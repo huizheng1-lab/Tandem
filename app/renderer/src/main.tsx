@@ -59,6 +59,10 @@ function missingKeyFromMessage(message: string): MissingKeyInfo | undefined {
   };
 }
 
+function sessionStartedText(session: SessionStartResponse): string {
+  return `Session ${session.sessionId} started in ${session.projectDir} - leader ${session.config.leader}, worker ${session.config.worker}`;
+}
+
 function App(): React.ReactElement {
   const tandem = window.tandem;
   if (!tandem) {
@@ -139,7 +143,7 @@ function App(): React.ReactElement {
   const startProjectSession = async (projectDir?: string) => {
     const started = await tandem.startSession({ projectDir });
     setSession(started);
-    setEntries([{ id: nextId.current++, kind: "message", role: "system", text: `Session ${started.sessionId} started in ${started.projectDir}` }]);
+    setEntries([{ id: nextId.current++, kind: "message", role: "system", text: sessionStartedText(started) }]);
     setPhase("IDLE");
     setRound(0);
     setCost(undefined);
@@ -206,7 +210,7 @@ function App(): React.ReactElement {
       .startSession({})
       .then(async (started) => {
         setSession(started);
-        appendMessage("system", `Session ${started.sessionId} started in ${started.projectDir}`);
+        appendMessage("system", sessionStartedText(started));
         setModels(await tandem.listModels());
         await refreshSidebar();
       })
