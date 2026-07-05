@@ -5,7 +5,7 @@ import { mkdir, readdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import cron from "node-cron";
 import type { ScheduledTask } from "node-cron";
-import { loadConfig, loadEnv, saveProjectConfig } from "../../src/config/load.js";
+import { loadConfig, loadConfigDetails, loadEnv, saveGlobalConfigPatch, saveProjectConfig } from "../../src/config/load.js";
 import type { TandemConfig } from "../../src/config/schema.js";
 import { createLiveAgents } from "../../src/agents/live.js";
 import { createDiffTracker } from "../../src/orchestrator/diff.js";
@@ -101,7 +101,7 @@ export class TandemService {
   private readonly homeDir?: string;
   private env: NodeJS.ProcessEnv;
   private config: TandemConfig;
-  private preSessionConfigDirty = false;
+  private projectConfigOverrides: Array<keyof TandemConfig> = [];
   private ledger = new CostLedger();
   private session?: SessionLike;
   private controller?: AbortController;
@@ -138,21 +138,16 @@ export class TandemService {
       await writeDesktopAppState(this.homeDir, { lastProjectDir: this.projectDir });
     }
     this.env = this.loadProjectEnv(this.projectDir);
-    const loadedConfig = loadConfig({ cwd: this.projectDir, homeDir: this.homeDir, env: this.env });
-    if (this.preSessionConfigDirty && !this.session) {
-      this.config = { ...loadedConfig, ...this.config };
-      await saveProjectConfig(this.config, this.projectDir);
-    } else {
-      this.config = loadedConfig;
-    }
-    this.preSessionConfigDirty = false;
+    const loaded = loadConfigDetails({ cwd: this.projectDir, homeDir: this.homeDir, env: this.env });
+    this.config = loaded.config;
+    this.projectConfigOverrides = loaded.projectOverrides;
     this.ledger = new CostLedger();
     this.lastCheckpoint = undefined;
     this.sessionAutoApprove = "none";
     this.session = await (this.deps.createSession ?? ((cwd) => SessionStore.create(cwd, this.homeDir)))(this.projectDir);
     await this.session.append("session:start", { projectDir: this.projectDir });
     await this.refreshCronTasks();
-    return { projectDir: this.projectDir, sessionId: this.session.id, config: this.config, defaultProject, projectSummary: await projectSummary(this.projectDir) };
+    return { projectDir: this.projectDir, sessionId: this.session.id, config: this.config, defaultProject, projectSummary: await projectSummary(this.projectDir), projectConfigOverrides: this.projectConfigOverrides };
   }
 
   async run(prompt: string): Promise<void> {
@@ -229,8 +224,8 @@ export class TandemService {
 
   async setConfig(patch: Partial<TandemConfig>): Promise<TandemConfig> {
     this.config = { ...this.config, ...patch };
-    if (!this.session) this.preSessionConfigDirty = true;
-    await saveProjectConfig(this.config, this.projectDir);
+    await saveGlobalConfigPatch(patch, this.homeDir);
+    if (this.session) await saveProjectConfig(this.config, this.projectDir);
     return this.config;
   }
 

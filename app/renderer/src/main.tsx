@@ -64,7 +64,10 @@ function missingKeyFromMessage(message: string): MissingKeyInfo | undefined {
 }
 
 function sessionStartedText(session: SessionStartResponse): string {
-  return `Session ${session.sessionId} started; working in ${session.projectDir} (${session.projectSummary}) - leader ${session.config.leader}, worker ${session.config.worker}, permissions ${session.config.permissionMode}`;
+  const permissionMode = session.projectConfigOverrides?.includes("permissionMode")
+    ? `${session.config.permissionMode} (project override)`
+    : session.config.permissionMode;
+  return `Session ${session.sessionId} started; working in ${session.projectDir} (${session.projectSummary}) - leader ${session.config.leader}, worker ${session.config.worker}, permissions ${permissionMode}`;
 }
 
 function displayPath(filePath: string): string {
@@ -358,6 +361,7 @@ function App(): React.ReactElement {
     const nextConfig = await tandem.setConfig({ permissionMode });
     setConfig(nextConfig);
     setSession((current) => (current ? { ...current, config: nextConfig } : current));
+    if (running) appendMessage("system", "permission mode applies from the next run.");
   };
 
   const updateShowThinking = async (value: boolean) => {

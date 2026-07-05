@@ -55,6 +55,7 @@ export interface SessionStartResponse {
   config: TandemConfig;
   defaultProject: boolean;
   projectSummary: string;
+  projectConfigOverrides?: string[];
 }
 
 export interface DesktopAppStateResponse {

@@ -31,11 +31,24 @@ function readJsonIfPresent(filePath: string): unknown {
   }
 }
 
+function readObjectIfPresent(filePath: string): Record<string, unknown> {
+  const value = readJsonIfPresent(filePath);
+  return value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : {};
+}
+
 function mergeConfig(...parts: unknown[]): TandemConfig {
   const merged = Object.assign({}, ...parts);
   const parsed = ConfigSchema.safeParse(merged);
   if (!parsed.success) {
     throw new ConfigError(`Invalid Tandem config. Update .tandem/config.json: ${parsed.error.message}`);
+  }
+  return parsed.data;
+}
+
+function parsePartialConfig(value: unknown, filePath: string): Partial<TandemConfig> {
+  const parsed = ConfigSchema.partial().safeParse(value);
+  if (!parsed.success) {
+    throw new ConfigError(`Invalid Tandem config. Update ${filePath}: ${parsed.error.message}`);
   }
   return parsed.data;
 }
@@ -49,14 +62,34 @@ export function loadEnv(cwd = process.cwd(), homeDir: string | undefined = undef
 }
 
 export function loadConfig(options: LoadConfigOptions = {}): TandemConfig {
+  return loadConfigDetails(options).config;
+}
+
+export function loadConfigDetails(options: LoadConfigOptions = {}): { config: TandemConfig; globalConfig: TandemConfig; projectConfig: Partial<TandemConfig>; projectOverrides: Array<keyof TandemConfig> } {
   const cwd = options.cwd ?? process.cwd();
-  const globalConfig = readJsonIfPresent(globalConfigPath(options.homeDir));
-  const projectConfig = readJsonIfPresent(projectConfigPath(cwd));
-  return mergeConfig(defaultConfig, globalConfig, projectConfig, options.flags ?? {});
+  const globalPath = globalConfigPath(options.homeDir);
+  const projectPath = projectConfigPath(cwd);
+  const globalRaw = readObjectIfPresent(globalPath);
+  const projectConfig = parsePartialConfig(readObjectIfPresent(projectPath), projectPath);
+  const globalConfig = mergeConfig(defaultConfig, globalRaw);
+  const config = mergeConfig(globalConfig, projectConfig, options.flags ?? {});
+  const projectOverrides = Object.keys(projectConfig).filter((key) => {
+    const typedKey = key as keyof TandemConfig;
+    return JSON.stringify(projectConfig[typedKey]) !== JSON.stringify(globalConfig[typedKey]);
+  }) as Array<keyof TandemConfig>;
+  return { config, globalConfig, projectConfig, projectOverrides };
 }
 
 export async function saveProjectConfig(config: TandemConfig, cwd = process.cwd()): Promise<void> {
   const filePath = projectConfigPath(cwd);
   await mkdir(path.dirname(filePath), { recursive: true });
   await writeFile(filePath, `${JSON.stringify(config, null, 2)}\n`, "utf8");
+}
+
+export async function saveGlobalConfigPatch(patch: Partial<TandemConfig>, homeDir?: string): Promise<void> {
+  const filePath = globalConfigPath(homeDir);
+  const existing = readObjectIfPresent(filePath);
+  const parsed = parsePartialConfig({ ...existing, ...patch }, filePath);
+  await mkdir(path.dirname(filePath), { recursive: true });
+  await writeFile(filePath, `${JSON.stringify(parsed, null, 2)}\n`, "utf8");
 }

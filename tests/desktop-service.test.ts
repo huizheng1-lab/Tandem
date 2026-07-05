@@ -1,4 +1,4 @@
-import { mkdir, writeFile } from "node:fs/promises";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
@@ -98,9 +98,39 @@ describe("TandemService", () => {
     const started = await service.startSession({ projectDir: cwd });
 
     expect(started.config.permissionMode).toBe("yolo");
+    await expect(readFile(path.join(home, ".tandem", "config.json"), "utf8").then(JSON.parse)).resolves.toMatchObject({ permissionMode: "yolo" });
     const next = new TandemService(window as never, { registerIpcResponses: false, homeDir: home, baseEnv: {} });
     await expect(next.getAppState()).resolves.toMatchObject({ projectDir: cwd, lastProjectDir: cwd });
     expect(next.getConfig().permissionMode).toBe("yolo");
+  });
+
+  it("reports when project permission mode overrides the global default", async () => {
+    const cwd = await tempDir();
+    const home = await tempDir();
+    await mkdir(path.join(home, ".tandem"), { recursive: true });
+    await mkdir(path.join(cwd, ".tandem"), { recursive: true });
+    await writeFile(path.join(home, ".tandem", "config.json"), JSON.stringify({ permissionMode: "yolo" }));
+    await writeFile(path.join(cwd, ".tandem", "config.json"), JSON.stringify({ permissionMode: "ask" }));
+    const { window } = fakeWindow();
+    const service = new TandemService(window as never, { registerIpcResponses: false, homeDir: home, baseEnv: {} });
+
+    const started = await service.startSession({ projectDir: cwd });
+
+    expect(started.config.permissionMode).toBe("ask");
+    expect(started.projectConfigOverrides).toContain("permissionMode");
+  });
+
+  it("persists active session config changes to global defaults and the current project", async () => {
+    const cwd = await tempDir();
+    const home = await tempDir();
+    const { window } = fakeWindow();
+    const service = new TandemService(window as never, { registerIpcResponses: false, homeDir: home, baseEnv: {} });
+    await service.startSession({ projectDir: cwd });
+
+    await service.setConfig({ permissionMode: "yolo", worker: "openai/gpt-5-mini" });
+
+    await expect(readFile(path.join(home, ".tandem", "config.json"), "utf8").then(JSON.parse)).resolves.toMatchObject({ permissionMode: "yolo", worker: "openai/gpt-5-mini" });
+    await expect(readFile(path.join(cwd, ".tandem", "config.json"), "utf8").then(JSON.parse)).resolves.toMatchObject({ permissionMode: "yolo", worker: "openai/gpt-5-mini" });
   });
 
   it("defaults new desktop sessions to the safe TandemProjects workspace", async () => {
@@ -350,10 +380,12 @@ describe("TandemService", () => {
 
   it("auto-approves build plans outside ask permission mode", async () => {
     const cwd = await tempDir();
+    const home = await tempDir();
     const { window, sent } = fakeWindow();
     let confirmed: boolean | undefined;
     const service = new TandemService(window as never, {
       registerIpcResponses: false,
+      homeDir: home,
       createSession: async () => ({
         id: "session-1",
         append: async () => undefined,
@@ -376,10 +408,12 @@ describe("TandemService", () => {
 
   it("asks for build plan confirmation in ask mode and follows the response", async () => {
     const cwd = await tempDir();
+    const home = await tempDir();
     const { window, sent } = fakeWindow();
     let confirmed: boolean | undefined;
     const service = new TandemService(window as never, {
       registerIpcResponses: false,
+      homeDir: home,
       createSession: async () => ({
         id: "session-1",
         append: async () => undefined,
@@ -405,10 +439,12 @@ describe("TandemService", () => {
 
   it("auto-approves build plans when session auto-approve-all is active", async () => {
     const cwd = await tempDir();
+    const home = await tempDir();
     const { window, sent } = fakeWindow();
     let confirmed: boolean | undefined;
     const service = new TandemService(window as never, {
       registerIpcResponses: false,
+      homeDir: home,
       createSession: async () => ({
         id: "session-1",
         append: async () => undefined,
