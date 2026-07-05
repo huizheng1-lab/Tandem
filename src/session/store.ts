@@ -20,6 +20,7 @@ export interface SessionMetadata {
 
 type SessionIndex = Record<string, Omit<SessionMetadata, "id">>;
 let indexQueue: Promise<void> = Promise.resolve();
+const EMPTY_SESSION_PRUNE_MS = 60 * 60 * 1000;
 
 export function projectHash(cwd = process.cwd()): string {
   return createHash("sha1").update(path.resolve(cwd)).digest("hex").slice(0, 12);
@@ -102,6 +103,25 @@ async function reconcileSessionIndex(cwd: string, homeDir: string, index: Sessio
   return next;
 }
 
+async function pruneOldEmptySessions(cwd: string, homeDir: string, index: SessionIndex, now = Date.now()): Promise<SessionIndex> {
+  const next: SessionIndex = {};
+  for (const [id, entry] of Object.entries(index)) {
+    const lastActiveAt = new Date(entry.lastActiveAt).getTime();
+    if (!Number.isFinite(lastActiveAt) || now - lastActiveAt <= EMPTY_SESSION_PRUNE_MS) {
+      next[id] = entry;
+      continue;
+    }
+    const filePath = path.join(sessionDir(cwd, homeDir), `${id}.jsonl`);
+    const events = await readSessionEvents(filePath);
+    if (events.some((event) => event.type === "user")) {
+      next[id] = entry;
+      continue;
+    }
+    await rm(filePath, { force: true });
+  }
+  return next;
+}
+
 async function updateSessionIndex(cwd: string, homeDir: string, id: string, updater: (entry: Omit<SessionMetadata, "id">) => void): Promise<void> {
   await enqueueIndexMutation(async () => {
     const index = await reconcileSessionIndex(cwd, homeDir, await readIndex(cwd, homeDir));
@@ -169,7 +189,7 @@ export async function listSessions(cwd = process.cwd(), homeDir = homedir()): Pr
   const dir = sessionDir(cwd, homeDir);
   if (!existsSync(dir)) return [];
   return enqueueIndexMutation(async () => {
-    const index = await reconcileSessionIndex(cwd, homeDir, await readIndex(cwd, homeDir));
+    const index = await pruneOldEmptySessions(cwd, homeDir, await reconcileSessionIndex(cwd, homeDir, await readIndex(cwd, homeDir)));
     await writeIndex(cwd, homeDir, index);
     return Object.entries(index)
       .map(([id, entry]) => ({ id, ...entry }))

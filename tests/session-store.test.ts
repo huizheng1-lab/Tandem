@@ -73,6 +73,31 @@ describe("SessionStore", () => {
     expect(() => JSON.parse(content)).not.toThrow();
   });
 
+  it("prunes old empty sessions but keeps sessions with user messages", async () => {
+    const { cwd, home } = await tempProject();
+    const dir = sessionDir(cwd, home);
+    await mkdir(dir, { recursive: true });
+    const old = new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString();
+    const emptyId = "empty-old";
+    const userId = "user-old";
+    await writeFile(path.join(dir, `${emptyId}.jsonl`), `${JSON.stringify({ type: "session:start", at: old, payload: { projectDir: cwd } })}\n`, "utf8");
+    await writeFile(path.join(dir, `${userId}.jsonl`), `${JSON.stringify({ type: "user", at: old, payload: { prompt: "keep me" } })}\n`, "utf8");
+    await writeFile(
+      sessionIndexPath(cwd, home),
+      `${JSON.stringify({
+        [emptyId]: { title: emptyId, archived: false, createdAt: old, lastActiveAt: old },
+        [userId]: { title: userId, archived: false, createdAt: old, lastActiveAt: old }
+      })}\n`,
+      "utf8"
+    );
+
+    const sessions = await listSessions(cwd, home);
+
+    expect(sessions.map((session) => session.id)).toEqual([userId]);
+    expect(existsSync(path.join(dir, `${emptyId}.jsonl`))).toBe(false);
+    expect(existsSync(path.join(dir, `${userId}.jsonl`))).toBe(true);
+  });
+
   it("merges missing session files without wiping custom title or archived metadata", async () => {
     const { cwd, home } = await tempProject();
     const indexed = await SessionStore.create(cwd, home);
