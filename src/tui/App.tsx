@@ -89,6 +89,10 @@ export function App({ config: initialConfig, env, cwd, initialError }: { config:
 
   useInput((inputValue, key) => {
     if (key.escape) {
+      pendingApproval?.resolve(false);
+      pendingPlan?.resolve(false);
+      setPendingApproval(undefined);
+      setPendingPlan(undefined);
       abortRef.current?.abort();
       setBusy(false);
       addMessage("SYSTEM", "Interrupted current turn.");
