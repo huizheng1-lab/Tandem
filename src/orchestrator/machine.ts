@@ -167,12 +167,20 @@ export async function runOrchestration(options: RunOptions): Promise<RunResult> 
 
     transition("REVIEWING", `round ${currentRound}/${options.config.maxReviewRounds} leader review`, currentRound);
     const diff = options.diffProvider ? await (typeof options.diffProvider === "function" ? options.diffProvider() : options.diffProvider.diff()) : "";
-    const verdict = await retryArtifact(
-      "ReviewVerdict",
-      emit,
-      () => options.agents.review({ plan, report, round: currentRound, diff }),
-      (value) => ReviewVerdictSchema.parse(value)
-    );
+    let verdict: ReviewVerdict;
+    try {
+      verdict = await retryArtifact(
+        "ReviewVerdict",
+        emit,
+        () => options.agents.review({ plan, report, round: currentRound, diff }),
+        (value) => ReviewVerdictSchema.parse(value)
+      );
+    } catch (error) {
+      const summary = `Build completed, but automated review could not be finalized after retries. Last worker report: ${report.summary}`;
+      emit({ type: "error", message: `leader review could not produce a valid ReviewVerdict: ${String(error)}` });
+      transition("DONE", "leader review failed; build report preserved", currentRound);
+      return { phase: "DONE", summary, plan, reports, verdicts, takeover: false };
+    }
     verdicts.push(verdict);
     emitCheckpoint();
 

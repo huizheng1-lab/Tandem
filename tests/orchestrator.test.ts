@@ -137,24 +137,22 @@ describe("orchestration", () => {
   it("resumes from a mid-review checkpoint without rerunning earlier build rounds", async () => {
     let builds = 0;
     let lastCheckpoint: OrchestrationCheckpoint | undefined;
-    await expect(
-      runOrchestration({
-        request: "build",
-        config: { maxReviewRounds: 3 },
-        agents: agents({
-          build: async () => {
-            builds += 1;
-            return report();
-          },
-          review: async () => {
-            throw new Error("simulated crash");
-          }
-        }),
-        emit: (event) => {
-          if (event.type === "checkpoint") lastCheckpoint = event.checkpoint;
+    await runOrchestration({
+      request: "build",
+      config: { maxReviewRounds: 3 },
+      agents: agents({
+        build: async () => {
+          builds += 1;
+          return report();
+        },
+        review: async () => ({ nope: true })
+      }),
+      emit: (event) => {
+        if (event.type === "checkpoint" && event.checkpoint.phase === "REVIEWING" && !lastCheckpoint) {
+          lastCheckpoint = event.checkpoint;
         }
-      })
-    ).rejects.toThrow(/simulated crash/);
+      }
+    });
 
     expect(lastCheckpoint?.phase).toBe("REVIEWING");
     expect(lastCheckpoint?.reports).toHaveLength(1);
@@ -175,5 +173,25 @@ describe("orchestration", () => {
     expect(result.takeover).toBe(false);
     expect(result.reports).toHaveLength(1);
     expect(builds).toBe(1);
+  });
+
+  it("ends kindly when review cannot produce a verdict", async () => {
+    let reviews = 0;
+    const result = await runOrchestration({
+      request: "build",
+      config: { maxReviewRounds: 3 },
+      agents: agents({
+        review: async () => {
+          reviews += 1;
+          throw new Error("review model failed");
+        }
+      })
+    });
+
+    expect(reviews).toBe(3);
+    expect(result.phase).toBe("DONE");
+    expect(result.takeover).toBe(false);
+    expect(result.reports).toHaveLength(1);
+    expect(result.summary).toContain("Build completed, but automated review could not be finalized");
   });
 });
