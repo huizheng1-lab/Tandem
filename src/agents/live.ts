@@ -1,5 +1,5 @@
-import { tool } from "ai";
-import type { ToolSet } from "ai";
+import { generateObject, tool } from "ai";
+import type { LanguageModel, ToolSet } from "ai";
 import { z } from "zod";
 import { TandemConfig } from "../config/schema.js";
 import { makeModel } from "../providers/client.js";
@@ -31,6 +31,33 @@ function jsonBlock(value: unknown): string {
 
 function mergeTools(...sets: ToolSet[]): ToolSet {
   return Object.assign({}, ...sets);
+}
+
+// Some models (observed: Gemini 2.5 Pro) reliably do the work but fail to call their submit_*
+// tool even when tool choice is forced. Recover by extracting the artifact from the prose the
+// model already wrote, via schema-constrained generation with no tools involved.
+async function extractFromProse<T>(
+  resolution: { model: LanguageModel; entry: import("../providers/registry.js").ModelEntry },
+  options: LiveAgentOptions,
+  role: "leader" | "worker",
+  schema: z.ZodType<T>,
+  artifactName: string,
+  text: string
+): Promise<T | undefined> {
+  if (!text.trim()) return undefined;
+  try {
+    const { object, usage } = await generateObject({
+      model: resolution.model,
+      schema,
+      abortSignal: options.abortSignal,
+      prompt: `The following text is a completed ${artifactName} written as prose. Convert it faithfully into the structured object. Do not invent facts that are not in the text.\n\n${text}`
+    });
+    const raw = usage as unknown as { inputTokens?: number; outputTokens?: number };
+    options.ledger.add(role, resolution.entry, raw.inputTokens ?? 0, raw.outputTokens ?? 0);
+    return object;
+  } catch {
+    return undefined;
+  }
 }
 
 export async function createLiveAgents(options: LiveAgentOptions): Promise<AgentFns> {
@@ -147,8 +174,10 @@ export async function createLiveAgents(options: LiveAgentOptions): Promise<Agent
         artifactName: "ReviewVerdict",
         getArtifact: () => verdict
       });
-      if (!result.artifact) throw new Error("Leader review finished without submit_review.");
-      return result.artifact;
+      if (result.artifact) return result.artifact;
+      const extracted = await extractFromProse(leader, options, "leader", ReviewVerdictSchema, "ReviewVerdict", result.text);
+      if (!extracted) throw new Error("Leader review finished without submit_review.");
+      return extracted;
     },
 
     takeover: async ({ plan, reports, feedback }) => {
@@ -185,18 +214,10 @@ export async function createLiveAgents(options: LiveAgentOptions): Promise<Agent
       });
       if (result.artifact) return result.artifact;
 
-      const fallback = await runAgentText({
-        model: leader.model,
-        modelEntry: leader.entry,
-        costRole: "leader",
-        ledger: options.ledger,
-        system: "Summarize why takeover failed to submit a structured artifact.",
-        messages: [{ role: "user", content: result.text }],
-        maxSteps: 1,
-        abortSignal: options.abortSignal,
-        onText: options.onLeaderText
-      });
-      throw new Error(`Leader takeover finished without submit_takeover. ${fallback.text}`);
+      const takeoverSchema = z.object({ report: CompletionReportSchema, userSummary: z.string() });
+      const extracted = await extractFromProse(leader, options, "leader", takeoverSchema, "TakeoverReport", result.text);
+      if (!extracted) throw new Error("Leader takeover finished without submit_takeover.");
+      return extracted;
     }
   };
 }
