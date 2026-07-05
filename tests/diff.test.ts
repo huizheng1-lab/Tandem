@@ -1,6 +1,7 @@
 import { mkdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { execa } from "execa";
 import { describe, expect, it } from "vitest";
 import { createDiffTracker } from "../src/orchestrator/diff.js";
 
@@ -42,5 +43,20 @@ describe("non-git diff tracker", () => {
     const diff = await tracker.diff();
     expect(diff).toContain("todo.mjs");
     expect(diff).toContain("+export const todo = [];");
+  });
+
+  it("captures files created in gitignored subdirectories inside git repos", async () => {
+    const cwd = await tempDir();
+    await execa("git", ["init"], { cwd });
+    await writeFile(path.join(cwd, ".gitignore"), "demo-todo/\n", "utf8");
+    const tracker = createDiffTracker(cwd);
+    await tracker.beforeBuild();
+
+    await mkdir(path.join(cwd, "demo-todo"), { recursive: true });
+    await writeFile(path.join(cwd, "demo-todo", "todo.mjs"), "export const todos = [];\n", "utf8");
+
+    const diff = await tracker.diff();
+    expect(diff).toContain("demo-todo/todo.mjs");
+    expect(diff).toContain("+export const todos = [];");
   });
 });

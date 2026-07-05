@@ -45,6 +45,7 @@ type SnapshotValue = string | null;
 export class DiffTracker {
   private readonly touchedFiles = new Set<string>();
   private snapshot = new Map<string, SnapshotValue>();
+  private snapshotTaken = false;
 
   constructor(
     private readonly cwd: string,
@@ -58,12 +59,17 @@ export class DiffTracker {
   }
 
   async beforeBuild(): Promise<void> {
-    if (await isGitRepo(this.cwd)) return;
     this.snapshot = await this.takeSnapshot();
+    this.snapshotTaken = true;
   }
 
   async diff(): Promise<string> {
+    if (this.snapshotTaken) return this.snapshotDiff();
     if (await isGitRepo(this.cwd)) return gitDiff(this.cwd);
+    return "No git repository detected; diff unavailable outside session snapshots.";
+  }
+
+  private async snapshotDiff(): Promise<string> {
     const after = await this.takeSnapshot();
     const files = new Set([...this.snapshot.keys(), ...after.keys(), ...this.touchedFiles]);
     const patches: string[] = [];
