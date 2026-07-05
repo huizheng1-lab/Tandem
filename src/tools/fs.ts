@@ -9,6 +9,7 @@ export interface ToolContext {
   permissionMode: PermissionMode;
   permissionBridge?: PermissionBridge;
   recordTouchedPath?: (filePath: string) => void;
+  abortSignal?: AbortSignal;
 }
 
 export function resolveInside(cwd: string, target: string): string {

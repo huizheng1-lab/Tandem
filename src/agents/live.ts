@@ -142,7 +142,8 @@ export async function createLiveAgents(options: LiveAgentOptions): Promise<Agent
     cwd: options.cwd,
     permissionMode: options.config.permissionMode,
     permissionBridge: options.permissionBridge,
-    recordTouchedPath: options.recordTouchedPath
+    recordTouchedPath: options.recordTouchedPath,
+    abortSignal: options.abortSignal
   };
 
   return {

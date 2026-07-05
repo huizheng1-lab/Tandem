@@ -9,6 +9,13 @@ export interface ShellResult {
   output: string;
 }
 
+export const DEFAULT_BASH_TIMEOUT_MS = 120000;
+export const MAX_BASH_TIMEOUT_MS = 300000;
+
+export function effectiveBashTimeout(timeoutMs = DEFAULT_BASH_TIMEOUT_MS): number {
+  return Math.min(timeoutMs, MAX_BASH_TIMEOUT_MS);
+}
+
 export function tailOutput(output: string, maxChars = 2000): string {
   if (output.length <= maxChars) return output;
   return output.slice(output.length - maxChars);
@@ -89,29 +96,61 @@ async function cleanupWindowsProcessTree(rootPid: number | undefined, seenDescen
   return [...killed].sort((left, right) => left - right);
 }
 
-export async function bashTool(ctx: ToolContext, command: string, timeoutMs = 120000): Promise<ShellResult> {
+export async function bashTool(ctx: ToolContext, command: string, timeoutMs = DEFAULT_BASH_TIMEOUT_MS): Promise<ShellResult> {
   resolveInside(ctx.cwd, ".");
   assertSafeBash(ctx.cwd, command);
   await ensurePermission(ctx.permissionMode, { action: "bash", target: command }, ctx.permissionBridge);
   let tracker: DescendantTracker | undefined;
   let rootPid: number | undefined;
+  let aborted = false;
+  let timedOut = false;
+  let removeAbortListener: (() => void) | undefined;
+  let timeout: ReturnType<typeof setTimeout> | undefined;
   try {
-    const subprocess = execa(command, { cwd: ctx.cwd, shell: true, timeout: timeoutMs, reject: false, all: true, cleanup: true, windowsHide: true });
+    if (ctx.abortSignal?.aborted) throw new Error("Command aborted.");
+    const effectiveTimeout = effectiveBashTimeout(timeoutMs);
+    const subprocess = execa(command, { cwd: ctx.cwd, shell: true, timeout: effectiveTimeout, reject: false, all: true, cleanup: true, windowsHide: true });
     rootPid = subprocess.pid;
     tracker = startDescendantTracker(rootPid);
+    timeout = setTimeout(() => {
+      timedOut = true;
+      if (process.platform === "win32") {
+        void cleanupWindowsProcessTree(rootPid, tracker?.seen ?? []).finally(() => subprocess.kill("SIGTERM"));
+      } else {
+        subprocess.kill("SIGTERM");
+      }
+    }, effectiveTimeout);
+    const abortListener = () => {
+      aborted = true;
+      if (process.platform === "win32") {
+        void cleanupWindowsProcessTree(rootPid, tracker?.seen ?? []).finally(() => subprocess.kill("SIGTERM"));
+      } else {
+        subprocess.kill("SIGTERM");
+      }
+    };
+    ctx.abortSignal?.addEventListener("abort", abortListener, { once: true });
+    removeAbortListener = () => ctx.abortSignal?.removeEventListener("abort", abortListener);
     const result = await subprocess;
+    if (timeout) clearTimeout(timeout);
+    removeAbortListener();
     tracker?.stop();
     const killed = await cleanupWindowsProcessTree(rootPid, tracker?.seen ?? []);
     const cleanupNote = killed.length > 0 ? `\n[SYSTEM] Cleaned up ${killed.length} shell child process(es): ${killed.join(", ")}` : "";
+    const abortNote = aborted ? "Command aborted.\n" : "";
+    const timeoutNote = timedOut ? `Command timed out after ${effectiveTimeout}ms.\n` : "";
     return {
       command,
-      passed: result.exitCode === 0,
-      output: tailOutput(`${result.all ?? ""}${cleanupNote}`)
+      passed: !aborted && !timedOut && result.exitCode === 0,
+      output: tailOutput(`${abortNote}${timeoutNote}${result.all ?? ""}${cleanupNote}`)
     };
   } catch (error) {
+    if (timeout) clearTimeout(timeout);
+    removeAbortListener?.();
+    if (ctx.abortSignal?.aborted) aborted = true;
     tracker?.stop();
     const killed = await cleanupWindowsProcessTree(rootPid, tracker?.seen ?? []);
     const cleanupNote = killed.length > 0 ? `\n[SYSTEM] Cleaned up ${killed.length} shell child process(es): ${killed.join(", ")}` : "";
-    return { command, passed: false, output: tailOutput(`${String(error)}${cleanupNote}`) };
+    const prefix = aborted ? "Command aborted." : timedOut ? `Command timed out after ${effectiveBashTimeout(timeoutMs)}ms.` : String(error);
+    return { command, passed: false, output: tailOutput(`${prefix}${cleanupNote}`) };
   }
 }
