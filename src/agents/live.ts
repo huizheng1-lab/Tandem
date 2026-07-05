@@ -163,7 +163,7 @@ export async function createLiveAgents(options: LiveAgentOptions): Promise<Agent
         modelEntry: leader.entry,
         costRole: "leader",
         ledger: options.ledger,
-        system: `${leaderPlannerPrompt}\nYou may answer directly for pure questions. For implementation work, call submit_build_plan exactly once.\nThe "verification" field must contain exact runnable shell commands only (e.g. "node test.mjs"), one command per entry — never prose or manual instructions. Put manual checks in acceptanceCriteria instead.`,
+        system: `${leaderPlannerPrompt}\nUsers may reference standing goals by number (for example, "goal 1"); resolve those references against the Standing goals list before asking for clarification.\nYou may answer directly for pure questions. For implementation work, call submit_build_plan exactly once.\nThe "verification" field must contain exact runnable shell commands only (e.g. "node test.mjs"), one command per entry — never prose or manual instructions. Put manual checks in acceptanceCriteria instead.`,
         messages: [
           {
             role: "user",

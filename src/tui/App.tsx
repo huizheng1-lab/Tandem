@@ -10,7 +10,7 @@ import { setModel } from "../commands/model.js";
 import { modelRegistry } from "../providers/registry.js";
 import { parseLoop } from "../commands/loop.js";
 import { addSchedule, listSchedules, markScheduleRun, missedSchedule, removeSchedule, Schedule } from "../commands/schedule.js";
-import { appendGoalNote, listGoals } from "../session/goals.js";
+import { appendGoalNote, formatStandingGoals, listGoals } from "../session/goals.js";
 import { SessionStore, listSessions } from "../session/store.js";
 import { createLiveAgents, suggestGoalProgressNotes } from "../agents/live.js";
 import { runOrchestration, MachineEvent, OrchestrationCheckpoint } from "../orchestrator/machine.js";
@@ -198,7 +198,7 @@ export function App({ config: initialConfig, env, cwd, initialError }: { config:
     setVerdict(undefined);
     try {
       const activeGoalObjects = (await listGoals(cwd)).filter((goal) => goal.status === "active");
-      const activeGoals = activeGoalObjects.map((goal) => goal.text);
+      const activeGoals = formatStandingGoals(activeGoalObjects);
       const diffTracker = createDiffTracker(cwd);
       const agents = await createLiveAgents({
         config,

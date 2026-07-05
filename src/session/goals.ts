@@ -60,3 +60,13 @@ export async function appendGoalNote(id: number, note: string, cwd = process.cwd
   goal.notes.push(note);
   await saveGoals(goals, cwd);
 }
+
+export function formatStandingGoal(goal: Goal): string {
+  const notes = goal.notes.slice(-2);
+  if (notes.length === 0) return `Goal ${goal.id}: ${goal.text}`;
+  return [`Goal ${goal.id}: ${goal.text}`, ...notes.map((note) => `  - ${note}`)].join("\n");
+}
+
+export function formatStandingGoals(goals: Goal[]): string[] {
+  return goals.map(formatStandingGoal);
+}

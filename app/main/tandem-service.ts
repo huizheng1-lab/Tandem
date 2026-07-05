@@ -11,7 +11,7 @@ import { createDiffTracker } from "../../src/orchestrator/diff.js";
 import { runOrchestration, type MachineEvent, type OrchestrationCheckpoint } from "../../src/orchestrator/machine.js";
 import { modelRegistry } from "../../src/providers/registry.js";
 import { CostLedger } from "../../src/session/cost.js";
-import { addGoal, completeGoal, listGoals } from "../../src/session/goals.js";
+import { addGoal, completeGoal, formatStandingGoals, listGoals } from "../../src/session/goals.js";
 import { archiveSession, deleteSession, listSessions, renameSession, SessionStore } from "../../src/session/store.js";
 import type { SessionMetadata } from "../../src/session/store.js";
 import type { PermissionBridge, PermissionRequest } from "../../src/tools/permissions.js";
@@ -120,7 +120,7 @@ export class TandemService {
         onLeaderThinking: (delta) => void this.emitText("leader", delta, true),
         onWorkerThinking: (delta) => void this.emitText("worker", delta, true)
       });
-      const goals = (await listGoals(this.projectDir)).filter((goal) => goal.status === "active").map((goal) => goal.text);
+      const goals = formatStandingGoals((await listGoals(this.projectDir)).filter((goal) => goal.status === "active"));
       const result = await (this.deps.runOrchestration ?? runOrchestration)({
         request: prompt,
         config: this.config,
