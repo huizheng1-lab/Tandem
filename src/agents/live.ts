@@ -3,9 +3,10 @@ import type { LanguageModel, ToolSet } from "ai";
 import { z } from "zod";
 import { TandemConfig } from "../config/schema.js";
 import { makeModel } from "../providers/client.js";
+import { ModelEntry } from "../providers/registry.js";
 import { PermissionBridge } from "../tools/permissions.js";
 import { makeToolSet } from "../tools/index.js";
-import { CostLedger } from "../session/cost.js";
+import { CostLedger, CostRole } from "../session/cost.js";
 import { AgentFns, PlanResult } from "../orchestrator/machine.js";
 import { BuildPlan, BuildPlanSchema, CompletionReportSchema, ReviewVerdictSchema } from "../orchestrator/artifacts.js";
 import { Goal } from "../session/goals.js";
@@ -33,30 +34,60 @@ function mergeTools(...sets: ToolSet[]): ToolSet {
   return Object.assign({}, ...sets);
 }
 
+export type ProseObjectGenerator<T> = (options: {
+  model: LanguageModel;
+  schema: z.ZodType<T>;
+  abortSignal?: AbortSignal;
+  prompt: string;
+}) => Promise<{ object: T; usage?: unknown }>;
+
+export interface ExtractFromProseOptions<T> {
+  resolution: { model: LanguageModel; entry: ModelEntry };
+  ledger: CostLedger;
+  role: CostRole;
+  schema: z.ZodType<T>;
+  artifactName: string;
+  text: string;
+  abortSignal?: AbortSignal;
+  originalError: Error;
+  generator?: ProseObjectGenerator<T>;
+}
+
+function usageNumber(value: unknown): number {
+  return typeof value === "number" && Number.isFinite(value) ? value : 0;
+}
+
 // Some models (observed: Gemini 2.5 Pro) reliably do the work but fail to call their submit_*
 // tool even when tool choice is forced. Recover by extracting the artifact from the prose the
 // model already wrote, via schema-constrained generation with no tools involved.
-async function extractFromProse<T>(
-  resolution: { model: LanguageModel; entry: import("../providers/registry.js").ModelEntry },
-  options: LiveAgentOptions,
-  role: "leader" | "worker",
-  schema: z.ZodType<T>,
-  artifactName: string,
-  text: string
-): Promise<T | undefined> {
-  if (!text.trim()) return undefined;
+export async function extractFromProse<T>(options: ExtractFromProseOptions<T>): Promise<T> {
+  if (!options.text.trim()) throw options.originalError;
+  const generator: ProseObjectGenerator<T> =
+    options.generator ??
+    ((input) =>
+      generateObject({
+        model: input.model,
+        schema: input.schema,
+        abortSignal: input.abortSignal,
+        prompt: input.prompt
+      }));
   try {
-    const { object, usage } = await generateObject({
-      model: resolution.model,
-      schema,
+    const { object, usage } = await generator({
+      model: options.resolution.model,
+      schema: options.schema,
       abortSignal: options.abortSignal,
-      prompt: `The following text is a completed ${artifactName} written as prose. Convert it faithfully into the structured object. Do not invent facts that are not in the text.\n\n${text}`
+      prompt: `The following text is a completed ${options.artifactName} written as prose. Convert it faithfully into the structured object. Do not invent facts that are not in the text.\n\n${options.text}`
     });
-    const raw = usage as unknown as { inputTokens?: number; outputTokens?: number };
-    options.ledger.add(role, resolution.entry, raw.inputTokens ?? 0, raw.outputTokens ?? 0);
+    const raw = usage as { inputTokens?: unknown; outputTokens?: unknown; promptTokens?: unknown; completionTokens?: unknown } | undefined;
+    options.ledger.add(
+      options.role,
+      options.resolution.entry,
+      usageNumber(raw?.inputTokens ?? raw?.promptTokens),
+      usageNumber(raw?.outputTokens ?? raw?.completionTokens)
+    );
     return object;
   } catch {
-    return undefined;
+    throw options.originalError;
   }
 }
 
@@ -175,9 +206,16 @@ export async function createLiveAgents(options: LiveAgentOptions): Promise<Agent
         getArtifact: () => verdict
       });
       if (result.artifact) return result.artifact;
-      const extracted = await extractFromProse(leader, options, "leader", ReviewVerdictSchema, "ReviewVerdict", result.text);
-      if (!extracted) throw new Error("Leader review finished without submit_review.");
-      return extracted;
+      return extractFromProse({
+        resolution: leader,
+        ledger: options.ledger,
+        role: "leader",
+        schema: ReviewVerdictSchema,
+        artifactName: "ReviewVerdict",
+        text: result.text,
+        abortSignal: options.abortSignal,
+        originalError: new Error("Leader review finished without submit_review.")
+      });
     },
 
     takeover: async ({ plan, reports, feedback }) => {
@@ -215,9 +253,16 @@ export async function createLiveAgents(options: LiveAgentOptions): Promise<Agent
       if (result.artifact) return result.artifact;
 
       const takeoverSchema = z.object({ report: CompletionReportSchema, userSummary: z.string() });
-      const extracted = await extractFromProse(leader, options, "leader", takeoverSchema, "TakeoverReport", result.text);
-      if (!extracted) throw new Error("Leader takeover finished without submit_takeover.");
-      return extracted;
+      return extractFromProse({
+        resolution: leader,
+        ledger: options.ledger,
+        role: "leader",
+        schema: takeoverSchema,
+        artifactName: "TakeoverReport",
+        text: result.text,
+        abortSignal: options.abortSignal,
+        originalError: new Error("Leader takeover finished without submit_takeover.")
+      });
     }
   };
 }
