@@ -42,6 +42,12 @@ Implemented Tandem from the supplied build plan as a fresh Node.js/TypeScript pr
 - I did not run a live provider-backed M3 demo in this pass; verification here is compiler/tests/build/CLI smoke. The live path now exists and will use `.env` keys when launched in a TTY.
 - `/schedule` registers live cron jobs and persists them, but missed-while-closed handling is a startup transcript prompt rather than an interactive catch-up workflow.
 
+## Dependency Audit
+
+- `npm audit fix` without `--force` made no dependency changes.
+- Remaining runtime findings are in pinned AI SDK v5 packages via `@ai-sdk/provider-utils`; npm's available fix upgrades to incompatible AI SDK major versions, so it was not applied.
+- Remaining dev-only findings are in Vitest/Vite/esbuild; npm's available fix upgrades to `vitest@4`, so it was not applied during the non-breaking audit task.
+
 ## M3 Acceptance Notes
 
 Automated unit tests drive approve, revise-to-approve, round-exhaustion takeover, exact build-round counts, leader-requested takeover, worker blocked takeover, and artifact validation retry paths with fake leader/worker functions and no network.
