@@ -114,8 +114,11 @@ export class TandemService {
       await session.append("done", done);
     } catch (error) {
       const event: MachineEvent = { type: "error", message: String(error) };
+      const done = { summary: event.message, takeover: false, error: true };
       this.window.webContents.send(ipcChannels.machineEvent, event);
+      this.window.webContents.send(ipcChannels.doneEvent, done);
       await session.append("machine", event);
+      await session.append("done", done);
     } finally {
       this.controller = undefined;
     }

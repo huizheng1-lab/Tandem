@@ -174,7 +174,7 @@ function App(): React.ReactElement {
       tandem.onCostEvent(setCost),
       tandem.onDoneEvent((event) => {
         setRunning(false);
-        setPhase("DONE");
+        setPhase(event.error ? "IDLE" : "DONE");
         appendMessage("system", `${event.summary}${event.takeover ? " (takeover)" : ""}`);
       }),
       tandem.onPermissionRequest((event) => {
@@ -248,12 +248,15 @@ function App(): React.ReactElement {
       await tandem.runPipeline({ prompt: text });
     } catch (error) {
       setRunning(false);
+      setPhase("IDLE");
       appendMessage("system", `Run failed: ${String(error)}`);
     }
   };
 
   const stop = async () => {
     await tandem.abortPipeline();
+    setRunning(false);
+    setPhase("IDLE");
     appendMessage("system", "Abort requested.");
   };
 

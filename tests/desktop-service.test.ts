@@ -92,4 +92,30 @@ describe("TandemService", () => {
     expect(appended.some((event) => event.type === "crash")).toBe(true);
     expect(sent.at(-1)?.channel).toBe(ipcChannels.machineEvent);
   });
+
+  it("emits a terminal event when pipeline setup fails", async () => {
+    const cwd = await tempDir();
+    const { window, sent } = fakeWindow();
+    const appended: Array<{ type: string; payload: unknown }> = [];
+    const service = new TandemService(window as never, {
+      registerIpcResponses: false,
+      createSession: async () => ({
+        id: "session-1",
+        append: async (type, payload) => {
+          appended.push({ type, payload });
+        },
+        read: async () => []
+      }),
+      createAgents: async () => {
+        throw new Error("Missing TEST_API_KEY for model test/model.");
+      }
+    });
+
+    await service.startSession({ projectDir: cwd });
+    await service.run("build");
+
+    const done = sent.find((event) => event.channel === ipcChannels.doneEvent);
+    expect(done?.payload).toMatchObject({ error: true, takeover: false });
+    expect(appended.some((event) => event.type === "done" && (event.payload as { error?: boolean }).error)).toBe(true);
+  });
 });

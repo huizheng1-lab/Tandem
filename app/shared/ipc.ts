@@ -56,6 +56,7 @@ export interface PipelineRunRequest {
 export interface PipelineDoneEvent {
   summary: string;
   takeover: boolean;
+  error?: boolean;
 }
 
 export interface TextEvent {
