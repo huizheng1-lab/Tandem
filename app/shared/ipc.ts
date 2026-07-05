@@ -142,6 +142,11 @@ export interface SessionDeleteRequest {
   id: string;
 }
 
+export interface SessionDeleteResponse {
+  sessions: SessionMetadata[];
+  activeSession?: SessionStartResponse;
+}
+
 export interface GoalAddRequest {
   text: string;
 }
@@ -171,7 +176,7 @@ export interface TandemDesktopApi {
   resumeSession(request: SessionResumeRequest): Promise<SessionResumeResponse>;
   renameSession(request: SessionRenameRequest): Promise<SessionMetadata[]>;
   archiveSession(request: SessionArchiveRequest): Promise<SessionMetadata[]>;
-  deleteSession(request: SessionDeleteRequest): Promise<SessionMetadata[]>;
+  deleteSession(request: SessionDeleteRequest): Promise<SessionDeleteResponse>;
   listGoals(): Promise<Goal[]>;
   addGoal(request: GoalAddRequest): Promise<Goal[]>;
   completeGoal(request: GoalCompleteRequest): Promise<Goal[]>;

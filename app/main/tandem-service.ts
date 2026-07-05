@@ -26,6 +26,7 @@ import {
   type PlanConfirmEvent,
   type PlanResponse,
   type SessionAutoApproveMode,
+  type SessionDeleteResponse,
   type SessionResumeResponse,
   type SessionStartRequest,
   type SessionStartResponse
@@ -191,10 +192,16 @@ export class TandemService {
     return this.listSessions();
   }
 
-  async deleteSession(id: string): Promise<SessionMetadata[]> {
-    if (this.session?.id === id) throw new Error("Cannot delete the active session. Start or resume another session first.");
+  async deleteSession(id: string): Promise<SessionDeleteResponse> {
+    const wasActive = this.session?.id === id;
+    if (wasActive) {
+      this.session = undefined;
+      this.lastCheckpoint = undefined;
+    }
     await deleteSession(id, this.projectDir);
-    return this.listSessions();
+    if (!wasActive) return { sessions: await this.listSessions() };
+    const activeSession = await this.startSession({ projectDir: this.projectDir });
+    return { sessions: await this.listSessions(), activeSession };
   }
 
   async recordCrash(error: unknown): Promise<void> {

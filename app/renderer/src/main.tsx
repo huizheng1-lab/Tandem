@@ -66,6 +66,10 @@ function sessionStartedText(session: SessionStartResponse): string {
   return `Session ${session.sessionId} started in ${session.projectDir} - leader ${session.config.leader}, worker ${session.config.worker}, permissions ${session.config.permissionMode}`;
 }
 
+function errorText(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
 function relativeTime(value: string): string {
   const ms = Date.now() - new Date(value).getTime();
   if (!Number.isFinite(ms)) return "";
@@ -187,12 +191,13 @@ function App(): React.ReactElement {
     setSchedules(scheduleItems);
   };
 
-  const startProjectSession = async (projectDir?: string) => {
-    const started = await tandem.startSession({ projectDir });
+  const applyStartedSession = async (started: SessionStartResponse, resetTranscript: boolean) => {
     setSession(started);
     setShowThinking(started.config.showThinking);
     showThinkingRef.current = started.config.showThinking;
-    setEntries([{ id: nextId.current++, kind: "message", role: "system", text: sessionStartedText(started) }]);
+    const startEntry = { id: nextId.current++, kind: "message" as const, role: "system" as const, text: sessionStartedText(started) };
+    if (resetTranscript) setEntries([startEntry]);
+    else setEntries((current) => [...current, startEntry]);
     setPhase("IDLE");
     setRound(0);
     setCost(undefined);
@@ -201,8 +206,23 @@ function App(): React.ReactElement {
     await refreshSidebar();
   };
 
+  const startProjectSession = async (projectDir?: string) => {
+    try {
+      await applyStartedSession(await tandem.startSession({ projectDir }), true);
+    } catch (error) {
+      appendMessage("system", `Start session failed: ${errorText(error)}`);
+    }
+  };
+
   const replaySession = async (id: string) => {
-    const resumed = await tandem.resumeSession({ id });
+    let resumed;
+    try {
+      resumed = await tandem.resumeSession({ id });
+    } catch (error) {
+      appendMessage("system", `Resume session failed: ${errorText(error)}`);
+      return;
+    }
+    setSession((current) => (current ? { ...current, sessionId: id } : current));
     const replayed: TranscriptEntry[] = [];
     for (const stored of resumed.events) {
       const payload = stored.payload as { prompt?: string; role?: "leader" | "worker"; delta?: string; summary?: string; takeover?: boolean } | MachineEvent;
@@ -233,6 +253,7 @@ function App(): React.ReactElement {
     }
     replayed.push({ id: nextId.current++, kind: "message", role: "system", text: `Resumed session ${id}. The next prompt will continue from its latest checkpoint.` });
     setEntries(replayed.length > 1 ? replayed : [{ id: nextId.current++, kind: "message", role: "system", text: `Session ${id} has no transcript events.` }]);
+    await refreshSidebar();
   };
 
   useEffect(() => {
@@ -263,12 +284,7 @@ function App(): React.ReactElement {
     void tandem
       .startSession({})
       .then(async (started) => {
-        setSession(started);
-        setShowThinking(started.config.showThinking);
-        showThinkingRef.current = started.config.showThinking;
-        appendMessage("system", sessionStartedText(started));
-        setModels(await tandem.listModels());
-        await refreshSidebar();
+        await applyStartedSession(started, false);
       })
       .catch((error: unknown) => {
         const message = String(error);
@@ -306,6 +322,10 @@ function App(): React.ReactElement {
     if (folder) await startProjectSession(folder);
   };
 
+  const createNewSession = async () => {
+    await startProjectSession(session?.projectDir);
+  };
+
   const addGoal = async () => {
     const text = goalText.trim();
     if (!text) return;
@@ -335,22 +355,32 @@ function App(): React.ReactElement {
 
   const saveRenameSession = async () => {
     if (!renamingSession) return;
-    setSessions(await tandem.renameSession({ id: renamingSession, title: renameTitle }));
-    setRenamingSession(undefined);
-    setRenameTitle("");
+    try {
+      setSessions(await tandem.renameSession({ id: renamingSession, title: renameTitle }));
+      setRenamingSession(undefined);
+      setRenameTitle("");
+    } catch (error) {
+      appendMessage("system", `Rename session failed: ${errorText(error)}`);
+    }
   };
 
   const archiveSession = async (id: string, archived: boolean) => {
-    setSessions(await tandem.archiveSession({ id, archived }));
+    try {
+      setSessions(await tandem.archiveSession({ id, archived }));
+    } catch (error) {
+      appendMessage("system", `${archived ? "Archive" : "Unarchive"} session failed: ${errorText(error)}`);
+    }
   };
 
   const deleteSession = async (id: string) => {
-    if (id === session?.sessionId) {
-      window.alert("Cannot delete the active session. Start or resume another session first.");
-      return;
-    }
     if (!window.confirm("Delete this session log permanently? Project files will not be touched.")) return;
-    setSessions(await tandem.deleteSession({ id }));
+    try {
+      const response = await tandem.deleteSession({ id });
+      setSessions(response.sessions);
+      if (response.activeSession) await applyStartedSession(response.activeSession, false);
+    } catch (error) {
+      appendMessage("system", `Delete session failed: ${errorText(error)}`);
+    }
   };
 
   const setSessionAutoApproveMode = async (mode: SessionAutoApproveMode) => {
@@ -422,6 +452,9 @@ function App(): React.ReactElement {
         <button type="button" className="sidebarButton" onClick={() => void pickProject()}>
           Pick Folder
         </button>
+        <button type="button" className="sidebarButton" onClick={() => void createNewSession()}>
+          New session
+        </button>
         <div className="sideSection">
           <div className="sideLabel">Session</div>
           <div className="sideValue">{session?.sessionId ?? "starting"}</div>
@@ -439,7 +472,7 @@ function App(): React.ReactElement {
                 ) : (
                   <button type="button" className="sessionTitle" onClick={() => void replaySession(item.id)}>
                     <span>{item.title || item.id.slice(0, 8)}</span>
-                    <small>{relativeTime(item.lastActiveAt)}</small>
+                    <small>{relativeTime(item.lastActiveAt)}{item.id === session?.sessionId ? " (current)" : ""}</small>
                   </button>
                 )}
                 <div className="sessionActions">
@@ -463,7 +496,7 @@ function App(): React.ReactElement {
                 <div key={item.id} className="sessionRow archived">
                   <button type="button" className="sessionTitle" onClick={() => void replaySession(item.id)}>
                     <span>{item.title || item.id.slice(0, 8)}</span>
-                    <small>{relativeTime(item.lastActiveAt)}</small>
+                    <small>{relativeTime(item.lastActiveAt)}{item.id === session?.sessionId ? " (current)" : ""}</small>
                   </button>
                   <div className="sessionActions">
                     <button type="button" onClick={() => void archiveSession(item.id, false)}>Unarchive</button>

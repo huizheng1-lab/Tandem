@@ -186,4 +186,18 @@ describe("TandemService", () => {
     await expect(bridge?.approve({ action: "bash", target: "npm test" })).resolves.toBe(true);
     expect(sent.filter((event) => event.channel === ipcChannels.permissionRequest)).toHaveLength(1);
   });
+
+  it("deletes the active session by rotating to a fresh session", async () => {
+    const cwd = await tempDir();
+    const { window } = fakeWindow();
+    const service = new TandemService(window as never, { registerIpcResponses: false });
+
+    const first = await service.startSession({ projectDir: cwd });
+    const response = await service.deleteSession(first.sessionId);
+
+    expect(response.activeSession?.sessionId).toBeTruthy();
+    expect(response.activeSession?.sessionId).not.toBe(first.sessionId);
+    expect(response.sessions.some((session) => session.id === first.sessionId)).toBe(false);
+    expect(response.sessions.some((session) => session.id === response.activeSession?.sessionId)).toBe(true);
+  });
 });
