@@ -14,7 +14,7 @@ import { appendGoalNote, listGoals } from "../session/goals.js";
 import { SessionStore, listSessions } from "../session/store.js";
 import { createLiveAgents, suggestGoalProgressNotes } from "../agents/live.js";
 import { runOrchestration, MachineEvent, OrchestrationCheckpoint } from "../orchestrator/machine.js";
-import { BuildPlan, ReviewVerdict } from "../orchestrator/artifacts.js";
+import { BuildPlan, CompletionReport, ReviewVerdict } from "../orchestrator/artifacts.js";
 import { createDiffTracker } from "../orchestrator/diff.js";
 import { PermissionBridge, PermissionRequest } from "../tools/permissions.js";
 import { Transcript, TranscriptMessage } from "./Transcript.js";
@@ -52,6 +52,12 @@ export function App({ config: initialConfig, env, cwd, initialError }: { config:
   const addMessage = (role: TranscriptMessage["role"], text: string) => {
     setMessages((current) => [...current, { role, text }]);
     void storeRef.current?.append("message", { role, text });
+  };
+
+  const addArtifactMessage = (name: string, value: unknown) => {
+    const message = artifactMessage(name, value);
+    setMessages((current) => [...current, message]);
+    void storeRef.current?.append("message", message);
   };
 
   const appendDelta = (role: "LEADER" | "WORKER", text: string) => {
@@ -125,6 +131,23 @@ export function App({ config: initialConfig, env, cwd, initialError }: { config:
       if (key.escape) setModelPicker(undefined);
       return;
     }
+    if (key.ctrl && inputValue === "e") {
+      setMessages((current) => {
+        let index = -1;
+        for (let i = current.length - 1; i >= 0; i -= 1) {
+          if (current[i]?.artifactDetails) {
+            index = i;
+            break;
+          }
+        }
+        if (index < 0) return current;
+        const next = [...current];
+        const message = next[index] as TranscriptMessage;
+        next[index] = { ...message, artifactExpanded: !message.artifactExpanded };
+        return next;
+      });
+      return;
+    }
     if (key.escape) {
       pendingApproval?.resolve(false);
       pendingPlan?.resolve(false);
@@ -154,7 +177,7 @@ export function App({ config: initialConfig, env, cwd, initialError }: { config:
     } else if (event.type === "artifact") {
       if (event.name === "BuildPlan") setPlan(event.value as BuildPlan);
       if (event.name === "ReviewVerdict") setVerdict(event.value as ReviewVerdict);
-      addMessage("SYSTEM", `${event.name} submitted.`);
+      addArtifactMessage(event.name, event.value);
     } else if (event.type === "checkpoint") {
       setPhase(event.checkpoint.phase);
       setRound(event.checkpoint.round);
@@ -384,4 +407,29 @@ export function App({ config: initialConfig, env, cwd, initialError }: { config:
       <InputBar value={input} onChange={setInput} onSubmit={submit} />
     </Box>
   );
+}
+
+function artifactMessage(name: string, value: unknown): TranscriptMessage {
+  return {
+    role: "SYSTEM",
+    text: `${artifactSummary(name, value)} (ctrl+e to expand)`,
+    artifactDetails: JSON.stringify(value, null, 2),
+    artifactExpanded: false
+  };
+}
+
+function artifactSummary(name: string, value: unknown): string {
+  if (name === "BuildPlan") {
+    const plan = value as BuildPlan;
+    return `BuildPlan: ${plan.title} | ${plan.tasks.length} tasks | ${plan.acceptanceCriteria.length} criteria | ${plan.verification.length} checks`;
+  }
+  if (name === "CompletionReport" || name === "TakeoverReport") {
+    const report = value as CompletionReport;
+    return `${name}: ${report.status} | ${report.filesChanged.length} files | ${report.verificationResults.length} checks`;
+  }
+  if (name === "ReviewVerdict") {
+    const verdict = value as ReviewVerdict;
+    return `ReviewVerdict: ${verdict.verdict} | ${verdict.feedback.length} issues | scores ${verdict.scores.correctness}/${verdict.scores.planAdherence}/${verdict.scores.codeQuality}`;
+  }
+  return `${name} submitted`;
 }
