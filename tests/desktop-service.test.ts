@@ -4,6 +4,7 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { TandemService } from "../app/main/tandem-service.js";
 import { ipcChannels } from "../app/shared/ipc.js";
+import type { BuildPlan } from "../src/orchestrator/artifacts.js";
 import type { AgentFns, RunOptions, RunResult } from "../src/orchestrator/machine.js";
 import type { PermissionBridge } from "../src/tools/permissions.js";
 import { safeDefaultProjectDir } from "../src/tools/protection.js";
@@ -25,6 +26,44 @@ function fakeWindow() {
       }
     }
   };
+}
+
+const plan: BuildPlan = {
+  title: "Test plan",
+  objective: "Exercise desktop plan confirmation",
+  constraints: [],
+  tasks: [{ id: "T1", description: "Do the thing" }],
+  acceptanceCriteria: ["The thing is done"],
+  verification: ["npm test"]
+};
+
+function fakeAgents(): AgentFns {
+  return {
+    plan: async () => ({ kind: "answer", answer: "done" }),
+    build: async () => ({}),
+    review: async () => ({}),
+    takeover: async () => {
+      throw new Error("not used");
+    }
+  };
+}
+
+async function waitForPlanConfirm(sent: Array<{ channel: string; payload: unknown }>) {
+  const deadline = Date.now() + 1000;
+  while (Date.now() < deadline) {
+    const event = sent.find((item) => item.channel === ipcChannels.planConfirm);
+    if (event) return event;
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  throw new Error("Timed out waiting for plan confirmation");
+}
+
+function respondToPlan(service: TandemService, id: string, approved: boolean): void {
+  const internals = service as unknown as {
+    pendingPlans: Map<string, (approved: boolean) => void>;
+    resolvePending(map: Map<string, (approved: boolean) => void>, id: string, approved: boolean): void;
+  };
+  internals.resolvePending(internals.pendingPlans, id, approved);
 }
 
 describe("TandemService", () => {
@@ -306,6 +345,87 @@ describe("TandemService", () => {
     await service.setSessionAutoApprove("all");
     await expect(bridge?.approve({ action: "bash", target: "npm test" })).resolves.toBe(true);
     expect(sent.filter((event) => event.channel === ipcChannels.permissionRequest)).toHaveLength(1);
+  });
+
+  it("auto-approves build plans outside ask permission mode", async () => {
+    const cwd = await tempDir();
+    const { window, sent } = fakeWindow();
+    let confirmed: boolean | undefined;
+    const service = new TandemService(window as never, {
+      registerIpcResponses: false,
+      createSession: async () => ({
+        id: "session-1",
+        append: async () => undefined,
+        read: async () => []
+      }),
+      createAgents: async (): Promise<AgentFns> => fakeAgents(),
+      runOrchestration: async (options: RunOptions): Promise<RunResult> => {
+        confirmed = await options.confirmPlan?.(plan);
+        return { phase: "DONE", summary: confirmed ? "approved" : "rejected", plan, reports: [], verdicts: [], takeover: false };
+      }
+    });
+
+    await service.setConfig({ permissionMode: "yolo" });
+    await service.startSession({ projectDir: cwd });
+    await service.run("build");
+
+    expect(confirmed).toBe(true);
+    expect(sent.some((event) => event.channel === ipcChannels.planConfirm)).toBe(false);
+  });
+
+  it("asks for build plan confirmation in ask mode and follows the response", async () => {
+    const cwd = await tempDir();
+    const { window, sent } = fakeWindow();
+    let confirmed: boolean | undefined;
+    const service = new TandemService(window as never, {
+      registerIpcResponses: false,
+      createSession: async () => ({
+        id: "session-1",
+        append: async () => undefined,
+        read: async () => []
+      }),
+      createAgents: async (): Promise<AgentFns> => fakeAgents(),
+      runOrchestration: async (options: RunOptions): Promise<RunResult> => {
+        confirmed = await options.confirmPlan?.(plan);
+        return { phase: "DONE", summary: confirmed ? "approved" : "rejected", plan, reports: [], verdicts: [], takeover: false };
+      }
+    });
+
+    await service.startSession({ projectDir: cwd });
+    const run = service.run("build");
+    const prompt = await waitForPlanConfirm(sent);
+    respondToPlan(service, (prompt.payload as { id: string }).id, false);
+    await run;
+
+    expect(confirmed).toBe(false);
+    expect(sent.filter((event) => event.channel === ipcChannels.planConfirm)).toHaveLength(1);
+    expect(sent.find((event) => event.channel === ipcChannels.doneEvent)?.payload).toMatchObject({ summary: "rejected" });
+  });
+
+  it("auto-approves build plans when session auto-approve-all is active", async () => {
+    const cwd = await tempDir();
+    const { window, sent } = fakeWindow();
+    let confirmed: boolean | undefined;
+    const service = new TandemService(window as never, {
+      registerIpcResponses: false,
+      createSession: async () => ({
+        id: "session-1",
+        append: async () => undefined,
+        read: async () => []
+      }),
+      createAgents: async (): Promise<AgentFns> => fakeAgents(),
+      runOrchestration: async (options: RunOptions): Promise<RunResult> => {
+        confirmed = await options.confirmPlan?.(plan);
+        return { phase: "DONE", summary: confirmed ? "approved" : "rejected", plan, reports: [], verdicts: [], takeover: false };
+      }
+    });
+
+    await service.startSession({ projectDir: cwd });
+    await service.setSessionAutoApprove("all");
+    await service.run("build");
+
+    expect(confirmed).toBe(true);
+    expect(sent.some((event) => event.channel === ipcChannels.planConfirm)).toBe(false);
   });
 
   it("deletes the active session by rotating to a fresh session", async () => {

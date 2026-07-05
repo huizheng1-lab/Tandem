@@ -355,6 +355,7 @@ export class TandemService {
   }
 
   private confirmPlan(plan: PlanConfirmEvent["plan"]): Promise<boolean> {
+    if (this.config.permissionMode !== "ask" || this.sessionAutoApprove === "all") return Promise.resolve(true);
     const id = randomUUID();
     const event: PlanConfirmEvent = { id, plan };
     return new Promise((resolve) => {
