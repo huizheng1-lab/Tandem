@@ -6,7 +6,7 @@ complete
 
 ## Summary
 
-Implemented Tandem from the supplied build plan, revised it per `REVIEW_FEEDBACK.md`, then completed the Round 3 handoff tasks in `HANDOFF_GPT5.md`: checkpoint resume, non-git snapshot diffs, goal progress notes, prompt-safe Esc handling, bare `/model` picker, dependency audit, and docs refresh.
+Implemented Tandem from the supplied build plan, revised it per `REVIEW_FEEDBACK.md`, completed the Round 3 handoff tasks in `HANDOFF_GPT5.md`, and completed Round 4 in `HANDOFF_GPT5_R4.md`: prose artifact fallback ownership/tests, demo artifact hygiene, dev audit cleanup, and OpenAI-compatible worker usage accounting.
 
 ## Task Results
 
@@ -23,6 +23,10 @@ Implemented Tandem from the supplied build plan, revised it per `REVIEW_FEEDBACK
 - R3-5: done - bare `/model` opens a TUI role/model picker and persists the selection.
 - R3-6: done - ran `npm audit` and `npm audit fix` without `--force`; no non-breaking fixes were available.
 - R3-7: done - README and `.env.example` refreshed for Gemini, picker, live smoke test, and request flow.
+- R4-1: done - refactored prose artifact extraction into an injectable helper and added network-free tests for success, failure preserving the original error, and extraction-call cost recording.
+- R4-2: done - added `demo-todo/` to `.gitignore` and removed committed demo artifacts from git tracking.
+- R4-3: done - upgraded dev-only Vitest to 4.1.9, overrode esbuild to a patched release, and confirmed audit now only reports the documented AI SDK runtime advisories.
+- R4-4: done - enabled OpenAI-compatible streaming usage reporting and hardened token extraction for NaN/raw usage payloads so worker cost can be recorded in live runs.
 
 ## Files Changed
 
@@ -31,6 +35,7 @@ Implemented Tandem from the supplied build plan, revised it per `REVIEW_FEEDBACK
 - tsconfig.json
 - .env.example
 - README.md
+- .gitignore
 - src/
 - tests/
 - COMPLETION_REPORT.md
@@ -38,15 +43,16 @@ Implemented Tandem from the supplied build plan, revised it per `REVIEW_FEEDBACK
 ## Verification Results
 
 - `npx tsc --noEmit`: passed.
-- `npm test`: passed. 5 test files, 17 tests; 1 live-smoke test skipped unless `RUN_LIVE=1`.
+- `npm test`: passed. 7 test files, 22 tests; 1 live-smoke test skipped unless `RUN_LIVE=1`.
 - `npm run build`: passed. `dist/index.js` and `dist/index.d.ts` emitted.
 - `npx tandem --version`: passed, printed `0.1.0`.
 - `npx tandem /help`: passed.
+- `npm audit`: reports only 7 low-severity AI SDK runtime advisories under pinned v5 packages.
 
 ## Deviations From Plan
 
 - The TUI is a compact functional shell rather than a fully polished Claude Code-style interface.
-- I did not run the live provider-backed smoke test because `HANDOFF_GPT5.md` says it costs real tokens and should not be run unless asked. The live path exists and is documented.
+- I did not run the live provider-backed smoke test because the handoff says it costs real tokens and the reviewer runs it. The live path exists and is documented.
 - `/schedule` registers live cron jobs and persists them, but missed-while-closed handling is a startup transcript prompt rather than an interactive catch-up workflow.
 
 ## Dependency Audit
@@ -58,3 +64,4 @@ Implemented Tandem from the supplied build plan, revised it per `REVIEW_FEEDBACK
 ## Acceptance Notes
 
 Automated unit tests drive approve, revise-to-approve, round-exhaustion takeover, exact build-round counts, leader-requested takeover, worker blocked takeover, worker artifact failure takeover, artifact validation retry, checkpoint resume, tolerant verification matching, and non-git diff fallback with fake agents/files and no network.
+Additional R4 unit tests cover prose artifact extraction fallback and OpenAI-compatible usage payload parsing.

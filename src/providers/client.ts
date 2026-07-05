@@ -38,13 +38,15 @@ export async function makeModel(modelId: string, config: TandemConfig, env: Node
     name: string;
     apiKey?: string;
     baseURL: string;
+    includeUsage?: boolean;
   }) => (modelName: string) => LanguageModel;
   return {
     entry,
     model: createOpenAICompatible({
       name: entry.id.split("/")[0] ?? "compatible",
       apiKey: env[entry.envKey],
-      baseURL: entry.baseURL ?? ""
+      baseURL: entry.baseURL ?? "",
+      includeUsage: true
     })(entry.modelName)
   };
 }

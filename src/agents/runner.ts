@@ -29,12 +29,59 @@ function isRetryable(error: unknown): boolean {
   return /\b(429|500|502|503|504)\b/.test(text);
 }
 
-function usageTokens(usage: LanguageModelUsage): { input: number; output: number } {
-  const value = usage as unknown as { inputTokens?: number; outputTokens?: number; promptTokens?: number; completionTokens?: number };
-  return {
-    input: value.inputTokens ?? value.promptTokens ?? 0,
-    output: value.outputTokens ?? value.completionTokens ?? 0
+function finiteNumber(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+}
+
+function firstNumber(...values: unknown[]): number | undefined {
+  for (const value of values) {
+    const number = finiteNumber(value);
+    if (number !== undefined) return number;
+  }
+  return undefined;
+}
+
+export function usageTokens(usage: unknown): { input: number; output: number } {
+  const value = (usage ?? {}) as {
+    inputTokens?: unknown;
+    outputTokens?: unknown;
+    totalTokens?: unknown;
+    promptTokens?: unknown;
+    completionTokens?: unknown;
+    input_tokens?: unknown;
+    output_tokens?: unknown;
+    total_tokens?: unknown;
+    prompt_tokens?: unknown;
+    completion_tokens?: unknown;
+    usage?: unknown;
   };
+  const nested = (value.usage ?? {}) as {
+    inputTokens?: unknown;
+    outputTokens?: unknown;
+    totalTokens?: unknown;
+    promptTokens?: unknown;
+    completionTokens?: unknown;
+    input_tokens?: unknown;
+    output_tokens?: unknown;
+    total_tokens?: unknown;
+    prompt_tokens?: unknown;
+    completion_tokens?: unknown;
+  };
+  let input = firstNumber(value.inputTokens, value.promptTokens, value.input_tokens, value.prompt_tokens, nested.inputTokens, nested.promptTokens, nested.input_tokens, nested.prompt_tokens);
+  let output = firstNumber(
+    value.outputTokens,
+    value.completionTokens,
+    value.output_tokens,
+    value.completion_tokens,
+    nested.outputTokens,
+    nested.completionTokens,
+    nested.output_tokens,
+    nested.completion_tokens
+  );
+  const total = firstNumber(value.totalTokens, value.total_tokens, nested.totalTokens, nested.total_tokens);
+  if ((output === undefined || output === 0) && total !== undefined && input !== undefined && total >= input) output = total - input;
+  if ((input === undefined || input === 0) && total !== undefined && output !== undefined && total >= output) input = total - output;
+  return { input: input ?? 0, output: output ?? 0 };
 }
 
 export async function runAgentText(options: AgentRunOptions): Promise<{ text: string; usage?: LanguageModelUsage }> {
@@ -43,6 +90,17 @@ export async function runAgentText(options: AgentRunOptions): Promise<{ text: st
     try {
       let finishedUsage: LanguageModelUsage | undefined;
       let streamError: unknown;
+      let recordedUsage = false;
+      let stepInputTokens = 0;
+      let stepOutputTokens = 0;
+      const recordUsage = (usage: unknown) => {
+        if (!options.ledger || !options.costRole || !options.modelEntry || recordedUsage) return;
+        const tokens = usageTokens(usage);
+        const input = tokens.input || stepInputTokens;
+        const output = tokens.output || stepOutputTokens;
+        options.ledger.add(options.costRole, options.modelEntry, input, output);
+        recordedUsage = true;
+      };
       const result = streamText({
         model: options.model,
         system: options.system,
@@ -55,13 +113,15 @@ export async function runAgentText(options: AgentRunOptions): Promise<{ text: st
         onError: ({ error }) => {
           streamError = error;
         },
+        onStepFinish: ({ usage }) => {
+          const tokens = usageTokens(usage);
+          stepInputTokens += tokens.input;
+          stepOutputTokens += tokens.output;
+        },
         onFinish: ({ totalUsage }) => {
           finishedUsage = totalUsage;
           options.onUsage?.(totalUsage);
-          if (options.ledger && options.costRole && options.modelEntry) {
-            const tokens = usageTokens(totalUsage);
-            options.ledger.add(options.costRole, options.modelEntry, tokens.input, tokens.output);
-          }
+          recordUsage(totalUsage);
         }
       });
 
@@ -72,6 +132,7 @@ export async function runAgentText(options: AgentRunOptions): Promise<{ text: st
       }
       if (streamError) throw streamError;
       finishedUsage ??= await result.totalUsage;
+      recordUsage(finishedUsage);
       return { text, usage: finishedUsage };
     } catch (error) {
       lastError = error;
