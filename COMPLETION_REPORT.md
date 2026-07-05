@@ -51,10 +51,9 @@ Implemented Tandem from the supplied build plan, revised it per `REVIEW_FEEDBACK
 
 ## Dependency Audit
 
-- `npm audit` reported 12 vulnerabilities: 7 low, 3 moderate, 1 high, 1 critical.
-- `npm audit fix` without `--force` made no dependency changes.
-- Remaining runtime findings are in pinned AI SDK v5 packages via `@ai-sdk/provider-utils`; npm's available fix requires incompatible AI SDK major upgrades, so it was not applied.
-- Remaining dev-only findings are in Vitest/Vite/esbuild; npm's available fix requires `vitest@4`, so it was not applied during the non-breaking audit task.
+- Upgraded dev-only `vitest` to 4.1.9 and added an `esbuild` override to resolve dev-tool advisories.
+- `npm audit` now reports 7 low-severity vulnerabilities, all under pinned AI SDK v5 runtime packages via `@ai-sdk/provider-utils`.
+- The remaining audit fix requires incompatible AI SDK major upgrades, so it was not applied.
 
 ## Acceptance Notes
 
