@@ -65,6 +65,7 @@ ipcMain.handle(ipcChannels.pipelineRun, async (_event, request: PipelineRunReque
 ipcMain.handle(ipcChannels.pipelineAbort, () => {
   service?.abort();
 });
+ipcMain.handle(ipcChannels.appStateGet, () => service?.getAppState());
 ipcMain.handle(ipcChannels.configGet, () => service?.getConfig());
 ipcMain.handle(ipcChannels.configSet, (_event, patch) => service?.setConfig(patch));
 ipcMain.handle(ipcChannels.modelsList, () => service?.listModels());

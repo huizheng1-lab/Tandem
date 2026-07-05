@@ -21,6 +21,7 @@ const api: TandemDesktopApi = {
   startSession: (request) => ipcRenderer.invoke(ipcChannels.sessionStart, request),
   runPipeline: (request) => ipcRenderer.invoke(ipcChannels.pipelineRun, request),
   abortPipeline: () => ipcRenderer.invoke(ipcChannels.pipelineAbort),
+  getAppState: () => ipcRenderer.invoke(ipcChannels.appStateGet),
   getConfig: () => ipcRenderer.invoke(ipcChannels.configGet),
   setConfig: (patch) => ipcRenderer.invoke(ipcChannels.configSet, patch),
   listModels: () => ipcRenderer.invoke(ipcChannels.modelsList),

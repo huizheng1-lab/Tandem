@@ -22,6 +22,7 @@ export const ipcChannels = {
   planRespond: "plan:respond",
   configGet: "config:get",
   configSet: "config:set",
+  appStateGet: "app-state:get",
   modelsList: "models:list",
   sessionsList: "sessions:list",
   sessionResume: "session:resume",
@@ -53,6 +54,13 @@ export interface SessionStartResponse {
   sessionId: string;
   config: TandemConfig;
   defaultProject: boolean;
+  projectSummary: string;
+}
+
+export interface DesktopAppStateResponse {
+  projectDir: string;
+  lastProjectDir?: string;
+  config: TandemConfig;
   projectSummary: string;
 }
 
@@ -171,6 +179,7 @@ export interface TandemDesktopApi {
   startSession(request: SessionStartRequest): Promise<SessionStartResponse>;
   runPipeline(request: PipelineRunRequest): Promise<void>;
   abortPipeline(): Promise<void>;
+  getAppState(): Promise<DesktopAppStateResponse>;
   getConfig(): Promise<TandemConfig>;
   setConfig(patch: Partial<TandemConfig>): Promise<TandemConfig>;
   listModels(): Promise<ModelListItem[]>;

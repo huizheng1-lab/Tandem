@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
+import { existsSync, readFileSync } from "node:fs";
 import { BrowserWindow, ipcMain } from "electron";
-import { mkdir, readdir } from "node:fs/promises";
+import { mkdir, readdir, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import path from "node:path";
 import cron from "node-cron";
@@ -22,6 +23,7 @@ import type { Schedule } from "../../src/commands/schedule.js";
 import {
   ipcChannels,
   type CostTotals,
+  type DesktopAppStateResponse,
   type MissingKeyInfo,
   type PermissionRequestEvent,
   type PermissionResponse,
@@ -38,7 +40,34 @@ type PendingResolver = (approved: boolean) => void;
 type DesktopWindow = Pick<BrowserWindow, "webContents">;
 type SessionLike = Pick<SessionStore, "id" | "append" | "read">;
 
+interface DesktopAppState {
+  lastProjectDir?: string;
+}
+
+function desktopAppStatePath(homeDir: string): string {
+  return path.join(homeDir, ".tandem", "desktop-state.json");
+}
+
+function readDesktopAppState(homeDir: string): DesktopAppState {
+  const filePath = desktopAppStatePath(homeDir);
+  if (!existsSync(filePath)) return {};
+  try {
+    const parsed = JSON.parse(readFileSync(filePath, "utf8")) as DesktopAppState;
+    const lastProjectDir = typeof parsed.lastProjectDir === "string" && existsSync(parsed.lastProjectDir) ? parsed.lastProjectDir : undefined;
+    return { lastProjectDir };
+  } catch {
+    return {};
+  }
+}
+
+async function writeDesktopAppState(homeDir: string, state: DesktopAppState): Promise<void> {
+  const filePath = desktopAppStatePath(homeDir);
+  await mkdir(path.dirname(filePath), { recursive: true });
+  await writeFile(filePath, `${JSON.stringify(state, null, 2)}\n`, "utf8");
+}
+
 async function projectSummary(projectDir: string): Promise<string> {
+  if (!existsSync(projectDir)) return "folder not created yet";
   const entries = await readdir(projectDir, { recursive: true, withFileTypes: true });
   const files = entries.filter((entry) => entry.isFile() && !entry.parentPath.includes(`${path.sep}node_modules${path.sep}`) && !entry.parentPath.includes(`${path.sep}.git${path.sep}`));
   return files.length === 0 ? "empty folder" : `existing project, ${files.length} file${files.length === 1 ? "" : "s"}`;
@@ -62,12 +91,17 @@ export interface TandemServiceDeps {
   createSession?: (cwd: string) => Promise<SessionLike>;
   openSession?: (id: string, cwd: string) => Promise<SessionLike>;
   registerIpcResponses?: boolean;
+  homeDir?: string;
+  baseEnv?: NodeJS.ProcessEnv;
 }
 
 export class TandemService {
-  private projectDir = safeDefaultProjectDir();
-  private env: NodeJS.ProcessEnv = {};
-  private config: TandemConfig = loadConfig({ cwd: this.projectDir });
+  private projectDir: string;
+  private lastProjectDir?: string;
+  private readonly homeDir: string;
+  private env: NodeJS.ProcessEnv;
+  private config: TandemConfig;
+  private preSessionConfigDirty = false;
   private ledger = new CostLedger();
   private session?: SessionLike;
   private controller?: AbortController;
@@ -81,6 +115,11 @@ export class TandemService {
     private readonly window: DesktopWindow,
     private readonly deps: TandemServiceDeps = {}
   ) {
+    this.homeDir = deps.homeDir ?? homedir();
+    this.lastProjectDir = readDesktopAppState(this.homeDir).lastProjectDir;
+    this.projectDir = this.lastProjectDir ?? safeDefaultProjectDir(this.homeDir);
+    this.env = this.loadProjectEnv(this.projectDir);
+    this.config = loadConfig({ cwd: this.projectDir, homeDir: this.homeDir, env: this.env });
     if (deps.registerIpcResponses === false) return;
     ipcMain.on(ipcChannels.permissionRespond, (_event, response: PermissionResponse) => {
       this.resolvePending(this.pendingPermissions, response.id, response.approved);
@@ -92,14 +131,25 @@ export class TandemService {
 
   async startSession(request: SessionStartRequest): Promise<SessionStartResponse> {
     const defaultProject = !request.projectDir;
-    this.projectDir = request.projectDir || safeDefaultProjectDir();
+    this.projectDir = request.projectDir || safeDefaultProjectDir(this.homeDir);
     await mkdir(this.projectDir, { recursive: true });
-    this.env = loadEnv(this.projectDir, undefined, { ...process.env });
-    this.config = loadConfig({ cwd: this.projectDir, env: this.env });
+    if (!defaultProject) {
+      this.lastProjectDir = this.projectDir;
+      await writeDesktopAppState(this.homeDir, { lastProjectDir: this.projectDir });
+    }
+    this.env = this.loadProjectEnv(this.projectDir);
+    const loadedConfig = loadConfig({ cwd: this.projectDir, homeDir: this.homeDir, env: this.env });
+    if (this.preSessionConfigDirty && !this.session) {
+      this.config = { ...loadedConfig, ...this.config };
+      await saveProjectConfig(this.config, this.projectDir);
+    } else {
+      this.config = loadedConfig;
+    }
+    this.preSessionConfigDirty = false;
     this.ledger = new CostLedger();
     this.lastCheckpoint = undefined;
     this.sessionAutoApprove = "none";
-    this.session = await (this.deps.createSession ?? ((cwd) => SessionStore.create(cwd)))(this.projectDir);
+    this.session = await (this.deps.createSession ?? ((cwd) => SessionStore.create(cwd, this.homeDir)))(this.projectDir);
     await this.session.append("session:start", { projectDir: this.projectDir });
     await this.refreshCronTasks();
     return { projectDir: this.projectDir, sessionId: this.session.id, config: this.config, defaultProject, projectSummary: await projectSummary(this.projectDir) };
@@ -168,8 +218,18 @@ export class TandemService {
     return this.config;
   }
 
+  async getAppState(): Promise<DesktopAppStateResponse> {
+    return {
+      projectDir: this.projectDir,
+      lastProjectDir: this.lastProjectDir,
+      config: this.config,
+      projectSummary: await projectSummary(this.projectDir)
+    };
+  }
+
   async setConfig(patch: Partial<TandemConfig>): Promise<TandemConfig> {
     this.config = { ...this.config, ...patch };
+    if (!this.session) this.preSessionConfigDirty = true;
     await saveProjectConfig(this.config, this.projectDir);
     return this.config;
   }
@@ -185,11 +245,11 @@ export class TandemService {
   }
 
   listSessions(): Promise<SessionMetadata[]> {
-    return listSessions(this.projectDir);
+    return listSessions(this.projectDir, this.homeDir);
   }
 
   async resumeSession(id: string): Promise<SessionResumeResponse> {
-    const store = await (this.deps.openSession ?? ((sessionId, cwd) => SessionStore.open(sessionId, cwd)))(id, this.projectDir);
+    const store = await (this.deps.openSession ?? ((sessionId, cwd) => SessionStore.open(sessionId, cwd, this.homeDir)))(id, this.projectDir);
     const events = await store.read();
     this.session = store;
     const checkpoint = this.findLastCheckpoint(events.map((event) => event.payload));
@@ -198,12 +258,12 @@ export class TandemService {
   }
 
   async renameSession(id: string, title: string): Promise<SessionMetadata[]> {
-    await renameSession(id, title, this.projectDir);
+    await renameSession(id, title, this.projectDir, this.homeDir);
     return this.listSessions();
   }
 
   async archiveSession(id: string, archived: boolean): Promise<SessionMetadata[]> {
-    await archiveSession(id, archived, this.projectDir);
+    await archiveSession(id, archived, this.projectDir, this.homeDir);
     return this.listSessions();
   }
 
@@ -213,7 +273,7 @@ export class TandemService {
       this.session = undefined;
       this.lastCheckpoint = undefined;
     }
-    await deleteSession(id, this.projectDir);
+    await deleteSession(id, this.projectDir, this.homeDir);
     if (!wasActive) return { sessions: await this.listSessions() };
     const activeSession = await this.startSession({ projectDir: this.projectDir });
     return { sessions: await this.listSessions(), activeSession };
@@ -316,6 +376,10 @@ export class TandemService {
       if (event?.type === "checkpoint") return event.checkpoint;
     }
     return undefined;
+  }
+
+  private loadProjectEnv(projectDir: string): NodeJS.ProcessEnv {
+    return loadEnv(projectDir, this.homeDir, { ...(this.deps.baseEnv ?? process.env) });
   }
 
   private async refreshCronTasks(): Promise<void> {

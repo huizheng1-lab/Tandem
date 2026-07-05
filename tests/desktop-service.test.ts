@@ -1,4 +1,4 @@
-import { mkdir } from "node:fs/promises";
+import { mkdir, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
@@ -7,6 +7,7 @@ import { ipcChannels } from "../app/shared/ipc.js";
 import type { AgentFns, RunOptions, RunResult } from "../src/orchestrator/machine.js";
 import type { PermissionBridge } from "../src/tools/permissions.js";
 import { safeDefaultProjectDir } from "../src/tools/protection.js";
+import { SessionStore } from "../src/session/store.js";
 
 async function tempDir(): Promise<string> {
   const dir = path.join(tmpdir(), `tandem-desktop-${Date.now()}-${Math.random().toString(16).slice(2)}`);
@@ -27,6 +28,42 @@ function fakeWindow() {
 }
 
 describe("TandemService", () => {
+  it("initializes launch context from the last project without starting a session", async () => {
+    const cwd = await tempDir();
+    const home = await tempDir();
+    await mkdir(path.join(home, ".tandem"), { recursive: true });
+    await writeFile(path.join(home, ".tandem", ".env"), "GEMINI_API_KEY=gemini-test\nMINIMAX_API_KEY=minimax-test\n", "utf8");
+    await writeFile(path.join(home, ".tandem", "desktop-state.json"), `${JSON.stringify({ lastProjectDir: cwd })}\n`, "utf8");
+    const store = await SessionStore.create(cwd, home);
+    await store.append("user", { prompt: "last project session" });
+
+    const { window } = fakeWindow();
+    const service = new TandemService(window as never, { registerIpcResponses: false, homeDir: home, baseEnv: {} });
+
+    await expect(service.getAppState()).resolves.toMatchObject({ projectDir: cwd, lastProjectDir: cwd });
+    expect(service.listModels().find((model) => model.id === "google/gemini-2.5-pro")?.available).toBe(true);
+    expect(service.listModels().find((model) => model.id === "minimax/minimax-m2.7")?.available).toBe(true);
+    expect((await service.listSessions()).map((session) => session.id)).toContain(store.id);
+
+    const renamed = await service.renameSession(store.id, "Pre-pick rename");
+    expect(renamed.find((session) => session.id === store.id)?.title).toBe("Pre-pick rename");
+  });
+
+  it("persists explicit desktop projects and pre-session config changes", async () => {
+    const cwd = await tempDir();
+    const home = await tempDir();
+    const { window } = fakeWindow();
+    const service = new TandemService(window as never, { registerIpcResponses: false, homeDir: home, baseEnv: {} });
+
+    await service.setConfig({ permissionMode: "yolo" });
+    const started = await service.startSession({ projectDir: cwd });
+
+    expect(started.config.permissionMode).toBe("yolo");
+    const next = new TandemService(window as never, { registerIpcResponses: false, homeDir: home, baseEnv: {} });
+    await expect(next.getAppState()).resolves.toMatchObject({ projectDir: cwd, lastProjectDir: cwd });
+    expect(next.getConfig().permissionMode).toBe("yolo");
+  });
+
   it("defaults new desktop sessions to the safe TandemProjects workspace", async () => {
     const { window } = fakeWindow();
     const service = new TandemService(window as never, { registerIpcResponses: false });
