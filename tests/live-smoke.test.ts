@@ -4,7 +4,7 @@ import { describe, expect, it } from "vitest";
 import { loadConfig, loadEnv } from "../src/config/load.js";
 import { createLiveAgents } from "../src/agents/live.js";
 import { runOrchestration } from "../src/orchestrator/machine.js";
-import { workingTreeDiff } from "../src/orchestrator/diff.js";
+import { createDiffTracker } from "../src/orchestrator/diff.js";
 import { CostLedger } from "../src/session/cost.js";
 
 // Live end-to-end smoke test (BUILD_PLAN.md M3 acceptance). Costs real API tokens.
@@ -19,11 +19,13 @@ describe.runIf(process.env.RUN_LIVE === "1")("live leader/worker pipeline", () =
     await mkdir(demoDir, { recursive: true });
 
     const ledger = new CostLedger();
+    const diffTracker = createDiffTracker(demoDir);
     const agents = await createLiveAgents({
       config,
       cwd: demoDir,
       env,
       ledger,
+      recordTouchedPath: (filePath) => diffTracker.recordTouchedPath(filePath),
       onLeaderText: (text) => process.stdout.write(text),
       onWorkerText: (text) => process.stdout.write(text)
     });
@@ -33,7 +35,7 @@ describe.runIf(process.env.RUN_LIVE === "1")("live leader/worker pipeline", () =
         "Create todo.mjs, a Node.js CLI with commands: add <text>, list, done <id>. Store items in todo.json next to the script. Also create test.mjs that exercises add/list/done using child_process and exits non-zero on failure. Keep it dependency-free (no npm install).",
       config,
       agents,
-      diffProvider: () => workingTreeDiff(demoDir),
+      diffProvider: diffTracker,
       emit: (event) => console.log(`\n[machine] ${JSON.stringify(event).slice(0, 400)}`)
     });
 
