@@ -9,9 +9,19 @@ import {
 } from "./artifacts.js";
 
 export type MachinePhase = "IDLE" | "PLANNING" | "BUILDING" | "REVIEWING" | "FEEDBACK" | "TAKEOVER" | "DONE";
+export interface OrchestrationCheckpoint {
+  phase: MachinePhase;
+  round: number;
+  plan?: BuildPlan;
+  reports: CompletionReport[];
+  verdicts: ReviewVerdict[];
+  feedbackHistory: ReviewVerdict["feedback"][];
+}
+
 export type MachineEvent =
   | { type: "transition"; phase: MachinePhase; message: string }
   | { type: "artifact"; name: string; value: unknown }
+  | { type: "checkpoint"; checkpoint: OrchestrationCheckpoint }
   | { type: "error"; message: string };
 
 export type PlanResult = { kind: "answer"; answer: string } | { kind: "plan"; plan: BuildPlan };
@@ -30,6 +40,7 @@ export interface RunOptions {
   goals?: string[];
   diffProvider?: () => Promise<string>;
   confirmPlan?: (plan: BuildPlan) => Promise<boolean>;
+  initialState?: OrchestrationCheckpoint;
   emit?: (event: MachineEvent) => void;
 }
 
@@ -61,78 +72,122 @@ export interface RunResult {
 
 export async function runOrchestration(options: RunOptions): Promise<RunResult> {
   const emit = options.emit ?? (() => undefined);
-  const reports: CompletionReport[] = [];
-  const verdicts: ReviewVerdict[] = [];
-  const allFeedback: ReviewVerdict["feedback"][] = [];
+  const reports: CompletionReport[] = [...(options.initialState?.reports ?? [])];
+  const verdicts: ReviewVerdict[] = [...(options.initialState?.verdicts ?? [])];
+  const allFeedback: ReviewVerdict["feedback"][] = [...(options.initialState?.feedbackHistory ?? [])];
+  let phase: MachinePhase = options.initialState?.phase ?? "PLANNING";
+  let round = options.initialState?.round ?? 0;
 
-  emit({ type: "transition", phase: "PLANNING", message: "leader planning" });
-  const planResult = await options.agents.plan({ request: options.request, goals: options.goals ?? [] });
-  if (planResult.kind === "answer") {
-    emit({ type: "transition", phase: "DONE", message: "leader answered without build plan" });
-    return { phase: "DONE", summary: planResult.answer, reports, verdicts, takeover: false };
-  }
+  const emitCheckpoint = () => {
+    emit({
+      type: "checkpoint",
+      checkpoint: {
+        phase,
+        round,
+        plan,
+        reports: [...reports],
+        verdicts: [...verdicts],
+        feedbackHistory: [...allFeedback]
+      }
+    });
+  };
 
-  const plan = BuildPlanSchema.parse(planResult.plan);
-  emit({ type: "artifact", name: "BuildPlan", value: plan });
-  if (options.confirmPlan) {
-    const confirmed = await options.confirmPlan(plan);
-    if (!confirmed) {
-      emit({ type: "transition", phase: "DONE", message: "build plan rejected by user" });
-      return { phase: "DONE", summary: "Build plan was not approved.", plan, reports, verdicts, takeover: false };
+  const transition = (nextPhase: MachinePhase, message: string, nextRound = round) => {
+    phase = nextPhase;
+    round = nextRound;
+    emit({ type: "transition", phase: nextPhase, message });
+    emitCheckpoint();
+  };
+
+  let plan = options.initialState?.plan;
+
+  if (!plan) {
+    transition("PLANNING", "leader planning", 0);
+    const planResult = await options.agents.plan({ request: options.request, goals: options.goals ?? [] });
+    if (planResult.kind === "answer") {
+      transition("DONE", "leader answered without build plan", 0);
+      return { phase: "DONE", summary: planResult.answer, reports, verdicts, takeover: false };
+    }
+
+    plan = BuildPlanSchema.parse(planResult.plan);
+    emit({ type: "artifact", name: "BuildPlan", value: plan });
+    emitCheckpoint();
+    if (options.confirmPlan) {
+      const confirmed = await options.confirmPlan(plan);
+      if (!confirmed) {
+        transition("DONE", "build plan rejected by user", 0);
+        return { phase: "DONE", summary: "Build plan was not approved.", plan, reports, verdicts, takeover: false };
+      }
     }
   }
 
+  if (phase === "DONE") {
+    emitCheckpoint();
+    return { phase: "DONE", summary: "Session already completed.", plan, reports, verdicts, takeover: false };
+  }
+
   const runTakeover = async (message: string): Promise<RunResult> => {
-    emit({ type: "transition", phase: "TAKEOVER", message });
+    transition("TAKEOVER", message, round);
     const takeover = await options.agents.takeover({ plan, reports, feedback: allFeedback });
     const report = validateCompletionReport(plan, takeover.report);
     reports.push(report);
     emit({ type: "artifact", name: "TakeoverReport", value: report });
-    emit({ type: "transition", phase: "DONE", message: "takeover done" });
+    transition("DONE", "takeover done", round);
     return { phase: "DONE", summary: takeover.userSummary, plan, reports, verdicts, takeover: true };
   };
 
   if (options.config.maxReviewRounds === 0) return runTakeover("maxReviewRounds is 0; leader takeover");
 
-  let feedback: ReviewVerdict["feedback"] = [];
-  for (let round = 1; round <= options.config.maxReviewRounds; round += 1) {
-    emit({ type: "transition", phase: "BUILDING", message: `round ${round}/${options.config.maxReviewRounds} worker build` });
-    let report: CompletionReport;
-    try {
-      report = await retryArtifact(
-        "CompletionReport",
-        emit,
-        () => options.agents.build({ plan, round, feedback, previousReport: reports.at(-1) }),
-        (value) => validateCompletionReport(plan, value)
-      );
-    } catch (error) {
-      emit({ type: "error", message: `worker could not produce a valid CompletionReport: ${String(error)}` });
-      return runTakeover("worker artifact failure; leader takeover");
-    }
-    reports.push(report);
+  let feedback: ReviewVerdict["feedback"] = allFeedback.at(-1) ?? [];
+  let nextRound = phase === "REVIEWING" ? Math.max(1, reports.length) : Math.max(1, reports.length + 1);
+  if (phase === "BUILDING" && round > 0) nextRound = round;
+  if (phase === "FEEDBACK") nextRound = reports.length + 1;
 
-    emit({ type: "transition", phase: "REVIEWING", message: `round ${round}/${options.config.maxReviewRounds} leader review` });
+  for (let currentRound = nextRound; currentRound <= options.config.maxReviewRounds; currentRound += 1) {
+    let report: CompletionReport;
+    if (phase === "REVIEWING" && reports.length >= currentRound) {
+      report = reports[currentRound - 1] as CompletionReport;
+    } else {
+      transition("BUILDING", `round ${currentRound}/${options.config.maxReviewRounds} worker build`, currentRound);
+      try {
+        report = await retryArtifact(
+          "CompletionReport",
+          emit,
+          () => options.agents.build({ plan, round: currentRound, feedback, previousReport: reports.at(-1) }),
+          (value) => validateCompletionReport(plan, value)
+        );
+      } catch (error) {
+        emit({ type: "error", message: `worker could not produce a valid CompletionReport: ${String(error)}` });
+        return runTakeover("worker artifact failure; leader takeover");
+      }
+      reports.push(report);
+      emitCheckpoint();
+    }
+
+    transition("REVIEWING", `round ${currentRound}/${options.config.maxReviewRounds} leader review`, currentRound);
     const diff = options.diffProvider ? await options.diffProvider() : "";
     const verdict = await retryArtifact(
       "ReviewVerdict",
       emit,
-      () => options.agents.review({ plan, report, round, diff }),
+      () => options.agents.review({ plan, report, round: currentRound, diff }),
       (value) => ReviewVerdictSchema.parse(value)
     );
     verdicts.push(verdict);
+    emitCheckpoint();
 
     if (verdict.verdict === "takeover" || report.status === "blocked") {
       return runTakeover(report.status === "blocked" ? "worker blocked; leader takeover" : "leader requested takeover");
     }
 
     if (verdict.verdict === "approve") {
-      emit({ type: "transition", phase: "DONE", message: "leader review approved" });
+      transition("DONE", "leader review approved", currentRound);
       return { phase: "DONE", summary: verdict.userSummary, plan, reports, verdicts, takeover: false };
     }
 
     feedback = verdict.feedback;
     allFeedback.push(feedback);
-    emit({ type: "transition", phase: "FEEDBACK", message: `leader review requested ${feedback.length} change(s)` });
+    transition("FEEDBACK", `leader review requested ${feedback.length} change(s)`, currentRound);
+    phase = "BUILDING";
   }
 
   return runTakeover("round limit exhausted; leader takeover");

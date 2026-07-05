@@ -11,7 +11,7 @@ import { addSchedule, listSchedules, removeSchedule } from "../commands/schedule
 import { listGoals } from "../session/goals.js";
 import { SessionStore, listSessions } from "../session/store.js";
 import { createLiveAgents } from "../agents/live.js";
-import { runOrchestration, MachineEvent } from "../orchestrator/machine.js";
+import { runOrchestration, MachineEvent, OrchestrationCheckpoint } from "../orchestrator/machine.js";
 import { BuildPlan, ReviewVerdict } from "../orchestrator/artifacts.js";
 import { workingTreeDiff } from "../orchestrator/diff.js";
 import { PermissionBridge, PermissionRequest } from "../tools/permissions.js";
@@ -34,6 +34,7 @@ export function App({ config: initialConfig, env, cwd, initialError }: { config:
   const [verdict, setVerdict] = useState<ReviewVerdict | undefined>();
   const [pendingApproval, setPendingApproval] = useState<{ request: PermissionRequest; resolve: (approved: boolean) => void }>();
   const [pendingPlan, setPendingPlan] = useState<{ plan: BuildPlan; resolve: (approved: boolean) => void }>();
+  const [pendingResume, setPendingResume] = useState<{ request: string; checkpoint: OrchestrationCheckpoint }>();
   const ledger = useMemo(() => new CostLedger(), []);
   const app = useApp();
   const abortRef = useRef<AbortController>();
@@ -113,12 +114,17 @@ export function App({ config: initialConfig, env, cwd, initialError }: { config:
       if (event.name === "BuildPlan") setPlan(event.value as BuildPlan);
       if (event.name === "ReviewVerdict") setVerdict(event.value as ReviewVerdict);
       addMessage("SYSTEM", `${event.name} submitted.`);
+    } else if (event.type === "checkpoint") {
+      setPhase(event.checkpoint.phase);
+      setRound(event.checkpoint.round);
+      setPlan(event.checkpoint.plan);
+      setVerdict(event.checkpoint.verdicts.at(-1));
     } else {
       addMessage("SYSTEM", event.message);
     }
   };
 
-  const runPipeline = async (prompt: string) => {
+  const runPipeline = async (prompt: string, initialState?: OrchestrationCheckpoint) => {
     const controller = new AbortController();
     abortRef.current = controller;
     setBusy(true);
@@ -145,6 +151,7 @@ export function App({ config: initialConfig, env, cwd, initialError }: { config:
         goals: activeGoals,
         diffProvider: () => workingTreeDiff(cwd),
         confirmPlan,
+        initialState,
         emit: handleEvent
       });
       addMessage("LEADER", result.summary);
@@ -221,6 +228,15 @@ export function App({ config: initialConfig, env, cwd, initialError }: { config:
       setInput("");
       return;
     }
+    if (pendingResume) {
+      const shouldResume = value.trim() === "" || /^y(es)?$/i.test(value.trim());
+      const resume = pendingResume;
+      setPendingResume(undefined);
+      setInput("");
+      if (shouldResume) await runPipeline(resume.request, resume.checkpoint);
+      else addMessage("SYSTEM", "Resume continuation cancelled.");
+      return;
+    }
     if (!value.trim()) return;
     setInput("");
     addMessage("USER", value);
@@ -238,7 +254,22 @@ export function App({ config: initialConfig, env, cwd, initialError }: { config:
           .filter((event) => event.type === "message")
           .map((event) => event.payload as TranscriptMessage);
         setMessages(restored.length > 0 ? restored : [{ role: "SYSTEM", text: `Resumed session ${id}.` }]);
-        resumeResult = `Resumed session ${id}.`;
+        const checkpoints = events
+          .filter((event) => event.type === "checkpoint")
+          .map((event) => (event.payload as { checkpoint: OrchestrationCheckpoint }).checkpoint);
+        const checkpoint = checkpoints.at(-1);
+        const userMessages = restored.filter((message) => message.role === "USER");
+        const request = userMessages.at(-1)?.text ?? "";
+        if (checkpoint && checkpoint.phase !== "DONE" && request) {
+          setPhase(checkpoint.phase);
+          setRound(checkpoint.round);
+          setPlan(checkpoint.plan);
+          setVerdict(checkpoint.verdicts.at(-1));
+          setPendingResume({ request, checkpoint });
+          resumeResult = `Resumed session ${id}. Press Enter to continue from ${checkpoint.phase}, or type anything else to cancel.`;
+        } else {
+          resumeResult = `Resumed session ${id}.`;
+        }
       }
       const commandResult = loopResult ?? scheduleResult ?? resumeResult ?? (value === "/sessions" ? (await listSessions(cwd)).join("\n") || "No sessions yet." : await dispatchCommand(value, { config, env, cwd, ledger, setConfig }));
       if (commandResult !== undefined) {
@@ -259,6 +290,7 @@ export function App({ config: initialConfig, env, cwd, initialError }: { config:
       <PlanView plan={plan} verdict={verdict} />
       <Approval action={pendingApproval?.request.action} target={pendingApproval?.request.target} />
       {pendingPlan ? <Text color="yellow">Plan approval pending</Text> : null}
+      {pendingResume ? <Text color="yellow">Resume continuation pending</Text> : null}
       {busy ? <Text color="cyan"><Spinner type="dots" /> working</Text> : null}
       <StatusLine leader={config.leader} worker={config.worker} phase={phase} round={round} maxRounds={config.maxReviewRounds} cost={ledger.totalDollars()} />
       <InputBar value={input} onChange={setInput} onSubmit={submit} />

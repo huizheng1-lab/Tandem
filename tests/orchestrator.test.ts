@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { AgentFns, runOrchestration } from "../src/orchestrator/machine.js";
+import { AgentFns, OrchestrationCheckpoint, runOrchestration } from "../src/orchestrator/machine.js";
 import { BuildPlan, CompletionReport, ReviewVerdict } from "../src/orchestrator/artifacts.js";
 
 const plan: BuildPlan = {
@@ -132,5 +132,48 @@ describe("orchestration", () => {
     });
     expect(builds).toBe(2);
     expect(result.takeover).toBe(false);
+  });
+
+  it("resumes from a mid-review checkpoint without rerunning earlier build rounds", async () => {
+    let builds = 0;
+    let lastCheckpoint: OrchestrationCheckpoint | undefined;
+    await expect(
+      runOrchestration({
+        request: "build",
+        config: { maxReviewRounds: 3 },
+        agents: agents({
+          build: async () => {
+            builds += 1;
+            return report();
+          },
+          review: async () => {
+            throw new Error("simulated crash");
+          }
+        }),
+        emit: (event) => {
+          if (event.type === "checkpoint") lastCheckpoint = event.checkpoint;
+        }
+      })
+    ).rejects.toThrow(/simulated crash/);
+
+    expect(lastCheckpoint?.phase).toBe("REVIEWING");
+    expect(lastCheckpoint?.reports).toHaveLength(1);
+
+    const result = await runOrchestration({
+      request: "build",
+      config: { maxReviewRounds: 3 },
+      initialState: lastCheckpoint,
+      agents: agents({
+        build: async () => {
+          builds += 1;
+          return report();
+        },
+        review: async () => verdict("approve")
+      })
+    });
+
+    expect(result.takeover).toBe(false);
+    expect(result.reports).toHaveLength(1);
+    expect(builds).toBe(1);
   });
 });
