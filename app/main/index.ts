@@ -1,12 +1,15 @@
-import { app, BrowserWindow, ipcMain } from "electron";
+import { app, BrowserWindow, dialog, ipcMain } from "electron";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
 import { ipcChannels } from "../shared/ipc.js";
+import { TandemService } from "./tandem-service.js";
+import type { PipelineRunRequest, SessionResumeRequest, SessionStartRequest } from "../shared/ipc.js";
 
 const currentFile = fileURLToPath(import.meta.url);
 const currentDir = path.dirname(currentFile);
 
 let mainWindow: BrowserWindow | undefined;
+let service: TandemService | undefined;
 
 function createWindow(): void {
   mainWindow = new BrowserWindow({
@@ -22,6 +25,7 @@ function createWindow(): void {
       preload: path.join(currentDir, "../preload/index.mjs")
     }
   });
+  service = new TandemService(mainWindow);
 
   if (process.env.ELECTRON_RENDERER_URL) {
     void mainWindow.loadURL(process.env.ELECTRON_RENDERER_URL);
@@ -31,6 +35,25 @@ function createWindow(): void {
 }
 
 ipcMain.handle(ipcChannels.ping, () => "pong");
+ipcMain.handle(ipcChannels.sessionStart, (_event, request: SessionStartRequest) => {
+  return service?.startSession(request);
+});
+ipcMain.handle(ipcChannels.pipelineRun, async (_event, request: PipelineRunRequest) => {
+  await service?.run(request.prompt);
+});
+ipcMain.handle(ipcChannels.pipelineAbort, () => {
+  service?.abort();
+});
+ipcMain.handle(ipcChannels.configGet, () => service?.getConfig());
+ipcMain.handle(ipcChannels.configSet, (_event, patch) => service?.setConfig(patch));
+ipcMain.handle(ipcChannels.modelsList, () => service?.listModels());
+ipcMain.handle(ipcChannels.sessionsList, () => service?.listSessions());
+ipcMain.handle(ipcChannels.sessionResume, (_event, request: SessionResumeRequest) => service?.resumeSession(request.id));
+ipcMain.handle(ipcChannels.dialogPickFolder, async () => {
+  if (!mainWindow) return undefined;
+  const result = await dialog.showOpenDialog(mainWindow, { properties: ["openDirectory"] });
+  return result.canceled ? undefined : result.filePaths[0];
+});
 
 app.whenReady().then(() => {
   createWindow();
