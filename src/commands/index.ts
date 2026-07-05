@@ -1,0 +1,80 @@
+import { TandemConfig } from "../config/schema.js";
+import { saveProjectConfig } from "../config/load.js";
+import { CostLedger } from "../session/cost.js";
+import { listSessions } from "../session/store.js";
+import { handleGoal } from "./goal.js";
+import { listModels, setModel } from "./model.js";
+import { costText, helpText, statusText } from "./misc.js";
+import { addSchedule, listSchedules, removeSchedule } from "./schedule.js";
+
+export interface CommandContext {
+  config: TandemConfig;
+  env: NodeJS.ProcessEnv;
+  cwd: string;
+  ledger: CostLedger;
+  sessionId?: string;
+  setConfig?: (config: TandemConfig) => void;
+}
+
+function splitCommand(input: string): string[] {
+  const matches = input.match(/"[^"]*"|\S+/g) ?? [];
+  return matches.map((part) => (part.startsWith('"') && part.endsWith('"') ? part.slice(1, -1) : part));
+}
+
+export async function dispatchCommand(input: string, ctx: CommandContext): Promise<string | undefined> {
+  if (!input.startsWith("/")) return undefined;
+  const [command, ...args] = splitCommand(input);
+  switch (command) {
+    case "/help":
+      return helpText;
+    case "/models":
+      return listModels(ctx.config, ctx.env);
+    case "/model": {
+      const role = args[0];
+      const id = args[1];
+      if ((role !== "leader" && role !== "worker") || !id) return `leader: ${ctx.config.leader}\nworker: ${ctx.config.worker}`;
+      const next = await setModel(ctx.config, role, id, ctx.cwd);
+      ctx.setConfig?.(next);
+      return `Set ${role} model to ${id}.`;
+    }
+    case "/rounds": {
+      const rounds = Number(args[0]);
+      if (!Number.isInteger(rounds) || rounds < 0) return "Usage: /rounds <n>";
+      const next = { ...ctx.config, maxReviewRounds: rounds };
+      await saveProjectConfig(next, ctx.cwd);
+      ctx.setConfig?.(next);
+      return `Set maxReviewRounds to ${rounds}.`;
+    }
+    case "/status":
+      return statusText(ctx.config, "IDLE", 0, ctx.sessionId ?? "new");
+    case "/cost":
+      return costText(ctx.ledger);
+    case "/goal":
+      return handleGoal(args, ctx.cwd);
+    case "/sessions":
+      return (await listSessions(ctx.cwd)).join("\n") || "No sessions yet.";
+    case "/resume":
+      return args[0] ? `Resume requested for ${args[0]}.` : "Usage: /resume <id>";
+    case "/clear":
+      return "Started a new session.";
+    case "/takeover":
+      return "Leader takeover requested.";
+    case "/schedule": {
+      if (args[0] === "list") {
+        const schedules = await listSchedules(ctx.cwd);
+        return schedules.map((item) => `${item.id} ${item.cron} ${item.prompt}`).join("\n") || "No schedules.";
+      }
+      if (args[0] === "rm" && args[1]) {
+        await removeSchedule(args[1], ctx.cwd);
+        return `Removed schedule ${args[1]}.`;
+      }
+      if (args.length >= 2) {
+        const schedule = await addSchedule(args[0] ?? "", args.slice(1).join(" "), ctx.cwd);
+        return `Added schedule ${schedule.id}. Schedules run only while Tandem is open.`;
+      }
+      return 'Usage: /schedule "<cron>" <prompt>';
+    }
+    default:
+      return `Unknown command ${command}. Run /help.`;
+  }
+}
