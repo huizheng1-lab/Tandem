@@ -25,6 +25,7 @@ describe("config", () => {
     expect(config.worker).toBe("openai/gpt-5-mini");
     expect(config.maxReviewRounds).toBe(7);
     expect(config.permissionMode).toBe("ask");
+    expect(config.showThinking).toBe(false);
   });
 
   it("names the missing env var for selected models", () => {

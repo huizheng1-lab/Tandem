@@ -75,6 +75,7 @@ export interface PipelineDoneEvent {
 export interface TextEvent {
   role: "leader" | "worker";
   delta: string;
+  thinking?: boolean;
 }
 
 export interface CostTotals {

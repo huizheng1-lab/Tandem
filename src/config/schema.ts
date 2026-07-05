@@ -22,6 +22,7 @@ export const ConfigSchema = z.object({
   worker: z.string().min(1),
   maxReviewRounds: z.number().int().min(0),
   permissionMode: PermissionModeSchema,
+  showThinking: z.boolean(),
   maxStepsPerAgentTurn: z.number().int().positive(),
   customModels: z.array(CustomModelSchema)
 });
@@ -37,6 +38,7 @@ export const defaultConfig: TandemConfig = {
   worker: "minimax/minimax-m2.7",
   maxReviewRounds: 3,
   permissionMode: "ask",
+  showThinking: false,
   maxStepsPerAgentTurn: 60,
   customModels: [
     {

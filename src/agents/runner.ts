@@ -18,6 +18,7 @@ export interface AgentRunOptions {
   tools?: ToolSet;
   maxSteps: number;
   onText?: (text: string) => void;
+  onThinking?: (text: string) => void;
   onUsage?: (usage: LanguageModelUsage) => void;
   abortSignal?: AbortSignal;
   stopToolName?: string;
@@ -84,6 +85,88 @@ export function usageTokens(usage: unknown): { input: number; output: number } {
   return { input: input ?? 0, output: output ?? 0 };
 }
 
+function suffixPrefixLength(value: string, tag: string): number {
+  const lowerValue = value.toLowerCase();
+  const lowerTag = tag.toLowerCase();
+  const max = Math.min(lowerValue.length, lowerTag.length - 1);
+  for (let length = max; length > 0; length -= 1) {
+    if (lowerValue.endsWith(lowerTag.slice(0, length))) return length;
+  }
+  return 0;
+}
+
+export class ThinkingStreamFilter {
+  private buffer = "";
+  private inThinking = false;
+
+  constructor(private readonly onText?: (text: string) => void, private readonly onThinking?: (text: string) => void) {}
+
+  push(delta: string): { text: string; thinking: string } {
+    this.buffer += delta;
+    let text = "";
+    let thinking = "";
+
+    while (this.buffer.length > 0) {
+      if (this.inThinking) {
+        const closeIndex = this.buffer.toLowerCase().indexOf("</think>");
+        if (closeIndex === -1) {
+          const keep = suffixPrefixLength(this.buffer, "</think>");
+          const ready = keep > 0 ? this.buffer.slice(0, -keep) : this.buffer;
+          if (ready) {
+            thinking += ready;
+            this.onThinking?.(ready);
+          }
+          this.buffer = keep > 0 ? this.buffer.slice(-keep) : "";
+          break;
+        }
+
+        const ready = this.buffer.slice(0, closeIndex);
+        if (ready) {
+          thinking += ready;
+          this.onThinking?.(ready);
+        }
+        this.buffer = this.buffer.slice(closeIndex + "</think>".length);
+        this.inThinking = false;
+        continue;
+      }
+
+      const openIndex = this.buffer.toLowerCase().indexOf("<think>");
+      if (openIndex === -1) {
+        const keep = suffixPrefixLength(this.buffer, "<think>");
+        const ready = keep > 0 ? this.buffer.slice(0, -keep) : this.buffer;
+        if (ready) {
+          text += ready;
+          this.onText?.(ready);
+        }
+        this.buffer = keep > 0 ? this.buffer.slice(-keep) : "";
+        break;
+      }
+
+      const ready = this.buffer.slice(0, openIndex);
+      if (ready) {
+        text += ready;
+        this.onText?.(ready);
+      }
+      this.buffer = this.buffer.slice(openIndex + "<think>".length);
+      this.inThinking = true;
+    }
+
+    return { text, thinking };
+  }
+
+  end(): { text: string; thinking: string } {
+    if (!this.buffer) return { text: "", thinking: "" };
+    const remaining = this.buffer;
+    this.buffer = "";
+    if (this.inThinking) {
+      this.onThinking?.(remaining);
+      return { text: "", thinking: remaining };
+    }
+    this.onText?.(remaining);
+    return { text: remaining, thinking: "" };
+  }
+}
+
 export async function runAgentText(options: AgentRunOptions): Promise<{ text: string; usage?: LanguageModelUsage }> {
   let lastError: unknown;
   for (let attempt = 0; attempt < 3; attempt += 1) {
@@ -126,10 +209,17 @@ export async function runAgentText(options: AgentRunOptions): Promise<{ text: st
       });
 
       let text = "";
-      for await (const delta of result.textStream) {
-        text += delta;
-        options.onText?.(delta);
+      const filter = new ThinkingStreamFilter(options.onText, options.onThinking);
+      for await (const part of result.fullStream) {
+        if (part.type === "text-delta") {
+          const visible = filter.push(part.text).text;
+          text += visible;
+        } else if (part.type === "reasoning-delta") {
+          const reasoning = "text" in part ? part.text : (part as { delta?: string }).delta;
+          if (reasoning) options.onThinking?.(reasoning);
+        }
       }
+      text += filter.end().text;
       if (streamError) throw streamError;
       finishedUsage ??= await result.totalUsage;
       recordUsage(finishedUsage);

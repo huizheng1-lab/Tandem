@@ -20,7 +20,7 @@ import "./styles.css";
 type Role = "user" | "leader" | "worker" | "system";
 
 type TranscriptEntry =
-  | { id: number; kind: "message"; role: Role; text: string }
+  | { id: number; kind: "message"; role: Role; text: string; thinking?: boolean }
   | { id: number; kind: "artifact"; name: string; value: unknown; open: boolean };
 
 function pretty(value: unknown): string {
@@ -100,6 +100,8 @@ function App(): React.ReactElement {
   const [planModal, setPlanModal] = useState<PlanConfirmEvent>();
   const [missingKey, setMissingKey] = useState<MissingKeyInfo>();
   const [sessionAutoApprove, setSessionAutoApprove] = useState<SessionAutoApproveMode>("none");
+  const [showThinking, setShowThinking] = useState(false);
+  const [thinkingRoles, setThinkingRoles] = useState<Set<"leader" | "worker">>(new Set());
   const [sessions, setSessions] = useState<SessionMetadata[]>([]);
   const [showArchived, setShowArchived] = useState(false);
   const [renamingSession, setRenamingSession] = useState<string>();
@@ -111,6 +113,8 @@ function App(): React.ReactElement {
   const [schedulePrompt, setSchedulePrompt] = useState("");
   const nextId = useRef(2);
   const transcriptEnd = useRef<HTMLDivElement>(null);
+  const showThinkingRef = useRef(false);
+  const thinkingTimers = useRef<Partial<Record<"leader" | "worker", ReturnType<typeof setTimeout>>>>({});
 
   const totalCost = useMemo(() => {
     if (!cost) return "$0.0000";
@@ -128,10 +132,37 @@ function App(): React.ReactElement {
   const appendStream = (role: "leader" | "worker", delta: string) => {
     setEntries((current) => {
       const last = current.at(-1);
-      if (last?.kind === "message" && last.role === role) {
+      if (last?.kind === "message" && last.role === role && !last.thinking) {
         return [...current.slice(0, -1), { ...last, text: `${last.text}${delta}` }];
       }
       return [...current, { id: nextId.current++, kind: "message", role, text: delta }];
+    });
+  };
+
+  const markThinking = (role: "leader" | "worker") => {
+    setThinkingRoles((current) => new Set(current).add(role));
+    const existing = thinkingTimers.current[role];
+    if (existing) clearTimeout(existing);
+    thinkingTimers.current[role] = setTimeout(() => {
+      setThinkingRoles((current) => {
+        const next = new Set(current);
+        next.delete(role);
+        return next;
+      });
+    }, 1200);
+  };
+
+  const appendThinking = (role: "leader" | "worker", delta: string) => {
+    if (!showThinkingRef.current) {
+      markThinking(role);
+      return;
+    }
+    setEntries((current) => {
+      const last = current.at(-1);
+      if (last?.kind === "message" && last.role === role && last.thinking) {
+        return [...current.slice(0, -1), { ...last, text: `${last.text}${delta}` }];
+      }
+      return [...current, { id: nextId.current++, kind: "message", role, text: delta, thinking: true }];
     });
   };
 
@@ -159,6 +190,8 @@ function App(): React.ReactElement {
   const startProjectSession = async (projectDir?: string) => {
     const started = await tandem.startSession({ projectDir });
     setSession(started);
+    setShowThinking(started.config.showThinking);
+    showThinkingRef.current = started.config.showThinking;
     setEntries([{ id: nextId.current++, kind: "message", role: "system", text: sessionStartedText(started) }]);
     setPhase("IDLE");
     setRound(0);
@@ -178,6 +211,11 @@ function App(): React.ReactElement {
         const last = replayed.at(-1);
         if (last?.kind === "message" && last.role === payload.role) last.text += payload.delta ?? "";
         else replayed.push({ id: nextId.current++, kind: "message", role: payload.role ?? "system", text: payload.delta ?? "" });
+      }
+      if (stored.type === "thinking" && showThinking && "role" in payload && "delta" in payload) {
+        const last = replayed.at(-1);
+        if (last?.kind === "message" && last.role === payload.role && last.thinking) last.text += payload.delta ?? "";
+        else replayed.push({ id: nextId.current++, kind: "message", role: payload.role ?? "system", text: payload.delta ?? "", thinking: true });
       }
       if (stored.type === "machine") {
         const event = payload as MachineEvent;
@@ -202,8 +240,12 @@ function App(): React.ReactElement {
   }, [entries]);
 
   useEffect(() => {
+    showThinkingRef.current = showThinking;
+  }, [showThinking]);
+
+  useEffect(() => {
     const removers = [
-      tandem.onTextEvent((event) => appendStream(event.role, event.delta)),
+      tandem.onTextEvent((event) => (event.thinking ? appendThinking(event.role, event.delta) : appendStream(event.role, event.delta))),
       tandem.onMachineEvent(handleMachineEvent),
       tandem.onCostEvent(setCost),
       tandem.onDoneEvent((event) => {
@@ -222,6 +264,8 @@ function App(): React.ReactElement {
       .startSession({})
       .then(async (started) => {
         setSession(started);
+        setShowThinking(started.config.showThinking);
+        showThinkingRef.current = started.config.showThinking;
         appendMessage("system", sessionStartedText(started));
         setModels(await tandem.listModels());
         await refreshSidebar();
@@ -234,6 +278,9 @@ function App(): React.ReactElement {
 
     return () => {
       for (const remove of removers) remove();
+      for (const timer of Object.values(thinkingTimers.current)) {
+        if (timer) clearTimeout(timer);
+      }
     };
   }, []);
 
@@ -244,6 +291,13 @@ function App(): React.ReactElement {
 
   const updatePermissionMode = async (permissionMode: PermissionMode) => {
     const nextConfig = await tandem.setConfig({ permissionMode });
+    setSession((current) => (current ? { ...current, config: nextConfig } : current));
+  };
+
+  const updateShowThinking = async (value: boolean) => {
+    setShowThinking(value);
+    showThinkingRef.current = value;
+    const nextConfig = await tandem.setConfig({ showThinking: value });
     setSession((current) => (current ? { ...current, config: nextConfig } : current));
   };
 
@@ -486,6 +540,10 @@ function App(): React.ReactElement {
               <option value="yolo">Auto</option>
             </select>
           </label>
+          <label className="checkRow">
+            <input type="checkbox" checked={showThinking} onChange={(event) => void updateShowThinking(event.target.checked)} />
+            Show thinking
+          </label>
           <span className="phaseChip">{phase}</span>
           {sessionAutoApprove !== "none" ? (
             <span className="autoApproveChip">
@@ -509,7 +567,10 @@ function App(): React.ReactElement {
           ) : null}
           {entries.map((entry) =>
             entry.kind === "message" ? (
-              <article key={entry.id} className={`bubble ${entry.role}`}>
+              <article
+                key={entry.id}
+                className={`bubble ${entry.role}${entry.thinking ? " thinking" : ""}${(entry.role === "leader" || entry.role === "worker") && thinkingRoles.has(entry.role) ? " thinkingActive" : ""}`}
+              >
                 <div className="roleBadge">{roleLabel(entry.role)}</div>
                 <div className="messageText">{entry.text}</div>
               </article>

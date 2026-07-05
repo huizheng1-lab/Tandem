@@ -209,7 +209,9 @@ export function App({ config: initialConfig, env, cwd, initialError }: { config:
         recordTouchedPath: (filePath) => diffTracker.recordTouchedPath(filePath),
         abortSignal: controller.signal,
         onLeaderText: (text) => appendDelta("LEADER", text),
-        onWorkerText: (text) => appendDelta("WORKER", text)
+        onWorkerText: (text) => appendDelta("WORKER", text),
+        onLeaderThinking: config.showThinking ? (text) => appendDelta("LEADER", text) : undefined,
+        onWorkerThinking: config.showThinking ? (text) => appendDelta("WORKER", text) : undefined
       });
       const result = await runOrchestration({
         request: prompt,
@@ -229,6 +231,7 @@ export function App({ config: initialConfig, env, cwd, initialError }: { config:
         ledger,
         abortSignal: controller.signal,
         onLeaderText: (text) => appendDelta("LEADER", text),
+        onLeaderThinking: config.showThinking ? (text) => appendDelta("LEADER", text) : undefined,
         goals: activeGoalObjects,
         userSummary: result.summary
       });

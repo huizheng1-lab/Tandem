@@ -115,7 +115,9 @@ export class TandemService {
         recordTouchedPath: (filePath) => diffTracker.recordTouchedPath(filePath),
         abortSignal: this.controller.signal,
         onLeaderText: (delta) => void this.emitText("leader", delta),
-        onWorkerText: (delta) => void this.emitText("worker", delta)
+        onWorkerText: (delta) => void this.emitText("worker", delta),
+        onLeaderThinking: (delta) => void this.emitText("leader", delta, true),
+        onWorkerThinking: (delta) => void this.emitText("worker", delta, true)
       });
       const goals = (await listGoals(this.projectDir)).filter((goal) => goal.status === "active").map((goal) => goal.text);
       const result = await (this.deps.runOrchestration ?? runOrchestration)({
@@ -237,11 +239,11 @@ export class TandemService {
     return this.sessionAutoApprove;
   }
 
-  private async emitText(role: "leader" | "worker", delta: string): Promise<void> {
-    const event = { role, delta };
+  private async emitText(role: "leader" | "worker", delta: string, thinking = false): Promise<void> {
+    const event = { role, delta, thinking };
     this.window.webContents.send(ipcChannels.textEvent, event);
     this.window.webContents.send(ipcChannels.costEvent, this.costTotals());
-    await this.session?.append("text", event);
+    await this.session?.append(thinking ? "thinking" : "text", event);
     await this.session?.append("cost", this.costTotals());
   }
 

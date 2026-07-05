@@ -24,6 +24,8 @@ export interface LiveAgentOptions {
   abortSignal?: AbortSignal;
   onLeaderText?: (text: string) => void;
   onWorkerText?: (text: string) => void;
+  onLeaderThinking?: (text: string) => void;
+  onWorkerThinking?: (text: string) => void;
 }
 
 function jsonBlock(value: unknown): string {
@@ -173,6 +175,7 @@ export async function createLiveAgents(options: LiveAgentOptions): Promise<Agent
         stopToolName: "submit_build_plan",
         abortSignal: options.abortSignal,
         onText: options.onLeaderText,
+        onThinking: options.onLeaderThinking,
         artifactName: "BuildPlan",
         getArtifact: () => submittedPlan
       });
@@ -208,6 +211,7 @@ export async function createLiveAgents(options: LiveAgentOptions): Promise<Agent
         stopToolName: "submit_completion_report",
         abortSignal: options.abortSignal,
         onText: options.onWorkerText,
+        onThinking: options.onWorkerThinking,
         artifactName: "CompletionReport",
         getArtifact: () => report
       });
@@ -244,6 +248,7 @@ export async function createLiveAgents(options: LiveAgentOptions): Promise<Agent
         stopToolName: "submit_review",
         abortSignal: options.abortSignal,
         onText: options.onLeaderText,
+        onThinking: options.onLeaderThinking,
         artifactName: "ReviewVerdict",
         getArtifact: () => verdict
       });
@@ -289,6 +294,7 @@ export async function createLiveAgents(options: LiveAgentOptions): Promise<Agent
         stopToolName: "submit_takeover",
         abortSignal: options.abortSignal,
         onText: options.onLeaderText,
+        onThinking: options.onLeaderThinking,
         artifactName: "TakeoverReport",
         getArtifact: () => submitted
       });
@@ -314,7 +320,7 @@ export interface GoalProgressNote {
   note: string;
 }
 
-export async function suggestGoalProgressNotes(options: Pick<LiveAgentOptions, "config" | "cwd" | "env" | "ledger" | "abortSignal" | "onLeaderText"> & {
+export async function suggestGoalProgressNotes(options: Pick<LiveAgentOptions, "config" | "cwd" | "env" | "ledger" | "abortSignal" | "onLeaderText" | "onLeaderThinking"> & {
   goals: Goal[];
   userSummary: string;
 }): Promise<GoalProgressNote[]> {
@@ -356,6 +362,7 @@ export async function suggestGoalProgressNotes(options: Pick<LiveAgentOptions, "
     toolChoice: { type: "tool", toolName: "submit_goal_notes" },
     abortSignal: options.abortSignal,
     onText: options.onLeaderText,
+    onThinking: options.onLeaderThinking,
     artifactName: "GoalProgressNotes",
     getArtifact: () => submitted
   });
