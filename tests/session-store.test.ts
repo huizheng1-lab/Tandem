@@ -3,7 +3,7 @@ import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { archiveSession, deleteSession, listSessions, renameSession, SessionStore, sessionIndexPath, truncateTitle } from "../src/session/store.js";
+import { archiveSession, deleteSession, listSessions, renameSession, SessionStore, sessionDir, sessionIndexPath, truncateTitle } from "../src/session/store.js";
 
 async function tempDir(name: string): Promise<string> {
   const dir = path.join(tmpdir(), `tandem-${name}-${Date.now()}-${Math.random().toString(16).slice(2)}`);
@@ -71,5 +71,37 @@ describe("SessionStore", () => {
 
     const content = await readFile(sessionIndexPath(cwd, home), "utf8");
     expect(() => JSON.parse(content)).not.toThrow();
+  });
+
+  it("merges missing session files without wiping custom title or archived metadata", async () => {
+    const { cwd, home } = await tempProject();
+    const indexed = await SessionStore.create(cwd, home);
+    await indexed.append("user", { prompt: "original title" });
+    await renameSession(indexed.id, "Custom title", cwd, home);
+    await archiveSession(indexed.id, true, cwd, home);
+
+    const unindexedId = "unindexed-session";
+    await writeFile(
+      path.join(sessionDir(cwd, home), `${unindexedId}.jsonl`),
+      `${JSON.stringify({ type: "user", at: "2026-01-01T00:00:00.000Z", payload: { prompt: "new file prompt" } })}\n`,
+      "utf8"
+    );
+
+    const sessions = await listSessions(cwd, home);
+    expect(sessions.find((session) => session.id === indexed.id)).toMatchObject({ title: "Custom title", archived: true });
+    expect(sessions.find((session) => session.id === unindexedId)).toMatchObject({ title: "new file prompt", archived: false });
+  });
+
+  it("serializes concurrent index updates so appends do not clobber a rename", async () => {
+    const { cwd, home } = await tempProject();
+    const store = await SessionStore.create(cwd, home);
+    await store.append("user", { prompt: "initial title" });
+
+    await Promise.all([
+      ...Array.from({ length: 25 }, (_, index) => store.append("text", { role: "leader", delta: String(index) })),
+      renameSession(store.id, "Concurrent rename", cwd, home)
+    ]);
+
+    expect((await listSessions(cwd, home))[0]).toMatchObject({ id: store.id, title: "Concurrent rename" });
   });
 });

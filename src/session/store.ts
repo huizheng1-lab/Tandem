@@ -19,6 +19,7 @@ export interface SessionMetadata {
 }
 
 type SessionIndex = Record<string, Omit<SessionMetadata, "id">>;
+let indexQueue: Promise<void> = Promise.resolve();
 
 export function projectHash(cwd = process.cwd()): string {
   return createHash("sha1").update(path.resolve(cwd)).digest("hex").slice(0, 12);
@@ -40,11 +41,20 @@ export function truncateTitle(prompt: string): string {
   return `${(boundary >= 24 ? slice.slice(0, boundary) : slice).trimEnd()}...`;
 }
 
+async function enqueueIndexMutation<T>(operation: () => Promise<T>): Promise<T> {
+  const next = indexQueue.then(operation, operation);
+  indexQueue = next.then(
+    () => undefined,
+    () => undefined
+  );
+  return next;
+}
+
 async function readIndex(cwd: string, homeDir: string): Promise<SessionIndex> {
   try {
     return JSON.parse(await readFile(sessionIndexPath(cwd, homeDir), "utf8")) as SessionIndex;
   } catch {
-    return rebuildSessionIndex(cwd, homeDir);
+    return {};
   }
 }
 
@@ -64,35 +74,43 @@ async function readSessionEvents(filePath: string): Promise<SessionEvent[]> {
     .map((line) => JSON.parse(line) as SessionEvent);
 }
 
-async function rebuildSessionIndex(cwd = process.cwd(), homeDir = homedir()): Promise<SessionIndex> {
+async function sessionFileIds(cwd: string, homeDir: string): Promise<Set<string>> {
   const dir = sessionDir(cwd, homeDir);
-  if (!existsSync(dir)) return {};
-  const files = (await readdir(dir)).filter((file) => file.endsWith(".jsonl"));
-  const index: SessionIndex = {};
-  for (const file of files) {
-    const id = file.replace(/\.jsonl$/, "");
-    const events = await readSessionEvents(path.join(dir, file));
-    const first = events[0]?.at ?? new Date(0).toISOString();
-    const last = events.at(-1)?.at ?? first;
-    const userPrompt = events.find((event) => event.type === "user")?.payload as { prompt?: unknown } | undefined;
-    index[id] = {
-      title: typeof userPrompt?.prompt === "string" ? truncateTitle(userPrompt.prompt) : id.slice(0, 8),
-      archived: false,
-      createdAt: first,
-      lastActiveAt: last
-    };
+  if (!existsSync(dir)) return new Set();
+  return new Set((await readdir(dir)).filter((file) => file.endsWith(".jsonl")).map((file) => file.replace(/\.jsonl$/, "")));
+}
+
+async function synthesizeSessionEntry(cwd: string, homeDir: string, id: string): Promise<Omit<SessionMetadata, "id">> {
+  const events = await readSessionEvents(path.join(sessionDir(cwd, homeDir), `${id}.jsonl`));
+  const first = events[0]?.at ?? new Date(0).toISOString();
+  const last = events.at(-1)?.at ?? first;
+  const userPrompt = events.find((event) => event.type === "user")?.payload as { prompt?: unknown } | undefined;
+  return {
+    title: typeof userPrompt?.prompt === "string" ? truncateTitle(userPrompt.prompt) : id.slice(0, 8),
+    archived: false,
+    createdAt: first,
+    lastActiveAt: last
+  };
+}
+
+async function reconcileSessionIndex(cwd: string, homeDir: string, index: SessionIndex): Promise<SessionIndex> {
+  const files = await sessionFileIds(cwd, homeDir);
+  const next: SessionIndex = {};
+  for (const id of files) {
+    next[id] = index[id] ?? (await synthesizeSessionEntry(cwd, homeDir, id));
   }
-  await writeIndex(cwd, homeDir, index);
-  return index;
+  return next;
 }
 
 async function updateSessionIndex(cwd: string, homeDir: string, id: string, updater: (entry: Omit<SessionMetadata, "id">) => void): Promise<void> {
-  const index = await readIndex(cwd, homeDir);
-  const now = new Date().toISOString();
-  index[id] ??= { title: id.slice(0, 8), archived: false, createdAt: now, lastActiveAt: now };
-  const entry = index[id];
-  updater(entry);
-  await writeIndex(cwd, homeDir, index);
+  await enqueueIndexMutation(async () => {
+    const index = await reconcileSessionIndex(cwd, homeDir, await readIndex(cwd, homeDir));
+    const now = new Date().toISOString();
+    index[id] ??= { title: id.slice(0, 8), archived: false, createdAt: now, lastActiveAt: now };
+    const entry = index[id];
+    updater(entry);
+    await writeIndex(cwd, homeDir, index);
+  });
 }
 
 export class SessionStore {
@@ -150,14 +168,13 @@ export class SessionStore {
 export async function listSessions(cwd = process.cwd(), homeDir = homedir()): Promise<SessionMetadata[]> {
   const dir = sessionDir(cwd, homeDir);
   if (!existsSync(dir)) return [];
-  const index = await readIndex(cwd, homeDir);
-  const files = new Set((await readdir(dir)).filter((file) => file.endsWith(".jsonl")).map((file) => file.replace(/\.jsonl$/, "")));
-  const missing = [...files].filter((id) => !index[id]);
-  const finalIndex = missing.length > 0 ? await rebuildSessionIndex(cwd, homeDir) : index;
-  return Object.entries(finalIndex)
-    .filter(([id]) => files.has(id))
-    .map(([id, entry]) => ({ id, ...entry }))
-    .sort((left, right) => right.lastActiveAt.localeCompare(left.lastActiveAt));
+  return enqueueIndexMutation(async () => {
+    const index = await reconcileSessionIndex(cwd, homeDir, await readIndex(cwd, homeDir));
+    await writeIndex(cwd, homeDir, index);
+    return Object.entries(index)
+      .map(([id, entry]) => ({ id, ...entry }))
+      .sort((left, right) => right.lastActiveAt.localeCompare(left.lastActiveAt));
+  });
 }
 
 export async function renameSession(id: string, title: string, cwd = process.cwd(), homeDir = homedir()): Promise<void> {
@@ -174,7 +191,9 @@ export async function archiveSession(id: string, archived: boolean, cwd = proces
 
 export async function deleteSession(id: string, cwd = process.cwd(), homeDir = homedir()): Promise<void> {
   await rm(path.join(sessionDir(cwd, homeDir), `${id}.jsonl`), { force: true });
-  const index = await readIndex(cwd, homeDir);
-  delete index[id];
-  await writeIndex(cwd, homeDir, index);
+  await enqueueIndexMutation(async () => {
+    const index = await reconcileSessionIndex(cwd, homeDir, await readIndex(cwd, homeDir));
+    delete index[id];
+    await writeIndex(cwd, homeDir, index);
+  });
 }
