@@ -111,6 +111,8 @@ export class TandemService {
     const session = this.session as SessionLike;
     this.controller = new AbortController();
     await session.append("user", { prompt });
+    const initialState = this.lastCheckpoint?.phase === "DONE" ? undefined : this.lastCheckpoint;
+    this.lastCheckpoint = undefined;
 
     try {
       const diffTracker = createDiffTracker(this.projectDir);
@@ -137,13 +139,14 @@ export class TandemService {
         agents,
         goals,
         diffProvider: diffTracker,
-        initialState: this.lastCheckpoint,
+        initialState,
         confirmPlan: (plan) => this.confirmPlan(plan),
         emit: (event) => void this.emitMachine(event)
       });
       const done = { summary: result.summary, takeover: result.takeover };
       this.window.webContents.send(ipcChannels.doneEvent, done);
       await session.append("done", done);
+      this.lastCheckpoint = undefined;
     } catch (error) {
       const event: MachineEvent = { type: "error", message: String(error) };
       const done = { summary: event.message, takeover: false, error: true, missingKey: missingKeyInfo(error, this.projectDir) };
@@ -151,6 +154,7 @@ export class TandemService {
       this.window.webContents.send(ipcChannels.doneEvent, done);
       await session.append("machine", event);
       await session.append("done", done);
+      this.lastCheckpoint = undefined;
     } finally {
       this.controller = undefined;
     }
@@ -188,7 +192,8 @@ export class TandemService {
     const store = await (this.deps.openSession ?? ((sessionId, cwd) => SessionStore.open(sessionId, cwd)))(id, this.projectDir);
     const events = await store.read();
     this.session = store;
-    this.lastCheckpoint = this.findLastCheckpoint(events.map((event) => event.payload));
+    const checkpoint = this.findLastCheckpoint(events.map((event) => event.payload));
+    this.lastCheckpoint = checkpoint?.phase === "DONE" ? undefined : checkpoint;
     return { id, events, checkpoint: this.lastCheckpoint };
   }
 

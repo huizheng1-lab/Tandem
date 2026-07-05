@@ -84,6 +84,78 @@ describe("TandemService", () => {
     expect(sent.some((event) => event.channel === ipcChannels.doneEvent)).toBe(true);
   });
 
+  it("does not reuse a completed checkpoint for a follow-up prompt", async () => {
+    const cwd = await tempDir();
+    const { window } = fakeWindow();
+    const initialStates: RunOptions["initialState"][] = [];
+    const service = new TandemService(window as never, {
+      registerIpcResponses: false,
+      createSession: async () => ({
+        id: "session-1",
+        append: async () => undefined,
+        read: async () => []
+      }),
+      createAgents: async (): Promise<AgentFns> => ({
+        plan: async () => ({ kind: "answer", answer: "done" }),
+        build: async () => ({}),
+        review: async () => ({}),
+        takeover: async () => {
+          throw new Error("not used");
+        }
+      }),
+      runOrchestration: async (options: RunOptions): Promise<RunResult> => {
+        initialStates.push(options.initialState);
+        options.emit?.({ type: "checkpoint", checkpoint: { phase: "DONE", round: 0, reports: [], verdicts: [], feedbackHistory: [] } });
+        return { phase: "DONE", summary: "finished", reports: [], verdicts: [], takeover: false };
+      }
+    });
+
+    await service.startSession({ projectDir: cwd });
+    await service.run("first");
+    await service.run("second");
+
+    expect(initialStates).toEqual([undefined, undefined]);
+  });
+
+  it("consumes an interrupted resume checkpoint only once", async () => {
+    const cwd = await tempDir();
+    const { window } = fakeWindow();
+    const checkpoint = { phase: "BUILDING" as const, round: 1, reports: [], verdicts: [], feedbackHistory: [] };
+    const initialStates: RunOptions["initialState"][] = [];
+    const service = new TandemService(window as never, {
+      registerIpcResponses: false,
+      createSession: async () => ({
+        id: "session-1",
+        append: async () => undefined,
+        read: async () => []
+      }),
+      openSession: async () => ({
+        id: "session-1",
+        append: async () => undefined,
+        read: async () => [{ type: "machine", at: new Date().toISOString(), payload: { type: "checkpoint", checkpoint } }]
+      }),
+      createAgents: async (): Promise<AgentFns> => ({
+        plan: async () => ({ kind: "answer", answer: "done" }),
+        build: async () => ({}),
+        review: async () => ({}),
+        takeover: async () => {
+          throw new Error("not used");
+        }
+      }),
+      runOrchestration: async (options: RunOptions): Promise<RunResult> => {
+        initialStates.push(options.initialState);
+        return { phase: "DONE", summary: "finished", reports: [], verdicts: [], takeover: false };
+      }
+    });
+
+    await service.startSession({ projectDir: cwd });
+    await service.resumeSession("session-1");
+    await service.run("continue");
+    await service.run("fresh");
+
+    expect(initialStates).toEqual([checkpoint, undefined]);
+  });
+
   it("records crashes to the active session", async () => {
     const cwd = await tempDir();
     const { window, sent } = fakeWindow();
