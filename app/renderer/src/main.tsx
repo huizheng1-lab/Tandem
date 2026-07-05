@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import type {
   CostTotals,
+  DesktopAppStateResponse,
   Goal,
   MachineEvent,
   MissingKeyInfo,
@@ -13,7 +14,7 @@ import type {
   SessionMetadata,
   SessionStartResponse
 } from "../../shared/ipc.js";
-import type { PermissionMode } from "../../../src/config/schema.js";
+import type { PermissionMode, TandemConfig } from "../../../src/config/schema.js";
 import { ErrorBoundary } from "./ErrorBoundary.js";
 import "./styles.css";
 
@@ -66,6 +67,11 @@ function sessionStartedText(session: SessionStartResponse): string {
   return `Session ${session.sessionId} started; working in ${session.projectDir} (${session.projectSummary}) - leader ${session.config.leader}, worker ${session.config.worker}, permissions ${session.config.permissionMode}`;
 }
 
+function displayPath(filePath: string): string {
+  const parts = filePath.split(/[\\/]/).filter(Boolean);
+  return parts.at(-1) ?? filePath;
+}
+
 function errorText(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
@@ -115,6 +121,8 @@ function App(): React.ReactElement {
 
   const [session, setSession] = useState<SessionStartResponse>();
   const needsProjectPick = !session || Boolean(session.defaultProject);
+  const [config, setConfig] = useState<TandemConfig>();
+  const [appState, setAppState] = useState<DesktopAppStateResponse>();
   const [models, setModels] = useState<ModelListItem[]>([]);
   const [entries, setEntries] = useState<TranscriptEntry[]>([{ id: 1, kind: "message", role: "system", text: "Choose a project folder to start Tandem." }]);
   const [prompt, setPrompt] = useState("");
@@ -150,6 +158,8 @@ function App(): React.ReactElement {
   const costTitle = cost
     ? `Leader: ${cost.leader.inputTokens}/${cost.leader.outputTokens} tokens, $${cost.leader.dollars.toFixed(4)}\nWorker: ${cost.worker.inputTokens}/${cost.worker.outputTokens} tokens, $${cost.worker.dollars.toFixed(4)}`
     : "No usage yet";
+  const effectiveConfig = session?.config ?? config;
+  const contextProjectDir = session?.projectDir ?? appState?.lastProjectDir ?? appState?.projectDir;
 
   const appendMessage = (role: Role, text: string) => {
     setEntries((current) => [...current, { id: nextId.current++, kind: "message", role, text }]);
@@ -227,6 +237,8 @@ function App(): React.ReactElement {
 
   const applyStartedSession = async (started: SessionStartResponse, resetTranscript: boolean) => {
     setSession(started);
+    setConfig(started.config);
+    setAppState({ projectDir: started.projectDir, lastProjectDir: started.defaultProject ? appState?.lastProjectDir : started.projectDir, config: started.config, projectSummary: started.projectSummary });
     setShowThinking(started.config.showThinking);
     showThinkingRef.current = started.config.showThinking;
     const startEntry = { id: nextId.current++, kind: "message" as const, role: "system" as const, text: sessionStartedText(started) };
@@ -316,8 +328,12 @@ function App(): React.ReactElement {
       tandem.onPlanConfirm(setPlanModal)
     ];
 
-    void Promise.all([tandem.listModels(), refreshSidebar()])
-      .then(([modelItems]) => {
+    void Promise.all([tandem.getAppState(), tandem.listModels(), refreshSidebar()])
+      .then(([state, modelItems]) => {
+        setAppState(state);
+        setConfig(state.config);
+        setShowThinking(state.config.showThinking);
+        showThinkingRef.current = state.config.showThinking;
         setModels(modelItems);
       })
       .catch((error: unknown) => {
@@ -334,11 +350,13 @@ function App(): React.ReactElement {
 
   const updateModel = async (role: "leader" | "worker", modelId: string) => {
     const nextConfig = await tandem.setConfig({ [role]: modelId });
+    setConfig(nextConfig);
     setSession((current) => (current ? { ...current, config: nextConfig } : current));
   };
 
   const updatePermissionMode = async (permissionMode: PermissionMode) => {
     const nextConfig = await tandem.setConfig({ permissionMode });
+    setConfig(nextConfig);
     setSession((current) => (current ? { ...current, config: nextConfig } : current));
   };
 
@@ -346,6 +364,7 @@ function App(): React.ReactElement {
     setShowThinking(value);
     showThinkingRef.current = value;
     const nextConfig = await tandem.setConfig({ showThinking: value });
+    setConfig(nextConfig);
     setSession((current) => (current ? { ...current, config: nextConfig } : current));
   };
 
@@ -360,6 +379,11 @@ function App(): React.ReactElement {
       return;
     }
     await startProjectSession(session.projectDir);
+  };
+
+  const continueLastProject = async () => {
+    const projectDir = appState?.lastProjectDir ?? appState?.projectDir;
+    if (projectDir) await startProjectSession(projectDir);
   };
 
   const addGoal = async () => {
@@ -435,9 +459,9 @@ function App(): React.ReactElement {
   const statusText = () =>
     [
       `phase: ${phase}`,
-      `round: ${round}/${session?.config.maxReviewRounds ?? 0}`,
-      `leader: ${session?.config.leader ?? "unknown"}`,
-      `worker: ${session?.config.worker ?? "unknown"}`,
+      `round: ${round}/${effectiveConfig?.maxReviewRounds ?? 0}`,
+      `leader: ${effectiveConfig?.leader ?? "unknown"}`,
+      `worker: ${effectiveConfig?.worker ?? "unknown"}`,
       `session: ${session?.sessionId ?? "starting"}`
     ].join("\n");
 
@@ -462,6 +486,7 @@ function App(): React.ReactElement {
           return;
         }
         const nextConfig = await tandem.setConfig({ [role]: id });
+        setConfig(nextConfig);
         setSession((current) => (current ? { ...current, config: nextConfig } : current));
         appendMessage("system", `Set ${role} model to ${id}.`);
         return;
@@ -473,6 +498,7 @@ function App(): React.ReactElement {
           return;
         }
         const nextConfig = await tandem.setConfig({ maxReviewRounds: rounds });
+        setConfig(nextConfig);
         setSession((current) => (current ? { ...current, config: nextConfig } : current));
         appendMessage("system", `Set maxReviewRounds to ${rounds}.`);
         return;
@@ -592,7 +618,7 @@ function App(): React.ReactElement {
     <main className="shell">
       <aside className="sidebar">
         <div className="brand">Tandem</div>
-        <div className="projectPath">{session?.projectDir ?? "No project loaded"}</div>
+        <div className="projectPath">{contextProjectDir ?? "No project loaded"}</div>
         <button type="button" className="sidebarButton" onClick={() => void pickProject()}>
           Pick Folder
         </button>
@@ -601,7 +627,7 @@ function App(): React.ReactElement {
         </button>
         <div className="sideSection">
           <div className="sideLabel">Session</div>
-          <div className="sideValue">{session?.sessionId ?? "starting"}</div>
+          <div className="sideValue">{session?.sessionId ?? "not started"}</div>
         </div>
         <div className="sideSection">
           <div className="sideLabel">Sessions</div>
@@ -696,7 +722,7 @@ function App(): React.ReactElement {
         <header className="statusBar">
           <label>
             Leader
-            <select value={session?.config.leader ?? ""} onChange={(event) => void updateModel("leader", event.target.value)}>
+            <select value={effectiveConfig?.leader ?? ""} onChange={(event) => void updateModel("leader", event.target.value)}>
               {models.map((model) => (
                 <option key={model.id} value={model.id} disabled={!model.available}>
                   {model.id}
@@ -707,7 +733,7 @@ function App(): React.ReactElement {
           </label>
           <label>
             Worker
-            <select value={session?.config.worker ?? ""} onChange={(event) => void updateModel("worker", event.target.value)}>
+            <select value={effectiveConfig?.worker ?? ""} onChange={(event) => void updateModel("worker", event.target.value)}>
               {models.map((model) => (
                 <option key={model.id} value={model.id} disabled={!model.available}>
                   {model.id}
@@ -718,7 +744,7 @@ function App(): React.ReactElement {
           </label>
           <label>
             Permissions
-            <select value={session?.config.permissionMode ?? "ask"} onChange={(event) => void updatePermissionMode(event.target.value as PermissionMode)}>
+            <select value={effectiveConfig?.permissionMode ?? "ask"} onChange={(event) => void updatePermissionMode(event.target.value as PermissionMode)}>
               <option value="ask">Ask</option>
               <option value="auto-edit">Auto-edit</option>
               <option value="yolo">Auto</option>
@@ -737,7 +763,7 @@ function App(): React.ReactElement {
               </button>
             </span>
           ) : null}
-          <span>Round {round}/{session?.config.maxReviewRounds ?? 0}</span>
+          <span>Round {round}/{effectiveConfig?.maxReviewRounds ?? 0}</span>
           <span title={costTitle}>{totalCost}</span>
         </header>
         <section className="transcript">
@@ -755,9 +781,16 @@ function App(): React.ReactElement {
               <span>
                 Tandem will not modify files until you pick the folder for this session.
               </span>
-              <button type="button" onClick={() => void pickProject()}>
-                Pick Folder
-              </button>
+              <div className="noticeActions">
+                {appState?.lastProjectDir ? (
+                  <button type="button" onClick={() => void continueLastProject()}>
+                    Continue in {displayPath(appState.lastProjectDir)}
+                  </button>
+                ) : null}
+                <button type="button" onClick={() => void pickProject()}>
+                  Pick Folder
+                </button>
+              </div>
             </aside>
           ) : null}
           {entries.map((entry) =>

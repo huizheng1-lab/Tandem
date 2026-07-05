@@ -294,6 +294,12 @@ select {
   padding: 7px 10px;
 }
 
+.noticeActions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
 .bubble,
 .artifactCard {
   max-width: 820px;
