@@ -9,6 +9,7 @@ import type {
   PipelineRunRequest,
   ScheduleAddRequest,
   ScheduleRemoveRequest,
+  SessionAutoApproveRequest,
   SessionResumeRequest,
   SessionStartRequest
 } from "../shared/ipc.js";
@@ -63,6 +64,7 @@ ipcMain.handle(ipcChannels.goalComplete, (_event, request: GoalCompleteRequest) 
 ipcMain.handle(ipcChannels.schedulesList, () => service?.listSchedules());
 ipcMain.handle(ipcChannels.scheduleAdd, (_event, request: ScheduleAddRequest) => service?.addSchedule(request.cron, request.prompt));
 ipcMain.handle(ipcChannels.scheduleRemove, (_event, request: ScheduleRemoveRequest) => service?.removeSchedule(request.id));
+ipcMain.handle(ipcChannels.permissionSessionAutoApproveSet, (_event, request: SessionAutoApproveRequest) => service?.setSessionAutoApprove(request.mode));
 ipcMain.handle(ipcChannels.dialogPickFolder, async () => {
   if (!mainWindow) return undefined;
   const result = await dialog.showOpenDialog(mainWindow, { properties: ["openDirectory"] });

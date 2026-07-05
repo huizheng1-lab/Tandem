@@ -24,6 +24,7 @@ import {
   type PermissionResponse,
   type PlanConfirmEvent,
   type PlanResponse,
+  type SessionAutoApproveMode,
   type SessionResumeResponse,
   type SessionStartRequest,
   type SessionStartResponse
@@ -64,6 +65,7 @@ export class TandemService {
   private readonly pendingPermissions = new Map<string, PendingResolver>();
   private readonly pendingPlans = new Map<string, PendingResolver>();
   private readonly cronTasks = new Map<string, ScheduledTask>();
+  private sessionAutoApprove: SessionAutoApproveMode = "none";
 
   constructor(
     private readonly window: DesktopWindow,
@@ -84,6 +86,7 @@ export class TandemService {
     this.config = loadConfig({ cwd: this.projectDir, env: this.env });
     this.ledger = new CostLedger();
     this.lastCheckpoint = undefined;
+    this.sessionAutoApprove = "none";
     this.session = await (this.deps.createSession ?? ((cwd) => SessionStore.create(cwd)))(this.projectDir);
     await this.session.append("session:start", { projectDir: this.projectDir });
     await this.refreshCronTasks();
@@ -211,6 +214,12 @@ export class TandemService {
     return this.listSchedules();
   }
 
+  async setSessionAutoApprove(mode: SessionAutoApproveMode): Promise<SessionAutoApproveMode> {
+    this.sessionAutoApprove = mode;
+    await this.session?.append("permission:auto-approve", { mode });
+    return this.sessionAutoApprove;
+  }
+
   private async emitText(role: "leader" | "worker", delta: string): Promise<void> {
     const event = { role, delta };
     this.window.webContents.send(ipcChannels.textEvent, event);
@@ -232,6 +241,10 @@ export class TandemService {
   }
 
   private requestPermission(request: PermissionRequest): Promise<boolean> {
+    if (this.sessionAutoApprove === "all") return Promise.resolve(true);
+    if (this.sessionAutoApprove === "edits" && (request.action === "write" || request.action === "edit")) {
+      return Promise.resolve(true);
+    }
     const id = randomUUID();
     const event: PermissionRequestEvent = { id, ...request };
     return new Promise((resolve) => {

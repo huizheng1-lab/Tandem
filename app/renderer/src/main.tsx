@@ -9,6 +9,7 @@ import type {
   PermissionRequestEvent,
   PlanConfirmEvent,
   Schedule,
+  SessionAutoApproveMode,
   SessionStartResponse
 } from "../../shared/ipc.js";
 import type { PermissionMode } from "../../../src/config/schema.js";
@@ -86,14 +87,13 @@ function App(): React.ReactElement {
   const [permissionModal, setPermissionModal] = useState<PermissionRequestEvent>();
   const [planModal, setPlanModal] = useState<PlanConfirmEvent>();
   const [missingKey, setMissingKey] = useState<MissingKeyInfo>();
+  const [sessionAutoApprove, setSessionAutoApprove] = useState<SessionAutoApproveMode>("none");
   const [sessions, setSessions] = useState<string[]>([]);
   const [goals, setGoals] = useState<Goal[]>([]);
   const [schedules, setSchedules] = useState<Schedule[]>([]);
   const [goalText, setGoalText] = useState("");
   const [scheduleCron, setScheduleCron] = useState("");
   const [schedulePrompt, setSchedulePrompt] = useState("");
-  const [alwaysAllow, setAlwaysAllow] = useState(false);
-  const autoAllowedActions = useRef(new Set<string>());
   const nextId = useRef(2);
   const transcriptEnd = useRef<HTMLDivElement>(null);
 
@@ -148,6 +148,7 @@ function App(): React.ReactElement {
     setPhase("IDLE");
     setRound(0);
     setCost(undefined);
+    setSessionAutoApprove("none");
     setModels(await tandem.listModels());
     await refreshSidebar();
   };
@@ -197,11 +198,6 @@ function App(): React.ReactElement {
         appendMessage("system", `${event.summary}${event.takeover ? " (takeover)" : ""}`);
       }),
       tandem.onPermissionRequest((event) => {
-        if (autoAllowedActions.current.has(event.action)) {
-          tandem.respondToPermission({ id: event.id, approved: true });
-          return;
-        }
-        setAlwaysAllow(false);
         setPermissionModal(event);
       }),
       tandem.onPlanConfirm(setPlanModal)
@@ -263,6 +259,10 @@ function App(): React.ReactElement {
     setSchedules(await tandem.removeSchedule({ id }));
   };
 
+  const setSessionAutoApproveMode = async (mode: SessionAutoApproveMode) => {
+    setSessionAutoApprove(await tandem.setSessionAutoApprove({ mode }));
+  };
+
   const send = async () => {
     const text = prompt.trim();
     if (!text || running) return;
@@ -291,8 +291,23 @@ function App(): React.ReactElement {
 
   const respondToPermission = (approved: boolean) => {
     if (!permissionModal) return;
-    if (approved && alwaysAllow) autoAllowedActions.current.add(permissionModal.action);
     tandem.respondToPermission({ id: permissionModal.id, approved });
+    setPermissionModal(undefined);
+  };
+
+  const allowEditsForSession = async () => {
+    if (!permissionModal) return;
+    await setSessionAutoApproveMode("edits");
+    if (permissionModal.action === "write" || permissionModal.action === "edit") {
+      tandem.respondToPermission({ id: permissionModal.id, approved: true });
+      setPermissionModal(undefined);
+    }
+  };
+
+  const allowAllForSession = async () => {
+    if (!permissionModal) return;
+    await setSessionAutoApproveMode("all");
+    tandem.respondToPermission({ id: permissionModal.id, approved: true });
     setPermissionModal(undefined);
   };
 
@@ -391,6 +406,14 @@ function App(): React.ReactElement {
             </select>
           </label>
           <span className="phaseChip">{phase}</span>
+          {sessionAutoApprove !== "none" ? (
+            <span className="autoApproveChip">
+              auto-approving: {sessionAutoApprove === "edits" ? "edits" : "all"}
+              <button type="button" aria-label="Revoke session auto-approval" onClick={() => void setSessionAutoApproveMode("none")}>
+                x
+              </button>
+            </span>
+          ) : null}
           <span>Round {round}/{session?.config.maxReviewRounds ?? 0}</span>
           <span title={costTitle}>{totalCost}</span>
         </header>
@@ -472,11 +495,13 @@ function App(): React.ReactElement {
               <strong>{permissionModal.action}</strong>
               <code>{permissionModal.target}</code>
             </div>
-            <label className="checkRow">
-              <input type="checkbox" checked={alwaysAllow} onChange={(event) => setAlwaysAllow(event.target.checked)} />
-              Always allow this action for this session
-            </label>
             <div className="modalActions">
+              <button type="button" className="secondary" disabled={permissionModal.action === "bash"} onClick={() => void allowEditsForSession()}>
+                Allow all edits this session
+              </button>
+              <button type="button" className="secondary" onClick={() => void allowAllForSession()}>
+                Allow everything this session
+              </button>
               <button type="button" className="secondary" onClick={() => respondToPermission(false)}>
                 Deny
               </button>

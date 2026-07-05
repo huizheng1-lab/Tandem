@@ -32,6 +32,7 @@ const api: TandemDesktopApi = {
   listSchedules: () => ipcRenderer.invoke(ipcChannels.schedulesList),
   addSchedule: (request) => ipcRenderer.invoke(ipcChannels.scheduleAdd, request),
   removeSchedule: (request) => ipcRenderer.invoke(ipcChannels.scheduleRemove, request),
+  setSessionAutoApprove: (request) => ipcRenderer.invoke(ipcChannels.permissionSessionAutoApproveSet, request),
   pickFolder: () => ipcRenderer.invoke(ipcChannels.dialogPickFolder),
   respondToPermission: (response: PermissionResponse) => ipcRenderer.send(ipcChannels.permissionRespond, response),
   respondToPlan: (response: PlanResponse) => ipcRenderer.send(ipcChannels.planRespond, response),

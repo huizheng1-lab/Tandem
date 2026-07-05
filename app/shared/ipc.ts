@@ -30,6 +30,7 @@ export const ipcChannels = {
   schedulesList: "schedules:list",
   scheduleAdd: "schedule:add",
   scheduleRemove: "schedule:remove",
+  permissionSessionAutoApproveSet: "permission:auto-approve:set",
   dialogPickFolder: "dialog:pickFolder",
   machineEvent: "evt:machine",
   textEvent: "evt:text",
@@ -86,6 +87,12 @@ export interface PermissionRequestEvent {
 export interface PermissionResponse {
   id: string;
   approved: boolean;
+}
+
+export type SessionAutoApproveMode = "none" | "edits" | "all";
+
+export interface SessionAutoApproveRequest {
+  mode: SessionAutoApproveMode;
 }
 
 export interface PlanConfirmEvent {
@@ -149,6 +156,7 @@ export interface TandemDesktopApi {
   listSchedules(): Promise<Schedule[]>;
   addSchedule(request: ScheduleAddRequest): Promise<Schedule[]>;
   removeSchedule(request: ScheduleRemoveRequest): Promise<Schedule[]>;
+  setSessionAutoApprove(request: SessionAutoApproveRequest): Promise<SessionAutoApproveMode>;
   pickFolder(): Promise<string | undefined>;
   respondToPermission(response: PermissionResponse): void;
   respondToPlan(response: PlanResponse): void;

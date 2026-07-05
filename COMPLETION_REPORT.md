@@ -6,7 +6,7 @@ complete
 
 ## Summary
 
-Implemented Tandem from the supplied build plan, revised it per `REVIEW_FEEDBACK.md`, completed the Round 3 handoff tasks in `HANDOFF_GPT5.md`, Round 4 in `HANDOFF_GPT5_R4.md`, Round 5 in `HANDOFF_GPT5_R5.md`, Round 6 in `HANDOFF_GPT5_R6.md`, Round 7 in `HANDOFF_GPT5_R7.md`, Round 8 in `HANDOFF_GPT5_R8.md`, the desktop app plan in `BUILD_PLAN_DESKTOP.md`, desktop Round D6 in `HANDOFF_GPT5_D6.md`, and desktop Round D7 in `HANDOFF_GPT5_D7.md`: smoke-test diff/cost tightening, missed-schedule catch-up, transcript artifact expansion, help accuracy, diagnosable prose extraction fallback, JSON-text artifact recovery, graceful review-failure completion, snapshot diff coverage for bash-created and gitignored files, reviewer empty-diff verification hardening, packaged Electron desktop chat app, sandbox-compatible preload loading, review score consistency hardening, and desktop failure-path UX fixes.
+Implemented Tandem from the supplied build plan, revised it per `REVIEW_FEEDBACK.md`, completed the Round 3 handoff tasks in `HANDOFF_GPT5.md`, Round 4 in `HANDOFF_GPT5_R4.md`, Round 5 in `HANDOFF_GPT5_R5.md`, Round 6 in `HANDOFF_GPT5_R6.md`, Round 7 in `HANDOFF_GPT5_R7.md`, Round 8 in `HANDOFF_GPT5_R8.md`, the desktop app plan in `BUILD_PLAN_DESKTOP.md`, desktop Round D6 in `HANDOFF_GPT5_D6.md`, desktop Round D7 in `HANDOFF_GPT5_D7.md`, and desktop Round D8 in `HANDOFF_GPT5_D8.md`: smoke-test diff/cost tightening, missed-schedule catch-up, transcript artifact expansion, help accuracy, diagnosable prose extraction fallback, JSON-text artifact recovery, graceful review-failure completion, snapshot diff coverage for bash-created and gitignored files, reviewer empty-diff verification hardening, packaged Electron desktop chat app, sandbox-compatible preload loading, review score consistency hardening, desktop failure-path UX fixes, and desktop auto-approval controls.
 
 ## Task Results
 
@@ -51,6 +51,8 @@ Implemented Tandem from the supplied build plan, revised it per `REVIEW_FEEDBACK
 - D7-1: done - pipeline errors now emit terminal `evt:done` events with `error: true`, and the renderer resets phase/composer state on done, error, and Stop paths.
 - D7-2: done - missing API key failures now carry structured key/model/env-file details and render an actionable desktop banner without adding secret entry fields.
 - D7-3: done - session-start system messages now include the effective leader and worker model IDs.
+- D8-1: done - top-bar Permissions selector exposes `ask`, `auto-edit`, and `yolo`, persists via `config:set`, and the session-start line shows the active permission mode. The service reads the updated config when creating agents for the next run.
+- D8-2: done - permission dialogs now include session-scoped "Allow all edits" and "Allow everything" controls, active auto-approval appears near the phase chip with a revoke button, and the policy lives in the main process without changing persisted config.
 
 ## Files Changed
 
@@ -69,7 +71,7 @@ Implemented Tandem from the supplied build plan, revised it per `REVIEW_FEEDBACK
 ## Verification Results
 
 - `npx tsc --noEmit`: passed.
-- `npm test`: passed. 10 test files, 39 tests; 1 live-smoke test skipped unless `RUN_LIVE=1`.
+- `npm test`: passed. 10 test files, 40 tests; 1 live-smoke test skipped unless `RUN_LIVE=1`.
 - `npm run build`: passed. `dist/index.js` and `dist/index.d.ts` emitted.
 - `npx electron-vite build`: passed. Desktop main, CommonJS preload `out/preload/index.js`, and renderer emitted to `out/`.
 - `npm run dist:app`: passed. Produced `release/Tandem Setup 0.1.0.exe` and `release/Tandem 0.1.0.exe`.
@@ -101,3 +103,4 @@ Additional R8 unit tests cover gitignored files created inside a git worktree af
 Additional desktop tests cover IPC channel contract uniqueness and TandemService run/crash behavior with fake agents and fake session storage.
 Additional D6 tests cover review verdict score consistency: approve with severe scores is rejected, while revise with severe scores is allowed.
 Additional D7 tests cover terminal error events for failed desktop runs and structured missing-key guidance payloads.
+Additional D8 tests cover session-scoped desktop auto-approval: edit mode suppresses write/edit prompts but still sends bash prompts, and all mode suppresses bash prompts too.

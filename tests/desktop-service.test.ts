@@ -5,6 +5,7 @@ import { describe, expect, it } from "vitest";
 import { TandemService } from "../app/main/tandem-service.js";
 import { ipcChannels } from "../app/shared/ipc.js";
 import type { AgentFns, RunOptions, RunResult } from "../src/orchestrator/machine.js";
+import type { PermissionBridge } from "../src/tools/permissions.js";
 
 async function tempDir(): Promise<string> {
   const dir = path.join(tmpdir(), `tandem-desktop-${Date.now()}-${Math.random().toString(16).slice(2)}`);
@@ -145,5 +146,44 @@ describe("TandemService", () => {
         model: "minimax/minimax-m2.7"
       }
     });
+  });
+
+  it("applies session-scoped auto-approval without disabling bash prompts in edit mode", async () => {
+    const cwd = await tempDir();
+    const { window, sent } = fakeWindow();
+    let bridge: PermissionBridge | undefined;
+    const service = new TandemService(window as never, {
+      registerIpcResponses: false,
+      createSession: async () => ({
+        id: "session-1",
+        append: async () => undefined,
+        read: async () => []
+      }),
+      createAgents: async (options): Promise<AgentFns> => {
+        bridge = options.permissionBridge;
+        return {
+          plan: async () => ({ kind: "answer", answer: "done" }),
+          build: async () => ({}),
+          review: async () => ({}),
+          takeover: async () => {
+            throw new Error("not used");
+          }
+        };
+      },
+      runOrchestration: async (): Promise<RunResult> => ({ phase: "DONE", summary: "finished", reports: [], verdicts: [], takeover: false })
+    });
+
+    await service.startSession({ projectDir: cwd });
+    await service.setSessionAutoApprove("edits");
+    await service.run("build");
+
+    await expect(bridge?.approve({ action: "write", target: "file.txt" })).resolves.toBe(true);
+    const pendingBash = bridge?.approve({ action: "bash", target: "npm test" });
+    expect(pendingBash).toBeInstanceOf(Promise);
+    expect(sent.filter((event) => event.channel === ipcChannels.permissionRequest)).toHaveLength(1);
+
+    await service.setSessionAutoApprove("all");
+    await expect(bridge?.approve({ action: "bash", target: "npm test" })).resolves.toBe(true);
+    expect(sent.filter((event) => event.channel === ipcChannels.permissionRequest)).toHaveLength(1);
   });
 });
