@@ -30,14 +30,25 @@ export function makeToolSet(ctx: ToolContext, role: ToolRole, allowedBashCommand
     })
   };
 
-  if (role === "leader-readonly") return readonlyTools;
-
   const bashExecute = async ({ command, timeoutMs }: { command: string; timeoutMs?: number }) => {
     if (role === "reviewer" && !allowedBashCommands.includes(command)) {
       throw new Error(`Reviewer bash is restricted to plan verification commands: ${allowedBashCommands.join(", ")}`);
     }
     return bashTool(ctx, command, timeoutMs);
   };
+
+  if (role === "leader-readonly") return readonlyTools;
+
+  if (role === "reviewer") {
+    return {
+      ...readonlyTools,
+      bash: tool({
+        description: "Run one of the plan verification commands in the project root.",
+        inputSchema: z.object({ command: z.string(), timeoutMs: z.number().int().positive().optional() }),
+        execute: bashExecute
+      })
+    };
+  }
 
   return {
     ...readonlyTools,

@@ -61,12 +61,37 @@ describe("orchestration", () => {
   });
 
   it("forces takeover when rounds are exhausted", async () => {
+    let builds = 0;
     const result = await runOrchestration({
       request: "build",
       config: { maxReviewRounds: 0 },
-      agents: agents({ review: async () => verdict("revise", [{ issue: "x", requiredChange: "y" }]) })
+      agents: agents({
+        build: async () => {
+          builds += 1;
+          return report();
+        },
+        review: async () => verdict("revise", [{ issue: "x", requiredChange: "y" }])
+      })
     });
     expect(result.takeover).toBe(true);
+    expect(builds).toBe(0);
+  });
+
+  it("gives the worker exactly maxReviewRounds build attempts", async () => {
+    let builds = 0;
+    const result = await runOrchestration({
+      request: "build",
+      config: { maxReviewRounds: 2 },
+      agents: agents({
+        build: async () => {
+          builds += 1;
+          return report();
+        },
+        review: async () => verdict("revise", [{ issue: "x", requiredChange: "y" }])
+      })
+    });
+    expect(result.takeover).toBe(true);
+    expect(builds).toBe(2);
   });
 
   it("supports leader early takeover", async () => {

@@ -29,6 +29,7 @@ export interface RunOptions {
   agents: AgentFns;
   goals?: string[];
   diffProvider?: () => Promise<string>;
+  confirmPlan?: (plan: BuildPlan) => Promise<boolean>;
   emit?: (event: MachineEvent) => void;
 }
 
@@ -72,19 +73,28 @@ export async function runOrchestration(options: RunOptions): Promise<RunResult> 
 
   const plan = BuildPlanSchema.parse(planResult.plan);
   emit({ type: "artifact", name: "BuildPlan", value: plan });
+  if (options.confirmPlan) {
+    const confirmed = await options.confirmPlan(plan);
+    if (!confirmed) {
+      emit({ type: "transition", phase: "DONE", message: "build plan rejected by user" });
+      return { phase: "DONE", summary: "Build plan was not approved.", plan, reports, verdicts, takeover: false };
+    }
+  }
+
+  const runTakeover = async (message: string): Promise<RunResult> => {
+    emit({ type: "transition", phase: "TAKEOVER", message });
+    const takeover = await options.agents.takeover({ plan, reports, feedback: allFeedback });
+    const report = validateCompletionReport(plan, takeover.report);
+    reports.push(report);
+    emit({ type: "artifact", name: "TakeoverReport", value: report });
+    emit({ type: "transition", phase: "DONE", message: "takeover done" });
+    return { phase: "DONE", summary: takeover.userSummary, plan, reports, verdicts, takeover: true };
+  };
+
+  if (options.config.maxReviewRounds === 0) return runTakeover("maxReviewRounds is 0; leader takeover");
 
   let feedback: ReviewVerdict["feedback"] = [];
-  for (let round = 1; ; round += 1) {
-    if (round > options.config.maxReviewRounds + 1) {
-      emit({ type: "transition", phase: "TAKEOVER", message: `round limit exceeded; leader takeover` });
-      const takeover = await options.agents.takeover({ plan, reports, feedback: allFeedback });
-      const report = validateCompletionReport(plan, takeover.report);
-      reports.push(report);
-      emit({ type: "artifact", name: "TakeoverReport", value: report });
-      emit({ type: "transition", phase: "DONE", message: "takeover done" });
-      return { phase: "DONE", summary: takeover.userSummary, plan, reports, verdicts, takeover: true };
-    }
-
+  for (let round = 1; round <= options.config.maxReviewRounds; round += 1) {
     emit({ type: "transition", phase: "BUILDING", message: `round ${round}/${options.config.maxReviewRounds} worker build` });
     const report = await retryArtifact(
       "CompletionReport",
@@ -105,13 +115,7 @@ export async function runOrchestration(options: RunOptions): Promise<RunResult> 
     verdicts.push(verdict);
 
     if (verdict.verdict === "takeover" || report.status === "blocked") {
-      emit({ type: "transition", phase: "TAKEOVER", message: report.status === "blocked" ? "worker blocked; leader takeover" : "leader requested takeover" });
-      const takeover = await options.agents.takeover({ plan, reports, feedback: allFeedback });
-      const takeoverReport = validateCompletionReport(plan, takeover.report);
-      reports.push(takeoverReport);
-      emit({ type: "artifact", name: "TakeoverReport", value: takeoverReport });
-      emit({ type: "transition", phase: "DONE", message: "takeover done" });
-      return { phase: "DONE", summary: takeover.userSummary, plan, reports, verdicts, takeover: true };
+      return runTakeover(report.status === "blocked" ? "worker blocked; leader takeover" : "leader requested takeover");
     }
 
     if (verdict.verdict === "approve") {
@@ -123,4 +127,6 @@ export async function runOrchestration(options: RunOptions): Promise<RunResult> 
     allFeedback.push(feedback);
     emit({ type: "transition", phase: "FEEDBACK", message: `leader review requested ${feedback.length} change(s)` });
   }
+
+  return runTakeover("round limit exhausted; leader takeover");
 }

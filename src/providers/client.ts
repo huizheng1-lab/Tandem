@@ -1,9 +1,10 @@
 import { TandemConfig } from "../config/schema.js";
 import { ModelEntry, resolveModel, validateModelEnv } from "./registry.js";
+import type { LanguageModel } from "ai";
 
 export interface ModelResolution {
   entry: ModelEntry;
-  model: unknown;
+  model: LanguageModel;
 }
 
 export async function makeModel(modelId: string, config: TandemConfig, env: NodeJS.ProcessEnv = process.env): Promise<ModelResolution> {
@@ -13,14 +14,14 @@ export async function makeModel(modelId: string, config: TandemConfig, env: Node
   if (entry.provider === "anthropic") {
     const mod = await import("@ai-sdk/anthropic");
     // SDK boundary: provider factory names are version-coupled, so isolate dynamic access here.
-    const createAnthropic = (mod as Record<string, unknown>).createAnthropic as (options: { apiKey?: string }) => (modelName: string) => unknown;
+    const createAnthropic = (mod as Record<string, unknown>).createAnthropic as (options: { apiKey?: string }) => (modelName: string) => LanguageModel;
     return { entry, model: createAnthropic({ apiKey: env[entry.envKey] })(entry.modelName) };
   }
 
   if (entry.provider === "openai") {
     const mod = await import("@ai-sdk/openai");
     // SDK boundary: see note above.
-    const createOpenAI = (mod as Record<string, unknown>).createOpenAI as (options: { apiKey?: string }) => (modelName: string) => unknown;
+    const createOpenAI = (mod as Record<string, unknown>).createOpenAI as (options: { apiKey?: string }) => (modelName: string) => LanguageModel;
     return { entry, model: createOpenAI({ apiKey: env[entry.envKey] })(entry.modelName) };
   }
 
@@ -30,7 +31,7 @@ export async function makeModel(modelId: string, config: TandemConfig, env: Node
     name: string;
     apiKey?: string;
     baseURL: string;
-  }) => (modelName: string) => unknown;
+  }) => (modelName: string) => LanguageModel;
   return {
     entry,
     model: createOpenAICompatible({
