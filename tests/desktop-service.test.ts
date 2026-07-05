@@ -118,4 +118,32 @@ describe("TandemService", () => {
     expect(done?.payload).toMatchObject({ error: true, takeover: false });
     expect(appended.some((event) => event.type === "done" && (event.payload as { error?: boolean }).error)).toBe(true);
   });
+
+  it("includes missing key details on model env failures", async () => {
+    const cwd = await tempDir();
+    const { window, sent } = fakeWindow();
+    const service = new TandemService(window as never, {
+      registerIpcResponses: false,
+      createSession: async () => ({
+        id: "session-1",
+        append: async () => undefined,
+        read: async () => []
+      }),
+      createAgents: async () => {
+        throw new Error("Missing MINIMAX_API_KEY for model minimax/minimax-m2.7. Add it to .env or ~/.tandem/.env, then retry.");
+      }
+    });
+
+    await service.startSession({ projectDir: cwd });
+    await service.run("build");
+
+    const done = sent.find((event) => event.channel === ipcChannels.doneEvent);
+    expect(done?.payload).toMatchObject({
+      error: true,
+      missingKey: {
+        key: "MINIMAX_API_KEY",
+        model: "minimax/minimax-m2.7"
+      }
+    });
+  });
 });

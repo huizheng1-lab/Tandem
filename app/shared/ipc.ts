@@ -53,10 +53,18 @@ export interface PipelineRunRequest {
   prompt: string;
 }
 
+export interface MissingKeyInfo {
+  key: string;
+  model: string;
+  projectEnvPath: string;
+  globalEnvPath: string;
+}
+
 export interface PipelineDoneEvent {
   summary: string;
   takeover: boolean;
   error?: boolean;
+  missingKey?: MissingKeyInfo;
 }
 
 export interface TextEvent {

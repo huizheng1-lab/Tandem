@@ -4,6 +4,7 @@ import type {
   CostTotals,
   Goal,
   MachineEvent,
+  MissingKeyInfo,
   ModelListItem,
   PermissionRequestEvent,
   PlanConfirmEvent,
@@ -47,6 +48,17 @@ function roleLabel(role: Role): string {
   return "YOU";
 }
 
+function missingKeyFromMessage(message: string): MissingKeyInfo | undefined {
+  const match = /Missing\s+([A-Z0-9_]+)\s+for model\s+(.+?)(?:\.\s+Add|\.$)/.exec(message);
+  if (!match) return undefined;
+  return {
+    key: match[1] ?? "",
+    model: match[2] ?? "",
+    projectEnvPath: "<projectDir>\\.env",
+    globalEnvPath: "~\\.tandem\\.env"
+  };
+}
+
 function App(): React.ReactElement {
   const tandem = window.tandem;
   if (!tandem) {
@@ -68,6 +80,7 @@ function App(): React.ReactElement {
   const [cost, setCost] = useState<CostTotals>();
   const [permissionModal, setPermissionModal] = useState<PermissionRequestEvent>();
   const [planModal, setPlanModal] = useState<PlanConfirmEvent>();
+  const [missingKey, setMissingKey] = useState<MissingKeyInfo>();
   const [sessions, setSessions] = useState<string[]>([]);
   const [goals, setGoals] = useState<Goal[]>([]);
   const [schedules, setSchedules] = useState<Schedule[]>([]);
@@ -175,6 +188,7 @@ function App(): React.ReactElement {
       tandem.onDoneEvent((event) => {
         setRunning(false);
         setPhase(event.error ? "IDLE" : "DONE");
+        setMissingKey(event.missingKey);
         appendMessage("system", `${event.summary}${event.takeover ? " (takeover)" : ""}`);
       }),
       tandem.onPermissionRequest((event) => {
@@ -197,7 +211,9 @@ function App(): React.ReactElement {
         await refreshSidebar();
       })
       .catch((error: unknown) => {
-        appendMessage("system", `Failed to start session: ${String(error)}`);
+        const message = String(error);
+        setMissingKey(missingKeyFromMessage(message));
+        appendMessage("system", `Failed to start session: ${message}`);
       });
 
     return () => {
@@ -243,13 +259,16 @@ function App(): React.ReactElement {
     setPrompt("");
     setRunning(true);
     setPhase("PLANNING");
+    setMissingKey(undefined);
     appendMessage("user", text);
     try {
       await tandem.runPipeline({ prompt: text });
     } catch (error) {
       setRunning(false);
       setPhase("IDLE");
-      appendMessage("system", `Run failed: ${String(error)}`);
+      const message = String(error);
+      setMissingKey(missingKeyFromMessage(message));
+      appendMessage("system", `Run failed: ${message}`);
     }
   };
 
@@ -358,6 +377,14 @@ function App(): React.ReactElement {
           <span title={costTitle}>{totalCost}</span>
         </header>
         <section className="transcript">
+          {missingKey ? (
+            <aside className="noticeBanner">
+              <strong>Missing API key: {missingKey.key}</strong>
+              <span>
+                Model {missingKey.model} needs this key. Add it to <code>{missingKey.projectEnvPath}</code> for this project or <code>{missingKey.globalEnvPath}</code> globally, then start the run again.
+              </span>
+            </aside>
+          ) : null}
           {entries.map((entry) =>
             entry.kind === "message" ? (
               <article key={entry.id} className={`bubble ${entry.role}`}>

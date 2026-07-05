@@ -1,5 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { BrowserWindow, ipcMain } from "electron";
+import { homedir } from "node:os";
+import path from "node:path";
 import cron from "node-cron";
 import type { ScheduledTask } from "node-cron";
 import { loadConfig, loadEnv, saveProjectConfig } from "../../src/config/load.js";
@@ -17,6 +19,7 @@ import type { Schedule } from "../../src/commands/schedule.js";
 import {
   ipcChannels,
   type CostTotals,
+  type MissingKeyInfo,
   type PermissionRequestEvent,
   type PermissionResponse,
   type PlanConfirmEvent,
@@ -29,6 +32,18 @@ import {
 type PendingResolver = (approved: boolean) => void;
 type DesktopWindow = Pick<BrowserWindow, "webContents">;
 type SessionLike = Pick<SessionStore, "id" | "append" | "read">;
+
+function missingKeyInfo(error: unknown, projectDir: string): MissingKeyInfo | undefined {
+  const text = String(error);
+  const match = /Missing\s+([A-Z0-9_]+)\s+for model\s+(.+?)(?:\.\s+Add|\.$)/.exec(text);
+  if (!match) return undefined;
+  return {
+    key: match[1] ?? "",
+    model: match[2] ?? "",
+    projectEnvPath: path.join(projectDir, ".env"),
+    globalEnvPath: path.join(homedir(), ".tandem", ".env")
+  };
+}
 
 export interface TandemServiceDeps {
   createAgents?: typeof createLiveAgents;
@@ -114,7 +129,7 @@ export class TandemService {
       await session.append("done", done);
     } catch (error) {
       const event: MachineEvent = { type: "error", message: String(error) };
-      const done = { summary: event.message, takeover: false, error: true };
+      const done = { summary: event.message, takeover: false, error: true, missingKey: missingKeyInfo(error, this.projectDir) };
       this.window.webContents.send(ipcChannels.machineEvent, event);
       this.window.webContents.send(ipcChannels.doneEvent, done);
       await session.append("machine", event);

@@ -177,6 +177,27 @@ select {
   padding: 20px;
 }
 
+.noticeBanner {
+  display: grid;
+  gap: 6px;
+  max-width: 820px;
+  border: 1px solid #665832;
+  border-radius: 8px;
+  padding: 12px 14px;
+  color: #f5e9c8;
+  background: #2d291a;
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.noticeBanner code {
+  border: 1px solid #4d4630;
+  border-radius: 4px;
+  padding: 1px 4px;
+  color: #fff3ce;
+  background: #1d1a12;
+}
+
 .bubble,
 .artifactCard {
   max-width: 820px;
