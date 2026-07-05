@@ -98,6 +98,8 @@ select {
 .sessionRow {
   display: grid;
   gap: 5px;
+  min-width: 0;
+  overflow: hidden;
   border: 1px solid #2f3540;
   border-radius: 6px;
   padding: 7px;
@@ -145,7 +147,9 @@ select {
 }
 
 .renameInput {
+  width: 100%;
   min-width: 0;
+  box-sizing: border-box;
   border: 1px solid #465367;
   border-radius: 5px;
   color: #f3f2ee;

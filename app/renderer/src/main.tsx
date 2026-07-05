@@ -114,9 +114,9 @@ function App(): React.ReactElement {
   }
 
   const [session, setSession] = useState<SessionStartResponse>();
-  const needsProjectPick = Boolean(session?.defaultProject);
+  const needsProjectPick = !session || Boolean(session.defaultProject);
   const [models, setModels] = useState<ModelListItem[]>([]);
-  const [entries, setEntries] = useState<TranscriptEntry[]>([{ id: 1, kind: "message", role: "system", text: "Starting desktop session..." }]);
+  const [entries, setEntries] = useState<TranscriptEntry[]>([{ id: 1, kind: "message", role: "system", text: "Choose a project folder to start Tandem." }]);
   const [prompt, setPrompt] = useState("");
   const [running, setRunning] = useState(false);
   const [phase, setPhase] = useState("IDLE");
@@ -256,7 +256,7 @@ function App(): React.ReactElement {
       appendMessage("system", `Resume session failed: ${errorText(error)}`);
       return;
     }
-    setSession((current) => (current ? { ...current, sessionId: id } : current));
+    setSession((current) => (current ? { ...current, sessionId: id, defaultProject: false } : current));
     const replayed: TranscriptEntry[] = [];
     for (const stored of resumed.events) {
       const payload = stored.payload as { prompt?: string; role?: "leader" | "worker"; delta?: string; summary?: string; takeover?: boolean } | MachineEvent;
@@ -316,15 +316,12 @@ function App(): React.ReactElement {
       tandem.onPlanConfirm(setPlanModal)
     ];
 
-    void tandem
-      .startSession({})
-      .then(async (started) => {
-        await applyStartedSession(started, false);
+    void Promise.all([tandem.listModels(), refreshSidebar()])
+      .then(([modelItems]) => {
+        setModels(modelItems);
       })
       .catch((error: unknown) => {
-        const message = String(error);
-        setMissingKey(missingKeyFromMessage(message));
-        appendMessage("system", `Failed to start session: ${message}`);
+        appendMessage("system", `Failed to initialize desktop data: ${errorText(error)}`);
       });
 
     return () => {
@@ -358,7 +355,11 @@ function App(): React.ReactElement {
   };
 
   const createNewSession = async () => {
-    await startProjectSession(session?.defaultProject ? undefined : session?.projectDir);
+    if (!session || session.defaultProject) {
+      await pickProject();
+      return;
+    }
+    await startProjectSession(session.projectDir);
   };
 
   const addGoal = async () => {
@@ -608,10 +609,17 @@ function App(): React.ReactElement {
             {activeSessions.map((item) => (
               <div key={item.id} className="sessionRow">
                 {renamingSession === item.id ? (
-                  <input className="renameInput" value={renameTitle} onChange={(event) => setRenameTitle(event.target.value)} onKeyDown={(event) => {
-                    if (event.key === "Enter") void saveRenameSession();
-                    if (event.key === "Escape") setRenamingSession(undefined);
-                  }} />
+                  <input
+                    className="renameInput"
+                    value={renameTitle}
+                    autoFocus
+                    onFocus={(event) => event.currentTarget.select()}
+                    onChange={(event) => setRenameTitle(event.target.value)}
+                    onKeyDown={(event) => {
+                      if (event.key === "Enter") void saveRenameSession();
+                      if (event.key === "Escape") setRenamingSession(undefined);
+                    }}
+                  />
                 ) : (
                   <button type="button" className="sessionTitle" onClick={() => void replaySession(item.id)}>
                     <span>{item.title || item.id.slice(0, 8)}</span>
@@ -745,7 +753,7 @@ function App(): React.ReactElement {
             <aside className="noticeBanner chooseProject">
               <strong>Choose your project folder</strong>
               <span>
-                Tandem is parked in the safe default workspace at <code>{session?.projectDir}</code>. Pick the folder you want this session to modify before sending a prompt.
+                Tandem will not modify files until you pick the folder for this session.
               </span>
               <button type="button" onClick={() => void pickProject()}>
                 Pick Folder
