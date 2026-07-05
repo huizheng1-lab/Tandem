@@ -70,6 +70,27 @@ function errorText(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
+function splitCommand(input: string): string[] {
+  const matches = input.match(/"[^"]*"|\S+/g) ?? [];
+  return matches.map((part) => (part.startsWith('"') && part.endsWith('"') ? part.slice(1, -1) : part));
+}
+
+function composerHelpText(): string {
+  return [
+    "Composer commands:",
+    "/help",
+    "/models",
+    "/model leader <id>",
+    "/model worker <id>",
+    "/rounds <n>",
+    "/status",
+    "/cost",
+    "/goal add <text>",
+    "/goal list",
+    "/goal done <n>"
+  ].join("\n");
+}
+
 function relativeTime(value: string): string {
   const ms = Date.now() - new Date(value).getTime();
   if (!Number.isFinite(ms)) return "";
@@ -387,10 +408,113 @@ function App(): React.ReactElement {
     setSessionAutoApprove(await tandem.setSessionAutoApprove({ mode }));
   };
 
+  const costText = () => {
+    const totals = cost ?? { leader: { inputTokens: 0, outputTokens: 0, dollars: 0 }, worker: { inputTokens: 0, outputTokens: 0, dollars: 0 } };
+    return [
+      `leader: ${totals.leader.inputTokens} in / ${totals.leader.outputTokens} out / $${totals.leader.dollars.toFixed(4)}`,
+      `worker: ${totals.worker.inputTokens} in / ${totals.worker.outputTokens} out / $${totals.worker.dollars.toFixed(4)}`,
+      `total: $${(totals.leader.dollars + totals.worker.dollars).toFixed(4)}`
+    ].join("\n");
+  };
+
+  const statusText = () =>
+    [
+      `phase: ${phase}`,
+      `round: ${round}/${session?.config.maxReviewRounds ?? 0}`,
+      `leader: ${session?.config.leader ?? "unknown"}`,
+      `worker: ${session?.config.worker ?? "unknown"}`,
+      `session: ${session?.sessionId ?? "starting"}`
+    ].join("\n");
+
+  const handleComposerCommand = async (input: string): Promise<void> => {
+    const [command, ...args] = splitCommand(input);
+    try {
+      if (command === "/help") {
+        appendMessage("system", composerHelpText());
+        return;
+      }
+      if (command === "/models") {
+        const items = await tandem.listModels();
+        setModels(items);
+        appendMessage("system", items.map((model) => `${model.available ? "ok" : "key"} ${model.id}${model.available ? "" : ` (${model.envKey} missing)`}`).join("\n") || "No models.");
+        return;
+      }
+      if (command === "/model") {
+        const role = args[0];
+        const id = args[1];
+        if ((role !== "leader" && role !== "worker") || !id) {
+          appendMessage("system", "Usage: /model leader <id> or /model worker <id>");
+          return;
+        }
+        const nextConfig = await tandem.setConfig({ [role]: id });
+        setSession((current) => (current ? { ...current, config: nextConfig } : current));
+        appendMessage("system", `Set ${role} model to ${id}.`);
+        return;
+      }
+      if (command === "/rounds") {
+        const rounds = Number(args[0]);
+        if (!Number.isInteger(rounds) || rounds < 0) {
+          appendMessage("system", "Usage: /rounds <n>");
+          return;
+        }
+        const nextConfig = await tandem.setConfig({ maxReviewRounds: rounds });
+        setSession((current) => (current ? { ...current, config: nextConfig } : current));
+        appendMessage("system", `Set maxReviewRounds to ${rounds}.`);
+        return;
+      }
+      if (command === "/status") {
+        appendMessage("system", statusText());
+        return;
+      }
+      if (command === "/cost") {
+        appendMessage("system", costText());
+        return;
+      }
+      if (command === "/goal") {
+        const sub = args[0];
+        if (sub === "add") {
+          const text = args.slice(1).join(" ").trim();
+          if (!text) {
+            appendMessage("system", "Usage: /goal add <text>");
+            return;
+          }
+          const nextGoals = await tandem.addGoal({ text });
+          setGoals(nextGoals);
+          const added = nextGoals.at(-1);
+          appendMessage("system", added ? `Added goal ${added.id}: ${added.text}` : "Goal added.");
+          return;
+        }
+        if (sub === "done") {
+          const id = Number(args[1]);
+          if (!Number.isInteger(id)) {
+            appendMessage("system", "Usage: /goal done <n>");
+            return;
+          }
+          const nextGoals = await tandem.completeGoal({ id });
+          setGoals(nextGoals);
+          const completed = nextGoals.find((goal) => goal.id === id);
+          appendMessage("system", completed ? `Completed goal ${completed.id}: ${completed.text}` : `Completed goal ${id}.`);
+          return;
+        }
+        const nextGoals = await tandem.listGoals();
+        setGoals(nextGoals);
+        appendMessage("system", nextGoals.length > 0 ? nextGoals.map((goal) => `${goal.id}. [${goal.status}] ${goal.text}`).join("\n") : "No goals yet. Add one with /goal add <text>.");
+        return;
+      }
+      appendMessage("system", "Unknown command - try /help");
+    } catch (error) {
+      appendMessage("system", `Command failed: ${errorText(error)}`);
+    }
+  };
+
   const send = async () => {
     const text = prompt.trim();
     if (!text || running) return;
     setPrompt("");
+    if (text.startsWith("/")) {
+      await handleComposerCommand(text);
+      return;
+    }
     setRunning(true);
     setPhase("PLANNING");
     setMissingKey(undefined);
