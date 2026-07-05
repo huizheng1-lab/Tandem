@@ -6,6 +6,7 @@ import { TandemService } from "../app/main/tandem-service.js";
 import { ipcChannels } from "../app/shared/ipc.js";
 import type { AgentFns, RunOptions, RunResult } from "../src/orchestrator/machine.js";
 import type { PermissionBridge } from "../src/tools/permissions.js";
+import { safeDefaultProjectDir } from "../src/tools/protection.js";
 
 async function tempDir(): Promise<string> {
   const dir = path.join(tmpdir(), `tandem-desktop-${Date.now()}-${Math.random().toString(16).slice(2)}`);
@@ -26,6 +27,17 @@ function fakeWindow() {
 }
 
 describe("TandemService", () => {
+  it("defaults new desktop sessions to the safe TandemProjects workspace", async () => {
+    const { window } = fakeWindow();
+    const service = new TandemService(window as never, { registerIpcResponses: false });
+
+    const started = await service.startSession({});
+
+    expect(started.projectDir).toBe(safeDefaultProjectDir());
+    expect(started.defaultProject).toBe(true);
+    expect(started.projectSummary).toMatch(/folder|project/);
+  });
+
   it("runs orchestration through injected core dependencies and records session events", async () => {
     const cwd = await tempDir();
     const { window, sent } = fakeWindow();

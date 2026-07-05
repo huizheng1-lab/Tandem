@@ -6,7 +6,7 @@ complete
 
 ## Summary
 
-Implemented Tandem from the supplied build plan, revised it per `REVIEW_FEEDBACK.md`, completed the Round 3 handoff tasks in `HANDOFF_GPT5.md`, Round 4 in `HANDOFF_GPT5_R4.md`, Round 5 in `HANDOFF_GPT5_R5.md`, Round 6 in `HANDOFF_GPT5_R6.md`, Round 7 in `HANDOFF_GPT5_R7.md`, Round 8 in `HANDOFF_GPT5_R8.md`, the desktop app plan in `BUILD_PLAN_DESKTOP.md`, desktop Round D6 in `HANDOFF_GPT5_D6.md`, desktop Round D7 in `HANDOFF_GPT5_D7.md`, desktop Round D8 in `HANDOFF_GPT5_D8.md`, desktop Round D9 in `HANDOFF_GPT5_D9.md`, desktop Round D10 in `HANDOFF_GPT5_D10.md`, desktop Round D11 in `HANDOFF_GPT5_D11.md`, and desktop Round D12 in `HANDOFF_GPT5_D12.md`: smoke-test diff/cost tightening, missed-schedule catch-up, transcript artifact expansion, help accuracy, diagnosable prose extraction fallback, JSON-text artifact recovery, graceful review-failure completion, snapshot diff coverage for bash-created and gitignored files, reviewer empty-diff verification hardening, packaged Electron desktop chat app, sandbox-compatible preload loading, review score consistency hardening, desktop failure-path UX fixes, desktop auto-approval controls, session titles/archive/delete, default-hidden thinking streams, resilient session rename/delete behavior, numbered goal references, desktop composer slash commands, shell child-process cleanup, single-instance launch behavior, and strict dev-server ports.
+Implemented Tandem from the supplied build plan, revised it per `REVIEW_FEEDBACK.md`, completed the Round 3 handoff tasks in `HANDOFF_GPT5.md`, Round 4 in `HANDOFF_GPT5_R4.md`, Round 5 in `HANDOFF_GPT5_R5.md`, Round 6 in `HANDOFF_GPT5_R6.md`, Round 7 in `HANDOFF_GPT5_R7.md`, Round 8 in `HANDOFF_GPT5_R8.md`, the desktop app plan in `BUILD_PLAN_DESKTOP.md`, desktop Round D6 in `HANDOFF_GPT5_D6.md`, desktop Round D7 in `HANDOFF_GPT5_D7.md`, desktop Round D8 in `HANDOFF_GPT5_D8.md`, desktop Round D9 in `HANDOFF_GPT5_D9.md`, desktop Round D10 in `HANDOFF_GPT5_D10.md`, desktop Round D11 in `HANDOFF_GPT5_D11.md`, desktop Round D12 in `HANDOFF_GPT5_D12.md`, and desktop Round D13 in `HANDOFF_GPT5_D13.md`: smoke-test diff/cost tightening, missed-schedule catch-up, transcript artifact expansion, help accuracy, diagnosable prose extraction fallback, JSON-text artifact recovery, graceful review-failure completion, snapshot diff coverage for bash-created and gitignored files, reviewer empty-diff verification hardening, packaged Electron desktop chat app, sandbox-compatible preload loading, review score consistency hardening, desktop failure-path UX fixes, desktop auto-approval controls, session titles/archive/delete, default-hidden thinking streams, resilient session rename/delete behavior, numbered goal references, desktop composer slash commands, shell child-process cleanup, single-instance launch behavior, strict dev-server ports, safe default workspace behavior, and Tandem self-protection guards.
 
 ## Task Results
 
@@ -63,6 +63,8 @@ Implemented Tandem from the supplied build plan, revised it per `REVIEW_FEEDBACK
 - D12-1: done - bash tool execution hides Windows shell windows, tracks descendant processes during command execution, taskkills the root/seen descendants after settle or timeout, reports cleanup in command output, and the worker prompt now forbids long-running verification servers/watchers.
 - D12-2: done - Electron main process now uses `requestSingleInstanceLock`; second launches quit and focus/restore the existing window.
 - D12-3: done - renderer dev server uses `strictPort: true` so a second dev app cannot silently shift ports.
+- D13-1/D13-3: done - implicit desktop sessions now default to `~/TandemProjects`, create it on first run, mark the session as a safe default workspace, block normal prompts until the user picks a project folder, and display the working folder plus empty/existing project summary in the session-start line.
+- D13-2: done - write/edit/bash tools now refuse Tandem's source/install roots and `~/.tandem` regardless of permission mode, while read-only tools remain available; Electron registers packaged/dev app roots as protected paths.
 
 ## Files Changed
 
@@ -81,7 +83,7 @@ Implemented Tandem from the supplied build plan, revised it per `REVIEW_FEEDBACK
 ## Verification Results
 
 - `npx tsc --noEmit`: passed.
-- `npm test`: passed. 13 test files, 54 tests; 1 live-smoke test skipped unless `RUN_LIVE=1`.
+- `npm test`: passed. 13 test files, 58 tests; 1 live-smoke test skipped unless `RUN_LIVE=1`.
 - `npm run build`: passed. `dist/index.js` and `dist/index.d.ts` emitted.
 - `npx electron-vite build`: passed. Desktop main, CommonJS preload `out/preload/index.js`, and renderer emitted to `out/`.
 - `npm run dist:app`: passed after stopping repo-local Electron processes that had locked the prior `release/win-unpacked/resources/app.asar`. Produced `release/Tandem Setup 0.1.0.exe` and `release/Tandem 0.1.0.exe`.
@@ -118,3 +120,4 @@ Additional D9 tests cover session index maintenance, rename/archive/delete, corr
 Additional D10 tests cover merge-safe session index reconciliation, serialized concurrent index updates preserving a rename, and active desktop session deletion rotating to a fresh session.
 Additional D11 tests cover standing-goal formatting with user-visible ids and recent progress notes.
 Additional D12 tests cover Windows shell child-process cleanup for a child that would otherwise outlive its parent.
+Additional D13 tests cover safe default desktop project selection and tool-layer refusal for Tandem source roots, nested Tandem paths, and bash commands aimed at `~/.tandem`.

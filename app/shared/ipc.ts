@@ -52,6 +52,8 @@ export interface SessionStartResponse {
   projectDir: string;
   sessionId: string;
   config: TandemConfig;
+  defaultProject: boolean;
+  projectSummary: string;
 }
 
 export interface PipelineRunRequest {

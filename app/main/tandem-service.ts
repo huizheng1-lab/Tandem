@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { BrowserWindow, ipcMain } from "electron";
+import { mkdir, readdir } from "node:fs/promises";
 import { homedir } from "node:os";
 import path from "node:path";
 import cron from "node-cron";
@@ -14,6 +15,7 @@ import { CostLedger } from "../../src/session/cost.js";
 import { addGoal, completeGoal, formatStandingGoals, listGoals } from "../../src/session/goals.js";
 import { archiveSession, deleteSession, listSessions, renameSession, SessionStore } from "../../src/session/store.js";
 import type { SessionMetadata } from "../../src/session/store.js";
+import { safeDefaultProjectDir } from "../../src/tools/protection.js";
 import type { PermissionBridge, PermissionRequest } from "../../src/tools/permissions.js";
 import { addSchedule, listSchedules, markScheduleRun, removeSchedule } from "../../src/commands/schedule.js";
 import type { Schedule } from "../../src/commands/schedule.js";
@@ -36,6 +38,12 @@ type PendingResolver = (approved: boolean) => void;
 type DesktopWindow = Pick<BrowserWindow, "webContents">;
 type SessionLike = Pick<SessionStore, "id" | "append" | "read">;
 
+async function projectSummary(projectDir: string): Promise<string> {
+  const entries = await readdir(projectDir, { recursive: true, withFileTypes: true });
+  const files = entries.filter((entry) => entry.isFile() && !entry.parentPath.includes(`${path.sep}node_modules${path.sep}`) && !entry.parentPath.includes(`${path.sep}.git${path.sep}`));
+  return files.length === 0 ? "empty folder" : `existing project, ${files.length} file${files.length === 1 ? "" : "s"}`;
+}
+
 function missingKeyInfo(error: unknown, projectDir: string): MissingKeyInfo | undefined {
   const text = String(error);
   const match = /Missing\s+([A-Z0-9_]+)\s+for model\s+(.+?)(?:\.\s+Add|\.$)/.exec(text);
@@ -57,7 +65,7 @@ export interface TandemServiceDeps {
 }
 
 export class TandemService {
-  private projectDir = process.cwd();
+  private projectDir = safeDefaultProjectDir();
   private env: NodeJS.ProcessEnv = {};
   private config: TandemConfig = loadConfig({ cwd: this.projectDir });
   private ledger = new CostLedger();
@@ -83,7 +91,9 @@ export class TandemService {
   }
 
   async startSession(request: SessionStartRequest): Promise<SessionStartResponse> {
-    this.projectDir = request.projectDir || process.cwd();
+    const defaultProject = !request.projectDir;
+    this.projectDir = request.projectDir || safeDefaultProjectDir();
+    await mkdir(this.projectDir, { recursive: true });
     this.env = loadEnv(this.projectDir, undefined, { ...process.env });
     this.config = loadConfig({ cwd: this.projectDir, env: this.env });
     this.ledger = new CostLedger();
@@ -92,7 +102,7 @@ export class TandemService {
     this.session = await (this.deps.createSession ?? ((cwd) => SessionStore.create(cwd)))(this.projectDir);
     await this.session.append("session:start", { projectDir: this.projectDir });
     await this.refreshCronTasks();
-    return { projectDir: this.projectDir, sessionId: this.session.id, config: this.config };
+    return { projectDir: this.projectDir, sessionId: this.session.id, config: this.config, defaultProject, projectSummary: await projectSummary(this.projectDir) };
   }
 
   async run(prompt: string): Promise<void> {

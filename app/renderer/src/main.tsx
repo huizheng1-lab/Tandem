@@ -63,7 +63,7 @@ function missingKeyFromMessage(message: string): MissingKeyInfo | undefined {
 }
 
 function sessionStartedText(session: SessionStartResponse): string {
-  return `Session ${session.sessionId} started in ${session.projectDir} - leader ${session.config.leader}, worker ${session.config.worker}, permissions ${session.config.permissionMode}`;
+  return `Session ${session.sessionId} started; working in ${session.projectDir} (${session.projectSummary}) - leader ${session.config.leader}, worker ${session.config.worker}, permissions ${session.config.permissionMode}`;
 }
 
 function errorText(error: unknown): string {
@@ -114,6 +114,7 @@ function App(): React.ReactElement {
   }
 
   const [session, setSession] = useState<SessionStartResponse>();
+  const needsProjectPick = Boolean(session?.defaultProject);
   const [models, setModels] = useState<ModelListItem[]>([]);
   const [entries, setEntries] = useState<TranscriptEntry[]>([{ id: 1, kind: "message", role: "system", text: "Starting desktop session..." }]);
   const [prompt, setPrompt] = useState("");
@@ -344,7 +345,7 @@ function App(): React.ReactElement {
   };
 
   const createNewSession = async () => {
-    await startProjectSession(session?.projectDir);
+    await startProjectSession(session?.defaultProject ? undefined : session?.projectDir);
   };
 
   const addGoal = async () => {
@@ -513,6 +514,10 @@ function App(): React.ReactElement {
     setPrompt("");
     if (text.startsWith("/")) {
       await handleComposerCommand(text);
+      return;
+    }
+    if (needsProjectPick) {
+      appendMessage("system", "Choose a project folder before running Tandem. The default workspace is only a safe holding area.");
       return;
     }
     setRunning(true);
@@ -722,6 +727,17 @@ function App(): React.ReactElement {
               </span>
             </aside>
           ) : null}
+          {needsProjectPick ? (
+            <aside className="noticeBanner chooseProject">
+              <strong>Choose your project folder</strong>
+              <span>
+                Tandem is parked in the safe default workspace at <code>{session?.projectDir}</code>. Pick the folder you want this session to modify before sending a prompt.
+              </span>
+              <button type="button" onClick={() => void pickProject()}>
+                Pick Folder
+              </button>
+            </aside>
+          ) : null}
           {entries.map((entry) =>
             entry.kind === "message" ? (
               <article
@@ -754,7 +770,7 @@ function App(): React.ReactElement {
             placeholder="Ask Tandem to build something..."
             rows={3}
             value={prompt}
-            disabled={running}
+            disabled={running || needsProjectPick}
             onChange={(event) => setPrompt(event.target.value)}
             onKeyDown={(event) => {
               if (event.key === "Enter" && !event.shiftKey) {
@@ -763,8 +779,8 @@ function App(): React.ReactElement {
               }
             }}
           />
-          <button type="button" onClick={() => void (running ? stop() : send())}>
-            {running ? "Stop" : "Send"}
+          <button type="button" onClick={() => void (running ? stop() : needsProjectPick ? pickProject() : send())}>
+            {running ? "Stop" : needsProjectPick ? "Pick Folder" : "Send"}
           </button>
         </footer>
       </section>

@@ -281,6 +281,15 @@ select {
   background: #1d1a12;
 }
 
+.noticeBanner button {
+  justify-self: start;
+  border: 1px solid #6d603b;
+  border-radius: 6px;
+  color: #fff3ce;
+  background: #3a331f;
+  padding: 7px 10px;
+}
+
 .bubble,
 .artifactCard {
   max-width: 820px;
