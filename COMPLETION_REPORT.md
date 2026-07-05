@@ -6,7 +6,7 @@ complete
 
 ## Summary
 
-Implemented Tandem from the supplied build plan, revised it per `REVIEW_FEEDBACK.md`, completed the Round 3 handoff tasks in `HANDOFF_GPT5.md`, Round 4 in `HANDOFF_GPT5_R4.md`, Round 5 in `HANDOFF_GPT5_R5.md`, and Round 6 in `HANDOFF_GPT5_R6.md`: smoke-test diff/cost tightening, missed-schedule catch-up, transcript artifact expansion, help accuracy, diagnosable prose extraction fallback, JSON-text artifact recovery, and graceful review-failure completion.
+Implemented Tandem from the supplied build plan, revised it per `REVIEW_FEEDBACK.md`, completed the Round 3 handoff tasks in `HANDOFF_GPT5.md`, Round 4 in `HANDOFF_GPT5_R4.md`, Round 5 in `HANDOFF_GPT5_R5.md`, Round 6 in `HANDOFF_GPT5_R6.md`, and Round 7 in `HANDOFF_GPT5_R7.md`: smoke-test diff/cost tightening, missed-schedule catch-up, transcript artifact expansion, help accuracy, diagnosable prose extraction fallback, JSON-text artifact recovery, graceful review-failure completion, snapshot diff coverage for bash-created files, and reviewer empty-diff verification hardening.
 
 ## Task Results
 
@@ -36,6 +36,8 @@ Implemented Tandem from the supplied build plan, revised it per `REVIEW_FEEDBACK
 - R6-1: done - prose extraction fallback failures now preserve the original structured-generation failure and expose fallback extraction diagnostics.
 - R6-2: done - artifact extraction now falls back from `generateObject` to strict JSON text via `generateText`, parses and validates with zod, and reviewer prompting makes the submit tool mandatory.
 - R6-3: done - review retry exhaustion now ends in `DONE` with the last worker report preserved instead of throwing; planning failures still throw through the existing path.
+- R7-1: done - non-git snapshot diffs now scan the workspace as the source of truth, include bash/plain-fs created files without touched-path hints, skip only noisy internal directories, and cap per-file snapshot reads.
+- R7-2: done - reviewer prompting now requires read-only workspace inspection when the diff is empty, unexpectedly small, or inconsistent with the completion report before choosing revise or takeover.
 
 ## Files Changed
 
@@ -52,7 +54,7 @@ Implemented Tandem from the supplied build plan, revised it per `REVIEW_FEEDBACK
 ## Verification Results
 
 - `npx tsc --noEmit`: passed.
-- `npm test`: passed. 8 test files, 29 tests; 1 live-smoke test skipped unless `RUN_LIVE=1`.
+- `npm test`: passed. 8 test files, 30 tests; 1 live-smoke test skipped unless `RUN_LIVE=1`.
 - `npm run build`: passed. `dist/index.js` and `dist/index.d.ts` emitted.
 - `npx tandem --version`: passed, printed `0.1.0`.
 - `npx tandem /help`: passed.
@@ -75,3 +77,4 @@ Automated unit tests drive approve, revise-to-approve, round-exhaustion takeover
 Additional R4 unit tests cover prose artifact extraction fallback and OpenAI-compatible usage payload parsing.
 Additional R5 unit tests cover missed-schedule detection.
 Additional R6 unit tests cover fallback diagnostic errors, JSON-text artifact recovery, JSON-text fallback failure reporting, and graceful review retry exhaustion.
+Additional R7 unit tests cover non-git snapshot diffs for files created outside tracker hints, simulating bash-created files.
