@@ -6,7 +6,7 @@ complete
 
 ## Summary
 
-Implemented Tandem from the supplied build plan, revised it per `REVIEW_FEEDBACK.md`, completed the Round 3 handoff tasks in `HANDOFF_GPT5.md`, and completed Round 4 in `HANDOFF_GPT5_R4.md`: prose artifact fallback ownership/tests, demo artifact hygiene, dev audit cleanup, and OpenAI-compatible worker usage accounting.
+Implemented Tandem from the supplied build plan, revised it per `REVIEW_FEEDBACK.md`, completed the Round 3 handoff tasks in `HANDOFF_GPT5.md`, Round 4 in `HANDOFF_GPT5_R4.md`, and Round 5 in `HANDOFF_GPT5_R5.md`: smoke-test diff/cost tightening, missed-schedule catch-up, transcript artifact expansion, and help accuracy.
 
 ## Task Results
 
@@ -27,6 +27,12 @@ Implemented Tandem from the supplied build plan, revised it per `REVIEW_FEEDBACK
 - R4-2: done - added `demo-todo/` to `.gitignore` and removed committed demo artifacts from git tracking.
 - R4-3: done - upgraded dev-only Vitest to 4.1.9, overrode esbuild to a patched release, and confirmed audit now only reports the documented AI SDK runtime advisories.
 - R4-4: done - enabled OpenAI-compatible streaming usage reporting and hardened token extraction for NaN/raw usage payloads so worker cost can be recorded in live runs.
+- R5-1: no action - live worker-cost fix was confirmed by reviewer.
+- R5-6: done - live smoke test now uses the same snapshot diff provider wiring as the app.
+- R5-2: done - live smoke test separately asserts leader and worker output tokens plus non-zero worker dollars, and prints cost via `process.stdout.write`.
+- R5-3: done - schedules persist `lastRunAt`; startup detects missed fires and prompts to run each missed schedule.
+- R5-4: done - artifact messages appear in the transcript as summaries, with `ctrl+e` toggling the newest artifact details.
+- R5-5: done - `/help` output now lists implemented command syntax with descriptions.
 
 ## Files Changed
 
@@ -43,7 +49,7 @@ Implemented Tandem from the supplied build plan, revised it per `REVIEW_FEEDBACK
 ## Verification Results
 
 - `npx tsc --noEmit`: passed.
-- `npm test`: passed. 7 test files, 22 tests; 1 live-smoke test skipped unless `RUN_LIVE=1`.
+- `npm test`: passed. 8 test files, 25 tests; 1 live-smoke test skipped unless `RUN_LIVE=1`.
 - `npm run build`: passed. `dist/index.js` and `dist/index.d.ts` emitted.
 - `npx tandem --version`: passed, printed `0.1.0`.
 - `npx tandem /help`: passed.
@@ -53,7 +59,6 @@ Implemented Tandem from the supplied build plan, revised it per `REVIEW_FEEDBACK
 
 - The TUI is a compact functional shell rather than a fully polished Claude Code-style interface.
 - I did not run the live provider-backed smoke test because the handoff says it costs real tokens and the reviewer runs it. The live path exists and is documented.
-- `/schedule` registers live cron jobs and persists them, but missed-while-closed handling is a startup transcript prompt rather than an interactive catch-up workflow.
 
 ## Dependency Audit
 
@@ -65,3 +70,4 @@ Implemented Tandem from the supplied build plan, revised it per `REVIEW_FEEDBACK
 
 Automated unit tests drive approve, revise-to-approve, round-exhaustion takeover, exact build-round counts, leader-requested takeover, worker blocked takeover, worker artifact failure takeover, artifact validation retry, checkpoint resume, tolerant verification matching, and non-git diff fallback with fake agents/files and no network.
 Additional R4 unit tests cover prose artifact extraction fallback and OpenAI-compatible usage payload parsing.
+Additional R5 unit tests cover missed-schedule detection.
