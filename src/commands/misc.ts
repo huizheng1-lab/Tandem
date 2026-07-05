@@ -3,6 +3,7 @@ import { CostLedger } from "../session/cost.js";
 
 export const helpText = `/help
 /models
+/model
 /model leader <id>
 /model worker <id>
 /rounds <n>
