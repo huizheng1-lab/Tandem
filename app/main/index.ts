@@ -22,6 +22,7 @@ const currentDir = path.dirname(currentFile);
 
 let mainWindow: BrowserWindow | undefined;
 let service: TandemService | undefined;
+const gotSingleInstanceLock = app.requestSingleInstanceLock();
 
 function createWindow(): void {
   mainWindow = new BrowserWindow({
@@ -77,17 +78,27 @@ ipcMain.handle(ipcChannels.dialogPickFolder, async () => {
   return result.canceled ? undefined : result.filePaths[0];
 });
 
-app.whenReady().then(() => {
-  createWindow();
-
-  app.on("activate", () => {
-    if (BrowserWindow.getAllWindows().length === 0) createWindow();
+if (!gotSingleInstanceLock) {
+  app.quit();
+} else {
+  app.on("second-instance", () => {
+    if (!mainWindow) return;
+    if (mainWindow.isMinimized()) mainWindow.restore();
+    mainWindow.focus();
   });
-});
 
-app.on("window-all-closed", () => {
-  if (process.platform !== "darwin") app.quit();
-});
+  app.whenReady().then(() => {
+    createWindow();
+
+    app.on("activate", () => {
+      if (BrowserWindow.getAllWindows().length === 0) createWindow();
+    });
+  });
+
+  app.on("window-all-closed", () => {
+    if (process.platform !== "darwin") app.quit();
+  });
+}
 
 async function recordFatal(error: unknown): Promise<void> {
   try {
