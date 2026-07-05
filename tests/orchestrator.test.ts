@@ -108,6 +108,16 @@ describe("orchestration", () => {
     expect(result.takeover).toBe(true);
   });
 
+  it("takes over when the worker cannot produce a valid report", async () => {
+    const result = await runOrchestration({
+      request: "build",
+      config: { maxReviewRounds: 3 },
+      agents: agents({ build: async () => ({ nope: true }) })
+    });
+    expect(result.takeover).toBe(true);
+    expect(result.phase).toBe("DONE");
+  });
+
   it("retries artifact validation failures", async () => {
     let builds = 0;
     const result = await runOrchestration({

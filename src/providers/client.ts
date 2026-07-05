@@ -25,6 +25,13 @@ export async function makeModel(modelId: string, config: TandemConfig, env: Node
     return { entry, model: createOpenAI({ apiKey: env[entry.envKey] })(entry.modelName) };
   }
 
+  if (entry.provider === "google") {
+    const mod = await import("@ai-sdk/google");
+    // SDK boundary: see note above.
+    const createGoogle = (mod as Record<string, unknown>).createGoogleGenerativeAI as (options: { apiKey?: string }) => (modelName: string) => LanguageModel;
+    return { entry, model: createGoogle({ apiKey: env[entry.envKey] })(entry.modelName) };
+  }
+
   const mod = await import("@ai-sdk/openai-compatible");
   // SDK boundary: see note above.
   const createOpenAICompatible = (mod as Record<string, unknown>).createOpenAICompatible as (options: {

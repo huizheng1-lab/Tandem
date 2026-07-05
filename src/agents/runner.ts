@@ -21,6 +21,7 @@ export interface AgentRunOptions {
   onUsage?: (usage: LanguageModelUsage) => void;
   abortSignal?: AbortSignal;
   stopToolName?: string;
+  toolChoice?: { type: "tool"; toolName: string };
 }
 
 function isRetryable(error: unknown): boolean {
@@ -41,14 +42,19 @@ export async function runAgentText(options: AgentRunOptions): Promise<{ text: st
   for (let attempt = 0; attempt < 3; attempt += 1) {
     try {
       let finishedUsage: LanguageModelUsage | undefined;
+      let streamError: unknown;
       const result = streamText({
         model: options.model,
         system: options.system,
         messages: options.messages,
         tools: options.tools,
         stopWhen: options.stopToolName ? [stepCountIs(options.maxSteps), hasToolCall(options.stopToolName)] : stepCountIs(options.maxSteps),
+        toolChoice: options.toolChoice,
         abortSignal: options.abortSignal,
         maxRetries: 2,
+        onError: ({ error }) => {
+          streamError = error;
+        },
         onFinish: ({ totalUsage }) => {
           finishedUsage = totalUsage;
           options.onUsage?.(totalUsage);
@@ -64,6 +70,7 @@ export async function runAgentText(options: AgentRunOptions): Promise<{ text: st
         text += delta;
         options.onText?.(delta);
       }
+      if (streamError) throw streamError;
       finishedUsage ??= await result.totalUsage;
       return { text, usage: finishedUsage };
     } catch (error) {
@@ -77,5 +84,19 @@ export async function runAgentText(options: AgentRunOptions): Promise<{ text: st
 
 export async function runAgentArtifact<T>(options: AgentRunOptions & { artifactName: string; getArtifact: () => T | undefined }): Promise<{ artifact?: T; text: string; usage?: LanguageModelUsage }> {
   const result = await runAgentText(options);
-  return { ...result, artifact: options.getArtifact() };
+  const artifact = options.getArtifact();
+  if (artifact !== undefined || !options.stopToolName) return { ...result, artifact };
+
+  // The model finished its work but ended the turn in prose instead of calling its submit tool.
+  // Continue the conversation once with the tool call forced.
+  const nudged = await runAgentText({
+    ...options,
+    messages: [
+      ...options.messages,
+      { role: "assistant", content: result.text || "(no text)" },
+      { role: "user", content: `You did not call ${options.stopToolName}. Call ${options.stopToolName} now with your final ${options.artifactName}. Do not write prose.` }
+    ],
+    toolChoice: { type: "tool", toolName: options.stopToolName }
+  });
+  return { ...nudged, text: `${result.text}${nudged.text}`, artifact: options.getArtifact() };
 }

@@ -36,14 +36,15 @@ export interface RunOptions {
 async function retryArtifact<T>(name: string, emit: (event: MachineEvent) => void, producer: () => Promise<unknown>, parse: (value: unknown) => T): Promise<T> {
   let lastError: unknown;
   for (let attempt = 1; attempt <= 3; attempt += 1) {
-    const value = await producer();
     try {
+      const value = await producer();
       const parsed = parse(value);
       emit({ type: "artifact", name, value: parsed });
       return parsed;
     } catch (error) {
+      if (error instanceof Error && error.name === "AbortError") throw error;
       lastError = error;
-      emit({ type: "error", message: `${name} validation failed on attempt ${attempt}: ${String(error)}` });
+      emit({ type: "error", message: `${name} failed on attempt ${attempt}: ${String(error)}` });
     }
   }
   throw lastError instanceof Error ? lastError : new Error(String(lastError));
@@ -96,12 +97,18 @@ export async function runOrchestration(options: RunOptions): Promise<RunResult> 
   let feedback: ReviewVerdict["feedback"] = [];
   for (let round = 1; round <= options.config.maxReviewRounds; round += 1) {
     emit({ type: "transition", phase: "BUILDING", message: `round ${round}/${options.config.maxReviewRounds} worker build` });
-    const report = await retryArtifact(
-      "CompletionReport",
-      emit,
-      () => options.agents.build({ plan, round, feedback, previousReport: reports.at(-1) }),
-      (value) => validateCompletionReport(plan, value)
-    );
+    let report: CompletionReport;
+    try {
+      report = await retryArtifact(
+        "CompletionReport",
+        emit,
+        () => options.agents.build({ plan, round, feedback, previousReport: reports.at(-1) }),
+        (value) => validateCompletionReport(plan, value)
+      );
+    } catch (error) {
+      emit({ type: "error", message: `worker could not produce a valid CompletionReport: ${String(error)}` });
+      return runTakeover("worker artifact failure; leader takeover");
+    }
     reports.push(report);
 
     emit({ type: "transition", phase: "REVIEWING", message: `round ${round}/${options.config.maxReviewRounds} leader review` });

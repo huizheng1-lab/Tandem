@@ -1,6 +1,6 @@
 import { CustomModel } from "../config/schema.js";
 
-export type ProviderKind = "anthropic" | "openai" | "openai-compatible";
+export type ProviderKind = "anthropic" | "openai" | "google" | "openai-compatible";
 
 export interface ModelEntry {
   id: string;
@@ -47,6 +47,22 @@ export const builtInModels: ModelEntry[] = [
     envKey: "ANTHROPIC_API_KEY",
     contextWindow: 200000,
     costHints: { inputPerMillion: 1, outputPerMillion: 5 }
+  },
+  {
+    id: "google/gemini-2.5-pro",
+    provider: "google",
+    modelName: "gemini-2.5-pro",
+    envKey: "GEMINI_API_KEY",
+    contextWindow: 1000000,
+    costHints: { inputPerMillion: 1.25, outputPerMillion: 10 }
+  },
+  {
+    id: "google/gemini-2.5-flash",
+    provider: "google",
+    modelName: "gemini-2.5-flash",
+    envKey: "GEMINI_API_KEY",
+    contextWindow: 1000000,
+    costHints: { inputPerMillion: 0.3, outputPerMillion: 2.5 }
   },
   {
     id: "openai/gpt-5",
