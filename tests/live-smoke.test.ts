@@ -39,17 +39,19 @@ describe.runIf(process.env.RUN_LIVE === "1")("live leader/worker pipeline", () =
       emit: (event) => console.log(`\n[machine] ${JSON.stringify(event).slice(0, 400)}`)
     });
 
-    console.log("\n[result]", JSON.stringify({ phase: result.phase, takeover: result.takeover, summary: result.summary }, null, 2));
-    console.log("[cost]", JSON.stringify(ledger.totals()));
+    process.stdout.write(`\n[result] ${JSON.stringify({ phase: result.phase, takeover: result.takeover, summary: result.summary }, null, 2)}\n`);
+    process.stdout.write(`[cost] ${JSON.stringify(ledger.totals())}\n`);
     expect(result.phase).toBe("DONE");
     expect(result.plan, "leader should have produced a BuildPlan, not a plain answer").toBeDefined();
     expect(result.reports.length, "at least one worker/takeover report expected").toBeGreaterThan(0);
     const totals = ledger.totals();
-    expect(totals.leader.outputTokens + totals.worker.outputTokens, "cost ledger should record real usage").toBeGreaterThan(0);
+    expect(totals.leader.outputTokens, "leader output tokens should be recorded").toBeGreaterThan(0);
+    expect(totals.worker.outputTokens, "worker output tokens should be recorded").toBeGreaterThan(0);
+    expect(totals.worker.dollars, "worker cost should be non-zero").toBeGreaterThan(0);
 
     const check = await import("node:child_process").then(({ execFileSync }) =>
       execFileSync("node", ["test.mjs"], { cwd: demoDir, encoding: "utf8" })
     );
-    console.log("[demo test.mjs]", check.trim());
+    process.stdout.write(`[demo test.mjs] ${check.trim()}\n`);
   }, 900_000);
 });
