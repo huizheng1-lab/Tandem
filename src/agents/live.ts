@@ -1,4 +1,4 @@
-import { generateObject, tool } from "ai";
+import { generateObject, generateText, tool } from "ai";
 import type { LanguageModel, ToolSet } from "ai";
 import { z } from "zod";
 import { TandemConfig } from "../config/schema.js";
@@ -41,6 +41,12 @@ export type ProseObjectGenerator<T> = (options: {
   prompt: string;
 }) => Promise<{ object: T; usage?: unknown }>;
 
+export type ProseTextGenerator = (options: {
+  model: LanguageModel;
+  abortSignal?: AbortSignal;
+  prompt: string;
+}) => Promise<{ text: string; usage?: unknown }>;
+
 export interface ExtractFromProseOptions<T> {
   resolution: { model: LanguageModel; entry: ModelEntry };
   ledger: CostLedger;
@@ -51,6 +57,7 @@ export interface ExtractFromProseOptions<T> {
   abortSignal?: AbortSignal;
   originalError: Error;
   generator?: ProseObjectGenerator<T>;
+  textGenerator?: ProseTextGenerator;
 }
 
 function usageNumber(value: unknown): number {
@@ -61,12 +68,26 @@ function fallbackError(originalError: Error, cause: unknown): Error {
   return new Error(`${originalError.message} Fallback extraction also failed: ${String(cause)}`, { cause });
 }
 
+function recordFallbackUsage(role: CostRole, ledger: CostLedger, entry: ModelEntry, usage: unknown): void {
+  const raw = usage as { inputTokens?: unknown; outputTokens?: unknown; promptTokens?: unknown; completionTokens?: unknown } | undefined;
+  ledger.add(role, entry, usageNumber(raw?.inputTokens ?? raw?.promptTokens), usageNumber(raw?.outputTokens ?? raw?.completionTokens));
+}
+
+function extractJsonText(text: string): string {
+  const fenced = /```(?:json)?\s*([\s\S]*?)```/i.exec(text);
+  if (fenced?.[1]) return fenced[1].trim();
+  const firstBrace = text.indexOf("{");
+  const lastBrace = text.lastIndexOf("}");
+  if (firstBrace >= 0 && lastBrace > firstBrace) return text.slice(firstBrace, lastBrace + 1);
+  return text.trim();
+}
+
 // Some models (observed: Gemini 2.5 Pro) reliably do the work but fail to call their submit_*
 // tool even when tool choice is forced. Recover by extracting the artifact from the prose the
 // model already wrote, via schema-constrained generation with no tools involved.
 export async function extractFromProse<T>(options: ExtractFromProseOptions<T>): Promise<T> {
   if (!options.text.trim()) throw options.originalError;
-  const generator: ProseObjectGenerator<T> =
+  const objectGenerator: ProseObjectGenerator<T> =
     options.generator ??
     ((input) =>
       generateObject({
@@ -75,23 +96,36 @@ export async function extractFromProse<T>(options: ExtractFromProseOptions<T>): 
         abortSignal: input.abortSignal,
         prompt: input.prompt
       }));
+  const textGenerator: ProseTextGenerator =
+    options.textGenerator ??
+    ((input) =>
+      generateText({
+        model: input.model,
+        abortSignal: input.abortSignal,
+        prompt: input.prompt
+      }));
+  const basePrompt = `The following text is a completed ${options.artifactName} written as prose. Convert it faithfully into the structured object. Do not invent facts that are not in the text.\n\n${options.text}`;
   try {
-    const { object, usage } = await generator({
+    const { object, usage } = await objectGenerator({
       model: options.resolution.model,
       schema: options.schema,
       abortSignal: options.abortSignal,
-      prompt: `The following text is a completed ${options.artifactName} written as prose. Convert it faithfully into the structured object. Do not invent facts that are not in the text.\n\n${options.text}`
+      prompt: basePrompt
     });
-    const raw = usage as { inputTokens?: unknown; outputTokens?: unknown; promptTokens?: unknown; completionTokens?: unknown } | undefined;
-    options.ledger.add(
-      options.role,
-      options.resolution.entry,
-      usageNumber(raw?.inputTokens ?? raw?.promptTokens),
-      usageNumber(raw?.outputTokens ?? raw?.completionTokens)
-    );
+    recordFallbackUsage(options.role, options.ledger, options.resolution.entry, usage);
     return object;
-  } catch (cause) {
-    throw fallbackError(options.originalError, cause);
+  } catch (objectCause) {
+    try {
+      const { text, usage } = await textGenerator({
+        model: options.resolution.model,
+        abortSignal: options.abortSignal,
+        prompt: `${basePrompt}\n\nReturn only valid JSON for ${options.artifactName}. No markdown, no prose, no code fences.`
+      });
+      recordFallbackUsage(options.role, options.ledger, options.resolution.entry, usage);
+      return options.schema.parse(JSON.parse(extractJsonText(text)));
+    } catch (textCause) {
+      throw fallbackError(options.originalError, `generateObject failed: ${String(objectCause)}; JSON-text fallback failed: ${String(textCause)}`);
+    }
   }
 }
 
@@ -194,7 +228,7 @@ export async function createLiveAgents(options: LiveAgentOptions): Promise<Agent
         modelEntry: leader.entry,
         costRole: "leader",
         ledger: options.ledger,
-        system: `${leaderReviewerPrompt}\nYou may rerun only the plan verification commands. End by calling submit_review.`,
+        system: `${leaderReviewerPrompt}\nYou may rerun only the plan verification commands. Prose verdicts are discarded; the turn is only complete after submit_review has been called.`,
         messages: [
           {
             role: "user",

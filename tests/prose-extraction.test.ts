@@ -91,4 +91,45 @@ describe("extractFromProse", () => {
     expect(totals.outputTokens).toBe(10);
     expect(totals.dollars).toBeCloseTo(0.00018, 8);
   });
+
+  it("falls back to JSON text parsing when generateObject fails", async () => {
+    const ledger = new CostLedger();
+    const result = await extractFromProse({
+      resolution: { model: {} as LanguageModel, entry: modelEntry },
+      ledger,
+      role: "leader",
+      schema,
+      artifactName: "ReviewVerdict",
+      text: "Approved.",
+      originalError: new Error("original"),
+      generator: async () => {
+        throw new Error("schema conversion failed");
+      },
+      textGenerator: async () => ({
+        text: '```json\n{"verdict":"approve","userSummary":"done"}\n```',
+        usage: { inputTokens: 80, outputTokens: 12 }
+      })
+    });
+
+    expect(result).toEqual({ verdict: "approve", userSummary: "done" });
+    expect(ledger.totals().leader.outputTokens).toBe(12);
+  });
+
+  it("reports both generateObject and JSON text fallback failures", async () => {
+    await expect(
+      extractFromProse({
+        resolution: { model: {} as LanguageModel, entry: modelEntry },
+        ledger: new CostLedger(),
+        role: "leader",
+        schema,
+        artifactName: "ReviewVerdict",
+        text: "Approved.",
+        originalError: new Error("Leader review finished without submit_review."),
+        generator: async () => {
+          throw new Error("schema conversion failed");
+        },
+        textGenerator: async () => ({ text: "not json" })
+      })
+    ).rejects.toThrow(/generateObject failed: Error: schema conversion failed; JSON-text fallback failed:/);
+  });
 });
