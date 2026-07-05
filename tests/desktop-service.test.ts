@@ -1,0 +1,95 @@
+import { mkdir } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import path from "node:path";
+import { describe, expect, it } from "vitest";
+import { TandemService } from "../app/main/tandem-service.js";
+import { ipcChannels } from "../app/shared/ipc.js";
+import type { AgentFns, RunOptions, RunResult } from "../src/orchestrator/machine.js";
+
+async function tempDir(): Promise<string> {
+  const dir = path.join(tmpdir(), `tandem-desktop-${Date.now()}-${Math.random().toString(16).slice(2)}`);
+  await mkdir(dir, { recursive: true });
+  return dir;
+}
+
+function fakeWindow() {
+  const sent: Array<{ channel: string; payload: unknown }> = [];
+  return {
+    sent,
+    window: {
+      webContents: {
+        send: (channel: string, payload: unknown) => sent.push({ channel, payload })
+      }
+    }
+  };
+}
+
+describe("TandemService", () => {
+  it("runs orchestration through injected core dependencies and records session events", async () => {
+    const cwd = await tempDir();
+    const { window, sent } = fakeWindow();
+    const appended: Array<{ type: string; payload: unknown }> = [];
+    let agentCwd = "";
+    let request = "";
+
+    const service = new TandemService(window as never, {
+      registerIpcResponses: false,
+      createSession: async () => ({
+        id: "session-1",
+        append: async (type, payload) => {
+          appended.push({ type, payload });
+        },
+        read: async () => []
+      }),
+      createAgents: async (options): Promise<AgentFns> => {
+        agentCwd = options.cwd;
+        return {
+          plan: async () => ({ kind: "answer", answer: "done" }),
+          build: async () => ({}),
+          review: async () => ({}),
+          takeover: async () => {
+            throw new Error("not used");
+          }
+        };
+      },
+      runOrchestration: async (options: RunOptions): Promise<RunResult> => {
+        request = options.request;
+        options.emit?.({ type: "transition", phase: "PLANNING", message: "planning" });
+        return { phase: "DONE", summary: "finished", reports: [], verdicts: [], takeover: false };
+      }
+    });
+
+    const started = await service.startSession({ projectDir: cwd });
+    await service.run("build the thing");
+
+    expect(started.sessionId).toBe("session-1");
+    expect(agentCwd).toBe(cwd);
+    expect(request).toBe("build the thing");
+    expect(appended.some((event) => event.type === "user")).toBe(true);
+    expect(appended.some((event) => event.type === "done")).toBe(true);
+    expect(sent.some((event) => event.channel === ipcChannels.machineEvent)).toBe(true);
+    expect(sent.some((event) => event.channel === ipcChannels.doneEvent)).toBe(true);
+  });
+
+  it("records crashes to the active session", async () => {
+    const cwd = await tempDir();
+    const { window, sent } = fakeWindow();
+    const appended: Array<{ type: string; payload: unknown }> = [];
+    const service = new TandemService(window as never, {
+      registerIpcResponses: false,
+      createSession: async () => ({
+        id: "session-1",
+        append: async (type, payload) => {
+          appended.push({ type, payload });
+        },
+        read: async () => []
+      })
+    });
+
+    await service.startSession({ projectDir: cwd });
+    await service.recordCrash(new Error("boom"));
+
+    expect(appended.some((event) => event.type === "crash")).toBe(true);
+    expect(sent.at(-1)?.channel).toBe(ipcChannels.machineEvent);
+  });
+});

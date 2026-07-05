@@ -80,3 +80,21 @@ app.whenReady().then(() => {
 app.on("window-all-closed", () => {
   if (process.platform !== "darwin") app.quit();
 });
+
+async function recordFatal(error: unknown): Promise<void> {
+  try {
+    await service?.recordCrash(error);
+  } finally {
+    console.error(String(error));
+  }
+}
+
+process.on("uncaughtException", (error) => {
+  void recordFatal(error).finally(() => {
+    process.exit(1);
+  });
+});
+
+process.on("unhandledRejection", (error) => {
+  void recordFatal(error);
+});

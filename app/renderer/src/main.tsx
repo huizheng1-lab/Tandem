@@ -10,6 +10,7 @@ import type {
   Schedule,
   SessionStartResponse
 } from "../../shared/ipc.js";
+import { ErrorBoundary } from "./ErrorBoundary.js";
 import "./styles.css";
 
 type Role = "user" | "leader" | "worker" | "system";
@@ -432,4 +433,8 @@ function App(): React.ReactElement {
   );
 }
 
-createRoot(document.getElementById("root") as HTMLElement).render(<App />);
+createRoot(document.getElementById("root") as HTMLElement).render(
+  <ErrorBoundary>
+    <App />
+  </ErrorBoundary>
+);

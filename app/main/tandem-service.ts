@@ -27,20 +27,34 @@ import {
 } from "../shared/ipc.js";
 
 type PendingResolver = (approved: boolean) => void;
+type DesktopWindow = Pick<BrowserWindow, "webContents">;
+type SessionLike = Pick<SessionStore, "id" | "append" | "read">;
+
+export interface TandemServiceDeps {
+  createAgents?: typeof createLiveAgents;
+  runOrchestration?: typeof runOrchestration;
+  createSession?: (cwd: string) => Promise<SessionLike>;
+  openSession?: (id: string, cwd: string) => Promise<SessionLike>;
+  registerIpcResponses?: boolean;
+}
 
 export class TandemService {
   private projectDir = process.cwd();
   private env: NodeJS.ProcessEnv = {};
   private config: TandemConfig = loadConfig({ cwd: this.projectDir });
   private ledger = new CostLedger();
-  private session?: SessionStore;
+  private session?: SessionLike;
   private controller?: AbortController;
   private lastCheckpoint?: OrchestrationCheckpoint;
   private readonly pendingPermissions = new Map<string, PendingResolver>();
   private readonly pendingPlans = new Map<string, PendingResolver>();
   private readonly cronTasks = new Map<string, ScheduledTask>();
 
-  constructor(private readonly window: BrowserWindow) {
+  constructor(
+    private readonly window: DesktopWindow,
+    private readonly deps: TandemServiceDeps = {}
+  ) {
+    if (deps.registerIpcResponses === false) return;
     ipcMain.on(ipcChannels.permissionRespond, (_event, response: PermissionResponse) => {
       this.resolvePending(this.pendingPermissions, response.id, response.approved);
     });
@@ -55,7 +69,7 @@ export class TandemService {
     this.config = loadConfig({ cwd: this.projectDir, env: this.env });
     this.ledger = new CostLedger();
     this.lastCheckpoint = undefined;
-    this.session = await SessionStore.create(this.projectDir);
+    this.session = await (this.deps.createSession ?? ((cwd) => SessionStore.create(cwd)))(this.projectDir);
     await this.session.append("session:start", { projectDir: this.projectDir });
     await this.refreshCronTasks();
     return { projectDir: this.projectDir, sessionId: this.session.id, config: this.config };
@@ -64,7 +78,7 @@ export class TandemService {
   async run(prompt: string): Promise<void> {
     if (this.controller) throw new Error("A Tandem run is already active.");
     if (!this.session) await this.startSession({ projectDir: this.projectDir });
-    const session = this.session as SessionStore;
+    const session = this.session as SessionLike;
     this.controller = new AbortController();
     await session.append("user", { prompt });
 
@@ -73,7 +87,7 @@ export class TandemService {
       const permissionBridge: PermissionBridge = {
         approve: (request) => this.requestPermission(request)
       };
-      const agents = await createLiveAgents({
+      const agents = await (this.deps.createAgents ?? createLiveAgents)({
         config: this.config,
         cwd: this.projectDir,
         env: this.env,
@@ -85,7 +99,7 @@ export class TandemService {
         onWorkerText: (delta) => void this.emitText("worker", delta)
       });
       const goals = (await listGoals(this.projectDir)).filter((goal) => goal.status === "active").map((goal) => goal.text);
-      const result = await runOrchestration({
+      const result = await (this.deps.runOrchestration ?? runOrchestration)({
         request: prompt,
         config: this.config,
         agents,
@@ -136,11 +150,17 @@ export class TandemService {
   }
 
   async resumeSession(id: string): Promise<SessionResumeResponse> {
-    const store = await SessionStore.open(id, this.projectDir);
+    const store = await (this.deps.openSession ?? ((sessionId, cwd) => SessionStore.open(sessionId, cwd)))(id, this.projectDir);
     const events = await store.read();
     this.session = store;
     this.lastCheckpoint = this.findLastCheckpoint(events.map((event) => event.payload));
     return { id, events, checkpoint: this.lastCheckpoint };
+  }
+
+  async recordCrash(error: unknown): Promise<void> {
+    const event: MachineEvent = { type: "error", message: `Desktop process crash: ${String(error)}` };
+    this.window.webContents.send(ipcChannels.machineEvent, event);
+    await this.session?.append("crash", event);
   }
 
   listGoals() {

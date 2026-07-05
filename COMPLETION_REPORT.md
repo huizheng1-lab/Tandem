@@ -6,7 +6,7 @@ complete
 
 ## Summary
 
-Implemented Tandem from the supplied build plan, revised it per `REVIEW_FEEDBACK.md`, completed the Round 3 handoff tasks in `HANDOFF_GPT5.md`, Round 4 in `HANDOFF_GPT5_R4.md`, Round 5 in `HANDOFF_GPT5_R5.md`, Round 6 in `HANDOFF_GPT5_R6.md`, and Round 7 in `HANDOFF_GPT5_R7.md`: smoke-test diff/cost tightening, missed-schedule catch-up, transcript artifact expansion, help accuracy, diagnosable prose extraction fallback, JSON-text artifact recovery, graceful review-failure completion, snapshot diff coverage for bash-created files, and reviewer empty-diff verification hardening.
+Implemented Tandem from the supplied build plan, revised it per `REVIEW_FEEDBACK.md`, completed the Round 3 handoff tasks in `HANDOFF_GPT5.md`, Round 4 in `HANDOFF_GPT5_R4.md`, Round 5 in `HANDOFF_GPT5_R5.md`, Round 6 in `HANDOFF_GPT5_R6.md`, Round 7 in `HANDOFF_GPT5_R7.md`, and the desktop app plan in `BUILD_PLAN_DESKTOP.md`: smoke-test diff/cost tightening, missed-schedule catch-up, transcript artifact expansion, help accuracy, diagnosable prose extraction fallback, JSON-text artifact recovery, graceful review-failure completion, snapshot diff coverage for bash-created files, reviewer empty-diff verification hardening, and a packaged Electron desktop chat app.
 
 ## Task Results
 
@@ -38,6 +38,12 @@ Implemented Tandem from the supplied build plan, revised it per `REVIEW_FEEDBACK
 - R6-3: done - review retry exhaustion now ends in `DONE` with the last worker report preserved instead of throwing; planning failures still throw through the existing path.
 - R7-1: done - non-git snapshot diffs now scan the workspace as the source of truth, include bash/plain-fs created files without touched-path hints, skip only noisy internal directories, and cap per-file snapshot reads.
 - R7-2: done - reviewer prompting now requires read-only workspace inspection when the diff is empty, unexpectedly small, or inconsistent with the completion report before choosing revise or takeover.
+- D0: done - Electron, electron-vite, React renderer, typed preload ping, `dev:app`, `dist:app`, and desktop build scaffold are wired while keeping CLI tests green.
+- D1: done - main-process `TandemService` bridges `createLiveAgents`, `runOrchestration`, `SessionStore`, `CostLedger`, diff tracking, plan confirmation, permission requests, aborts, and streaming events into typed IPC.
+- D2: done - desktop chat UI includes transcript bubbles, artifact cards, model dropdowns, status/cost display, composer Stop button, and in-window plan/permission modals.
+- D3: done - sidebar supports project folder switching, session list/resume with checkpoint continuation, goals add/complete, and schedules add/remove with main-process cron tasks.
+- D4: done - electron-builder packaging targets NSIS and portable Windows executables, includes a generated Tandem icon, and documents the desktop app and shortcut story.
+- D5: done - renderer error boundary, main-process crash recording, IPC contract tests, and mock-service tests were added.
 
 ## Files Changed
 
@@ -47,6 +53,8 @@ Implemented Tandem from the supplied build plan, revised it per `REVIEW_FEEDBACK
 - .env.example
 - README.md
 - .gitignore
+- app/
+- electron.vite.config.ts
 - src/
 - tests/
 - COMPLETION_REPORT.md
@@ -54,8 +62,10 @@ Implemented Tandem from the supplied build plan, revised it per `REVIEW_FEEDBACK
 ## Verification Results
 
 - `npx tsc --noEmit`: passed.
-- `npm test`: passed. 8 test files, 30 tests; 1 live-smoke test skipped unless `RUN_LIVE=1`.
+- `npm test`: passed. 10 test files, 34 tests; 1 live-smoke test skipped unless `RUN_LIVE=1`.
 - `npm run build`: passed. `dist/index.js` and `dist/index.d.ts` emitted.
+- `npx electron-vite build`: passed. Desktop main, preload, and renderer emitted to `out/`.
+- `npm run dist:app`: passed. Produced `release/Tandem Setup 0.1.0.exe` and `release/Tandem 0.1.0.exe`.
 - `npx tandem --version`: passed, printed `0.1.0`.
 - `npx tandem /help`: passed.
 - `npm audit`: reports only 7 low-severity AI SDK runtime advisories under pinned v5 packages.
@@ -63,6 +73,7 @@ Implemented Tandem from the supplied build plan, revised it per `REVIEW_FEEDBACK
 ## Deviations From Plan
 
 - The TUI is a compact functional shell rather than a fully polished Claude Code-style interface.
+- Desktop live provider execution was not run manually in this pass; the packaged app and bridge build locally, and provider-backed GUI smoke remains for reviewer/manual validation.
 - I did not run the live provider-backed smoke test because the handoff says it costs real tokens and the reviewer runs it. The live path exists and is documented.
 
 ## Dependency Audit
@@ -78,3 +89,4 @@ Additional R4 unit tests cover prose artifact extraction fallback and OpenAI-com
 Additional R5 unit tests cover missed-schedule detection.
 Additional R6 unit tests cover fallback diagnostic errors, JSON-text artifact recovery, JSON-text fallback failure reporting, and graceful review retry exhaustion.
 Additional R7 unit tests cover non-git snapshot diffs for files created outside tracker hints, simulating bash-created files.
+Additional desktop tests cover IPC channel contract uniqueness and TandemService run/crash behavior with fake agents and fake session storage.

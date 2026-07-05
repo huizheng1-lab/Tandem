@@ -342,3 +342,36 @@ select {
   color: #c6ccd5;
   font-size: 13px;
 }
+
+.errorBoundary {
+  display: grid;
+  place-content: center;
+  gap: 16px;
+  min-height: 100vh;
+  padding: 32px;
+  background: #101114;
+}
+
+.errorBoundary h1 {
+  margin: 0;
+  font-size: 22px;
+}
+
+.errorBoundary pre {
+  max-width: 720px;
+  overflow: auto;
+  border: 1px solid #3a4658;
+  border-radius: 8px;
+  padding: 14px;
+  color: #d7dce4;
+  background: #181c23;
+}
+
+.errorBoundary button {
+  justify-self: start;
+  border: 1px solid #3d4654;
+  border-radius: 6px;
+  color: #f3f2ee;
+  background: #2b624f;
+  padding: 10px 12px;
+}
