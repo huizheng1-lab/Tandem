@@ -1,8 +1,8 @@
 import { createHash, randomUUID } from "node:crypto";
 import { createWriteStream, existsSync } from "node:fs";
 import { mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises";
-import { homedir } from "node:os";
 import path from "node:path";
+import { tandemStateDir } from "../paths.js";
 
 export interface SessionEvent {
   type: string;
@@ -26,11 +26,11 @@ export function projectHash(cwd = process.cwd()): string {
   return createHash("sha1").update(path.resolve(cwd)).digest("hex").slice(0, 12);
 }
 
-export function sessionDir(cwd = process.cwd(), homeDir = homedir()): string {
-  return path.join(homeDir, ".tandem", "sessions", projectHash(cwd));
+export function sessionDir(cwd = process.cwd(), homeDir?: string): string {
+  return path.join(tandemStateDir(homeDir), "sessions", projectHash(cwd));
 }
 
-export function sessionIndexPath(cwd = process.cwd(), homeDir = homedir()): string {
+export function sessionIndexPath(cwd = process.cwd(), homeDir?: string): string {
   return path.join(sessionDir(cwd, homeDir), "index.json");
 }
 
@@ -51,7 +51,7 @@ async function enqueueIndexMutation<T>(operation: () => Promise<T>): Promise<T> 
   return next;
 }
 
-async function readIndex(cwd: string, homeDir: string): Promise<SessionIndex> {
+async function readIndex(cwd: string, homeDir: string | undefined): Promise<SessionIndex> {
   try {
     return JSON.parse(await readFile(sessionIndexPath(cwd, homeDir), "utf8")) as SessionIndex;
   } catch {
@@ -59,7 +59,7 @@ async function readIndex(cwd: string, homeDir: string): Promise<SessionIndex> {
   }
 }
 
-async function writeIndex(cwd: string, homeDir: string, index: SessionIndex): Promise<void> {
+async function writeIndex(cwd: string, homeDir: string | undefined, index: SessionIndex): Promise<void> {
   const filePath = sessionIndexPath(cwd, homeDir);
   await mkdir(path.dirname(filePath), { recursive: true });
   await writeFile(filePath, `${JSON.stringify(index, null, 2)}\n`, "utf8");
@@ -75,13 +75,13 @@ async function readSessionEvents(filePath: string): Promise<SessionEvent[]> {
     .map((line) => JSON.parse(line) as SessionEvent);
 }
 
-async function sessionFileIds(cwd: string, homeDir: string): Promise<Set<string>> {
+async function sessionFileIds(cwd: string, homeDir: string | undefined): Promise<Set<string>> {
   const dir = sessionDir(cwd, homeDir);
   if (!existsSync(dir)) return new Set();
   return new Set((await readdir(dir)).filter((file) => file.endsWith(".jsonl")).map((file) => file.replace(/\.jsonl$/, "")));
 }
 
-async function synthesizeSessionEntry(cwd: string, homeDir: string, id: string): Promise<Omit<SessionMetadata, "id">> {
+async function synthesizeSessionEntry(cwd: string, homeDir: string | undefined, id: string): Promise<Omit<SessionMetadata, "id">> {
   const events = await readSessionEvents(path.join(sessionDir(cwd, homeDir), `${id}.jsonl`));
   const first = events[0]?.at ?? new Date(0).toISOString();
   const last = events.at(-1)?.at ?? first;
@@ -94,7 +94,7 @@ async function synthesizeSessionEntry(cwd: string, homeDir: string, id: string):
   };
 }
 
-async function reconcileSessionIndex(cwd: string, homeDir: string, index: SessionIndex): Promise<SessionIndex> {
+async function reconcileSessionIndex(cwd: string, homeDir: string | undefined, index: SessionIndex): Promise<SessionIndex> {
   const files = await sessionFileIds(cwd, homeDir);
   const next: SessionIndex = {};
   for (const id of files) {
@@ -103,7 +103,7 @@ async function reconcileSessionIndex(cwd: string, homeDir: string, index: Sessio
   return next;
 }
 
-async function pruneOldEmptySessions(cwd: string, homeDir: string, index: SessionIndex, now = Date.now()): Promise<SessionIndex> {
+async function pruneOldEmptySessions(cwd: string, homeDir: string | undefined, index: SessionIndex, now = Date.now()): Promise<SessionIndex> {
   const next: SessionIndex = {};
   for (const [id, entry] of Object.entries(index)) {
     const lastActiveAt = new Date(entry.lastActiveAt).getTime();
@@ -122,7 +122,7 @@ async function pruneOldEmptySessions(cwd: string, homeDir: string, index: Sessio
   return next;
 }
 
-async function updateSessionIndex(cwd: string, homeDir: string, id: string, updater: (entry: Omit<SessionMetadata, "id">) => void): Promise<void> {
+async function updateSessionIndex(cwd: string, homeDir: string | undefined, id: string, updater: (entry: Omit<SessionMetadata, "id">) => void): Promise<void> {
   await enqueueIndexMutation(async () => {
     const index = await reconcileSessionIndex(cwd, homeDir, await readIndex(cwd, homeDir));
     const now = new Date().toISOString();
@@ -137,12 +137,12 @@ export class SessionStore {
   readonly id: string;
   readonly filePath: string;
 
-  private constructor(id: string, filePath: string, private readonly cwd: string, private readonly homeDir: string) {
+  private constructor(id: string, filePath: string, private readonly cwd: string, private readonly homeDir: string | undefined) {
     this.id = id;
     this.filePath = filePath;
   }
 
-  static async create(cwd = process.cwd(), homeDir = homedir()): Promise<SessionStore> {
+  static async create(cwd = process.cwd(), homeDir?: string): Promise<SessionStore> {
     const id = randomUUID();
     const dir = sessionDir(cwd, homeDir);
     await mkdir(dir, { recursive: true });
@@ -158,7 +158,7 @@ export class SessionStore {
     return new SessionStore(id, filePath, cwd, homeDir);
   }
 
-  static async open(id: string, cwd = process.cwd(), homeDir = homedir()): Promise<SessionStore> {
+  static async open(id: string, cwd = process.cwd(), homeDir?: string): Promise<SessionStore> {
     const filePath = path.join(sessionDir(cwd, homeDir), `${id}.jsonl`);
     if (!existsSync(filePath)) throw new Error(`No session ${id}. Run /sessions to list sessions.`);
     return new SessionStore(id, filePath, cwd, homeDir);
@@ -185,7 +185,7 @@ export class SessionStore {
   }
 }
 
-export async function listSessions(cwd = process.cwd(), homeDir = homedir()): Promise<SessionMetadata[]> {
+export async function listSessions(cwd = process.cwd(), homeDir?: string): Promise<SessionMetadata[]> {
   const dir = sessionDir(cwd, homeDir);
   if (!existsSync(dir)) return [];
   return enqueueIndexMutation(async () => {
@@ -197,19 +197,19 @@ export async function listSessions(cwd = process.cwd(), homeDir = homedir()): Pr
   });
 }
 
-export async function renameSession(id: string, title: string, cwd = process.cwd(), homeDir = homedir()): Promise<void> {
+export async function renameSession(id: string, title: string, cwd = process.cwd(), homeDir?: string): Promise<void> {
   await updateSessionIndex(cwd, homeDir, id, (entry) => {
     entry.title = title.trim() || id.slice(0, 8);
   });
 }
 
-export async function archiveSession(id: string, archived: boolean, cwd = process.cwd(), homeDir = homedir()): Promise<void> {
+export async function archiveSession(id: string, archived: boolean, cwd = process.cwd(), homeDir?: string): Promise<void> {
   await updateSessionIndex(cwd, homeDir, id, (entry) => {
     entry.archived = archived;
   });
 }
 
-export async function deleteSession(id: string, cwd = process.cwd(), homeDir = homedir()): Promise<void> {
+export async function deleteSession(id: string, cwd = process.cwd(), homeDir?: string): Promise<void> {
   await rm(path.join(sessionDir(cwd, homeDir), `${id}.jsonl`), { force: true });
   await enqueueIndexMutation(async () => {
     const index = await reconcileSessionIndex(cwd, homeDir, await readIndex(cwd, homeDir));

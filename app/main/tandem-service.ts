@@ -2,7 +2,6 @@ import { randomUUID } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import { BrowserWindow, ipcMain } from "electron";
 import { mkdir, readdir, writeFile } from "node:fs/promises";
-import { homedir } from "node:os";
 import path from "node:path";
 import cron from "node-cron";
 import type { ScheduledTask } from "node-cron";
@@ -12,6 +11,7 @@ import { createLiveAgents } from "../../src/agents/live.js";
 import { createDiffTracker } from "../../src/orchestrator/diff.js";
 import { runOrchestration, type MachineEvent, type OrchestrationCheckpoint } from "../../src/orchestrator/machine.js";
 import { modelRegistry } from "../../src/providers/registry.js";
+import { tandemStateDir } from "../../src/paths.js";
 import { CostLedger } from "../../src/session/cost.js";
 import { addGoal, completeGoal, formatStandingGoals, listGoals } from "../../src/session/goals.js";
 import { archiveSession, deleteSession, listSessions, renameSession, SessionStore } from "../../src/session/store.js";
@@ -44,11 +44,11 @@ interface DesktopAppState {
   lastProjectDir?: string;
 }
 
-function desktopAppStatePath(homeDir: string): string {
-  return path.join(homeDir, ".tandem", "desktop-state.json");
+function desktopAppStatePath(homeDir?: string): string {
+  return path.join(tandemStateDir(homeDir), "desktop-state.json");
 }
 
-function readDesktopAppState(homeDir: string): DesktopAppState {
+function readDesktopAppState(homeDir?: string): DesktopAppState {
   const filePath = desktopAppStatePath(homeDir);
   if (!existsSync(filePath)) return {};
   try {
@@ -60,7 +60,7 @@ function readDesktopAppState(homeDir: string): DesktopAppState {
   }
 }
 
-async function writeDesktopAppState(homeDir: string, state: DesktopAppState): Promise<void> {
+async function writeDesktopAppState(homeDir: string | undefined, state: DesktopAppState): Promise<void> {
   const filePath = desktopAppStatePath(homeDir);
   await mkdir(path.dirname(filePath), { recursive: true });
   await writeFile(filePath, `${JSON.stringify(state, null, 2)}\n`, "utf8");
@@ -73,7 +73,7 @@ async function projectSummary(projectDir: string): Promise<string> {
   return files.length === 0 ? "empty folder" : `existing project, ${files.length} file${files.length === 1 ? "" : "s"}`;
 }
 
-function missingKeyInfo(error: unknown, projectDir: string): MissingKeyInfo | undefined {
+function missingKeyInfo(error: unknown, projectDir: string, homeDir?: string): MissingKeyInfo | undefined {
   const text = String(error);
   const match = /Missing\s+([A-Z0-9_]+)\s+for model\s+(.+?)(?:\.\s+Add|\.$)/.exec(text);
   if (!match) return undefined;
@@ -81,7 +81,7 @@ function missingKeyInfo(error: unknown, projectDir: string): MissingKeyInfo | un
     key: match[1] ?? "",
     model: match[2] ?? "",
     projectEnvPath: path.join(projectDir, ".env"),
-    globalEnvPath: path.join(homedir(), ".tandem", ".env")
+    globalEnvPath: path.join(tandemStateDir(homeDir), ".env")
   };
 }
 
@@ -98,7 +98,7 @@ export interface TandemServiceDeps {
 export class TandemService {
   private projectDir: string;
   private lastProjectDir?: string;
-  private readonly homeDir: string;
+  private readonly homeDir?: string;
   private env: NodeJS.ProcessEnv;
   private config: TandemConfig;
   private preSessionConfigDirty = false;
@@ -115,7 +115,7 @@ export class TandemService {
     private readonly window: DesktopWindow,
     private readonly deps: TandemServiceDeps = {}
   ) {
-    this.homeDir = deps.homeDir ?? homedir();
+    this.homeDir = deps.homeDir;
     this.lastProjectDir = readDesktopAppState(this.homeDir).lastProjectDir;
     this.projectDir = this.lastProjectDir ?? safeDefaultProjectDir(this.homeDir);
     this.env = this.loadProjectEnv(this.projectDir);
@@ -199,7 +199,7 @@ export class TandemService {
       this.lastCheckpoint = undefined;
     } catch (error) {
       const event: MachineEvent = { type: "error", message: String(error) };
-      const done = { summary: event.message, takeover: false, error: true, missingKey: missingKeyInfo(error, this.projectDir) };
+      const done = { summary: event.message, takeover: false, error: true, missingKey: missingKeyInfo(error, this.projectDir, this.homeDir) };
       this.window.webContents.send(ipcChannels.machineEvent, event);
       this.window.webContents.send(ipcChannels.doneEvent, done);
       await session.append("machine", event);

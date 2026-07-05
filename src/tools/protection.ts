@@ -2,6 +2,7 @@ import { existsSync } from "node:fs";
 import { homedir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { tandemStateDir } from "../paths.js";
 
 const SELF_PROTECTION_MESSAGE = "Tandem will not modify its own installation. Pick a different project folder.";
 
@@ -41,19 +42,19 @@ export function safeDefaultProjectDir(homeDir = homedir()): string {
   return path.join(homeDir, "TandemProjects");
 }
 
-export function protectedRoots(homeDir = homedir()): string[] {
+export function protectedRoots(homeDir?: string): string[] {
   const moduleRoot = findSourceRoot(path.dirname(fileURLToPath(import.meta.url)));
   const cwdRoot = findSourceRoot(process.cwd());
-  return [...envProtectedRoots(), moduleRoot, cwdRoot, path.join(homeDir, ".tandem")]
+  return [...envProtectedRoots(), moduleRoot, cwdRoot, tandemStateDir(homeDir)]
     .filter((item): item is string => Boolean(item))
     .map((item) => path.resolve(item));
 }
 
-export function isProtectedPath(filePath: string, homeDir = homedir()): boolean {
+export function isProtectedPath(filePath: string, homeDir?: string): boolean {
   return protectedRoots(homeDir).some((root) => isSameOrInside(filePath, root));
 }
 
-export function isProtectedProjectDir(projectDir: string, homeDir = homedir()): boolean {
+export function isProtectedProjectDir(projectDir: string, homeDir?: string): boolean {
   return protectedRoots(homeDir).some((root) => overlaps(projectDir, root));
 }
 
@@ -72,4 +73,3 @@ export function assertSafeBash(projectDir: string, command: string): void {
     throw new Error(SELF_PROTECTION_MESSAGE);
   }
 }
-

@@ -104,12 +104,13 @@ describe("TandemService", () => {
   });
 
   it("defaults new desktop sessions to the safe TandemProjects workspace", async () => {
+    const home = await tempDir();
     const { window } = fakeWindow();
-    const service = new TandemService(window as never, { registerIpcResponses: false });
+    const service = new TandemService(window as never, { registerIpcResponses: false, homeDir: home });
 
     const started = await service.startSession({});
 
-    expect(started.projectDir).toBe(safeDefaultProjectDir());
+    expect(started.projectDir).toBe(safeDefaultProjectDir(home));
     expect(started.defaultProject).toBe(true);
     expect(started.projectSummary).toMatch(/folder|project/);
   });

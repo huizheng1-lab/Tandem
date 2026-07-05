@@ -20,6 +20,9 @@ MINIMAX_API_KEY=...
 ```
 
 Project config lives in `.tandem/config.json` and overrides `~/.tandem/config.json`.
+Set `TANDEM_HOME` to relocate global Tandem state; when set, Tandem reads global `.env`,
+`config.json`, `desktop-state.json`, and `sessions/` directly from that directory instead of
+`~/.tandem`.
 
 ```json
 {
@@ -47,7 +50,7 @@ Built-in model ids include `anthropic/claude-fable-5`, `anthropic/claude-opus-4-
 2. In `ask` mode, you confirm the plan before any build starts.
 3. The worker receives a fresh context with the plan, edits files, runs every verification command, and submits a `CompletionReport`.
 4. The leader reviews the report plus the diff, then approves, requests another worker round, or takes over.
-5. Tandem records transcript events, checkpoints, cost ticks, and artifacts in `~/.tandem/sessions/...` so `/resume <id>` can restore and continue an interrupted run.
+5. Tandem records transcript events, checkpoints, cost ticks, and artifacts in `~/.tandem/sessions/...` (or `$TANDEM_HOME/sessions/...`) so `/resume <id>` can restore and continue an interrupted run.
 
 ## Commands
 

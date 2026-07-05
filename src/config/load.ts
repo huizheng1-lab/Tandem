@@ -1,8 +1,8 @@
 import { existsSync, readFileSync } from "node:fs";
 import { mkdir, writeFile } from "node:fs/promises";
-import { homedir } from "node:os";
 import path from "node:path";
 import dotenv from "dotenv";
+import { tandemStateDir } from "../paths.js";
 import { ConfigFlags, ConfigSchema, TandemConfig, defaultConfig } from "./schema.js";
 
 export class ConfigError extends Error {}
@@ -18,8 +18,8 @@ export function projectConfigPath(cwd: string): string {
   return path.join(cwd, ".tandem", "config.json");
 }
 
-export function globalConfigPath(homeDir = homedir()): string {
-  return path.join(homeDir, ".tandem", "config.json");
+export function globalConfigPath(homeDir?: string): string {
+  return path.join(tandemStateDir(homeDir), "config.json");
 }
 
 function readJsonIfPresent(filePath: string): unknown {
@@ -40,9 +40,9 @@ function mergeConfig(...parts: unknown[]): TandemConfig {
   return parsed.data;
 }
 
-export function loadEnv(cwd = process.cwd(), homeDir = homedir(), env: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
+export function loadEnv(cwd = process.cwd(), homeDir: string | undefined = undefined, env: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
   const projectEnv = path.join(cwd, ".env");
-  const globalEnv = path.join(homeDir, ".tandem", ".env");
+  const globalEnv = path.join(tandemStateDir(homeDir), ".env");
   if (existsSync(globalEnv)) dotenv.config({ path: globalEnv, processEnv: env, override: false });
   if (existsSync(projectEnv)) dotenv.config({ path: projectEnv, processEnv: env, override: true });
   return env;
@@ -50,8 +50,7 @@ export function loadEnv(cwd = process.cwd(), homeDir = homedir(), env: NodeJS.Pr
 
 export function loadConfig(options: LoadConfigOptions = {}): TandemConfig {
   const cwd = options.cwd ?? process.cwd();
-  const home = options.homeDir ?? homedir();
-  const globalConfig = readJsonIfPresent(globalConfigPath(home));
+  const globalConfig = readJsonIfPresent(globalConfigPath(options.homeDir));
   const projectConfig = readJsonIfPresent(projectConfigPath(cwd));
   return mergeConfig(defaultConfig, globalConfig, projectConfig, options.flags ?? {});
 }
