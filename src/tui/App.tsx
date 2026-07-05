@@ -64,7 +64,19 @@ export function App({ config: initialConfig, env, cwd, initialError }: { config:
     setMessages((current) => {
       const last = current.at(-1);
       if (last?.role === role) return [...current.slice(0, -1), { ...last, text: `${last.text}${text}` }];
+      if (!text.trim()) return current;
       return [...current, { role, text }];
+    });
+  };
+
+  const trimTrailingAgentMessage = () => {
+    setMessages((current) => {
+      const last = current.at(-1);
+      if (last?.role !== "LEADER" && last?.role !== "WORKER") return current;
+      const text = last.text.trimEnd();
+      if (!text) return current.slice(0, -1);
+      if (text === last.text) return current;
+      return [...current.slice(0, -1), { ...last, text }];
     });
   };
 
@@ -223,6 +235,7 @@ export function App({ config: initialConfig, env, cwd, initialError }: { config:
         initialState,
         emit: handleEvent
       });
+      trimTrailingAgentMessage();
       addMessage("LEADER", result.summary);
       const notes = await suggestGoalProgressNotes({
         config,
@@ -242,6 +255,7 @@ export function App({ config: initialConfig, env, cwd, initialError }: { config:
       setPhase("DONE");
       void storeRef.current?.append("cost", ledger.totals());
     } finally {
+      trimTrailingAgentMessage();
       setBusy(false);
       abortRef.current = undefined;
     }

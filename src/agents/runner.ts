@@ -98,8 +98,17 @@ function suffixPrefixLength(value: string, tag: string): number {
 export class ThinkingStreamFilter {
   private buffer = "";
   private inThinking = false;
+  private suppressFollowingWhitespace = false;
+  private hasVisibleNonWhitespace = false;
 
   constructor(private readonly onText?: (text: string) => void, private readonly onThinking?: (text: string) => void) {}
+
+  private emitText(delta: string): string {
+    if (!delta) return "";
+    this.hasVisibleNonWhitespace ||= /\S/.test(delta);
+    this.onText?.(delta);
+    return delta;
+  }
 
   push(delta: string): { text: string; thinking: string } {
     this.buffer += delta;
@@ -127,7 +136,18 @@ export class ThinkingStreamFilter {
         }
         this.buffer = this.buffer.slice(closeIndex + "</think>".length);
         this.inThinking = false;
+        this.suppressFollowingWhitespace = true;
         continue;
+      }
+
+      if (this.suppressFollowingWhitespace) {
+        const trimmed = this.buffer.replace(/^\s+/, "");
+        if (trimmed.length === 0) {
+          this.buffer = "";
+          break;
+        }
+        this.buffer = trimmed;
+        this.suppressFollowingWhitespace = false;
       }
 
       const openIndex = this.buffer.toLowerCase().indexOf("<think>");
@@ -135,17 +155,15 @@ export class ThinkingStreamFilter {
         const keep = suffixPrefixLength(this.buffer, "<think>");
         const ready = keep > 0 ? this.buffer.slice(0, -keep) : this.buffer;
         if (ready) {
-          text += ready;
-          this.onText?.(ready);
+          text += this.emitText(ready);
         }
         this.buffer = keep > 0 ? this.buffer.slice(-keep) : "";
         break;
       }
 
       const ready = this.buffer.slice(0, openIndex);
-      if (ready) {
-        text += ready;
-        this.onText?.(ready);
+      if (ready && (!/^\s+$/.test(ready) || this.hasVisibleNonWhitespace)) {
+        text += this.emitText(ready);
       }
       this.buffer = this.buffer.slice(openIndex + "<think>".length);
       this.inThinking = true;
@@ -162,8 +180,8 @@ export class ThinkingStreamFilter {
       this.onThinking?.(remaining);
       return { text: "", thinking: remaining };
     }
-    this.onText?.(remaining);
-    return { text: remaining, thinking: "" };
+    const visible = this.suppressFollowingWhitespace ? remaining.replace(/^\s+/, "") : remaining;
+    return { text: this.emitText(visible), thinking: "" };
   }
 }
 

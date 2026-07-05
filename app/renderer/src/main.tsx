@@ -161,7 +161,19 @@ function App(): React.ReactElement {
       if (last?.kind === "message" && last.role === role && !last.thinking) {
         return [...current.slice(0, -1), { ...last, text: `${last.text}${delta}` }];
       }
+      if (!delta.trim()) return current;
       return [...current, { id: nextId.current++, kind: "message", role, text: delta }];
+    });
+  };
+
+  const trimTrailingAgentBubble = () => {
+    setEntries((current) => {
+      const last = current.at(-1);
+      if (last?.kind !== "message" || (last.role !== "leader" && last.role !== "worker") || last.thinking) return current;
+      const text = last.text.trimEnd();
+      if (!text) return current.slice(0, -1);
+      if (text === last.text) return current;
+      return [...current.slice(0, -1), { ...last, text }];
     });
   };
 
@@ -295,6 +307,7 @@ function App(): React.ReactElement {
         setRunning(false);
         setPhase(event.error ? "IDLE" : "DONE");
         setMissingKey(event.missingKey);
+        trimTrailingAgentBubble();
         appendMessage("system", `${event.summary}${event.takeover ? " (takeover)" : ""}`);
       }),
       tandem.onPermissionRequest((event) => {
@@ -531,6 +544,7 @@ function App(): React.ReactElement {
       setPhase("IDLE");
       const message = String(error);
       setMissingKey(missingKeyFromMessage(message));
+      trimTrailingAgentBubble();
       appendMessage("system", `Run failed: ${message}`);
     }
   };

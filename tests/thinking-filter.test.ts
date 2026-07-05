@@ -35,4 +35,20 @@ describe("ThinkingStreamFilter", () => {
   it("handles multiple think blocks in a stream", () => {
     expect(runFilter(["a<think>one</think>b<think>two</think>c"])).toEqual({ text: "abc", thinking: "onetwo" });
   });
+
+  it("swallows whitespace between consecutive think blocks and before real output", () => {
+    expect(runFilter(["<think>a</think>\n\n\n<think>b</think>\n\nHello"])).toEqual({ text: "Hello", thinking: "ab" });
+  });
+
+  it("preserves visible blank lines before a later think block but swallows whitespace after it", () => {
+    expect(runFilter(["line1\n\n<think>x</think>\n\nline2"])).toEqual({ text: "line1\n\nline2", thinking: "x" });
+  });
+
+  it("swallows adjacent whitespace around think blocks split across chunks", () => {
+    expect(runFilter(["<think>a</think>\n", "\n<thi", "nk>b</think>\n", "\nHello"])).toEqual({ text: "Hello", thinking: "ab" });
+  });
+
+  it("emits no visible text for a turn that is only thinking plus whitespace", () => {
+    expect(runFilter(["<think>a</think>\n\n", "\n<think>b</think>\n\n"])).toEqual({ text: "", thinking: "ab" });
+  });
 });
