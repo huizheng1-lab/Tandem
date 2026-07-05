@@ -1,6 +1,15 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
-import type { CostTotals, MachineEvent, ModelListItem, PermissionRequestEvent, PlanConfirmEvent, SessionStartResponse } from "../../shared/ipc.js";
+import type {
+  CostTotals,
+  Goal,
+  MachineEvent,
+  ModelListItem,
+  PermissionRequestEvent,
+  PlanConfirmEvent,
+  Schedule,
+  SessionStartResponse
+} from "../../shared/ipc.js";
 import "./styles.css";
 
 type Role = "user" | "leader" | "worker" | "system";
@@ -48,6 +57,12 @@ function App(): React.ReactElement {
   const [cost, setCost] = useState<CostTotals>();
   const [permissionModal, setPermissionModal] = useState<PermissionRequestEvent>();
   const [planModal, setPlanModal] = useState<PlanConfirmEvent>();
+  const [sessions, setSessions] = useState<string[]>([]);
+  const [goals, setGoals] = useState<Goal[]>([]);
+  const [schedules, setSchedules] = useState<Schedule[]>([]);
+  const [goalText, setGoalText] = useState("");
+  const [scheduleCron, setScheduleCron] = useState("");
+  const [schedulePrompt, setSchedulePrompt] = useState("");
   const [alwaysAllow, setAlwaysAllow] = useState(false);
   const autoAllowedActions = useRef(new Set<string>());
   const nextId = useRef(2);
@@ -90,6 +105,53 @@ function App(): React.ReactElement {
     }
   };
 
+  const refreshSidebar = async () => {
+    const [sessionIds, goalItems, scheduleItems] = await Promise.all([window.tandem.listSessions(), window.tandem.listGoals(), window.tandem.listSchedules()]);
+    setSessions(sessionIds);
+    setGoals(goalItems);
+    setSchedules(scheduleItems);
+  };
+
+  const startProjectSession = async (projectDir?: string) => {
+    const started = await window.tandem.startSession({ projectDir });
+    setSession(started);
+    setEntries([{ id: nextId.current++, kind: "message", role: "system", text: `Session ${started.sessionId} started in ${started.projectDir}` }]);
+    setPhase("IDLE");
+    setRound(0);
+    setCost(undefined);
+    setModels(await window.tandem.listModels());
+    await refreshSidebar();
+  };
+
+  const replaySession = async (id: string) => {
+    const resumed = await window.tandem.resumeSession({ id });
+    const replayed: TranscriptEntry[] = [];
+    for (const stored of resumed.events) {
+      const payload = stored.payload as { prompt?: string; role?: "leader" | "worker"; delta?: string; summary?: string; takeover?: boolean } | MachineEvent;
+      if (stored.type === "user" && "prompt" in payload) replayed.push({ id: nextId.current++, kind: "message", role: "user", text: payload.prompt ?? "" });
+      if (stored.type === "text" && "role" in payload && "delta" in payload) {
+        const last = replayed.at(-1);
+        if (last?.kind === "message" && last.role === payload.role) last.text += payload.delta ?? "";
+        else replayed.push({ id: nextId.current++, kind: "message", role: payload.role ?? "system", text: payload.delta ?? "" });
+      }
+      if (stored.type === "machine") {
+        const event = payload as MachineEvent;
+        if (event.type === "artifact") replayed.push({ id: nextId.current++, kind: "artifact", name: event.name, value: event.value, open: false });
+        if (event.type === "transition") replayed.push({ id: nextId.current++, kind: "message", role: "system", text: event.message });
+        if (event.type === "error") replayed.push({ id: nextId.current++, kind: "message", role: "system", text: event.message });
+        if (event.type === "checkpoint") {
+          setPhase(event.checkpoint.phase);
+          setRound(event.checkpoint.round);
+        }
+      }
+      if (stored.type === "done" && "summary" in payload) {
+        replayed.push({ id: nextId.current++, kind: "message", role: "system", text: `${payload.summary}${payload.takeover ? " (takeover)" : ""}` });
+      }
+    }
+    replayed.push({ id: nextId.current++, kind: "message", role: "system", text: `Resumed session ${id}. The next prompt will continue from its latest checkpoint.` });
+    setEntries(replayed.length > 1 ? replayed : [{ id: nextId.current++, kind: "message", role: "system", text: `Session ${id} has no transcript events.` }]);
+  };
+
   useEffect(() => {
     transcriptEnd.current?.scrollIntoView({ block: "end" });
   }, [entries]);
@@ -121,6 +183,7 @@ function App(): React.ReactElement {
         setSession(started);
         appendMessage("system", `Session ${started.sessionId} started in ${started.projectDir}`);
         setModels(await window.tandem.listModels());
+        await refreshSidebar();
       })
       .catch((error: unknown) => {
         appendMessage("system", `Failed to start session: ${String(error)}`);
@@ -134,6 +197,33 @@ function App(): React.ReactElement {
   const updateModel = async (role: "leader" | "worker", modelId: string) => {
     const nextConfig = await window.tandem.setConfig({ [role]: modelId });
     setSession((current) => (current ? { ...current, config: nextConfig } : current));
+  };
+
+  const pickProject = async () => {
+    const folder = await window.tandem.pickFolder();
+    if (folder) await startProjectSession(folder);
+  };
+
+  const addGoal = async () => {
+    const text = goalText.trim();
+    if (!text) return;
+    setGoals(await window.tandem.addGoal({ text }));
+    setGoalText("");
+  };
+
+  const completeGoal = async (id: number) => {
+    setGoals(await window.tandem.completeGoal({ id }));
+  };
+
+  const addSchedule = async () => {
+    if (!scheduleCron.trim() || !schedulePrompt.trim()) return;
+    setSchedules(await window.tandem.addSchedule({ cron: scheduleCron.trim(), prompt: schedulePrompt.trim() }));
+    setScheduleCron("");
+    setSchedulePrompt("");
+  };
+
+  const removeSchedule = async (id: string) => {
+    setSchedules(await window.tandem.removeSchedule({ id }));
   };
 
   const send = async () => {
@@ -174,9 +264,55 @@ function App(): React.ReactElement {
       <aside className="sidebar">
         <div className="brand">Tandem</div>
         <div className="projectPath">{session?.projectDir ?? "No project loaded"}</div>
+        <button type="button" className="sidebarButton" onClick={() => void pickProject()}>
+          Pick Folder
+        </button>
         <div className="sideSection">
           <div className="sideLabel">Session</div>
           <div className="sideValue">{session?.sessionId ?? "starting"}</div>
+        </div>
+        <div className="sideSection">
+          <div className="sideLabel">Sessions</div>
+          <div className="sideList">
+            {sessions.map((id) => (
+              <button key={id} type="button" className="linkButton" onClick={() => void replaySession(id)}>
+                {id}
+              </button>
+            ))}
+          </div>
+        </div>
+        <div className="sideSection">
+          <div className="sideLabel">Goals</div>
+          <div className="compactForm">
+            <input value={goalText} placeholder="Add goal" onChange={(event) => setGoalText(event.target.value)} />
+            <button type="button" onClick={() => void addGoal()}>
+              Add
+            </button>
+          </div>
+          <div className="sideList">
+            {goals.map((goal) => (
+              <button key={goal.id} type="button" className={goal.status === "done" ? "linkButton done" : "linkButton"} onClick={() => void completeGoal(goal.id)}>
+                {goal.id}. {goal.text}
+              </button>
+            ))}
+          </div>
+        </div>
+        <div className="sideSection">
+          <div className="sideLabel">Schedules</div>
+          <div className="scheduleForm">
+            <input value={scheduleCron} placeholder="*/30 * * * *" onChange={(event) => setScheduleCron(event.target.value)} />
+            <input value={schedulePrompt} placeholder="Prompt" onChange={(event) => setSchedulePrompt(event.target.value)} />
+            <button type="button" onClick={() => void addSchedule()}>
+              Add
+            </button>
+          </div>
+          <div className="sideList">
+            {schedules.map((schedule) => (
+              <button key={schedule.id} type="button" className="linkButton" onClick={() => void removeSchedule(schedule.id)}>
+                {schedule.cron} {schedule.prompt}
+              </button>
+            ))}
+          </div>
         </div>
       </aside>
       <section className="workspace">

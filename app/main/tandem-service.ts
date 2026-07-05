@@ -1,5 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { BrowserWindow, ipcMain } from "electron";
+import cron from "node-cron";
+import type { ScheduledTask } from "node-cron";
 import { loadConfig, loadEnv, saveProjectConfig } from "../../src/config/load.js";
 import type { TandemConfig } from "../../src/config/schema.js";
 import { createLiveAgents } from "../../src/agents/live.js";
@@ -7,9 +9,11 @@ import { createDiffTracker } from "../../src/orchestrator/diff.js";
 import { runOrchestration, type MachineEvent, type OrchestrationCheckpoint } from "../../src/orchestrator/machine.js";
 import { modelRegistry } from "../../src/providers/registry.js";
 import { CostLedger } from "../../src/session/cost.js";
-import { listGoals } from "../../src/session/goals.js";
+import { addGoal, completeGoal, listGoals } from "../../src/session/goals.js";
 import { listSessions, SessionStore } from "../../src/session/store.js";
 import type { PermissionBridge, PermissionRequest } from "../../src/tools/permissions.js";
+import { addSchedule, listSchedules, markScheduleRun, removeSchedule } from "../../src/commands/schedule.js";
+import type { Schedule } from "../../src/commands/schedule.js";
 import {
   ipcChannels,
   type CostTotals,
@@ -34,6 +38,7 @@ export class TandemService {
   private lastCheckpoint?: OrchestrationCheckpoint;
   private readonly pendingPermissions = new Map<string, PendingResolver>();
   private readonly pendingPlans = new Map<string, PendingResolver>();
+  private readonly cronTasks = new Map<string, ScheduledTask>();
 
   constructor(private readonly window: BrowserWindow) {
     ipcMain.on(ipcChannels.permissionRespond, (_event, response: PermissionResponse) => {
@@ -52,6 +57,7 @@ export class TandemService {
     this.lastCheckpoint = undefined;
     this.session = await SessionStore.create(this.projectDir);
     await this.session.append("session:start", { projectDir: this.projectDir });
+    await this.refreshCronTasks();
     return { projectDir: this.projectDir, sessionId: this.session.id, config: this.config };
   }
 
@@ -137,6 +143,36 @@ export class TandemService {
     return { id, events, checkpoint: this.lastCheckpoint };
   }
 
+  listGoals() {
+    return listGoals(this.projectDir);
+  }
+
+  async addGoal(text: string) {
+    await addGoal(text, this.projectDir);
+    return this.listGoals();
+  }
+
+  async completeGoal(id: number) {
+    await completeGoal(id, this.projectDir);
+    return this.listGoals();
+  }
+
+  listSchedules(): Promise<Schedule[]> {
+    return listSchedules(this.projectDir);
+  }
+
+  async addSchedule(cronExpression: string, prompt: string): Promise<Schedule[]> {
+    await addSchedule(cronExpression, prompt, this.projectDir);
+    await this.refreshCronTasks();
+    return this.listSchedules();
+  }
+
+  async removeSchedule(id: string): Promise<Schedule[]> {
+    await removeSchedule(id, this.projectDir);
+    await this.refreshCronTasks();
+    return this.listSchedules();
+  }
+
   private async emitText(role: "leader" | "worker", delta: string): Promise<void> {
     const event = { role, delta };
     this.window.webContents.send(ipcChannels.textEvent, event);
@@ -188,5 +224,28 @@ export class TandemService {
       if (event?.type === "checkpoint") return event.checkpoint;
     }
     return undefined;
+  }
+
+  private async refreshCronTasks(): Promise<void> {
+    for (const task of this.cronTasks.values()) task.stop();
+    this.cronTasks.clear();
+    const schedules = await listSchedules(this.projectDir);
+    for (const schedule of schedules) {
+      if (!cron.validate(schedule.cron)) continue;
+      const task = cron.schedule(schedule.cron, () => {
+        void this.runScheduledPrompt(schedule);
+      });
+      this.cronTasks.set(schedule.id, task);
+    }
+  }
+
+  private async runScheduledPrompt(schedule: Schedule): Promise<void> {
+    if (this.controller) {
+      const event: MachineEvent = { type: "error", message: `Skipped scheduled prompt ${schedule.id}; another run is active.` };
+      await this.emitMachine(event);
+      return;
+    }
+    await markScheduleRun(schedule.id, this.projectDir);
+    await this.run(schedule.prompt);
   }
 }

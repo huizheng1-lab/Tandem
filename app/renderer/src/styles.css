@@ -57,9 +57,62 @@ select {
   line-height: 1.4;
 }
 
+.sidebarButton,
+.compactForm button,
+.scheduleForm button {
+  border: 1px solid #3d4654;
+  border-radius: 6px;
+  color: #f3f2ee;
+  background: #2b624f;
+  padding: 8px 10px;
+}
+
 .sideSection {
   display: grid;
   gap: 6px;
+}
+
+.sideList {
+  display: grid;
+  gap: 5px;
+  max-height: 132px;
+  overflow: auto;
+}
+
+.linkButton {
+  overflow-wrap: anywhere;
+  border: 1px solid #2f3540;
+  border-radius: 6px;
+  color: #c7ccd4;
+  background: #1d2027;
+  padding: 7px 8px;
+  text-align: left;
+  font-size: 12px;
+}
+
+.linkButton.done {
+  color: #7e8795;
+  text-decoration: line-through;
+}
+
+.compactForm,
+.scheduleForm {
+  display: grid;
+  gap: 6px;
+}
+
+.compactForm {
+  grid-template-columns: minmax(0, 1fr) auto;
+}
+
+.compactForm input,
+.scheduleForm input {
+  min-width: 0;
+  border: 1px solid #353d49;
+  border-radius: 6px;
+  color: #f3f2ee;
+  background: #101114;
+  padding: 8px;
 }
 
 .sideLabel,
