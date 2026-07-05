@@ -24,6 +24,9 @@ export default defineConfig({
   },
   renderer: {
     root: resolve(__dirname, "app/renderer"),
+    server: {
+      strictPort: true
+    },
     build: {
       rollupOptions: {
         input: resolve(__dirname, "app/renderer/index.html")
