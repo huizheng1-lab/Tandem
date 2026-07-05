@@ -12,5 +12,5 @@
     "types": ["node", "react"],
     "outDir": "dist"
   },
-  "include": ["src", "tests"]
+  "include": ["src", "tests", "app", "electron.vite.config.ts"]
 }
