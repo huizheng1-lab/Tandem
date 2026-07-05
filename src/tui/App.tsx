@@ -9,7 +9,7 @@ import { dispatchCommand } from "../commands/index.js";
 import { setModel } from "../commands/model.js";
 import { modelRegistry } from "../providers/registry.js";
 import { parseLoop } from "../commands/loop.js";
-import { addSchedule, listSchedules, removeSchedule } from "../commands/schedule.js";
+import { addSchedule, listSchedules, markScheduleRun, missedSchedule, removeSchedule, Schedule } from "../commands/schedule.js";
 import { appendGoalNote, listGoals } from "../session/goals.js";
 import { SessionStore, listSessions } from "../session/store.js";
 import { createLiveAgents, suggestGoalProgressNotes } from "../agents/live.js";
@@ -37,6 +37,7 @@ export function App({ config: initialConfig, env, cwd, initialError }: { config:
   const [pendingApproval, setPendingApproval] = useState<{ request: PermissionRequest; resolve: (approved: boolean) => void }>();
   const [pendingPlan, setPendingPlan] = useState<{ plan: BuildPlan; resolve: (approved: boolean) => void }>();
   const [pendingResume, setPendingResume] = useState<{ request: string; checkpoint: OrchestrationCheckpoint }>();
+  const [pendingMissedSchedule, setPendingMissedSchedule] = useState<Schedule>();
   const [modelPicker, setModelPicker] = useState<{ stage: "role" | "model"; role: "leader" | "worker"; index: number }>();
   const ledger = useMemo(() => new CostLedger(), []);
   const modelOptions = useMemo(() => modelRegistry(config.customModels), [config.customModels]);
@@ -46,6 +47,7 @@ export function App({ config: initialConfig, env, cwd, initialError }: { config:
   const loopTimerRef = useRef<NodeJS.Timeout>();
   const loopRunningRef = useRef(false);
   const cronJobsRef = useRef<Map<string, ScheduledTask>>(new Map());
+  const missedScheduleQueueRef = useRef<Schedule[]>([]);
 
   const addMessage = (role: TranscriptMessage["role"], text: string) => {
     setMessages((current) => [...current, { role, text }]);
@@ -70,10 +72,17 @@ export function App({ config: initialConfig, env, cwd, initialError }: { config:
 
   const registerSchedule = (id: string, spec: string, prompt: string) => {
     cronJobsRef.current.get(id)?.stop();
-    const task = cron.schedule(spec, () => {
-      void runSequential(prompt, `schedule ${id}`);
+    const task = cron.schedule(spec, async () => {
+      await runSequential(prompt, `schedule ${id}`);
+      await markScheduleRun(id, cwd);
     });
     cronJobsRef.current.set(id, task);
+  };
+
+  const promptNextMissedSchedule = () => {
+    const next = missedScheduleQueueRef.current.shift();
+    setPendingMissedSchedule(next);
+    if (next) addMessage("SYSTEM", `Missed schedule ${next.id} (${next.cron}): run now? y/n`);
   };
 
   useEffect(() => {
@@ -83,7 +92,10 @@ export function App({ config: initialConfig, env, cwd, initialError }: { config:
     });
     void listSchedules(cwd).then((schedules) => {
       for (const schedule of schedules) registerSchedule(schedule.id, schedule.cron, schedule.prompt);
-      if (schedules.length > 0) addMessage("SYSTEM", `${schedules.length} schedule(s) loaded. If any were missed while Tandem was closed, submit the prompt now to run it.`);
+      const missed = schedules.filter((schedule) => missedSchedule(schedule.cron, schedule.lastRunAt));
+      missedScheduleQueueRef.current = missed;
+      if (schedules.length > 0) addMessage("SYSTEM", `${schedules.length} schedule(s) loaded.`);
+      if (missed.length > 0) promptNextMissedSchedule();
     });
     return () => {
       loopTimerRef.current && clearInterval(loopTimerRef.current);
@@ -283,6 +295,19 @@ export function App({ config: initialConfig, env, cwd, initialError }: { config:
       else addMessage("SYSTEM", "Resume continuation cancelled.");
       return;
     }
+    if (pendingMissedSchedule) {
+      const schedule = pendingMissedSchedule;
+      setPendingMissedSchedule(undefined);
+      setInput("");
+      if (/^y(es)?$/i.test(value.trim())) {
+        await runSequential(schedule.prompt, `missed schedule ${schedule.id}`);
+        await markScheduleRun(schedule.id, cwd);
+      } else {
+        addMessage("SYSTEM", `Skipped missed schedule ${schedule.id}.`);
+      }
+      promptNextMissedSchedule();
+      return;
+    }
     if (!value.trim()) return;
     setInput("");
     addMessage("USER", value);
@@ -353,6 +378,7 @@ export function App({ config: initialConfig, env, cwd, initialError }: { config:
       <Approval action={pendingApproval?.request.action} target={pendingApproval?.request.target} />
       {pendingPlan ? <Text color="yellow">Plan approval pending</Text> : null}
       {pendingResume ? <Text color="yellow">Resume continuation pending</Text> : null}
+      {pendingMissedSchedule ? <Text color="yellow">Missed schedule prompt pending</Text> : null}
       {busy ? <Text color="cyan"><Spinner type="dots" /> working</Text> : null}
       <StatusLine leader={config.leader} worker={config.worker} phase={phase} round={round} maxRounds={config.maxReviewRounds} cost={ledger.totalDollars()} />
       <InputBar value={input} onChange={setInput} onSubmit={submit} />
