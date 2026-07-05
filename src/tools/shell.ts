@@ -1,6 +1,7 @@
 import { execa } from "execa";
 import { ToolContext, resolveInside } from "./fs.js";
 import { ensurePermission } from "./permissions.js";
+import { assertSafeBash } from "./protection.js";
 
 export interface ShellResult {
   command: string;
@@ -90,6 +91,7 @@ async function cleanupWindowsProcessTree(rootPid: number | undefined, seenDescen
 
 export async function bashTool(ctx: ToolContext, command: string, timeoutMs = 120000): Promise<ShellResult> {
   resolveInside(ctx.cwd, ".");
+  assertSafeBash(ctx.cwd, command);
   await ensurePermission(ctx.permissionMode, { action: "bash", target: command }, ctx.permissionBridge);
   let tracker: DescendantTracker | undefined;
   let rootPid: number | undefined;

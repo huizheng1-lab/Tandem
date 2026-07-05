@@ -28,6 +28,22 @@ describe("tools", () => {
     expect(isDestructiveCommand("rm -rf /")).toBe(true);
   });
 
+  it("refuses write and bash when the project is Tandem itself", async () => {
+    await expect(writeFileTool({ cwd: process.cwd(), permissionMode: "yolo" }, "self-write.txt", "nope")).rejects.toThrow(/Tandem will not modify its own installation/);
+    await expect(bashTool({ cwd: process.cwd(), permissionMode: "yolo" }, "echo nope")).rejects.toThrow(/Tandem will not modify its own installation/);
+  });
+
+  it("refuses write when the project is inside Tandem and allows a sibling project", async () => {
+    await expect(writeFileTool({ cwd: path.join(process.cwd(), "src"), permissionMode: "yolo" }, "self-write.txt", "nope")).rejects.toThrow(/Tandem will not modify its own installation/);
+    const cwd = await tempDir();
+    await expect(writeFileTool({ cwd, permissionMode: "yolo" }, "ok.txt", "ok")).resolves.toBe("Wrote ok.txt");
+  });
+
+  it("refuses bash commands aimed at the Tandem home directory", async () => {
+    const cwd = await tempDir();
+    await expect(bashTool({ cwd, permissionMode: "yolo" }, "echo nope > ~/.tandem/should-not-write")).rejects.toThrow(/Tandem will not modify its own installation/);
+  });
+
   it.runIf(process.platform === "win32")("cleans up shell child processes that outlive their parent", async () => {
     const cwd = await tempDir();
     await writeFile(

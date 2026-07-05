@@ -19,6 +19,14 @@ import type {
 
 const currentFile = fileURLToPath(import.meta.url);
 const currentDir = path.dirname(currentFile);
+process.env.TANDEM_PROTECTED_ROOTS = [
+  process.env.TANDEM_PROTECTED_ROOTS,
+  app.getAppPath(),
+  path.dirname(process.execPath),
+  path.resolve(currentDir, "..")
+]
+  .filter(Boolean)
+  .join(path.delimiter);
 
 let mainWindow: BrowserWindow | undefined;
 let service: TandemService | undefined;

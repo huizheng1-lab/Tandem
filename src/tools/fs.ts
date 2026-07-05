@@ -2,6 +2,7 @@ import { mkdir, readFile, readdir, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { PermissionBridge, ensurePermission } from "./permissions.js";
 import { PermissionMode } from "../config/schema.js";
+import { assertSafeWritePath } from "./protection.js";
 
 export interface ToolContext {
   cwd: string;
@@ -31,6 +32,7 @@ export async function readFileTool(ctx: Pick<ToolContext, "cwd">, filePath: stri
 
 export async function writeFileTool(ctx: ToolContext, filePath: string, content: string): Promise<string> {
   const fullPath = resolveInside(ctx.cwd, filePath);
+  assertSafeWritePath(ctx.cwd, fullPath);
   await ensurePermission(ctx.permissionMode, { action: "write", target: filePath }, ctx.permissionBridge);
   await mkdir(path.dirname(fullPath), { recursive: true });
   await writeFile(fullPath, content, "utf8");
@@ -40,6 +42,7 @@ export async function writeFileTool(ctx: ToolContext, filePath: string, content:
 
 export async function editFileTool(ctx: ToolContext, filePath: string, oldString: string, newString: string, replaceAll = false): Promise<string> {
   const fullPath = resolveInside(ctx.cwd, filePath);
+  assertSafeWritePath(ctx.cwd, fullPath);
   await ensurePermission(ctx.permissionMode, { action: "edit", target: filePath }, ctx.permissionBridge);
   const content = await readFile(fullPath, "utf8");
   const occurrences = content.split(oldString).length - 1;
