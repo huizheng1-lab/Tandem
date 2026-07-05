@@ -11,6 +11,7 @@ import type {
   Schedule,
   SessionStartResponse
 } from "../../shared/ipc.js";
+import type { PermissionMode } from "../../../src/config/schema.js";
 import { ErrorBoundary } from "./ErrorBoundary.js";
 import "./styles.css";
 
@@ -60,7 +61,7 @@ function missingKeyFromMessage(message: string): MissingKeyInfo | undefined {
 }
 
 function sessionStartedText(session: SessionStartResponse): string {
-  return `Session ${session.sessionId} started in ${session.projectDir} - leader ${session.config.leader}, worker ${session.config.worker}`;
+  return `Session ${session.sessionId} started in ${session.projectDir} - leader ${session.config.leader}, worker ${session.config.worker}, permissions ${session.config.permissionMode}`;
 }
 
 function App(): React.ReactElement {
@@ -230,6 +231,11 @@ function App(): React.ReactElement {
     setSession((current) => (current ? { ...current, config: nextConfig } : current));
   };
 
+  const updatePermissionMode = async (permissionMode: PermissionMode) => {
+    const nextConfig = await tandem.setConfig({ permissionMode });
+    setSession((current) => (current ? { ...current, config: nextConfig } : current));
+  };
+
   const pickProject = async () => {
     const folder = await tandem.pickFolder();
     if (folder) await startProjectSession(folder);
@@ -374,6 +380,14 @@ function App(): React.ReactElement {
                   {model.available ? "" : ` (${model.envKey} missing)`}
                 </option>
               ))}
+            </select>
+          </label>
+          <label>
+            Permissions
+            <select value={session?.config.permissionMode ?? "ask"} onChange={(event) => void updatePermissionMode(event.target.value as PermissionMode)}>
+              <option value="ask">Ask</option>
+              <option value="auto-edit">Auto-edit</option>
+              <option value="yolo">Auto</option>
             </select>
           </label>
           <span className="phaseChip">{phase}</span>
