@@ -3,12 +3,13 @@ import type { BuildPlan } from "../../src/orchestrator/artifacts.js";
 import type { MachineEvent, OrchestrationCheckpoint } from "../../src/orchestrator/machine.js";
 import type { CostTick } from "../../src/session/cost.js";
 import type { Goal } from "../../src/session/goals.js";
-import type { SessionEvent } from "../../src/session/store.js";
+import type { SessionEvent, SessionMetadata } from "../../src/session/store.js";
 import type { Schedule } from "../../src/commands/schedule.js";
 
 export type { MachineEvent, OrchestrationCheckpoint } from "../../src/orchestrator/machine.js";
 export type { Goal } from "../../src/session/goals.js";
 export type { Schedule } from "../../src/commands/schedule.js";
+export type { SessionMetadata } from "../../src/session/store.js";
 
 export const ipcChannels = {
   ping: "app:ping",
@@ -24,6 +25,9 @@ export const ipcChannels = {
   modelsList: "models:list",
   sessionsList: "sessions:list",
   sessionResume: "session:resume",
+  sessionRename: "session:rename",
+  sessionArchive: "session:archive",
+  sessionDelete: "session:delete",
   goalsList: "goals:list",
   goalAdd: "goal:add",
   goalComplete: "goal:complete",
@@ -123,6 +127,20 @@ export interface SessionResumeResponse {
   checkpoint?: OrchestrationCheckpoint;
 }
 
+export interface SessionRenameRequest {
+  id: string;
+  title: string;
+}
+
+export interface SessionArchiveRequest {
+  id: string;
+  archived: boolean;
+}
+
+export interface SessionDeleteRequest {
+  id: string;
+}
+
 export interface GoalAddRequest {
   text: string;
 }
@@ -148,8 +166,11 @@ export interface TandemDesktopApi {
   getConfig(): Promise<TandemConfig>;
   setConfig(patch: Partial<TandemConfig>): Promise<TandemConfig>;
   listModels(): Promise<ModelListItem[]>;
-  listSessions(): Promise<string[]>;
+  listSessions(): Promise<SessionMetadata[]>;
   resumeSession(request: SessionResumeRequest): Promise<SessionResumeResponse>;
+  renameSession(request: SessionRenameRequest): Promise<SessionMetadata[]>;
+  archiveSession(request: SessionArchiveRequest): Promise<SessionMetadata[]>;
+  deleteSession(request: SessionDeleteRequest): Promise<SessionMetadata[]>;
   listGoals(): Promise<Goal[]>;
   addGoal(request: GoalAddRequest): Promise<Goal[]>;
   completeGoal(request: GoalCompleteRequest): Promise<Goal[]>;

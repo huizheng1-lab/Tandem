@@ -7,6 +7,10 @@ import { listModels, setModel } from "./model.js";
 import { costText, helpText, statusText } from "./misc.js";
 import { addSchedule, listSchedules, removeSchedule } from "./schedule.js";
 
+function formatSessionList(sessions: Awaited<ReturnType<typeof listSessions>>): string {
+  return sessions.map((session) => `${session.id} ${session.archived ? "[archived] " : ""}${session.title}`).join("\n") || "No sessions yet.";
+}
+
 export interface CommandContext {
   config: TandemConfig;
   env: NodeJS.ProcessEnv;
@@ -52,7 +56,7 @@ export async function dispatchCommand(input: string, ctx: CommandContext): Promi
     case "/goal":
       return handleGoal(args, ctx.cwd);
     case "/sessions":
-      return (await listSessions(ctx.cwd)).join("\n") || "No sessions yet.";
+      return formatSessionList(await listSessions(ctx.cwd));
     case "/resume":
       return args[0] ? `Resume requested for ${args[0]}.` : "Usage: /resume <id>";
     case "/clear":

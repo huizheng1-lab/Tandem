@@ -10,6 +10,7 @@ import type {
   PlanConfirmEvent,
   Schedule,
   SessionAutoApproveMode,
+  SessionMetadata,
   SessionStartResponse
 } from "../../shared/ipc.js";
 import type { PermissionMode } from "../../../src/config/schema.js";
@@ -65,6 +66,17 @@ function sessionStartedText(session: SessionStartResponse): string {
   return `Session ${session.sessionId} started in ${session.projectDir} - leader ${session.config.leader}, worker ${session.config.worker}, permissions ${session.config.permissionMode}`;
 }
 
+function relativeTime(value: string): string {
+  const ms = Date.now() - new Date(value).getTime();
+  if (!Number.isFinite(ms)) return "";
+  const minutes = Math.max(0, Math.floor(ms / 60_000));
+  if (minutes < 1) return "now";
+  if (minutes < 60) return `${minutes}m ago`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours}h ago`;
+  return `${Math.floor(hours / 24)}d ago`;
+}
+
 function App(): React.ReactElement {
   const tandem = window.tandem;
   if (!tandem) {
@@ -88,7 +100,10 @@ function App(): React.ReactElement {
   const [planModal, setPlanModal] = useState<PlanConfirmEvent>();
   const [missingKey, setMissingKey] = useState<MissingKeyInfo>();
   const [sessionAutoApprove, setSessionAutoApprove] = useState<SessionAutoApproveMode>("none");
-  const [sessions, setSessions] = useState<string[]>([]);
+  const [sessions, setSessions] = useState<SessionMetadata[]>([]);
+  const [showArchived, setShowArchived] = useState(false);
+  const [renamingSession, setRenamingSession] = useState<string>();
+  const [renameTitle, setRenameTitle] = useState("");
   const [goals, setGoals] = useState<Goal[]>([]);
   const [schedules, setSchedules] = useState<Schedule[]>([]);
   const [goalText, setGoalText] = useState("");
@@ -259,6 +274,31 @@ function App(): React.ReactElement {
     setSchedules(await tandem.removeSchedule({ id }));
   };
 
+  const beginRenameSession = (item: SessionMetadata) => {
+    setRenamingSession(item.id);
+    setRenameTitle(item.title);
+  };
+
+  const saveRenameSession = async () => {
+    if (!renamingSession) return;
+    setSessions(await tandem.renameSession({ id: renamingSession, title: renameTitle }));
+    setRenamingSession(undefined);
+    setRenameTitle("");
+  };
+
+  const archiveSession = async (id: string, archived: boolean) => {
+    setSessions(await tandem.archiveSession({ id, archived }));
+  };
+
+  const deleteSession = async (id: string) => {
+    if (id === session?.sessionId) {
+      window.alert("Cannot delete the active session. Start or resume another session first.");
+      return;
+    }
+    if (!window.confirm("Delete this session log permanently? Project files will not be touched.")) return;
+    setSessions(await tandem.deleteSession({ id }));
+  };
+
   const setSessionAutoApproveMode = async (mode: SessionAutoApproveMode) => {
     setSessionAutoApprove(await tandem.setSessionAutoApprove({ mode }));
   };
@@ -317,6 +357,9 @@ function App(): React.ReactElement {
     setPlanModal(undefined);
   };
 
+  const activeSessions = sessions.filter((item) => !item.archived);
+  const archivedSessions = sessions.filter((item) => item.archived);
+
   return (
     <main className="shell">
       <aside className="sidebar">
@@ -332,12 +375,50 @@ function App(): React.ReactElement {
         <div className="sideSection">
           <div className="sideLabel">Sessions</div>
           <div className="sideList">
-            {sessions.map((id) => (
-              <button key={id} type="button" className="linkButton" onClick={() => void replaySession(id)}>
-                {id}
-              </button>
+            {activeSessions.map((item) => (
+              <div key={item.id} className="sessionRow">
+                {renamingSession === item.id ? (
+                  <input className="renameInput" value={renameTitle} onChange={(event) => setRenameTitle(event.target.value)} onKeyDown={(event) => {
+                    if (event.key === "Enter") void saveRenameSession();
+                    if (event.key === "Escape") setRenamingSession(undefined);
+                  }} />
+                ) : (
+                  <button type="button" className="sessionTitle" onClick={() => void replaySession(item.id)}>
+                    <span>{item.title || item.id.slice(0, 8)}</span>
+                    <small>{relativeTime(item.lastActiveAt)}</small>
+                  </button>
+                )}
+                <div className="sessionActions">
+                  {renamingSession === item.id ? (
+                    <button type="button" onClick={() => void saveRenameSession()}>Save</button>
+                  ) : (
+                    <button type="button" onClick={() => beginRenameSession(item)}>Rename</button>
+                  )}
+                  <button type="button" onClick={() => void archiveSession(item.id, true)}>Archive</button>
+                  <button type="button" onClick={() => void deleteSession(item.id)}>Delete</button>
+                </div>
+              </div>
             ))}
           </div>
+          <button type="button" className="linkButton" onClick={() => setShowArchived((value) => !value)}>
+            {showArchived ? "Hide" : "Show"} Archived ({archivedSessions.length})
+          </button>
+          {showArchived ? (
+            <div className="sideList">
+              {archivedSessions.map((item) => (
+                <div key={item.id} className="sessionRow archived">
+                  <button type="button" className="sessionTitle" onClick={() => void replaySession(item.id)}>
+                    <span>{item.title || item.id.slice(0, 8)}</span>
+                    <small>{relativeTime(item.lastActiveAt)}</small>
+                  </button>
+                  <div className="sessionActions">
+                    <button type="button" onClick={() => void archiveSession(item.id, false)}>Unarchive</button>
+                    <button type="button" onClick={() => void deleteSession(item.id)}>Delete</button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          ) : null}
         </div>
         <div className="sideSection">
           <div className="sideLabel">Goals</div>

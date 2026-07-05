@@ -370,7 +370,13 @@ export function App({ config: initialConfig, env, cwd, initialError }: { config:
           resumeResult = `Resumed session ${id}.`;
         }
       }
-      const commandResult = loopResult ?? scheduleResult ?? resumeResult ?? (value === "/sessions" ? (await listSessions(cwd)).join("\n") || "No sessions yet." : await dispatchCommand(value, { config, env, cwd, ledger, setConfig }));
+      const commandResult =
+        loopResult ??
+        scheduleResult ??
+        resumeResult ??
+        (value === "/sessions"
+          ? (await listSessions(cwd)).map((session) => `${session.id} ${session.archived ? "[archived] " : ""}${session.title}`).join("\n") || "No sessions yet."
+          : await dispatchCommand(value, { config, env, cwd, ledger, setConfig }));
       if (commandResult !== undefined) {
         addMessage("SYSTEM", commandResult);
       } else {

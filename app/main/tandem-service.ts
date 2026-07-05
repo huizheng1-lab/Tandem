@@ -12,7 +12,8 @@ import { runOrchestration, type MachineEvent, type OrchestrationCheckpoint } fro
 import { modelRegistry } from "../../src/providers/registry.js";
 import { CostLedger } from "../../src/session/cost.js";
 import { addGoal, completeGoal, listGoals } from "../../src/session/goals.js";
-import { listSessions, SessionStore } from "../../src/session/store.js";
+import { archiveSession, deleteSession, listSessions, renameSession, SessionStore } from "../../src/session/store.js";
+import type { SessionMetadata } from "../../src/session/store.js";
 import type { PermissionBridge, PermissionRequest } from "../../src/tools/permissions.js";
 import { addSchedule, listSchedules, markScheduleRun, removeSchedule } from "../../src/commands/schedule.js";
 import type { Schedule } from "../../src/commands/schedule.js";
@@ -166,7 +167,7 @@ export class TandemService {
     }));
   }
 
-  listSessions(): Promise<string[]> {
+  listSessions(): Promise<SessionMetadata[]> {
     return listSessions(this.projectDir);
   }
 
@@ -176,6 +177,22 @@ export class TandemService {
     this.session = store;
     this.lastCheckpoint = this.findLastCheckpoint(events.map((event) => event.payload));
     return { id, events, checkpoint: this.lastCheckpoint };
+  }
+
+  async renameSession(id: string, title: string): Promise<SessionMetadata[]> {
+    await renameSession(id, title, this.projectDir);
+    return this.listSessions();
+  }
+
+  async archiveSession(id: string, archived: boolean): Promise<SessionMetadata[]> {
+    await archiveSession(id, archived, this.projectDir);
+    return this.listSessions();
+  }
+
+  async deleteSession(id: string): Promise<SessionMetadata[]> {
+    if (this.session?.id === id) throw new Error("Cannot delete the active session. Start or resume another session first.");
+    await deleteSession(id, this.projectDir);
+    return this.listSessions();
   }
 
   async recordCrash(error: unknown): Promise<void> {

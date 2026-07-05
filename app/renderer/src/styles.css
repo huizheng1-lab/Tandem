@@ -95,6 +95,65 @@ select {
   text-decoration: line-through;
 }
 
+.sessionRow {
+  display: grid;
+  gap: 5px;
+  border: 1px solid #2f3540;
+  border-radius: 6px;
+  padding: 7px;
+  background: #1d2027;
+}
+
+.sessionRow.archived {
+  opacity: 0.78;
+}
+
+.sessionTitle {
+  display: grid;
+  gap: 3px;
+  width: 100%;
+  border: 0;
+  color: #d7dce4;
+  background: transparent;
+  padding: 0;
+  text-align: left;
+}
+
+.sessionTitle span {
+  overflow-wrap: anywhere;
+  font-size: 12px;
+}
+
+.sessionTitle small {
+  color: #8f98a6;
+  font-size: 11px;
+}
+
+.sessionActions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+
+.sessionActions button {
+  border: 1px solid #343b47;
+  border-radius: 5px;
+  color: #b9c0c9;
+  background: #17191e;
+  padding: 4px 6px;
+  font-size: 11px;
+}
+
+.renameInput {
+  min-width: 0;
+  border: 1px solid #465367;
+  border-radius: 5px;
+  color: #f3f2ee;
+  background: #101114;
+  padding: 6px;
+  font-size: 12px;
+}
+
 .compactForm,
 .scheduleForm {
   display: grid;

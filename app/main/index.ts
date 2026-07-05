@@ -10,6 +10,9 @@ import type {
   ScheduleAddRequest,
   ScheduleRemoveRequest,
   SessionAutoApproveRequest,
+  SessionArchiveRequest,
+  SessionDeleteRequest,
+  SessionRenameRequest,
   SessionResumeRequest,
   SessionStartRequest
 } from "../shared/ipc.js";
@@ -58,6 +61,9 @@ ipcMain.handle(ipcChannels.configSet, (_event, patch) => service?.setConfig(patc
 ipcMain.handle(ipcChannels.modelsList, () => service?.listModels());
 ipcMain.handle(ipcChannels.sessionsList, () => service?.listSessions());
 ipcMain.handle(ipcChannels.sessionResume, (_event, request: SessionResumeRequest) => service?.resumeSession(request.id));
+ipcMain.handle(ipcChannels.sessionRename, (_event, request: SessionRenameRequest) => service?.renameSession(request.id, request.title));
+ipcMain.handle(ipcChannels.sessionArchive, (_event, request: SessionArchiveRequest) => service?.archiveSession(request.id, request.archived));
+ipcMain.handle(ipcChannels.sessionDelete, (_event, request: SessionDeleteRequest) => service?.deleteSession(request.id));
 ipcMain.handle(ipcChannels.goalsList, () => service?.listGoals());
 ipcMain.handle(ipcChannels.goalAdd, (_event, request: GoalAddRequest) => service?.addGoal(request.text));
 ipcMain.handle(ipcChannels.goalComplete, (_event, request: GoalCompleteRequest) => service?.completeGoal(request.id));
