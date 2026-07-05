@@ -6,6 +6,8 @@ import type { ScheduledTask } from "node-cron";
 import { TandemConfig } from "../config/schema.js";
 import { CostLedger } from "../session/cost.js";
 import { dispatchCommand } from "../commands/index.js";
+import { setModel } from "../commands/model.js";
+import { modelRegistry } from "../providers/registry.js";
 import { parseLoop } from "../commands/loop.js";
 import { addSchedule, listSchedules, removeSchedule } from "../commands/schedule.js";
 import { appendGoalNote, listGoals } from "../session/goals.js";
@@ -35,7 +37,9 @@ export function App({ config: initialConfig, env, cwd, initialError }: { config:
   const [pendingApproval, setPendingApproval] = useState<{ request: PermissionRequest; resolve: (approved: boolean) => void }>();
   const [pendingPlan, setPendingPlan] = useState<{ plan: BuildPlan; resolve: (approved: boolean) => void }>();
   const [pendingResume, setPendingResume] = useState<{ request: string; checkpoint: OrchestrationCheckpoint }>();
+  const [modelPicker, setModelPicker] = useState<{ stage: "role" | "model"; role: "leader" | "worker"; index: number }>();
   const ledger = useMemo(() => new CostLedger(), []);
+  const modelOptions = useMemo(() => modelRegistry(config.customModels), [config.customModels]);
   const app = useApp();
   const abortRef = useRef<AbortController>();
   const storeRef = useRef<SessionStore>();
@@ -88,6 +92,27 @@ export function App({ config: initialConfig, env, cwd, initialError }: { config:
   }, []);
 
   useInput((inputValue, key) => {
+    if (modelPicker) {
+      const count = modelPicker.stage === "role" ? 2 : modelOptions.length;
+      if (key.upArrow) setModelPicker({ ...modelPicker, index: (modelPicker.index + count - 1) % count });
+      if (key.downArrow) setModelPicker({ ...modelPicker, index: (modelPicker.index + 1) % count });
+      if (key.return) {
+        if (modelPicker.stage === "role") {
+          setModelPicker({ stage: "model", role: modelPicker.index === 0 ? "leader" : "worker", index: 0 });
+        } else {
+          const selected = modelOptions[modelPicker.index];
+          if (selected) {
+            void setModel(config, modelPicker.role, selected.id, cwd).then((next) => {
+              setConfig(next);
+              addMessage("SYSTEM", `Set ${modelPicker.role} model to ${selected.id}.`);
+            });
+          }
+          setModelPicker(undefined);
+        }
+      }
+      if (key.escape) setModelPicker(undefined);
+      return;
+    }
     if (key.escape) {
       pendingApproval?.resolve(false);
       pendingPlan?.resolve(false);
@@ -263,6 +288,11 @@ export function App({ config: initialConfig, env, cwd, initialError }: { config:
     addMessage("USER", value);
     setBusy(true);
     try {
+      if (value.trim() === "/model") {
+        setModelPicker({ stage: "role", role: "leader", index: 0 });
+        addMessage("SYSTEM", "Choose model role with arrows, then Enter.");
+        return;
+      }
       const loopResult = await handleLoop(value);
       const scheduleResult = loopResult === undefined ? await handleSchedule(value) : undefined;
       let resumeResult: string | undefined;
@@ -309,6 +339,17 @@ export function App({ config: initialConfig, env, cwd, initialError }: { config:
     <Box flexDirection="column">
       <Transcript messages={messages} />
       <PlanView plan={plan} verdict={verdict} />
+      {modelPicker ? (
+        <Box borderStyle="single" flexDirection="column" paddingX={1}>
+          <Text color="cyan">{modelPicker.stage === "role" ? "Choose role" : `Choose ${modelPicker.role} model`}</Text>
+          {(modelPicker.stage === "role" ? ["leader", "worker"] : modelOptions.map((model) => `${env[model.envKey] ? "ok " : "key"} ${model.id}`)).map((item, index) => (
+            <Text key={item} color={index === modelPicker.index ? "yellow" : undefined}>
+              {index === modelPicker.index ? "> " : "  "}
+              {item}
+            </Text>
+          ))}
+        </Box>
+      ) : null}
       <Approval action={pendingApproval?.request.action} target={pendingApproval?.request.target} />
       {pendingPlan ? <Text color="yellow">Plan approval pending</Text> : null}
       {pendingResume ? <Text color="yellow">Resume continuation pending</Text> : null}
