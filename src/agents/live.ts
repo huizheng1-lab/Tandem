@@ -57,6 +57,10 @@ function usageNumber(value: unknown): number {
   return typeof value === "number" && Number.isFinite(value) ? value : 0;
 }
 
+function fallbackError(originalError: Error, cause: unknown): Error {
+  return new Error(`${originalError.message} Fallback extraction also failed: ${String(cause)}`, { cause });
+}
+
 // Some models (observed: Gemini 2.5 Pro) reliably do the work but fail to call their submit_*
 // tool even when tool choice is forced. Recover by extracting the artifact from the prose the
 // model already wrote, via schema-constrained generation with no tools involved.
@@ -86,8 +90,8 @@ export async function extractFromProse<T>(options: ExtractFromProseOptions<T>): 
       usageNumber(raw?.outputTokens ?? raw?.completionTokens)
     );
     return object;
-  } catch {
-    throw options.originalError;
+  } catch (cause) {
+    throw fallbackError(options.originalError, cause);
   }
 }
 

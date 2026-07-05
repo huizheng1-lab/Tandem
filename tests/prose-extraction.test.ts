@@ -40,8 +40,26 @@ describe("extractFromProse", () => {
     expect(result).toEqual({ verdict: "approve", userSummary: "done" });
   });
 
-  it("throws the original error when extraction fails", async () => {
+  it("throws a diagnostic error when extraction fails", async () => {
     const originalError = new Error("Leader review finished without submit_review.");
+    const promise = extractFromProse({
+      resolution: { model: {} as LanguageModel, entry: modelEntry },
+      ledger: new CostLedger(),
+      role: "leader",
+      schema,
+      artifactName: "ReviewVerdict",
+      text: "I refuse to be JSON today.",
+      originalError,
+      generator: async () => {
+        throw new Error("provider parse failed");
+      }
+    });
+
+    await expect(promise).rejects.toThrow(/Leader review finished without submit_review\. Fallback extraction also failed:/);
+    await expect(promise).rejects.toThrow(/provider parse failed/);
+  });
+
+  it("throws the original error for empty prose", async () => {
     await expect(
       extractFromProse({
         resolution: { model: {} as LanguageModel, entry: modelEntry },
@@ -49,13 +67,10 @@ describe("extractFromProse", () => {
         role: "leader",
         schema,
         artifactName: "ReviewVerdict",
-        text: "I refuse to be JSON today.",
-        originalError,
-        generator: async () => {
-          throw new Error("provider parse failed");
-        }
+        text: "",
+        originalError: new Error("Leader review finished without submit_review.")
       })
-    ).rejects.toThrow(originalError.message);
+    ).rejects.toThrow(/^Leader review finished without submit_review\.$/);
   });
 
   it("records cost ledger usage for the extra extraction call", async () => {
