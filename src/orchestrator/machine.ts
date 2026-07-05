@@ -38,7 +38,7 @@ export interface RunOptions {
   config: Pick<TandemConfig, "maxReviewRounds">;
   agents: AgentFns;
   goals?: string[];
-  diffProvider?: () => Promise<string>;
+  diffProvider?: (() => Promise<string>) | { beforeBuild?: () => Promise<void>; diff: () => Promise<string> };
   confirmPlan?: (plan: BuildPlan) => Promise<boolean>;
   initialState?: OrchestrationCheckpoint;
   emit?: (event: MachineEvent) => void;
@@ -149,6 +149,7 @@ export async function runOrchestration(options: RunOptions): Promise<RunResult> 
       report = reports[currentRound - 1] as CompletionReport;
     } else {
       transition("BUILDING", `round ${currentRound}/${options.config.maxReviewRounds} worker build`, currentRound);
+      if (options.diffProvider && typeof options.diffProvider !== "function") await options.diffProvider.beforeBuild?.();
       try {
         report = await retryArtifact(
           "CompletionReport",
@@ -165,7 +166,7 @@ export async function runOrchestration(options: RunOptions): Promise<RunResult> 
     }
 
     transition("REVIEWING", `round ${currentRound}/${options.config.maxReviewRounds} leader review`, currentRound);
-    const diff = options.diffProvider ? await options.diffProvider() : "";
+    const diff = options.diffProvider ? await (typeof options.diffProvider === "function" ? options.diffProvider() : options.diffProvider.diff()) : "";
     const verdict = await retryArtifact(
       "ReviewVerdict",
       emit,

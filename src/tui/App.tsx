@@ -13,7 +13,7 @@ import { SessionStore, listSessions } from "../session/store.js";
 import { createLiveAgents } from "../agents/live.js";
 import { runOrchestration, MachineEvent, OrchestrationCheckpoint } from "../orchestrator/machine.js";
 import { BuildPlan, ReviewVerdict } from "../orchestrator/artifacts.js";
-import { workingTreeDiff } from "../orchestrator/diff.js";
+import { createDiffTracker } from "../orchestrator/diff.js";
 import { PermissionBridge, PermissionRequest } from "../tools/permissions.js";
 import { Transcript, TranscriptMessage } from "./Transcript.js";
 import { InputBar } from "./InputBar.js";
@@ -134,12 +134,14 @@ export function App({ config: initialConfig, env, cwd, initialError }: { config:
     setVerdict(undefined);
     try {
       const activeGoals = (await listGoals(cwd)).filter((goal) => goal.status === "active").map((goal) => goal.text);
+      const diffTracker = createDiffTracker(cwd);
       const agents = await createLiveAgents({
         config,
         cwd,
         env,
         ledger,
         permissionBridge,
+        recordTouchedPath: (filePath) => diffTracker.recordTouchedPath(filePath),
         abortSignal: controller.signal,
         onLeaderText: (text) => appendDelta("LEADER", text),
         onWorkerText: (text) => appendDelta("WORKER", text)
@@ -149,7 +151,7 @@ export function App({ config: initialConfig, env, cwd, initialError }: { config:
         config,
         agents,
         goals: activeGoals,
-        diffProvider: () => workingTreeDiff(cwd),
+        diffProvider: diffTracker,
         confirmPlan,
         initialState,
         emit: handleEvent

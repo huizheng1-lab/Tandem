@@ -7,6 +7,7 @@ export interface ToolContext {
   cwd: string;
   permissionMode: PermissionMode;
   permissionBridge?: PermissionBridge;
+  recordTouchedPath?: (filePath: string) => void;
 }
 
 export function resolveInside(cwd: string, target: string): string {
@@ -33,6 +34,7 @@ export async function writeFileTool(ctx: ToolContext, filePath: string, content:
   await ensurePermission(ctx.permissionMode, { action: "write", target: filePath }, ctx.permissionBridge);
   await mkdir(path.dirname(fullPath), { recursive: true });
   await writeFile(fullPath, content, "utf8");
+  ctx.recordTouchedPath?.(filePath);
   return `Wrote ${filePath}`;
 }
 
@@ -45,6 +47,7 @@ export async function editFileTool(ctx: ToolContext, filePath: string, oldString
   if (!replaceAll && occurrences > 1) throw new Error(`Text is not unique in ${filePath}; set replaceAll to true or narrow old_string.`);
   const updated = replaceAll ? content.split(oldString).join(newString) : content.replace(oldString, newString);
   await writeFile(fullPath, updated, "utf8");
+  ctx.recordTouchedPath?.(filePath);
   return `Edited ${filePath}`;
 }
 

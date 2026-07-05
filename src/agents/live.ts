@@ -18,6 +18,7 @@ export interface LiveAgentOptions {
   env: NodeJS.ProcessEnv;
   ledger: CostLedger;
   permissionBridge?: PermissionBridge;
+  recordTouchedPath?: (filePath: string) => void;
   abortSignal?: AbortSignal;
   onLeaderText?: (text: string) => void;
   onWorkerText?: (text: string) => void;
@@ -37,7 +38,8 @@ export async function createLiveAgents(options: LiveAgentOptions): Promise<Agent
   const toolContext = {
     cwd: options.cwd,
     permissionMode: options.config.permissionMode,
-    permissionBridge: options.permissionBridge
+    permissionBridge: options.permissionBridge,
+    recordTouchedPath: options.recordTouchedPath
   };
 
   return {
