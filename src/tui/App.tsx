@@ -8,9 +8,9 @@ import { CostLedger } from "../session/cost.js";
 import { dispatchCommand } from "../commands/index.js";
 import { parseLoop } from "../commands/loop.js";
 import { addSchedule, listSchedules, removeSchedule } from "../commands/schedule.js";
-import { listGoals } from "../session/goals.js";
+import { appendGoalNote, listGoals } from "../session/goals.js";
 import { SessionStore, listSessions } from "../session/store.js";
-import { createLiveAgents } from "../agents/live.js";
+import { createLiveAgents, suggestGoalProgressNotes } from "../agents/live.js";
 import { runOrchestration, MachineEvent, OrchestrationCheckpoint } from "../orchestrator/machine.js";
 import { BuildPlan, ReviewVerdict } from "../orchestrator/artifacts.js";
 import { createDiffTracker } from "../orchestrator/diff.js";
@@ -133,7 +133,8 @@ export function App({ config: initialConfig, env, cwd, initialError }: { config:
     setPlan(undefined);
     setVerdict(undefined);
     try {
-      const activeGoals = (await listGoals(cwd)).filter((goal) => goal.status === "active").map((goal) => goal.text);
+      const activeGoalObjects = (await listGoals(cwd)).filter((goal) => goal.status === "active");
+      const activeGoals = activeGoalObjects.map((goal) => goal.text);
       const diffTracker = createDiffTracker(cwd);
       const agents = await createLiveAgents({
         config,
@@ -157,6 +158,20 @@ export function App({ config: initialConfig, env, cwd, initialError }: { config:
         emit: handleEvent
       });
       addMessage("LEADER", result.summary);
+      const notes = await suggestGoalProgressNotes({
+        config,
+        cwd,
+        env,
+        ledger,
+        abortSignal: controller.signal,
+        onLeaderText: (text) => appendDelta("LEADER", text),
+        goals: activeGoalObjects,
+        userSummary: result.summary
+      });
+      for (const note of notes) {
+        await appendGoalNote(note.goalId, note.note, cwd);
+        addMessage("SYSTEM", `Goal ${note.goalId} noted: ${note.note}`);
+      }
       setPhase("DONE");
       void storeRef.current?.append("cost", ledger.totals());
     } finally {

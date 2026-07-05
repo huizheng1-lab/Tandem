@@ -8,6 +8,7 @@ import { makeToolSet } from "../tools/index.js";
 import { CostLedger } from "../session/cost.js";
 import { AgentFns, PlanResult } from "../orchestrator/machine.js";
 import { BuildPlan, BuildPlanSchema, CompletionReportSchema, ReviewVerdictSchema } from "../orchestrator/artifacts.js";
+import { Goal } from "../session/goals.js";
 import { runAgentArtifact, runAgentText } from "./runner.js";
 import { leaderPlannerPrompt, leaderReviewerPrompt, leaderTakeoverPrompt } from "./leader.js";
 import { workerPrompt } from "./worker.js";
@@ -198,4 +199,58 @@ export async function createLiveAgents(options: LiveAgentOptions): Promise<Agent
       throw new Error(`Leader takeover finished without submit_takeover. ${fallback.text}`);
     }
   };
+}
+
+export interface GoalProgressNote {
+  goalId: number;
+  note: string;
+}
+
+export async function suggestGoalProgressNotes(options: Pick<LiveAgentOptions, "config" | "cwd" | "env" | "ledger" | "abortSignal" | "onLeaderText"> & {
+  goals: Goal[];
+  userSummary: string;
+}): Promise<GoalProgressNote[]> {
+  if (options.goals.length === 0) return [];
+  const leader = await makeModel(options.config.leader, options.config, options.env);
+  let submitted: { notes: GoalProgressNote[] } | undefined;
+  const submitTools = {
+    submit_goal_notes: tool({
+      description: "Submit one-line progress notes for only the goals that advanced.",
+      inputSchema: z.object({
+        notes: z.array(
+          z.object({
+            goalId: z.number().int().positive(),
+            note: z.string().min(1).max(240)
+          })
+        )
+      }),
+      execute: (input) => {
+        submitted = input;
+        return { ok: true };
+      }
+    })
+  };
+  const result = await runAgentArtifact({
+    model: leader.model,
+    modelEntry: leader.entry,
+    costRole: "leader",
+    ledger: options.ledger,
+    system: "You update Tandem standing goals. If the completed run advanced a goal, call submit_goal_notes with a short past-tense note. Omit unrelated goals.",
+    messages: [
+      {
+        role: "user",
+        content: `Active goals:\n${jsonBlock(options.goals.map((goal) => ({ id: goal.id, text: goal.text })))}\n\nRun summary:\n${options.userSummary}`
+      }
+    ],
+    tools: submitTools,
+    maxSteps: Math.min(5, options.config.maxStepsPerAgentTurn),
+    stopToolName: "submit_goal_notes",
+    toolChoice: { type: "tool", toolName: "submit_goal_notes" },
+    abortSignal: options.abortSignal,
+    onText: options.onLeaderText,
+    artifactName: "GoalProgressNotes",
+    getArtifact: () => submitted
+  });
+  const allowedIds = new Set(options.goals.map((goal) => goal.id));
+  return (result.artifact?.notes ?? []).filter((note) => allowedIds.has(note.goalId));
 }
