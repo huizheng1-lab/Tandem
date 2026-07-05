@@ -46,6 +46,31 @@
   "engines": {
     "node": ">=20"
   },
+  "build": {
+    "appId": "dev.tandem.app",
+    "productName": "Tandem",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "out/**",
+      "package.json"
+    ],
+    "win": {
+      "icon": "app/assets/icon.ico",
+      "target": [
+        "nsis",
+        "portable"
+      ]
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true
+    }
+  },
   "overrides": {
     "esbuild": "^0.28.1"
   }

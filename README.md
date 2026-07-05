@@ -65,6 +65,22 @@ Bare `/model` opens a minimal picker in the TUI: choose leader or worker, then c
 
 Schedules run only while Tandem is open.
 
+## Desktop App
+
+Tandem also ships as an Electron desktop app with a chat pane, artifact cards, model dropdowns, project picker, sessions, goals, and schedules.
+
+```bash
+npm run dev:app
+```
+
+Build the Windows installer and portable executable with:
+
+```bash
+npm run dist:app
+```
+
+The installer uses product name `Tandem` and creates its own desktop and Start Menu shortcuts. The packaged app reads the selected project folder's `.env` and `.tandem/config.json`, just like the CLI.
+
 ## Verification
 
 Offline checks do not call provider APIs:
