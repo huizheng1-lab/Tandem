@@ -48,6 +48,16 @@ function roleLabel(role: Role): string {
 }
 
 function App(): React.ReactElement {
+  const tandem = window.tandem;
+  if (!tandem) {
+    return (
+      <main className="errorBoundary">
+        <h1>Preload bridge failed to load</h1>
+        <pre>preload bridge failed to load - see main process logs</pre>
+      </main>
+    );
+  }
+
   const [session, setSession] = useState<SessionStartResponse>();
   const [models, setModels] = useState<ModelListItem[]>([]);
   const [entries, setEntries] = useState<TranscriptEntry[]>([{ id: 1, kind: "message", role: "system", text: "Starting desktop session..." }]);
@@ -107,25 +117,25 @@ function App(): React.ReactElement {
   };
 
   const refreshSidebar = async () => {
-    const [sessionIds, goalItems, scheduleItems] = await Promise.all([window.tandem.listSessions(), window.tandem.listGoals(), window.tandem.listSchedules()]);
+    const [sessionIds, goalItems, scheduleItems] = await Promise.all([tandem.listSessions(), tandem.listGoals(), tandem.listSchedules()]);
     setSessions(sessionIds);
     setGoals(goalItems);
     setSchedules(scheduleItems);
   };
 
   const startProjectSession = async (projectDir?: string) => {
-    const started = await window.tandem.startSession({ projectDir });
+    const started = await tandem.startSession({ projectDir });
     setSession(started);
     setEntries([{ id: nextId.current++, kind: "message", role: "system", text: `Session ${started.sessionId} started in ${started.projectDir}` }]);
     setPhase("IDLE");
     setRound(0);
     setCost(undefined);
-    setModels(await window.tandem.listModels());
+    setModels(await tandem.listModels());
     await refreshSidebar();
   };
 
   const replaySession = async (id: string) => {
-    const resumed = await window.tandem.resumeSession({ id });
+    const resumed = await tandem.resumeSession({ id });
     const replayed: TranscriptEntry[] = [];
     for (const stored of resumed.events) {
       const payload = stored.payload as { prompt?: string; role?: "leader" | "worker"; delta?: string; summary?: string; takeover?: boolean } | MachineEvent;
@@ -159,31 +169,31 @@ function App(): React.ReactElement {
 
   useEffect(() => {
     const removers = [
-      window.tandem.onTextEvent((event) => appendStream(event.role, event.delta)),
-      window.tandem.onMachineEvent(handleMachineEvent),
-      window.tandem.onCostEvent(setCost),
-      window.tandem.onDoneEvent((event) => {
+      tandem.onTextEvent((event) => appendStream(event.role, event.delta)),
+      tandem.onMachineEvent(handleMachineEvent),
+      tandem.onCostEvent(setCost),
+      tandem.onDoneEvent((event) => {
         setRunning(false);
         setPhase("DONE");
         appendMessage("system", `${event.summary}${event.takeover ? " (takeover)" : ""}`);
       }),
-      window.tandem.onPermissionRequest((event) => {
+      tandem.onPermissionRequest((event) => {
         if (autoAllowedActions.current.has(event.action)) {
-          window.tandem.respondToPermission({ id: event.id, approved: true });
+          tandem.respondToPermission({ id: event.id, approved: true });
           return;
         }
         setAlwaysAllow(false);
         setPermissionModal(event);
       }),
-      window.tandem.onPlanConfirm(setPlanModal)
+      tandem.onPlanConfirm(setPlanModal)
     ];
 
-    void window.tandem
+    void tandem
       .startSession({})
       .then(async (started) => {
         setSession(started);
         appendMessage("system", `Session ${started.sessionId} started in ${started.projectDir}`);
-        setModels(await window.tandem.listModels());
+        setModels(await tandem.listModels());
         await refreshSidebar();
       })
       .catch((error: unknown) => {
@@ -196,35 +206,35 @@ function App(): React.ReactElement {
   }, []);
 
   const updateModel = async (role: "leader" | "worker", modelId: string) => {
-    const nextConfig = await window.tandem.setConfig({ [role]: modelId });
+    const nextConfig = await tandem.setConfig({ [role]: modelId });
     setSession((current) => (current ? { ...current, config: nextConfig } : current));
   };
 
   const pickProject = async () => {
-    const folder = await window.tandem.pickFolder();
+    const folder = await tandem.pickFolder();
     if (folder) await startProjectSession(folder);
   };
 
   const addGoal = async () => {
     const text = goalText.trim();
     if (!text) return;
-    setGoals(await window.tandem.addGoal({ text }));
+    setGoals(await tandem.addGoal({ text }));
     setGoalText("");
   };
 
   const completeGoal = async (id: number) => {
-    setGoals(await window.tandem.completeGoal({ id }));
+    setGoals(await tandem.completeGoal({ id }));
   };
 
   const addSchedule = async () => {
     if (!scheduleCron.trim() || !schedulePrompt.trim()) return;
-    setSchedules(await window.tandem.addSchedule({ cron: scheduleCron.trim(), prompt: schedulePrompt.trim() }));
+    setSchedules(await tandem.addSchedule({ cron: scheduleCron.trim(), prompt: schedulePrompt.trim() }));
     setScheduleCron("");
     setSchedulePrompt("");
   };
 
   const removeSchedule = async (id: string) => {
-    setSchedules(await window.tandem.removeSchedule({ id }));
+    setSchedules(await tandem.removeSchedule({ id }));
   };
 
   const send = async () => {
@@ -235,7 +245,7 @@ function App(): React.ReactElement {
     setPhase("PLANNING");
     appendMessage("user", text);
     try {
-      await window.tandem.runPipeline({ prompt: text });
+      await tandem.runPipeline({ prompt: text });
     } catch (error) {
       setRunning(false);
       appendMessage("system", `Run failed: ${String(error)}`);
@@ -243,20 +253,20 @@ function App(): React.ReactElement {
   };
 
   const stop = async () => {
-    await window.tandem.abortPipeline();
+    await tandem.abortPipeline();
     appendMessage("system", "Abort requested.");
   };
 
   const respondToPermission = (approved: boolean) => {
     if (!permissionModal) return;
     if (approved && alwaysAllow) autoAllowedActions.current.add(permissionModal.action);
-    window.tandem.respondToPermission({ id: permissionModal.id, approved });
+    tandem.respondToPermission({ id: permissionModal.id, approved });
     setPermissionModal(undefined);
   };
 
   const respondToPlan = (approved: boolean) => {
     if (!planModal) return;
-    window.tandem.respondToPlan({ id: planModal.id, approved });
+    tandem.respondToPlan({ id: planModal.id, approved });
     setPlanModal(undefined);
   };
 

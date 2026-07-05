@@ -30,7 +30,7 @@ function createWindow(): void {
     webPreferences: {
       contextIsolation: true,
       nodeIntegration: false,
-      preload: path.join(currentDir, "../preload/index.mjs")
+      preload: path.join(currentDir, "../preload/index.js")
     }
   });
   service = new TandemService(mainWindow);
