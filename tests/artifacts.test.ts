@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { BuildPlan, validateCompletionReport } from "../src/orchestrator/artifacts.js";
+import { BuildPlan, ReviewVerdictSchema, validateCompletionReport } from "../src/orchestrator/artifacts.js";
 
 const plan: BuildPlan = {
   title: "Demo",
@@ -55,5 +55,27 @@ describe("artifacts", () => {
         deviationsFromPlan: []
       })
     ).toThrow(/failing verification/);
+  });
+
+  it("rejects approve verdicts with severe scores", () => {
+    expect(() =>
+      ReviewVerdictSchema.parse({
+        verdict: "approve",
+        scores: { correctness: 1, planAdherence: 5, codeQuality: 5 },
+        feedback: [],
+        userSummary: "Looks good."
+      })
+    ).toThrow(/approve verdict requires scores above 2/);
+  });
+
+  it("allows revise verdicts with severe scores", () => {
+    const verdict = ReviewVerdictSchema.parse({
+      verdict: "revise",
+      scores: { correctness: 1, planAdherence: 2, codeQuality: 2 },
+      feedback: [{ issue: "broken", requiredChange: "fix it" }],
+      userSummary: "Needs fixes."
+    });
+
+    expect(verdict.verdict).toBe("revise");
   });
 });

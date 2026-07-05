@@ -104,7 +104,11 @@ export async function extractFromProse<T>(options: ExtractFromProseOptions<T>): 
         abortSignal: input.abortSignal,
         prompt: input.prompt
       }));
-  const basePrompt = `The following text is a completed ${options.artifactName} written as prose. Convert it faithfully into the structured object. Do not invent facts that are not in the text.\n\n${options.text}`;
+  const scoreGuidance =
+    options.artifactName === "ReviewVerdict"
+      ? "\nFor ReviewVerdict, scores must be consistent with the verdict: approve means the work met the bar and should not use 1 or 2 scores; 1 means severe failure."
+      : "";
+  const basePrompt = `The following text is a completed ${options.artifactName} written as prose. Convert it faithfully into the structured object. Do not invent facts that are not in the text.${scoreGuidance}\n\n${options.text}`;
   try {
     const { object, usage } = await objectGenerator({
       model: options.resolution.model,

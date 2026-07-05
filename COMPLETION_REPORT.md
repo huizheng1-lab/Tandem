@@ -6,7 +6,7 @@ complete
 
 ## Summary
 
-Implemented Tandem from the supplied build plan, revised it per `REVIEW_FEEDBACK.md`, completed the Round 3 handoff tasks in `HANDOFF_GPT5.md`, Round 4 in `HANDOFF_GPT5_R4.md`, Round 5 in `HANDOFF_GPT5_R5.md`, Round 6 in `HANDOFF_GPT5_R6.md`, Round 7 in `HANDOFF_GPT5_R7.md`, Round 8 in `HANDOFF_GPT5_R8.md`, and the desktop app plan in `BUILD_PLAN_DESKTOP.md`: smoke-test diff/cost tightening, missed-schedule catch-up, transcript artifact expansion, help accuracy, diagnosable prose extraction fallback, JSON-text artifact recovery, graceful review-failure completion, snapshot diff coverage for bash-created and gitignored files, reviewer empty-diff verification hardening, and a packaged Electron desktop chat app.
+Implemented Tandem from the supplied build plan, revised it per `REVIEW_FEEDBACK.md`, completed the Round 3 handoff tasks in `HANDOFF_GPT5.md`, Round 4 in `HANDOFF_GPT5_R4.md`, Round 5 in `HANDOFF_GPT5_R5.md`, Round 6 in `HANDOFF_GPT5_R6.md`, Round 7 in `HANDOFF_GPT5_R7.md`, Round 8 in `HANDOFF_GPT5_R8.md`, the desktop app plan in `BUILD_PLAN_DESKTOP.md`, and desktop Round D6 in `HANDOFF_GPT5_D6.md`: smoke-test diff/cost tightening, missed-schedule catch-up, transcript artifact expansion, help accuracy, diagnosable prose extraction fallback, JSON-text artifact recovery, graceful review-failure completion, snapshot diff coverage for bash-created and gitignored files, reviewer empty-diff verification hardening, packaged Electron desktop chat app, sandbox-compatible preload loading, and review score consistency hardening.
 
 ## Task Results
 
@@ -46,6 +46,8 @@ Implemented Tandem from the supplied build plan, revised it per `REVIEW_FEEDBACK
 - D4: done - electron-builder packaging targets NSIS and portable Windows executables, includes a generated Tandem icon, and documents the desktop app and shortcut story.
 - D5: done - renderer error boundary, main-process crash recording, IPC contract tests, and mock-service tests were added.
 - Desktop revisit after R8-1: done - confirmed the desktop `TandemService` uses `createDiffTracker` as its orchestration diff provider, so packaged GUI review runs inherit the snapshot-first diff behavior.
+- D6-1: done - kept the renderer sandboxed and configured electron-vite to emit the preload bridge as CommonJS `out/preload/index.js`; the BrowserWindow now points at that preload, and the renderer shows a clear preload-failure message if `window.tandem` is missing.
+- D6-2: done - reviewer and prose-extraction prompts now require scores to match verdicts, approve verdicts with any score <= 2 fail validation and retry, revise/takeover can still carry low scores, and the desktop artifact card now displays the actual score fields.
 
 ## Files Changed
 
@@ -64,10 +66,11 @@ Implemented Tandem from the supplied build plan, revised it per `REVIEW_FEEDBACK
 ## Verification Results
 
 - `npx tsc --noEmit`: passed.
-- `npm test`: passed. 10 test files, 35 tests; 1 live-smoke test skipped unless `RUN_LIVE=1`.
+- `npm test`: passed. 10 test files, 37 tests; 1 live-smoke test skipped unless `RUN_LIVE=1`.
 - `npm run build`: passed. `dist/index.js` and `dist/index.d.ts` emitted.
-- `npx electron-vite build`: passed. Desktop main, preload, and renderer emitted to `out/`.
+- `npx electron-vite build`: passed. Desktop main, CommonJS preload `out/preload/index.js`, and renderer emitted to `out/`.
 - `npm run dist:app`: passed. Produced `release/Tandem Setup 0.1.0.exe` and `release/Tandem 0.1.0.exe`.
+- `npm run dev:app`: launched successfully; logs showed main/preload builds, renderer dev server, env loading, and a visible Electron window titled `Tandem`.
 - `npx tandem --version`: passed, printed `0.1.0`.
 - `npx tandem /help`: passed.
 - `npm audit`: reports only 7 low-severity AI SDK runtime advisories under pinned v5 packages.
@@ -93,3 +96,4 @@ Additional R6 unit tests cover fallback diagnostic errors, JSON-text artifact re
 Additional R7 unit tests cover non-git snapshot diffs for files created outside tracker hints, simulating bash-created files.
 Additional R8 unit tests cover gitignored files created inside a git worktree after snapshot capture, matching the live smoke failure mode.
 Additional desktop tests cover IPC channel contract uniqueness and TandemService run/crash behavior with fake agents and fake session storage.
+Additional D6 tests cover review verdict score consistency: approve with severe scores is rejected, while revise with severe scores is allowed.

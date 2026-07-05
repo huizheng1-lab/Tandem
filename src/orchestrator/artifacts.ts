@@ -38,22 +38,33 @@ export const CompletionReportSchema = z.object({
 });
 export type CompletionReport = z.infer<typeof CompletionReportSchema>;
 
-export const ReviewVerdictSchema = z.object({
-  verdict: z.enum(["approve", "revise", "takeover"]),
-  scores: z.object({
-    correctness: z.number().min(1).max(5),
-    planAdherence: z.number().min(1).max(5),
-    codeQuality: z.number().min(1).max(5)
-  }),
-  feedback: z.array(
-    z.object({
-      issue: z.string(),
-      location: z.string().optional(),
-      requiredChange: z.string()
-    })
-  ),
-  userSummary: z.string()
-});
+export const ReviewVerdictSchema = z
+  .object({
+    verdict: z.enum(["approve", "revise", "takeover"]),
+    scores: z.object({
+      correctness: z.number().min(1).max(5),
+      planAdherence: z.number().min(1).max(5),
+      codeQuality: z.number().min(1).max(5)
+    }),
+    feedback: z.array(
+      z.object({
+        issue: z.string(),
+        location: z.string().optional(),
+        requiredChange: z.string()
+      })
+    ),
+    userSummary: z.string()
+  })
+  .superRefine((value, ctx) => {
+    if (value.verdict !== "approve") return;
+    const lowScore = Object.entries(value.scores).find(([, score]) => score <= 2);
+    if (!lowScore) return;
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ["scores", lowScore[0]],
+      message: "approve verdict requires scores above 2; low scores indicate revise or takeover"
+    });
+  });
 export type ReviewVerdict = z.infer<typeof ReviewVerdictSchema>;
 export type ReviewFeedback = ReviewVerdict["feedback"];
 

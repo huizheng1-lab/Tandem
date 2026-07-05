@@ -28,12 +28,12 @@ function artifactSummary(name: string, value: unknown): string {
     tasks?: unknown[];
     feedback?: unknown[];
     verdict?: string;
-    scores?: { correctness?: number; completeness?: number; safety?: number };
+    scores?: { correctness?: number; planAdherence?: number; codeQuality?: number };
     summary?: string;
   };
   if (name === "BuildPlan") return `${item.tasks?.length ?? 0} task(s)`;
   if (name === "ReviewVerdict") {
-    const scores = item.scores ? ` ${item.scores.correctness}/${item.scores.completeness}/${item.scores.safety}` : "";
+    const scores = item.scores ? ` ${item.scores.correctness}/${item.scores.planAdherence}/${item.scores.codeQuality}` : "";
     return `${item.verdict ?? "verdict"}${scores}`;
   }
   if (name.includes("Report")) return item.summary ?? "completion report";
