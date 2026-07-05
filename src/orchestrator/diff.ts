@@ -1,5 +1,5 @@
 import { existsSync } from "node:fs";
-import { readFile } from "node:fs/promises";
+import { readFile, stat } from "node:fs/promises";
 import path from "node:path";
 import { createTwoFilesPatch } from "diff";
 import { execa } from "execa";
@@ -46,10 +46,15 @@ export class DiffTracker {
   private readonly touchedFiles = new Set<string>();
   private snapshot = new Map<string, SnapshotValue>();
 
-  constructor(private readonly cwd: string, private readonly fileCap = 1000) {}
+  constructor(
+    private readonly cwd: string,
+    private readonly fileCap = 500,
+    private readonly maxFileBytes = 256 * 1024
+  ) {}
 
   recordTouchedPath(filePath: string): void {
-    this.touchedFiles.add(path.normalize(filePath));
+    const relativePath = this.toRelativePath(filePath);
+    if (relativePath) this.touchedFiles.add(relativePath);
   }
 
   async beforeBuild(): Promise<void> {
@@ -85,23 +90,41 @@ export class DiffTracker {
       cwd: this.cwd,
       dot: true,
       onlyFiles: true,
-      ignore: ["node_modules/**", "dist/**", ".git/**", ".tandem/**"]
+      followSymbolicLinks: false,
+      ignore: ["node_modules/**", ".git/**", ".tandem/**"]
     });
-    const selected = new Set([...files.slice(0, this.fileCap), ...this.touchedFiles]);
+    const scanned = files.map((file) => this.toRelativePath(file)).filter((file): file is string => Boolean(file));
+    scanned.sort((left, right) => {
+      const depth = left.split("/").length - right.split("/").length;
+      return depth === 0 ? left.localeCompare(right) : depth;
+    });
+    const selected = new Set([...scanned.slice(0, this.fileCap), ...this.touchedFiles]);
     const snapshot = new Map<string, SnapshotValue>();
     for (const file of selected) {
-      const fullPath = path.join(this.cwd, file);
-      if (!existsSync(fullPath)) {
-        snapshot.set(file, null);
-        continue;
-      }
-      try {
-        snapshot.set(file, await readFile(fullPath, "utf8"));
-      } catch {
-        snapshot.set(file, null);
-      }
+      snapshot.set(file, await this.readSnapshotFile(file));
     }
     return snapshot;
+  }
+
+  private toRelativePath(filePath: string): string | undefined {
+    const relative = path.isAbsolute(filePath) ? path.relative(this.cwd, filePath) : filePath;
+    if (!relative || relative.startsWith("..") || path.isAbsolute(relative)) return undefined;
+    return relative.split(path.sep).join("/");
+  }
+
+  private async readSnapshotFile(file: string): Promise<SnapshotValue> {
+    const fullPath = path.join(this.cwd, file);
+    if (!existsSync(fullPath)) return null;
+    try {
+      const info = await stat(fullPath);
+      if (!info.isFile()) return null;
+      if (info.size > this.maxFileBytes) {
+        return `[snapshot omitted: ${info.size} bytes exceeds ${this.maxFileBytes} byte limit]`;
+      }
+      return await readFile(fullPath, "utf8");
+    } catch {
+      return null;
+    }
   }
 }
 

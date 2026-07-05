@@ -31,4 +31,16 @@ describe("non-git diff tracker", () => {
     expect(diff).toContain("+created");
     expect(diff).toContain("deleted.txt");
   });
+
+  it("captures files created without touched-path hints outside git repos", async () => {
+    const cwd = await tempDir();
+    const tracker = createDiffTracker(cwd);
+    await tracker.beforeBuild();
+
+    await writeFile(path.join(cwd, "todo.mjs"), "export const todo = [];\n", "utf8");
+
+    const diff = await tracker.diff();
+    expect(diff).toContain("todo.mjs");
+    expect(diff).toContain("+export const todo = [];");
+  });
 });
