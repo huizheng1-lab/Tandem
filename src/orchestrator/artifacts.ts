@@ -157,6 +157,7 @@ function validateVerificationEntry(entry: string, platform: NodeJS.Platform): st
 
 export function validateBuildPlan(value: unknown, platform: NodeJS.Platform = process.platform): BuildPlan {
   const plan = BuildPlanSchema.parse(value);
+  if (plan.tasks.length === 0) throw new Error("no implementation tasks - answer directly instead");
   const errors = plan.verification.flatMap((entry) => validateVerificationEntry(entry, platform));
   if (errors.length > 0) throw new Error(`Invalid BuildPlan verification:\n${errors.join("\n")}`);
   return plan;

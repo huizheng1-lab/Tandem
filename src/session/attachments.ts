@@ -118,12 +118,12 @@ export async function mediaContentForFile(cwd: string, filePath: string, model: 
     if (model.media?.images) return [{ type: "image", image: buffer, mediaType: imageMediaType }];
     const dims = imageDimensions(buffer, filePath);
     const dimensions = dims.width && dims.height ? `, dimensions ${dims.width}x${dims.height}` : "";
-    return `[image attached at ${filePath} - this model cannot view images; format ${dims.format}${dimensions}, size ${size}]`;
+    return `[image attached at ${filePath} - You CANNOT view this file's visual content. Never guess, infer, or claim to know what it shows; if the task depends on it, submit a blocked report. Metadata: format ${dims.format}${dimensions}, size ${size}]`;
   }
   if (ext === ".pdf") {
     if (model.media?.pdf) return [{ type: "file", data: buffer, mediaType: "application/pdf", filename: path.basename(filePath) }];
     const pages = pdfPageCount(buffer);
-    return `[PDF attached at ${filePath} - this model cannot view PDFs; ${pages === undefined ? "page count unknown" : `${pages} page${pages === 1 ? "" : "s"}`}, size ${size}]`;
+    return `[PDF attached at ${filePath} - You CANNOT view this file's visual content. Never guess, infer, or claim to know what it shows; if the task depends on it, submit a blocked report. Metadata: ${pages === undefined ? "page count unknown" : `${pages} page${pages === 1 ? "" : "s"}`}, size ${size}]`;
   }
   return "";
 }

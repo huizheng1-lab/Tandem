@@ -111,6 +111,18 @@ function threadAsText(messages: RunnerMessage[]): string {
   return messages.map((message) => `${message.role.toUpperCase()}:\n${contentAsText(message.content)}`).join("\n\n");
 }
 
+export function workerMediaWarning(attachments: { path: string; mediaType?: string }[], workerEntry: ModelEntry): string {
+  const unsupported = attachments
+    .filter((attachment) => {
+      if (attachment.mediaType?.startsWith("image/")) return !workerEntry.media?.images;
+      if (attachment.mediaType === "application/pdf") return !workerEntry.media?.pdf;
+      return false;
+    })
+    .map((attachment) => attachment.path);
+  if (unsupported.length === 0) return "";
+  return `\nMedia routing: the worker model (${workerEntry.id}) cannot view these attached media files: ${unsupported.join(", ")}. Inspect them yourself during planning. If implementation is needed, the BuildPlan may only contain tasks executable without the worker seeing the media, and the plan must include your visual/PDF findings clearly enough for the worker to act without guessing.`;
+}
+
 export function buildLeaderRequestMessage(input: { request: string; goals: string[]; history?: string; includeHistoryDigest: boolean; validationFeedback?: string }): string {
   const history = input.includeHistoryDigest && input.history?.trim() ? `Compact session-log history:\n${input.history.trim()}\n\n` : "";
   return `${history}Request:\n${input.request}\n\nStanding goals (context only - do not redirect unrelated requests toward these):\n${input.goals.length > 0 ? input.goals.join("\n") : "none"}${input.validationFeedback ?? ""}`;
@@ -229,7 +241,7 @@ export async function createLiveAgents(options: LiveAgentOptions): Promise<Agent
     onToolEvent: options.onToolEvent
   };
   const projectInstructions = async () => (await options.projectInstructions?.())?.trim() || "Project instructions:\nnone";
-  const memoryInstruction = "Honor Project instructions. Use remember to append one durable user preference, project convention, environment constraint, decision, or unresolved issue to TANDEM.md when it should carry into future turns and worker rounds.";
+  const memoryInstruction = "Honor Project instructions. Use remember only for durable project facts such as conventions, constraints, decisions, or unresolved issues. Never use remember for Q&A trivia or one-off answers; direct answers rarely warrant notes.";
   const leaderThread: RunnerMessage[] = [...(options.leaderThread ?? [])].map((message) =>
     message.role === "user" && typeof message.content === "string" ? { ...message, content: stripEmbeddedHistoryDigest(message.content) } : message
   );
@@ -268,7 +280,11 @@ export async function createLiveAgents(options: LiveAgentOptions): Promise<Agent
             }
           })
         };
-        const system = `${leaderPlannerPrompt}\n${hostPrompt}\n${await projectInstructions()}\n${memoryInstruction}\nTreat the new request in the context of this continuing session conversation; pronouns, references like "that file", and follow-ups may refer to earlier turns.\nUsers may reference standing goals by number (for example, "goal 1"); resolve those references against the Standing goals list before asking for clarification.\nStanding goals are context only; do not redirect unrelated requests toward them.\nYou may answer directly for pure questions. For implementation work, call submit_build_plan exactly once.\nThe "verification" field must contain exact runnable shell commands only (e.g. "node test.mjs"), one command per entry - never prose or manual instructions. Put manual checks in acceptanceCriteria instead. Verification commands MUST be runnable verbatim on the host platform.`;
+        const triage = `FIRST, classify the request:
+(a) QUESTION/INSPECTION - answering, explaining, reading/summarizing files, images, PDFs, or status queries. Do the inspection yourself with read-only tools and ANSWER DIRECTLY. Do NOT call submit_build_plan. Do NOT write notes.
+(b) IMPLEMENTATION - requires creating/modifying files or running state-changing commands. Submit a BuildPlan.
+When the user explicitly asks for a direct answer, it is ALWAYS (a). A BuildPlan exists only when implementation work is required.`;
+        const system = `${leaderPlannerPrompt}\n${hostPrompt}\n${await projectInstructions()}\n${memoryInstruction}\n${triage}${workerMediaWarning(attachments, worker.entry)}\nTreat the new request in the context of this continuing session conversation; pronouns, references like "that file", and follow-ups may refer to earlier turns.\nUsers may reference standing goals by number (for example, "goal 1"); resolve those references against the Standing goals list before asking for clarification.\nStanding goals are context only; do not redirect unrelated requests toward them.\nThe "verification" field must contain exact runnable shell commands only (e.g. "node test.mjs"), one command per entry - never prose or manual instructions. Put manual checks in acceptanceCriteria instead. Verification commands MUST be runnable verbatim on the host platform.`;
         await compactLeaderThread(system);
         const includeHistoryDigest = leaderThread.length === 0;
         const userText = buildLeaderRequestMessage({ request, goals, history, includeHistoryDigest, validationFeedback });
@@ -326,7 +342,7 @@ export async function createLiveAgents(options: LiveAgentOptions): Promise<Agent
         modelEntry: worker.entry,
         costRole: "worker",
         ledger: options.ledger,
-        system: `${workerPrompt}\n${hostPrompt}\n${await projectInstructions()}\n${memoryInstruction}\nYou must run every verification command before submit_completion_report. In verificationResults[].command, repeat the BuildPlan verification command string verbatim. If you adapt a command for the host platform, still use the plan's original command as command and describe the adapted command plus real output in output.`,
+        system: `${workerPrompt}\n${hostPrompt}\n${await projectInstructions()}\n${memoryInstruction}\nIf read_file says you CANNOT view a file's visual content, never guess, infer, or claim to know what it shows. If the task depends on that content and the plan lacks sufficient leader-provided findings, submit a blocked CompletionReport.\nYou must run every verification command before submit_completion_report. In verificationResults[].command, repeat the BuildPlan verification command string verbatim. If you adapt a command for the host platform, still use the plan's original command as command and describe the adapted command plus real output in output.`,
         messages: [
           {
             role: "user",

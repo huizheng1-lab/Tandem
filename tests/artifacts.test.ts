@@ -36,6 +36,10 @@ describe("artifacts", () => {
     ).toThrow(/does not look like a runnable shell command/);
   });
 
+  it("rejects zero-task build plans as direct-answer work", () => {
+    expect(() => validateBuildPlan({ ...plan, tasks: [] })).toThrow(/no implementation tasks - answer directly instead/);
+  });
+
   it("rejects POSIX verification commands on Windows with safer alternatives", () => {
     expect(() => validateBuildPlan({ ...plan, verification: ["cat launch.bat"] }, "win32")).toThrow(/POSIX-only tool `cat`.*type <file>/s);
     expect(() => validateBuildPlan({ ...plan, verification: ["cat index.html | grep -E 'src=|title='"] }, "win32")).toThrow(/POSIX-only tool `cat`.*POSIX-only tool `grep`.*findstr/s);

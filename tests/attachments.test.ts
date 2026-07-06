@@ -49,7 +49,11 @@ describe("attachments", () => {
     await writeFile(path.join(cwd, "attachments", "mock.png"), oneByOnePng);
 
     await expect(mediaContentForFile(cwd, "attachments/mock.png", { media: { images: true } })).resolves.toMatchObject([{ type: "image", mediaType: "image/png" }]);
-    await expect(mediaContentForFile(cwd, "attachments/mock.png", { media: {} })).resolves.toContain("dimensions 1x1");
+    const stub = await mediaContentForFile(cwd, "attachments/mock.png", { media: {} });
+    expect(stub).toContain("You CANNOT view this file's visual content");
+    expect(stub).toContain("Never guess");
+    expect(stub).toContain("submit a blocked report");
+    expect(stub).toContain("dimensions 1x1");
   });
 
   it("returns PDF parts for PDF-capable callers and stubs otherwise", async () => {
@@ -58,7 +62,10 @@ describe("attachments", () => {
     await writeFile(path.join(cwd, "attachments", "spec.pdf"), "%PDF-1.7\n1 0 obj\n<< /Type /Page >>\nendobj\n", "utf8");
 
     await expect(mediaContentForFile(cwd, "attachments/spec.pdf", { media: { pdf: true } })).resolves.toMatchObject([{ type: "file", mediaType: "application/pdf" }]);
-    await expect(mediaContentForFile(cwd, "attachments/spec.pdf", { media: {} })).resolves.toContain("1 page");
+    const stub = await mediaContentForFile(cwd, "attachments/spec.pdf", { media: {} });
+    expect(stub).toContain("You CANNOT view this file's visual content");
+    expect(stub).toContain("Never guess");
+    expect(stub).toContain("1 page");
   });
 
   it("keeps text read_file behavior unchanged", async () => {
