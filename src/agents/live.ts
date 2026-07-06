@@ -6,7 +6,7 @@ import { makeModel } from "../providers/client.js";
 import { ModelEntry } from "../providers/registry.js";
 import { PermissionBridge } from "../tools/permissions.js";
 import { makeToolSet } from "../tools/index.js";
-import type { ToolActivityEvent } from "../tools/fs.js";
+import type { ToolActivityEvent, ToolContext } from "../tools/fs.js";
 import { CostLedger, CostRole } from "../session/cost.js";
 import { AgentFns, PlanResult } from "../orchestrator/machine.js";
 import { BuildPlan, BuildPlanSchema, CompletionReport, CompletionReportSchema, ReviewFeedback, ReviewVerdictSchema, validateBuildPlan } from "../orchestrator/artifacts.js";
@@ -37,6 +37,7 @@ export interface LiveAgentOptions {
   rememberNote?: (text: string, by: "leader" | "worker") => Promise<string>;
   leaderThread?: RunnerMessage[];
   onLeaderCompaction?: (event: { summary: string; compactedTurns: number }) => void | Promise<void>;
+  onTriage?: (kind: TriageKind) => void | Promise<void>;
 }
 
 function jsonBlock(value: unknown): string {
@@ -126,6 +127,73 @@ export function workerMediaWarning(attachments: { path: string; mediaType?: stri
 export function buildLeaderRequestMessage(input: { request: string; goals: string[]; history?: string; includeHistoryDigest: boolean; validationFeedback?: string }): string {
   const history = input.includeHistoryDigest && input.history?.trim() ? `Compact session-log history:\n${input.history.trim()}\n\n` : "";
   return `${history}Request:\n${input.request}\n\nStanding goals (context only - do not redirect unrelated requests toward these):\n${input.goals.length > 0 ? input.goals.join("\n") : "none"}${input.validationFeedback ?? ""}`;
+}
+
+const TriageSchema = z.object({ kind: z.enum(["question", "implementation"]) });
+export type TriageKind = z.infer<typeof TriageSchema>["kind"];
+
+export type TriageObjectGenerator = (options: {
+  model: LanguageModel;
+  schema: typeof TriageSchema;
+  abortSignal?: AbortSignal;
+  prompt: string;
+}) => Promise<{ object: z.infer<typeof TriageSchema>; usage?: unknown }>;
+
+function oneLineContext(text: string | undefined, max = 320): string {
+  const normalized = text?.replace(/\s+/g, " ").trim() ?? "";
+  if (!normalized) return "none";
+  return normalized.length <= max ? normalized : `${normalized.slice(0, max)}...`;
+}
+
+export function buildTriagePrompt(input: { request: string; history?: string; leaderThread?: RunnerMessage[] }): string {
+  const threadContext = input.leaderThread && input.leaderThread.length > 0 ? threadAsText(input.leaderThread.slice(-4)) : "";
+  return `Classify this Tandem request.
+Return {"kind":"question"} or {"kind":"implementation"}.
+
+Rules:
+- implementation ONLY if fulfilling the request requires creating/modifying files or running state-changing commands.
+- Answering, explaining, reading/summarizing files, images, or PDFs is question.
+- Mixed requests are implementation.
+- Explicit user "answer directly" is always question.
+
+One-line context: ${oneLineContext(input.history || threadContext)}
+
+Request:
+${input.request}`;
+}
+
+export async function classifyPlanRequest(options: {
+  request: string;
+  history?: string;
+  leaderThread?: RunnerMessage[];
+  resolution: { model: LanguageModel; entry: ModelEntry };
+  ledger: CostLedger;
+  abortSignal?: AbortSignal;
+  generator?: TriageObjectGenerator;
+}): Promise<TriageKind> {
+  const generator =
+    options.generator ??
+    ((input) =>
+      generateObject({
+        model: input.model,
+        schema: input.schema,
+        abortSignal: input.abortSignal,
+        prompt: input.prompt
+      }));
+  const { object, usage } = await generator({
+    model: options.resolution.model,
+    schema: TriageSchema,
+    abortSignal: options.abortSignal,
+    prompt: buildTriagePrompt({ request: options.request, history: options.history, leaderThread: options.leaderThread })
+  });
+  recordFallbackUsage("leader", options.ledger, options.resolution.entry, usage);
+  return object.kind;
+}
+
+export function leaderToolsForTriage(input: { kind: TriageKind; toolContext: ToolContext; media?: ModelEntry["media"]; submitTools?: ToolSet }): ToolSet {
+  const context = { ...input.toolContext, media: input.media, rememberNote: input.kind === "question" ? undefined : input.toolContext.rememberNote };
+  const readonlyTools = makeToolSet(context, "leader-readonly");
+  return input.kind === "question" ? readonlyTools : mergeTools(readonlyTools, input.submitTools ?? {});
 }
 
 export type ProseObjectGenerator<T> = (options: {
@@ -266,6 +334,55 @@ export async function createLiveAgents(options: LiveAgentOptions): Promise<Agent
 
   return {
     plan: async ({ request, goals, history, attachments = [] }): Promise<PlanResult> => {
+      const triageKind =
+        options.config.triage === "always-plan"
+          ? "implementation"
+          : await classifyPlanRequest({
+              request,
+              history,
+              leaderThread,
+              resolution: leader,
+              ledger: options.ledger,
+              abortSignal: options.abortSignal
+            });
+      await options.onTriage?.(triageKind);
+      const triage = `FIRST, classify the request:
+(a) QUESTION/INSPECTION - answering, explaining, reading/summarizing files, images, PDFs, or status queries. Do the inspection yourself with read-only tools and ANSWER DIRECTLY. Do NOT call submit_build_plan. Do NOT write notes.
+(b) IMPLEMENTATION - requires creating/modifying files or running state-changing commands. Submit a BuildPlan.
+When the user explicitly asks for a direct answer, it is ALWAYS (a). A BuildPlan exists only when implementation work is required.`;
+      const includeHistoryDigest = leaderThread.length === 0;
+      const baseUserText = buildLeaderRequestMessage({ request, goals, history, includeHistoryDigest });
+      if (triageKind === "question") {
+        const system = `You are Tandem's leader answering a question or inspection request.
+${hostPrompt}
+${await projectInstructions()}
+Honor Project instructions. Use read-only tools when useful. Answer directly and concisely.
+You cannot create or modify files, run shell commands, submit a BuildPlan, or write memory notes in this branch.
+Treat the new request in the context of this continuing session conversation; pronouns, references like "that file", and follow-ups may refer to earlier turns.
+Users may reference standing goals by number (for example, "goal 1"); resolve those references against the Standing goals list before asking for clarification.
+Standing goals are context only; do not redirect unrelated requests toward them.`;
+        await compactLeaderThread(system);
+        leaderThread.push({
+          role: "user",
+          content: await buildUserContentWithAttachments(options.cwd, baseUserText, attachments, leader.entry)
+        });
+        const result = await runAgentText({
+          model: leader.model,
+          modelEntry: leader.entry,
+          costRole: "leader",
+          ledger: options.ledger,
+          system,
+          messages: leaderThread,
+          tools: leaderToolsForTriage({ kind: "question", toolContext, media: leader.entry.media }),
+          maxSteps: options.config.maxStepsPerAgentTurn,
+          abortSignal: options.abortSignal,
+          onText: options.onLeaderText,
+          onThinking: options.onLeaderThinking
+        });
+        const answer = result.text.trim();
+        leaderThread.push({ role: "assistant", content: answer });
+        return { kind: "answer", answer };
+      }
       let validationFeedback = "";
       let lastError: unknown;
       for (let attempt = 1; attempt <= 3; attempt += 1) {
@@ -280,14 +397,9 @@ export async function createLiveAgents(options: LiveAgentOptions): Promise<Agent
             }
           })
         };
-        const triage = `FIRST, classify the request:
-(a) QUESTION/INSPECTION - answering, explaining, reading/summarizing files, images, PDFs, or status queries. Do the inspection yourself with read-only tools and ANSWER DIRECTLY. Do NOT call submit_build_plan. Do NOT write notes.
-(b) IMPLEMENTATION - requires creating/modifying files or running state-changing commands. Submit a BuildPlan.
-When the user explicitly asks for a direct answer, it is ALWAYS (a). A BuildPlan exists only when implementation work is required.`;
         const system = `${leaderPlannerPrompt}\n${hostPrompt}\n${await projectInstructions()}\n${memoryInstruction}\n${triage}${workerMediaWarning(attachments, worker.entry)}\nTreat the new request in the context of this continuing session conversation; pronouns, references like "that file", and follow-ups may refer to earlier turns.\nUsers may reference standing goals by number (for example, "goal 1"); resolve those references against the Standing goals list before asking for clarification.\nStanding goals are context only; do not redirect unrelated requests toward them.\nThe "verification" field must contain exact runnable shell commands only (e.g. "node test.mjs"), one command per entry - never prose or manual instructions. Put manual checks in acceptanceCriteria instead. Verification commands MUST be runnable verbatim on the host platform.`;
         await compactLeaderThread(system);
-        const includeHistoryDigest = leaderThread.length === 0;
-        const userText = buildLeaderRequestMessage({ request, goals, history, includeHistoryDigest, validationFeedback });
+        const userText = validationFeedback ? buildLeaderRequestMessage({ request, goals, history, includeHistoryDigest, validationFeedback }) : baseUserText;
         leaderThread.push({
           role: "user",
           content: await buildUserContentWithAttachments(options.cwd, userText, attachments, leader.entry)
@@ -299,7 +411,7 @@ When the user explicitly asks for a direct answer, it is ALWAYS (a). A BuildPlan
           ledger: options.ledger,
           system,
           messages: leaderThread,
-          tools: mergeTools(makeToolSet({ ...toolContext, media: leader.entry.media }, "leader-readonly"), submitTools),
+          tools: leaderToolsForTriage({ kind: "implementation", toolContext, media: leader.entry.media, submitTools }),
           maxSteps: options.config.maxStepsPerAgentTurn,
           stopToolName: "submit_build_plan",
           abortSignal: options.abortSignal,

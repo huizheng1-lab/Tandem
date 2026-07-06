@@ -252,7 +252,8 @@ export function App({ config: initialConfig, env, cwd, initialError }: { config:
         onLeaderCompaction: async (event) => {
           await storeRef.current?.append("memory:compaction", event);
           addMessage("SYSTEM", `compacted ${event.compactedTurns} earlier turns.`);
-        }
+        },
+        onTriage: (kind) => handleEvent({ type: "notice", message: `triage: ${kind}` })
       });
       const result = await runOrchestration({
         request: prompt,

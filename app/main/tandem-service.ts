@@ -206,7 +206,8 @@ export class TandemService {
         projectInstructions: () => this.currentProjectInstructions(),
         rememberNote: (text, by) => this.rememberProjectNote(text, by),
         leaderThread: rebuildLeaderThread(sessionEvents),
-        onLeaderCompaction: (event) => this.recordLeaderCompaction(event)
+        onLeaderCompaction: (event) => this.recordLeaderCompaction(event),
+        onTriage: (kind) => this.emitMachine({ type: "notice", message: `triage: ${kind}` })
       });
       const goals = formatStandingGoals((await listGoals(this.projectDir)).filter((goal) => goal.status === "active"));
       const result = await (this.deps.runOrchestration ?? runOrchestration)({

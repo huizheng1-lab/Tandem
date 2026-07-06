@@ -3,6 +3,9 @@ import { z } from "zod";
 export const PermissionModeSchema = z.enum(["ask", "auto-edit", "yolo"]);
 export type PermissionMode = z.infer<typeof PermissionModeSchema>;
 
+export const TriageModeSchema = z.enum(["auto", "always-plan"]);
+export type TriageMode = z.infer<typeof TriageModeSchema>;
+
 export const ModelProviderSchema = z.enum(["google", "anthropic", "openai", "openai-compatible"]);
 export type ModelProvider = z.infer<typeof ModelProviderSchema>;
 
@@ -38,6 +41,7 @@ export const ConfigSchema = z.object({
   worker: z.string().min(1),
   maxReviewRounds: z.number().int().min(0),
   permissionMode: PermissionModeSchema,
+  triage: TriageModeSchema,
   showThinking: z.boolean(),
   maxStepsPerAgentTurn: z.number().int().positive(),
   leaderContextBudgetTokens: z.number().int().positive(),
@@ -55,6 +59,7 @@ export const defaultConfig: TandemConfig = {
   worker: "minimax/minimax-m2.7",
   maxReviewRounds: 3,
   permissionMode: "ask",
+  triage: "auto",
   showThinking: false,
   maxStepsPerAgentTurn: 60,
   leaderContextBudgetTokens: 60000,

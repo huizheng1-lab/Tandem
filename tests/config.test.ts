@@ -28,7 +28,17 @@ describe("config", () => {
     expect(config.worker).toBe("openai/gpt-5-mini");
     expect(config.maxReviewRounds).toBe(7);
     expect(config.permissionMode).toBe("ask");
+    expect(config.triage).toBe("auto");
     expect(config.showThinking).toBe(false);
+  });
+
+  it("allows triage to be forced back to the old always-plan behavior", async () => {
+    const home = await tempDir("home");
+    const cwd = await tempDir("cwd");
+    await mkdir(path.join(home, ".tandem"), { recursive: true });
+    await writeFile(path.join(home, ".tandem", "config.json"), JSON.stringify({ triage: "always-plan" }));
+
+    expect(loadConfig({ cwd, homeDir: home }).triage).toBe("always-plan");
   });
 
   it("tracks project config fields that override global defaults", async () => {
