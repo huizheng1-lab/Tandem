@@ -2,6 +2,7 @@ import { contextBridge, ipcRenderer } from "electron";
 import { ipcChannels, type TandemDesktopApi } from "../shared/ipc.js";
 import type {
   MachineEvent,
+  MemoryEvent,
   PipelineDoneEvent,
   PermissionRequestEvent,
   PermissionResponse,
@@ -34,6 +35,9 @@ const api: TandemDesktopApi = {
   listGoals: () => ipcRenderer.invoke(ipcChannels.goalsList),
   addGoal: (request) => ipcRenderer.invoke(ipcChannels.goalAdd, request),
   completeGoal: (request) => ipcRenderer.invoke(ipcChannels.goalComplete, request),
+  listMemory: () => ipcRenderer.invoke(ipcChannels.memoryList),
+  addMemory: (request) => ipcRenderer.invoke(ipcChannels.memoryAdd, request),
+  removeMemory: (request) => ipcRenderer.invoke(ipcChannels.memoryRemove, request),
   listSchedules: () => ipcRenderer.invoke(ipcChannels.schedulesList),
   addSchedule: (request) => ipcRenderer.invoke(ipcChannels.scheduleAdd, request),
   removeSchedule: (request) => ipcRenderer.invoke(ipcChannels.scheduleRemove, request),
@@ -44,6 +48,7 @@ const api: TandemDesktopApi = {
   onMachineEvent: (callback) => on<MachineEvent>(ipcChannels.machineEvent, callback),
   onTextEvent: (callback) => on<TextEvent>(ipcChannels.textEvent, callback),
   onToolEvent: (callback) => on<ToolActivityEvent>(ipcChannels.toolEvent, callback),
+  onMemoryEvent: (callback) => on<MemoryEvent>(ipcChannels.memoryEvent, callback),
   onCostEvent: (callback) => on(ipcChannels.costEvent, callback),
   onDoneEvent: (callback) => on<PipelineDoneEvent>(ipcChannels.doneEvent, callback),
   onPermissionRequest: (callback) => on<PermissionRequestEvent>(ipcChannels.permissionRequest, callback),

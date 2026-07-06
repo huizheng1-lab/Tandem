@@ -15,6 +15,8 @@ import { tandemStateDir } from "../../src/paths.js";
 import { CostLedger } from "../../src/session/cost.js";
 import { addGoal, completeGoal, formatStandingGoals, listGoals } from "../../src/session/goals.js";
 import { buildConversationHistory } from "../../src/session/history.js";
+import { addNote, formatSessionNotes, removeNote, replaySessionMemory } from "../../src/session/memory.js";
+import type { MemoryAuthor, SessionMemoryNote } from "../../src/session/memory.js";
 import { archiveSession, deleteSession, listSessions, renameSession, SessionStore } from "../../src/session/store.js";
 import type { SessionMetadata } from "../../src/session/store.js";
 import { safeDefaultProjectDir } from "../../src/tools/protection.js";
@@ -25,6 +27,7 @@ import {
   ipcChannels,
   type CostTotals,
   type DesktopAppStateResponse,
+  type MemoryEvent,
   type MissingKeyInfo,
   type PermissionRequestEvent,
   type PermissionResponse,
@@ -181,7 +184,9 @@ export class TandemService {
         onWorkerText: (delta) => void this.emitText("worker", delta),
         onLeaderThinking: (delta) => void this.emitText("leader", delta, true),
         onWorkerThinking: (delta) => void this.emitText("worker", delta, true),
-        onToolEvent: (event) => void this.emitTool(event)
+        onToolEvent: (event) => void this.emitTool(event),
+        sessionNotes: () => this.currentSessionNotes(),
+        rememberNote: (text, by) => this.rememberSessionNote(text, by)
       });
       const goals = formatStandingGoals((await listGoals(this.projectDir)).filter((goal) => goal.status === "active"));
       const result = await (this.deps.runOrchestration ?? runOrchestration)({
@@ -193,6 +198,8 @@ export class TandemService {
         diffProvider: diffTracker,
         initialState,
         confirmPlan: (plan) => this.confirmPlan(plan),
+        addSessionNote: (text, by) => this.addSystemMemory(text, by),
+        removeSessionNotesByPrefix: (prefix) => this.removeMemoryByPrefix(prefix),
         emit: (event) => void this.emitMachine(event)
       });
       const done = { summary: result.summary, takeover: result.takeover };
@@ -309,6 +316,23 @@ export class TandemService {
     return this.listGoals();
   }
 
+  async listMemory(): Promise<SessionMemoryNote[]> {
+    if (!this.session) return [];
+    return replaySessionMemory(await this.session.read());
+  }
+
+  async addMemory(text: string): Promise<SessionMemoryNote[]> {
+    if (!this.session) await this.startSession({ projectDir: this.projectDir });
+    await addNote(this.session as SessionLike, text, "user");
+    return this.emitMemory();
+  }
+
+  async removeMemory(id: string): Promise<SessionMemoryNote[]> {
+    if (!this.session) return [];
+    await removeNote(this.session, id);
+    return this.emitMemory();
+  }
+
   listSchedules(): Promise<Schedule[]> {
     return listSchedules(this.projectDir);
   }
@@ -350,6 +374,38 @@ export class TandemService {
   private async emitTool(event: ToolActivityEvent): Promise<void> {
     this.window.webContents.send(ipcChannels.toolEvent, event);
     await this.session?.append("tool", event);
+  }
+
+  private async emitMemory(): Promise<SessionMemoryNote[]> {
+    const notes = await this.listMemory();
+    const event: MemoryEvent = { notes };
+    this.window.webContents.send(ipcChannels.memoryEvent, event);
+    return notes;
+  }
+
+  private async currentSessionNotes(): Promise<string> {
+    return formatSessionNotes(await this.listMemory());
+  }
+
+  private async rememberSessionNote(text: string, by: "leader" | "worker"): Promise<string> {
+    if (!this.session) throw new Error("No active session for memory.");
+    const result = await addNote(this.session, text, by);
+    if (result.added) await this.emitMemory();
+    return result.added ? `Remembered: ${result.note.text}` : `Already remembered: ${result.note.text}`;
+  }
+
+  private async addSystemMemory(text: string, by: Extract<MemoryAuthor, "system">): Promise<void> {
+    if (!this.session) return;
+    const result = await addNote(this.session, text, by);
+    if (result.added) await this.emitMemory();
+  }
+
+  private async removeMemoryByPrefix(prefix: string): Promise<void> {
+    if (!this.session) return;
+    const notes = await this.listMemory();
+    const matching = notes.filter((note) => note.text.startsWith(prefix));
+    for (const note of matching) await removeNote(this.session, note.id);
+    if (matching.length > 0) await this.emitMemory();
   }
 
   private costTotals(): CostTotals {

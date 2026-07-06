@@ -29,6 +29,8 @@ export interface LiveAgentOptions {
   onLeaderThinking?: (text: string) => void;
   onWorkerThinking?: (text: string) => void;
   onToolEvent?: (event: ToolActivityEvent) => void;
+  sessionNotes?: () => string | Promise<string>;
+  rememberNote?: (text: string, by: "leader" | "worker") => Promise<string>;
 }
 
 function jsonBlock(value: unknown): string {
@@ -69,12 +71,12 @@ export function summarizePreviousReport(report: CompletionReport | undefined) {
   };
 }
 
-export function buildWorkerContext(input: { round: number; plan: BuildPlan; feedback: ReviewFeedback; previousReport?: CompletionReport }, budget = WORKER_CONTEXT_CHAR_BUDGET): string {
+export function buildWorkerContext(input: { round: number; plan: BuildPlan; feedback: ReviewFeedback; previousReport?: CompletionReport; sessionNotes?: string }, budget = WORKER_CONTEXT_CHAR_BUDGET): string {
   const compact = {
     feedback: compactFeedback(input.feedback),
     previousReport: summarizePreviousReport(input.previousReport)
   };
-  let content = `Round ${input.round}\nBuildPlan:\n${jsonBlock(input.plan)}\n\nReview feedback:\n${jsonBlock(compact.feedback)}\n\nPrevious report summary:\n${jsonBlock(compact.previousReport)}`;
+  let content = `Session notes (shared memory):\n${input.sessionNotes?.trim() || "none"}\n\nRound ${input.round}\nBuildPlan:\n${jsonBlock(input.plan)}\n\nReview feedback:\n${jsonBlock(compact.feedback)}\n\nPrevious report summary:\n${jsonBlock(compact.previousReport)}`;
   if (content.length > budget) {
     const suffix = "\n[context truncated; full prior artifacts remain in the session log]";
     content = `${content.slice(0, Math.max(0, budget - suffix.length))}${suffix}`;
@@ -190,9 +192,12 @@ export async function createLiveAgents(options: LiveAgentOptions): Promise<Agent
     permissionMode: options.config.permissionMode,
     permissionBridge: options.permissionBridge,
     recordTouchedPath: options.recordTouchedPath,
+    rememberNote: options.rememberNote,
     abortSignal: options.abortSignal,
     onToolEvent: options.onToolEvent
   };
+  const sessionNotes = async () => (await options.sessionNotes?.())?.trim() || "none";
+  const memoryInstruction = "Honor Session notes (shared memory); use remember when you learn a durable user preference, project convention, environment constraint, decision, or unresolved issue.";
 
   return {
     plan: async ({ request, goals, history }): Promise<PlanResult> => {
@@ -215,11 +220,11 @@ export async function createLiveAgents(options: LiveAgentOptions): Promise<Agent
           modelEntry: leader.entry,
           costRole: "leader",
           ledger: options.ledger,
-          system: `${leaderPlannerPrompt}\n${hostPrompt}\nTreat the new request in the context of this conversation; pronouns, references like "that file", and follow-ups may refer to prior turns.\nUsers may reference standing goals by number (for example, "goal 1"); resolve those references against the Standing goals list before asking for clarification.\nStanding goals are context only; do not redirect unrelated requests toward them.\nYou may answer directly for pure questions. For implementation work, call submit_build_plan exactly once.\nThe "verification" field must contain exact runnable shell commands only (e.g. "node test.mjs"), one command per entry - never prose or manual instructions. Put manual checks in acceptanceCriteria instead. Verification commands MUST be runnable verbatim on the host platform.`,
+          system: `${leaderPlannerPrompt}\n${hostPrompt}\n${memoryInstruction}\nTreat the new request in the context of this conversation; pronouns, references like "that file", and follow-ups may refer to prior turns.\nUsers may reference standing goals by number (for example, "goal 1"); resolve those references against the Standing goals list before asking for clarification.\nStanding goals are context only; do not redirect unrelated requests toward them.\nYou may answer directly for pure questions. For implementation work, call submit_build_plan exactly once.\nThe "verification" field must contain exact runnable shell commands only (e.g. "node test.mjs"), one command per entry - never prose or manual instructions. Put manual checks in acceptanceCriteria instead. Verification commands MUST be runnable verbatim on the host platform.`,
           messages: [
             {
               role: "user",
-              content: `${history?.trim() ? `Conversation so far:\n${history.trim()}\n\n` : ""}Request:\n${request}\n\nStanding goals (context only - do not redirect unrelated requests toward these):\n${goals.length > 0 ? goals.join("\n") : "none"}${validationFeedback}`
+              content: `Session notes (shared memory):\n${await sessionNotes()}\n\n${history?.trim() ? `Conversation so far:\n${history.trim()}\n\n` : ""}Request:\n${request}\n\nStanding goals (context only - do not redirect unrelated requests toward these):\n${goals.length > 0 ? goals.join("\n") : "none"}${validationFeedback}`
             }
           ],
           tools: mergeTools(makeToolSet(toolContext, "leader-readonly"), submitTools),
@@ -259,11 +264,11 @@ export async function createLiveAgents(options: LiveAgentOptions): Promise<Agent
         modelEntry: worker.entry,
         costRole: "worker",
         ledger: options.ledger,
-        system: `${workerPrompt}\n${hostPrompt}\nYou must run every verification command before submit_completion_report. In verificationResults[].command, repeat the BuildPlan verification command string verbatim. If you adapt a command for the host platform, still use the plan's original command as command and describe the adapted command plus real output in output.`,
+        system: `${workerPrompt}\n${hostPrompt}\n${memoryInstruction}\nYou must run every verification command before submit_completion_report. In verificationResults[].command, repeat the BuildPlan verification command string verbatim. If you adapt a command for the host platform, still use the plan's original command as command and describe the adapted command plus real output in output.`,
         messages: [
           {
             role: "user",
-            content: buildWorkerContext({ round, plan, feedback, previousReport })
+            content: buildWorkerContext({ round, plan, feedback, previousReport, sessionNotes: await sessionNotes() })
           }
         ],
         tools: mergeTools(makeToolSet(toolContext, "worker"), submitTools),
@@ -296,11 +301,11 @@ export async function createLiveAgents(options: LiveAgentOptions): Promise<Agent
         modelEntry: leader.entry,
         costRole: "leader",
         ledger: options.ledger,
-        system: `${leaderReviewerPrompt}\n${hostPrompt}\nYou may rerun only the plan verification commands. Prose verdicts are discarded; the turn is only complete after submit_review has been called.`,
+        system: `${leaderReviewerPrompt}\n${hostPrompt}\n${memoryInstruction}\nYou may rerun only the plan verification commands. Prose verdicts are discarded; the turn is only complete after submit_review has been called.`,
         messages: [
           {
             role: "user",
-            content: `Round ${round}\nBuildPlan:\n${jsonBlock(plan)}\n\nCompletionReport:\n${jsonBlock(report)}\n\nDiff:\n${diff || "(empty diff)"}`
+            content: `Session notes (shared memory):\n${await sessionNotes()}\n\nRound ${round}\nBuildPlan:\n${jsonBlock(plan)}\n\nCompletionReport:\n${jsonBlock(report)}\n\nDiff:\n${diff || "(empty diff)"}`
           }
         ],
         tools: mergeTools(makeToolSet(toolContext, "reviewer", plan.verification), submitTools),
@@ -342,11 +347,11 @@ export async function createLiveAgents(options: LiveAgentOptions): Promise<Agent
         modelEntry: leader.entry,
         costRole: "leader",
         ledger: options.ledger,
-        system: `${leaderTakeoverPrompt}\n${hostPrompt}\nRun every verification command, then call submit_takeover. In verificationResults[].command, repeat the BuildPlan verification command string verbatim. If you adapt a command for the host platform, still use the plan's original command as command and describe the adapted command plus real output in output.`,
+        system: `${leaderTakeoverPrompt}\n${hostPrompt}\n${memoryInstruction}\nRun every verification command, then call submit_takeover. In verificationResults[].command, repeat the BuildPlan verification command string verbatim. If you adapt a command for the host platform, still use the plan's original command as command and describe the adapted command plus real output in output.`,
         messages: [
           {
             role: "user",
-            content: `BuildPlan:\n${jsonBlock(plan)}\n\nPrevious reports:\n${jsonBlock(reports)}\n\nFeedback history:\n${jsonBlock(feedback)}`
+            content: `Session notes (shared memory):\n${await sessionNotes()}\n\nBuildPlan:\n${jsonBlock(plan)}\n\nPrevious reports:\n${jsonBlock(reports)}\n\nFeedback history:\n${jsonBlock(feedback)}`
           }
         ],
         tools: mergeTools(makeToolSet(toolContext, "takeover"), submitTools),

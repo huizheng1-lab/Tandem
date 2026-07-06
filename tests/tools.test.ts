@@ -111,6 +111,38 @@ describe("tools", () => {
     expect(events[1]?.ms).toBeGreaterThanOrEqual(0);
   });
 
+  it("registers remember for leader and worker roles", async () => {
+    const cwd = await tempDir();
+    const remembered: Array<{ text: string; by: "leader" | "worker" }> = [];
+    const ctx = {
+      cwd,
+      permissionMode: "yolo" as const,
+      rememberNote: async (text: string, by: "leader" | "worker") => {
+        remembered.push({ text, by });
+        return `Remembered: ${text}`;
+      }
+    };
+    const leaderTools = makeToolSet(ctx, "leader-readonly") as unknown as { remember: { execute(input: { text: string }): Promise<string> } };
+    const workerTools = makeToolSet(ctx, "worker") as unknown as { remember: { execute(input: { text: string }): Promise<string> } };
+
+    await expect(leaderTools.remember.execute({ text: "Use single quotes" })).resolves.toContain("Remembered");
+    await expect(workerTools.remember.execute({ text: "Run npm test" })).resolves.toContain("Remembered");
+
+    expect(remembered).toEqual([
+      { text: "Use single quotes", by: "leader" },
+      { text: "Run npm test", by: "worker" }
+    ]);
+  });
+
+  it("rejects oversized remember notes", async () => {
+    const cwd = await tempDir();
+    const tools = makeToolSet({ cwd, permissionMode: "yolo", rememberNote: async () => "ok" }, "worker") as unknown as {
+      remember: { execute(input: { text: string }): Promise<string> };
+    };
+
+    await expect(tools.remember.execute({ text: "x".repeat(301) })).rejects.toThrow(/300 characters or fewer/);
+  });
+
   it("refuses write and bash when the project is Tandem itself", async () => {
     await expect(writeFileTool({ cwd: process.cwd(), permissionMode: "yolo" }, "self-write.txt", "nope")).rejects.toThrow(/Tandem will not modify its own installation/);
     await expect(bashTool({ cwd: process.cwd(), permissionMode: "yolo" }, "echo nope")).rejects.toThrow(/Tandem will not modify its own installation/);

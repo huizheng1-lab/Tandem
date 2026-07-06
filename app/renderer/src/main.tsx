@@ -11,6 +11,7 @@ import type {
   PlanConfirmEvent,
   Schedule,
   SessionAutoApproveMode,
+  SessionMemoryNote,
   SessionMetadata,
   SessionStartResponse,
   ToolActivityEvent
@@ -162,6 +163,9 @@ function App(): React.ReactElement {
   const [renameTitle, setRenameTitle] = useState("");
   const [deleteTarget, setDeleteTarget] = useState<SessionMetadata>();
   const [goals, setGoals] = useState<Goal[]>([]);
+  const [memoryNotes, setMemoryNotes] = useState<SessionMemoryNote[]>([]);
+  const [showMemory, setShowMemory] = useState(true);
+  const [memoryText, setMemoryText] = useState("");
   const [schedules, setSchedules] = useState<Schedule[]>([]);
   const [goalText, setGoalText] = useState("");
   const [scheduleCron, setScheduleCron] = useState("");
@@ -265,9 +269,10 @@ function App(): React.ReactElement {
   };
 
   const refreshSidebar = async () => {
-    const [sessionIds, goalItems, scheduleItems] = await Promise.all([tandem.listSessions(), tandem.listGoals(), tandem.listSchedules()]);
+    const [sessionIds, goalItems, memoryItems, scheduleItems] = await Promise.all([tandem.listSessions(), tandem.listGoals(), tandem.listMemory(), tandem.listSchedules()]);
     setSessions(sessionIds);
     setGoals(goalItems);
+    setMemoryNotes(memoryItems);
     setSchedules(scheduleItems);
   };
 
@@ -368,6 +373,7 @@ function App(): React.ReactElement {
     const removers = [
       tandem.onTextEvent((event) => (event.thinking ? appendThinking(event.role, event.delta) : appendStream(event.role, event.delta))),
       tandem.onToolEvent(handleToolEvent),
+      tandem.onMemoryEvent((event) => setMemoryNotes(event.notes)),
       tandem.onMachineEvent(handleMachineEvent),
       tandem.onCostEvent(setCost),
       tandem.onDoneEvent((event) => {
@@ -457,6 +463,25 @@ function App(): React.ReactElement {
 
   const completeGoal = async (id: number) => {
     setGoals(await tandem.completeGoal({ id }));
+  };
+
+  const addMemory = async () => {
+    const text = memoryText.trim();
+    if (!text) return;
+    try {
+      setMemoryNotes(await tandem.addMemory({ text }));
+      setMemoryText("");
+    } catch (error) {
+      appendMessage("system", `Add note failed: ${errorText(error)}`);
+    }
+  };
+
+  const removeMemory = async (id: string) => {
+    try {
+      setMemoryNotes(await tandem.removeMemory({ id }));
+    } catch (error) {
+      appendMessage("system", `Delete note failed: ${errorText(error)}`);
+    }
   };
 
   const addSchedule = async () => {
@@ -787,6 +812,41 @@ function App(): React.ReactElement {
               </button>
             ))}
           </div>
+        </div>
+        <div className="sideSection">
+          <button type="button" className="sideHeaderButton" onClick={() => setShowMemory((value) => !value)}>
+            <span>Session notes</span>
+            <small>{showMemory ? "Hide" : "Show"} ({memoryNotes.length})</small>
+          </button>
+          {showMemory ? (
+            <>
+              <div className="compactForm">
+                <input
+                  value={memoryText}
+                  placeholder="Add note"
+                  maxLength={300}
+                  onChange={(event) => setMemoryText(event.target.value)}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter") void addMemory();
+                  }}
+                />
+                <button type="button" onClick={() => void addMemory()}>
+                  Add
+                </button>
+              </div>
+              <div className="sideList">
+                {memoryNotes.map((note) => (
+                  <div key={note.id} className="memoryRow">
+                    <span className={`memoryBadge ${note.by}`}>{note.by}</span>
+                    <span className="memoryText">{note.text}</span>
+                    <button type="button" aria-label={`Delete note ${note.text}`} onClick={() => void removeMemory(note.id)}>
+                      X
+                    </button>
+                  </div>
+                ))}
+              </div>
+            </>
+          ) : null}
         </div>
         <div className="sideSection">
           <div className="sideLabel">Schedules</div>

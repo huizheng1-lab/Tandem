@@ -86,6 +86,35 @@ select {
   gap: 6px;
 }
 
+.sideHeaderButton {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  width: 100%;
+  min-width: 0;
+  border: 0;
+  color: #8f98a6;
+  background: transparent;
+  padding: 0;
+  text-align: left;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0;
+  text-transform: uppercase;
+}
+
+.sideHeaderButton span,
+.sideHeaderButton small {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.sideHeaderButton small {
+  color: #c7ccd4;
+  font-size: 11px;
+  text-transform: none;
+}
+
 .sideList {
   display: flex;
   flex-direction: column;
@@ -169,6 +198,66 @@ select {
   border-color: #7a4c4c;
   color: #ffe2e2;
   background: #422326;
+}
+
+.memoryRow {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: start;
+  gap: 6px;
+  min-width: 0;
+  overflow-x: hidden;
+  border: 1px solid #2f3540;
+  border-radius: 6px;
+  padding: 7px;
+  background: #1d2027;
+}
+
+.memoryBadge {
+  border: 1px solid #465367;
+  border-radius: 5px;
+  color: #d7dce4;
+  background: #29313d;
+  padding: 2px 5px;
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
+.memoryBadge.user {
+  border-color: #3f6f5c;
+  color: #d9f6e9;
+  background: #234538;
+}
+
+.memoryBadge.worker {
+  border-color: #75643e;
+  color: #f6ecd2;
+  background: #463b23;
+}
+
+.memoryBadge.system {
+  border-color: #596170;
+  color: #dfe4ed;
+  background: #2b313c;
+}
+
+.memoryText {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  color: #c7ccd4;
+  font-size: 12px;
+  line-height: 1.35;
+}
+
+.memoryRow button {
+  border: 1px solid #566276;
+  border-radius: 5px;
+  color: #e6e9ee;
+  background: #29313d;
+  padding: 2px 6px;
+  font-size: 11px;
+  font-weight: 700;
 }
 
 .renameInput {

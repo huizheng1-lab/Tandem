@@ -12,6 +12,7 @@ import { parseLoop } from "../commands/loop.js";
 import { addSchedule, listSchedules, markScheduleRun, missedSchedule, removeSchedule, Schedule } from "../commands/schedule.js";
 import { appendGoalNote, formatStandingGoals, listGoals } from "../session/goals.js";
 import { buildConversationHistory } from "../session/history.js";
+import { addNote, formatSessionNotes, removeNote, replaySessionMemory } from "../session/memory.js";
 import { SessionStore, listSessions } from "../session/store.js";
 import { createLiveAgents, suggestGoalProgressNotes } from "../agents/live.js";
 import { runOrchestration, MachineEvent, OrchestrationCheckpoint } from "../orchestrator/machine.js";
@@ -220,6 +221,20 @@ export function App({ config: initialConfig, env, cwd, initialError }: { config:
       addMessage("SYSTEM", `context: ${history.priorTurns} prior turn${history.priorTurns === 1 ? "" : "s"}`);
       if (history.truncated) addMessage("SYSTEM", "including last 10 turns of context");
       await storeRef.current?.append("user", { prompt });
+      const currentSessionNotes = async () => formatSessionNotes(replaySessionMemory((await storeRef.current?.read()) ?? []));
+      const rememberSessionNote = async (text: string, by: "leader" | "worker") => {
+        if (!storeRef.current) throw new Error("No active session for memory.");
+        const result = await addNote(storeRef.current, text, by);
+        return result.added ? `Remembered: ${result.note.text}` : `Already remembered: ${result.note.text}`;
+      };
+      const addSystemMemory = async (text: string) => {
+        if (storeRef.current) await addNote(storeRef.current, text, "system");
+      };
+      const removeMemoryByPrefix = async (prefix: string) => {
+        if (!storeRef.current) return;
+        const notes = replaySessionMemory(await storeRef.current.read()).filter((note) => note.text.startsWith(prefix));
+        for (const note of notes) await removeNote(storeRef.current, note.id);
+      };
       const activeGoalObjects = (await listGoals(cwd)).filter((goal) => goal.status === "active");
       const activeGoals = formatStandingGoals(activeGoalObjects);
       const diffTracker = createDiffTracker(cwd);
@@ -235,7 +250,9 @@ export function App({ config: initialConfig, env, cwd, initialError }: { config:
         onWorkerText: (text) => appendDelta("WORKER", text),
         onLeaderThinking: config.showThinking ? (text) => appendDelta("LEADER", text) : undefined,
         onWorkerThinking: config.showThinking ? (text) => appendDelta("WORKER", text) : undefined,
-        onToolEvent: addToolMessage
+        onToolEvent: addToolMessage,
+        sessionNotes: currentSessionNotes,
+        rememberNote: rememberSessionNote
       });
       const result = await runOrchestration({
         request: prompt,
@@ -246,6 +263,8 @@ export function App({ config: initialConfig, env, cwd, initialError }: { config:
         diffProvider: diffTracker,
         confirmPlan,
         initialState,
+        addSessionNote: (text) => addSystemMemory(text),
+        removeSessionNotesByPrefix: removeMemoryByPrefix,
         emit: handleEvent
       });
       trimTrailingAgentMessage();

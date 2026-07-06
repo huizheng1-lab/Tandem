@@ -3,12 +3,14 @@ import type { BuildPlan } from "../../src/orchestrator/artifacts.js";
 import type { MachineEvent, OrchestrationCheckpoint } from "../../src/orchestrator/machine.js";
 import type { CostTick } from "../../src/session/cost.js";
 import type { Goal } from "../../src/session/goals.js";
+import type { SessionMemoryNote } from "../../src/session/memory.js";
 import type { SessionEvent, SessionMetadata } from "../../src/session/store.js";
 import type { Schedule } from "../../src/commands/schedule.js";
 import type { ToolActivityEvent } from "../../src/tools/fs.js";
 
 export type { MachineEvent, OrchestrationCheckpoint } from "../../src/orchestrator/machine.js";
 export type { Goal } from "../../src/session/goals.js";
+export type { SessionMemoryNote } from "../../src/session/memory.js";
 export type { Schedule } from "../../src/commands/schedule.js";
 export type { SessionMetadata } from "../../src/session/store.js";
 export type { ToolActivityEvent } from "../../src/tools/fs.js";
@@ -34,6 +36,9 @@ export const ipcChannels = {
   goalsList: "goals:list",
   goalAdd: "goal:add",
   goalComplete: "goal:complete",
+  memoryList: "memory:list",
+  memoryAdd: "memory:add",
+  memoryRemove: "memory:remove",
   schedulesList: "schedules:list",
   scheduleAdd: "schedule:add",
   scheduleRemove: "schedule:remove",
@@ -43,6 +48,7 @@ export const ipcChannels = {
   textEvent: "evt:text",
   costEvent: "evt:cost",
   toolEvent: "evt:tool",
+  memoryEvent: "evt:memory",
   doneEvent: "evt:done"
 } as const;
 
@@ -169,6 +175,18 @@ export interface GoalCompleteRequest {
   id: number;
 }
 
+export interface MemoryAddRequest {
+  text: string;
+}
+
+export interface MemoryRemoveRequest {
+  id: string;
+}
+
+export interface MemoryEvent {
+  notes: SessionMemoryNote[];
+}
+
 export interface ScheduleAddRequest {
   cron: string;
   prompt: string;
@@ -195,6 +213,9 @@ export interface TandemDesktopApi {
   listGoals(): Promise<Goal[]>;
   addGoal(request: GoalAddRequest): Promise<Goal[]>;
   completeGoal(request: GoalCompleteRequest): Promise<Goal[]>;
+  listMemory(): Promise<SessionMemoryNote[]>;
+  addMemory(request: MemoryAddRequest): Promise<SessionMemoryNote[]>;
+  removeMemory(request: MemoryRemoveRequest): Promise<SessionMemoryNote[]>;
   listSchedules(): Promise<Schedule[]>;
   addSchedule(request: ScheduleAddRequest): Promise<Schedule[]>;
   removeSchedule(request: ScheduleRemoveRequest): Promise<Schedule[]>;
@@ -205,6 +226,7 @@ export interface TandemDesktopApi {
   onMachineEvent(callback: (event: MachineEvent) => void): () => void;
   onTextEvent(callback: (event: TextEvent) => void): () => void;
   onToolEvent(callback: (event: ToolActivityEvent) => void): () => void;
+  onMemoryEvent(callback: (event: MemoryEvent) => void): () => void;
   onCostEvent(callback: (event: CostTotals) => void): () => void;
   onDoneEvent(callback: (event: PipelineDoneEvent) => void): () => void;
   onPermissionRequest(callback: (event: PermissionRequestEvent) => void): () => void;

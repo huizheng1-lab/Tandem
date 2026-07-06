@@ -9,6 +9,7 @@ export interface ToolContext {
   permissionMode: PermissionMode;
   permissionBridge?: PermissionBridge;
   recordTouchedPath?: (filePath: string) => void;
+  rememberNote?: (text: string, by: "leader" | "worker") => Promise<string>;
   abortSignal?: AbortSignal;
   onToolEvent?: (event: ToolActivityEvent) => void;
 }

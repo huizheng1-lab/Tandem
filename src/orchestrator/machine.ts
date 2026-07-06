@@ -43,6 +43,8 @@ export interface RunOptions {
   history?: string;
   diffProvider?: (() => Promise<string>) | { beforeBuild?: () => Promise<void>; diff: () => Promise<string> };
   confirmPlan?: (plan: BuildPlan) => Promise<boolean>;
+  addSessionNote?: (text: string, by: "system") => Promise<void>;
+  removeSessionNotesByPrefix?: (prefix: string) => Promise<void>;
   initialState?: OrchestrationCheckpoint;
   emit?: (event: MachineEvent) => void;
 }
@@ -121,6 +123,9 @@ export async function runOrchestration(options: RunOptions): Promise<RunResult> 
         transition("DONE", "build plan rejected by user", 0);
         return { phase: "DONE", summary: "Build plan was not approved.", plan, reports, verdicts, takeover: false };
       }
+    }
+    if (plan.constraints.length > 0) {
+      await options.addSessionNote?.(`Plan '${plan.title}' constraints: ${plan.constraints.join("; ")}`, "system");
     }
   }
 
@@ -210,12 +215,17 @@ export async function runOrchestration(options: RunOptions): Promise<RunResult> 
     }
 
     if (verdict.verdict === "approve") {
+      await options.removeSessionNotesByPrefix?.("Review round ");
       transition("DONE", "leader review approved", currentRound);
       return { phase: "DONE", summary: verdict.userSummary, plan, reports, verdicts, takeover: false };
     }
 
     feedback = verdict.feedback;
     allFeedback.push(feedback);
+    if (feedback.length > 0) {
+      const issues = feedback.map((item) => [item.issue, item.location, item.requiredChange].filter(Boolean).join(" - ")).join("; ");
+      await options.addSessionNote?.(`Review round ${currentRound} open issues: ${issues}`, "system");
+    }
     transition("FEEDBACK", `leader review requested ${feedback.length} change(s)`, currentRound);
     phase = "BUILDING";
   }

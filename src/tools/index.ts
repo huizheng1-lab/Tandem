@@ -1,4 +1,5 @@
 import { tool } from "ai";
+import type { ToolSet } from "ai";
 import { z } from "zod";
 import { editFileTool, listDirTool, readFileTool, ToolActivityRole, ToolContext, writeFileTool } from "./fs.js";
 import { globTool, grepTool } from "./search.js";
@@ -8,6 +9,22 @@ export type ToolRole = "leader-readonly" | "worker" | "reviewer" | "takeover";
 
 function activityRole(role: ToolRole): ToolActivityRole {
   return role === "worker" ? "worker" : "leader";
+}
+
+function memoryTools(ctx: ToolContext, role: ToolRole): ToolSet {
+  if (!ctx.rememberNote) return {};
+  return {
+    remember: tool({
+      description: "Save a short fact, constraint, or decision that future turns and the other agent should know.",
+      inputSchema: z.object({ text: z.string() }),
+      execute: wrapExecute(ctx, role, "remember", ({ text }) => text.slice(0, 80), async ({ text }) => {
+        if (text.replace(/\s+/g, " ").trim().length > 300) {
+          throw new Error("Memory note is too long. Save one short fact, constraint, or decision in 300 characters or fewer.");
+        }
+        return ctx.rememberNote?.(text, activityRole(role)) ?? "Memory is not available.";
+      })
+    })
+  };
 }
 
 function wrapExecute<Input, Output>(ctx: ToolContext, role: ToolRole, toolName: string, target: (input: Input) => string, execute: (input: Input) => Promise<Output>): (input: Input) => Promise<Output> {
@@ -57,11 +74,14 @@ export function makeToolSet(ctx: ToolContext, role: ToolRole, allowedBashCommand
     return bashTool(ctx, command, timeoutMs);
   };
 
-  if (role === "leader-readonly") return readonlyTools;
+  const sharedTools = memoryTools(ctx, role);
+
+  if (role === "leader-readonly") return { ...readonlyTools, ...sharedTools };
 
   if (role === "reviewer") {
     return {
       ...readonlyTools,
+      ...sharedTools,
       bash: tool({
         description: "Run one of the plan verification commands in the project root.",
         inputSchema: z.object({ command: z.string(), timeoutMs: z.number().int().positive().optional() }),
@@ -72,6 +92,7 @@ export function makeToolSet(ctx: ToolContext, role: ToolRole, allowedBashCommand
 
   return {
     ...readonlyTools,
+    ...sharedTools,
     write_file: tool({
       description: "Write a file.",
       inputSchema: z.object({ path: z.string(), content: z.string() }),

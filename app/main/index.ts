@@ -6,6 +6,8 @@ import { TandemService } from "./tandem-service.js";
 import type {
   GoalAddRequest,
   GoalCompleteRequest,
+  MemoryAddRequest,
+  MemoryRemoveRequest,
   PipelineRunRequest,
   ScheduleAddRequest,
   ScheduleRemoveRequest,
@@ -77,6 +79,9 @@ ipcMain.handle(ipcChannels.sessionDelete, (_event, request: SessionDeleteRequest
 ipcMain.handle(ipcChannels.goalsList, () => service?.listGoals());
 ipcMain.handle(ipcChannels.goalAdd, (_event, request: GoalAddRequest) => service?.addGoal(request.text));
 ipcMain.handle(ipcChannels.goalComplete, (_event, request: GoalCompleteRequest) => service?.completeGoal(request.id));
+ipcMain.handle(ipcChannels.memoryList, () => service?.listMemory());
+ipcMain.handle(ipcChannels.memoryAdd, (_event, request: MemoryAddRequest) => service?.addMemory(request.text));
+ipcMain.handle(ipcChannels.memoryRemove, (_event, request: MemoryRemoveRequest) => service?.removeMemory(request.id));
 ipcMain.handle(ipcChannels.schedulesList, () => service?.listSchedules());
 ipcMain.handle(ipcChannels.scheduleAdd, (_event, request: ScheduleAddRequest) => service?.addSchedule(request.cron, request.prompt));
 ipcMain.handle(ipcChannels.scheduleRemove, (_event, request: ScheduleRemoveRequest) => service?.removeSchedule(request.id));
