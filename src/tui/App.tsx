@@ -11,6 +11,7 @@ import { modelRegistry } from "../providers/registry.js";
 import { parseLoop } from "../commands/loop.js";
 import { addSchedule, listSchedules, markScheduleRun, missedSchedule, removeSchedule, Schedule } from "../commands/schedule.js";
 import { appendGoalNote, formatStandingGoals, listGoals } from "../session/goals.js";
+import { buildConversationHistory } from "../session/history.js";
 import { SessionStore, listSessions } from "../session/store.js";
 import { createLiveAgents, suggestGoalProgressNotes } from "../agents/live.js";
 import { runOrchestration, MachineEvent, OrchestrationCheckpoint } from "../orchestrator/machine.js";
@@ -215,6 +216,10 @@ export function App({ config: initialConfig, env, cwd, initialError }: { config:
     setPlan(undefined);
     setVerdict(undefined);
     try {
+      const history = buildConversationHistory((await storeRef.current?.read()) ?? []);
+      addMessage("SYSTEM", `context: ${history.priorTurns} prior turn${history.priorTurns === 1 ? "" : "s"}`);
+      if (history.truncated) addMessage("SYSTEM", "including last 10 turns of context");
+      await storeRef.current?.append("user", { prompt });
       const activeGoalObjects = (await listGoals(cwd)).filter((goal) => goal.status === "active");
       const activeGoals = formatStandingGoals(activeGoalObjects);
       const diffTracker = createDiffTracker(cwd);
@@ -237,6 +242,7 @@ export function App({ config: initialConfig, env, cwd, initialError }: { config:
         config,
         agents,
         goals: activeGoals,
+        history: history.text,
         diffProvider: diffTracker,
         confirmPlan,
         initialState,
@@ -244,6 +250,7 @@ export function App({ config: initialConfig, env, cwd, initialError }: { config:
       });
       trimTrailingAgentMessage();
       addMessage("LEADER", result.summary);
+      await storeRef.current?.append("done", { summary: result.summary, takeover: result.takeover });
       const notes = await suggestGoalProgressNotes({
         config,
         cwd,

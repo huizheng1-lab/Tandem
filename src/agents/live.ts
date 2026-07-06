@@ -195,7 +195,7 @@ export async function createLiveAgents(options: LiveAgentOptions): Promise<Agent
   };
 
   return {
-    plan: async ({ request, goals }): Promise<PlanResult> => {
+    plan: async ({ request, goals, history }): Promise<PlanResult> => {
       let validationFeedback = "";
       let lastError: unknown;
       for (let attempt = 1; attempt <= 3; attempt += 1) {
@@ -215,11 +215,11 @@ export async function createLiveAgents(options: LiveAgentOptions): Promise<Agent
           modelEntry: leader.entry,
           costRole: "leader",
           ledger: options.ledger,
-          system: `${leaderPlannerPrompt}\n${hostPrompt}\nUsers may reference standing goals by number (for example, "goal 1"); resolve those references against the Standing goals list before asking for clarification.\nStanding goals are context only; do not redirect unrelated requests toward them.\nYou may answer directly for pure questions. For implementation work, call submit_build_plan exactly once.\nThe "verification" field must contain exact runnable shell commands only (e.g. "node test.mjs"), one command per entry - never prose or manual instructions. Put manual checks in acceptanceCriteria instead. Verification commands MUST be runnable verbatim on the host platform.`,
+          system: `${leaderPlannerPrompt}\n${hostPrompt}\nTreat the new request in the context of this conversation; pronouns, references like "that file", and follow-ups may refer to prior turns.\nUsers may reference standing goals by number (for example, "goal 1"); resolve those references against the Standing goals list before asking for clarification.\nStanding goals are context only; do not redirect unrelated requests toward them.\nYou may answer directly for pure questions. For implementation work, call submit_build_plan exactly once.\nThe "verification" field must contain exact runnable shell commands only (e.g. "node test.mjs"), one command per entry - never prose or manual instructions. Put manual checks in acceptanceCriteria instead. Verification commands MUST be runnable verbatim on the host platform.`,
           messages: [
             {
               role: "user",
-              content: `Request:\n${request}\n\nStanding goals (context only - do not redirect unrelated requests toward these):\n${goals.length > 0 ? goals.join("\n") : "none"}${validationFeedback}`
+              content: `${history?.trim() ? `Conversation so far:\n${history.trim()}\n\n` : ""}Request:\n${request}\n\nStanding goals (context only - do not redirect unrelated requests toward these):\n${goals.length > 0 ? goals.join("\n") : "none"}${validationFeedback}`
             }
           ],
           tools: mergeTools(makeToolSet(toolContext, "leader-readonly"), submitTools),

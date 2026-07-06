@@ -14,6 +14,7 @@ import { modelRegistry } from "../../src/providers/registry.js";
 import { tandemStateDir } from "../../src/paths.js";
 import { CostLedger } from "../../src/session/cost.js";
 import { addGoal, completeGoal, formatStandingGoals, listGoals } from "../../src/session/goals.js";
+import { buildConversationHistory } from "../../src/session/history.js";
 import { archiveSession, deleteSession, listSessions, renameSession, SessionStore } from "../../src/session/store.js";
 import type { SessionMetadata } from "../../src/session/store.js";
 import { safeDefaultProjectDir } from "../../src/tools/protection.js";
@@ -156,6 +157,9 @@ export class TandemService {
     if (!this.session) await this.startSession({ projectDir: this.projectDir });
     const session = this.session as SessionLike;
     this.controller = new AbortController();
+    const history = buildConversationHistory(await session.read());
+    await this.emitMachine({ type: "notice", message: `context: ${history.priorTurns} prior turn${history.priorTurns === 1 ? "" : "s"}` });
+    if (history.truncated) await this.emitMachine({ type: "notice", message: "including last 10 turns of context" });
     await session.append("user", { prompt });
     const initialState = this.lastCheckpoint?.phase === "DONE" ? undefined : this.lastCheckpoint;
     this.lastCheckpoint = undefined;
@@ -185,6 +189,7 @@ export class TandemService {
         config: this.config,
         agents,
         goals,
+        history: history.text,
         diffProvider: diffTracker,
         initialState,
         confirmPlan: (plan) => this.confirmPlan(plan),

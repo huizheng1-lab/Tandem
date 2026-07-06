@@ -23,12 +23,13 @@ export type MachineEvent =
   | { type: "transition"; phase: MachinePhase; message: string }
   | { type: "artifact"; name: string; value: unknown }
   | { type: "checkpoint"; checkpoint: OrchestrationCheckpoint }
+  | { type: "notice"; message: string }
   | { type: "error"; message: string };
 
 export type PlanResult = { kind: "answer"; answer: string } | { kind: "plan"; plan: BuildPlan };
 
 export interface AgentFns {
-  plan(input: { request: string; goals: string[] }): Promise<PlanResult>;
+  plan(input: { request: string; goals: string[]; history?: string }): Promise<PlanResult>;
   build(input: { plan: BuildPlan; round: number; feedback: ReviewVerdict["feedback"]; previousReport?: CompletionReport }): Promise<unknown>;
   review(input: { plan: BuildPlan; report: CompletionReport; round: number; diff: string }): Promise<unknown>;
   takeover(input: { plan: BuildPlan; reports: CompletionReport[]; feedback: ReviewVerdict["feedback"][] }): Promise<{ report: CompletionReport; userSummary: string }>;
@@ -39,6 +40,7 @@ export interface RunOptions {
   config: Pick<TandemConfig, "maxReviewRounds">;
   agents: AgentFns;
   goals?: string[];
+  history?: string;
   diffProvider?: (() => Promise<string>) | { beforeBuild?: () => Promise<void>; diff: () => Promise<string> };
   confirmPlan?: (plan: BuildPlan) => Promise<boolean>;
   initialState?: OrchestrationCheckpoint;
@@ -104,7 +106,7 @@ export async function runOrchestration(options: RunOptions): Promise<RunResult> 
 
   if (!plan) {
     transition("PLANNING", "leader planning", 0);
-    const planResult = await options.agents.plan({ request: options.request, goals: options.goals ?? [] });
+    const planResult = await options.agents.plan({ request: options.request, goals: options.goals ?? [], history: options.history });
     if (planResult.kind === "answer") {
       transition("DONE", "leader answered without build plan", 0);
       return { phase: "DONE", summary: planResult.answer, reports, verdicts, takeover: false };
