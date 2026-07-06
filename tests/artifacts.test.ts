@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { BuildPlan, ReviewVerdictSchema, validateCompletionReport } from "../src/orchestrator/artifacts.js";
+import { BuildPlan, ReviewVerdictSchema, validateBuildPlan, validateCompletionReport } from "../src/orchestrator/artifacts.js";
 
 const plan: BuildPlan = {
   title: "Demo",
@@ -24,12 +24,33 @@ describe("artifacts", () => {
     ).toThrow(/omitted verification/);
   });
 
-  it("matches prose verification entries against the command actually run", () => {
-    const prosePlan: BuildPlan = {
+  it("rejects prose verification entries in build plans", () => {
+    expect(() =>
+      validateBuildPlan(
+        {
+          ...plan,
+          verification: ["Play game and verify all effects are working"]
+        },
+        "win32"
+      )
+    ).toThrow(/does not look like a runnable shell command/);
+  });
+
+  it("rejects POSIX verification commands on Windows with safer alternatives", () => {
+    expect(() => validateBuildPlan({ ...plan, verification: ["cat launch.bat"] }, "win32")).toThrow(/POSIX-only tool `cat`.*type <file>/s);
+    expect(() => validateBuildPlan({ ...plan, verification: ["cat index.html | grep -E 'src=|title='"] }, "win32")).toThrow(/POSIX-only tool `cat`.*POSIX-only tool `grep`.*findstr/s);
+  });
+
+  it("accepts Windows-safe and cross-platform verification commands", () => {
+    expect(validateBuildPlan({ ...plan, verification: ["npm test", "node test.mjs", "type launch.bat"] }, "win32").verification).toHaveLength(3);
+  });
+
+  it("requires completion reports to echo plan verification commands exactly", () => {
+    const exactPlan: BuildPlan = {
       ...plan,
-      verification: ["Run `node test.mjs` and observe a successful exit."]
+      verification: ["node test.mjs"]
     };
-    const report = validateCompletionReport(prosePlan, {
+    const report = validateCompletionReport(exactPlan, {
       status: "complete",
       summary: "done",
       taskResults: [{ id: "T1", status: "done" }],
@@ -38,15 +59,25 @@ describe("artifacts", () => {
       deviationsFromPlan: []
     });
     expect(report.status).toBe("complete");
+    expect(() =>
+      validateCompletionReport(exactPlan, {
+        status: "complete",
+        summary: "done",
+        taskResults: [{ id: "T1", status: "done" }],
+        filesChanged: ["test.mjs"],
+        verificationResults: [{ command: "npm test", passed: true, output: "adapted from node test.mjs" }],
+        deviationsFromPlan: []
+      })
+    ).toThrow(/omitted verification commands: node test\.mjs/);
   });
 
-  it("still fails prose entries when the matched command failed", () => {
-    const prosePlan: BuildPlan = {
+  it("fails verification entries when the exact matched command failed", () => {
+    const exactPlan: BuildPlan = {
       ...plan,
-      verification: ["Run `node test.mjs` and observe a successful exit."]
+      verification: ["node test.mjs"]
     };
     expect(() =>
-      validateCompletionReport(prosePlan, {
+      validateCompletionReport(exactPlan, {
         status: "complete",
         summary: "done",
         taskResults: [{ id: "T1", status: "done" }],

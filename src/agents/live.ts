@@ -8,11 +8,12 @@ import { PermissionBridge } from "../tools/permissions.js";
 import { makeToolSet } from "../tools/index.js";
 import { CostLedger, CostRole } from "../session/cost.js";
 import { AgentFns, PlanResult } from "../orchestrator/machine.js";
-import { BuildPlan, BuildPlanSchema, CompletionReportSchema, ReviewVerdictSchema } from "../orchestrator/artifacts.js";
+import { BuildPlan, BuildPlanSchema, CompletionReportSchema, ReviewVerdictSchema, validateBuildPlan } from "../orchestrator/artifacts.js";
 import { Goal } from "../session/goals.js";
 import { runAgentArtifact, runAgentText } from "./runner.js";
 import { leaderPlannerPrompt, leaderReviewerPrompt, leaderTakeoverPrompt } from "./leader.js";
 import { workerPrompt } from "./worker.js";
+import { hostPlatformPrompt } from "./platform.js";
 
 export interface LiveAgentOptions {
   config: TandemConfig;
@@ -138,6 +139,7 @@ export async function extractFromProse<T>(options: ExtractFromProseOptions<T>): 
 export async function createLiveAgents(options: LiveAgentOptions): Promise<AgentFns> {
   const leader = await makeModel(options.config.leader, options.config, options.env);
   const worker = await makeModel(options.config.worker, options.config, options.env);
+  const hostPrompt = hostPlatformPrompt(process.platform, options.env);
   const toolContext = {
     cwd: options.cwd,
     permissionMode: options.config.permissionMode,
@@ -148,39 +150,50 @@ export async function createLiveAgents(options: LiveAgentOptions): Promise<Agent
 
   return {
     plan: async ({ request, goals }): Promise<PlanResult> => {
-      let submittedPlan: BuildPlan | undefined;
-      const submitTools = {
-        submit_build_plan: tool({
-          description: "Submit the build plan and end planning.",
-          inputSchema: BuildPlanSchema,
-          execute: (input) => {
-            submittedPlan = input;
-            return { ok: true };
-          }
-        })
-      };
-      const result = await runAgentArtifact({
-        model: leader.model,
-        modelEntry: leader.entry,
-        costRole: "leader",
-        ledger: options.ledger,
-        system: `${leaderPlannerPrompt}\nUsers may reference standing goals by number (for example, "goal 1"); resolve those references against the Standing goals list before asking for clarification.\nYou may answer directly for pure questions. For implementation work, call submit_build_plan exactly once.\nThe "verification" field must contain exact runnable shell commands only (e.g. "node test.mjs"), one command per entry — never prose or manual instructions. Put manual checks in acceptanceCriteria instead.`,
-        messages: [
-          {
-            role: "user",
-            content: `Request:\n${request}\n\nStanding goals:\n${goals.length > 0 ? goals.join("\n") : "none"}`
-          }
-        ],
-        tools: mergeTools(makeToolSet(toolContext, "leader-readonly"), submitTools),
-        maxSteps: options.config.maxStepsPerAgentTurn,
-        stopToolName: "submit_build_plan",
-        abortSignal: options.abortSignal,
-        onText: options.onLeaderText,
-        onThinking: options.onLeaderThinking,
-        artifactName: "BuildPlan",
-        getArtifact: () => submittedPlan
-      });
-      return result.artifact ? { kind: "plan", plan: result.artifact } : { kind: "answer", answer: result.text.trim() };
+      let validationFeedback = "";
+      let lastError: unknown;
+      for (let attempt = 1; attempt <= 3; attempt += 1) {
+        let submittedPlan: BuildPlan | undefined;
+        const submitTools = {
+          submit_build_plan: tool({
+            description: "Submit the build plan and end planning.",
+            inputSchema: BuildPlanSchema,
+            execute: (input) => {
+              submittedPlan = input;
+              return { ok: true };
+            }
+          })
+        };
+        const result = await runAgentArtifact({
+          model: leader.model,
+          modelEntry: leader.entry,
+          costRole: "leader",
+          ledger: options.ledger,
+          system: `${leaderPlannerPrompt}\n${hostPrompt}\nUsers may reference standing goals by number (for example, "goal 1"); resolve those references against the Standing goals list before asking for clarification.\nStanding goals are context only; do not redirect unrelated requests toward them.\nYou may answer directly for pure questions. For implementation work, call submit_build_plan exactly once.\nThe "verification" field must contain exact runnable shell commands only (e.g. "node test.mjs"), one command per entry - never prose or manual instructions. Put manual checks in acceptanceCriteria instead. Verification commands MUST be runnable verbatim on the host platform.`,
+          messages: [
+            {
+              role: "user",
+              content: `Request:\n${request}\n\nStanding goals (context only - do not redirect unrelated requests toward these):\n${goals.length > 0 ? goals.join("\n") : "none"}${validationFeedback}`
+            }
+          ],
+          tools: mergeTools(makeToolSet(toolContext, "leader-readonly"), submitTools),
+          maxSteps: options.config.maxStepsPerAgentTurn,
+          stopToolName: "submit_build_plan",
+          abortSignal: options.abortSignal,
+          onText: options.onLeaderText,
+          onThinking: options.onLeaderThinking,
+          artifactName: "BuildPlan",
+          getArtifact: () => submittedPlan
+        });
+        if (!result.artifact) return { kind: "answer", answer: result.text.trim() };
+        try {
+          return { kind: "plan", plan: validateBuildPlan(result.artifact) };
+        } catch (error) {
+          lastError = error;
+          validationFeedback = `\n\nPrevious submitted BuildPlan was rejected before execution:\n${String(error)}\nSubmit a corrected BuildPlan. Move manual checks to acceptanceCriteria and make every verification entry a host-runnable command.`;
+        }
+      }
+      throw lastError instanceof Error ? lastError : new Error(String(lastError));
     },
 
     build: async ({ plan, round, feedback, previousReport }) => {
@@ -200,7 +213,7 @@ export async function createLiveAgents(options: LiveAgentOptions): Promise<Agent
         modelEntry: worker.entry,
         costRole: "worker",
         ledger: options.ledger,
-        system: `${workerPrompt}\nYou must run every verification command before submit_completion_report.`,
+        system: `${workerPrompt}\n${hostPrompt}\nYou must run every verification command before submit_completion_report. In verificationResults[].command, repeat the BuildPlan verification command string verbatim. If you adapt a command for the host platform, still use the plan's original command as command and describe the adapted command plus real output in output.`,
         messages: [
           {
             role: "user",
@@ -237,7 +250,7 @@ export async function createLiveAgents(options: LiveAgentOptions): Promise<Agent
         modelEntry: leader.entry,
         costRole: "leader",
         ledger: options.ledger,
-        system: `${leaderReviewerPrompt}\nYou may rerun only the plan verification commands. Prose verdicts are discarded; the turn is only complete after submit_review has been called.`,
+        system: `${leaderReviewerPrompt}\n${hostPrompt}\nYou may rerun only the plan verification commands. Prose verdicts are discarded; the turn is only complete after submit_review has been called.`,
         messages: [
           {
             role: "user",
@@ -283,7 +296,7 @@ export async function createLiveAgents(options: LiveAgentOptions): Promise<Agent
         modelEntry: leader.entry,
         costRole: "leader",
         ledger: options.ledger,
-        system: `${leaderTakeoverPrompt}\nRun every verification command, then call submit_takeover.`,
+        system: `${leaderTakeoverPrompt}\n${hostPrompt}\nRun every verification command, then call submit_takeover. In verificationResults[].command, repeat the BuildPlan verification command string verbatim. If you adapt a command for the host platform, still use the plan's original command as command and describe the adapted command plus real output in output.`,
         messages: [
           {
             role: "user",

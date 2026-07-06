@@ -16,6 +16,50 @@ export const BuildPlanSchema = z.object({
 });
 export type BuildPlan = z.infer<typeof BuildPlanSchema>;
 
+const runnableCommandStarters = new Set([
+  "npm",
+  "npx",
+  "pnpm",
+  "yarn",
+  "bun",
+  "node",
+  "deno",
+  "python",
+  "python3",
+  "py",
+  "pytest",
+  "go",
+  "cargo",
+  "make",
+  "powershell",
+  "pwsh",
+  "cmd",
+  "type",
+  "findstr",
+  "git",
+  "tsc",
+  "vitest",
+  "jest",
+  "eslint",
+  "prettier",
+  "dotnet",
+  "mvn",
+  "gradle"
+]);
+
+const windowsPosixAlternatives: Record<string, string> = {
+  cat: "use `type <file>` or PowerShell `Get-Content <file>`",
+  grep: "use `findstr` or PowerShell `Select-String`",
+  ls: "use `dir` or PowerShell `Get-ChildItem`",
+  touch: "use PowerShell `New-Item` or `Set-Content`",
+  rm: "use `del`/`rmdir` or PowerShell `Remove-Item`",
+  sed: "use `node -e` or PowerShell text processing",
+  awk: "use `node -e` or PowerShell text processing",
+  head: "use PowerShell `Select-Object -First`",
+  tail: "use PowerShell `Select-Object -Last`",
+  chmod: "avoid chmod on Windows; use a platform-appropriate command"
+};
+
 export const CompletionReportSchema = z.object({
   status: z.enum(["complete", "blocked"]),
   summary: z.string(),
@@ -72,13 +116,57 @@ function normalizeCommand(value: string): string {
   return value.replace(/\s+/g, " ").trim();
 }
 
-// Plan verification entries may arrive as prose around a command (e.g. "Run `node test.mjs` and
-// observe a successful exit."), so match by containment in either direction, not string equality.
+function commandToken(segment: string): string {
+  const match = segment.trim().match(/^["']?([^\s"'`]+)["']?/);
+  return match?.[1]?.toLowerCase() ?? "";
+}
+
+function verificationSegments(command: string): string[] {
+  return command.split(/\|\||&&|[|;]/g).map((part) => part.trim()).filter(Boolean);
+}
+
+function hasCommandShape(entry: string): boolean {
+  const trimmed = entry.trim();
+  const first = commandToken(trimmed);
+  if (!first) return false;
+  if (runnableCommandStarters.has(first)) return true;
+  if (/^(?:\.{1,2}[\\/]|[a-zA-Z]:[\\/]|[\\/]|~[\\/])/.test(trimmed)) return true;
+  if (/^[\w.-]+\.(?:cmd|bat|ps1|mjs|cjs|js|ts|py|sh|exe)\b/i.test(trimmed)) return true;
+  return false;
+}
+
+function validateVerificationEntry(entry: string, platform: NodeJS.Platform): string[] {
+  const errors: string[] = [];
+  const normalized = normalizeCommand(entry);
+  if (!normalized) return ["verification entry is empty"];
+  if (platform === "win32") {
+    const posixTools = [...new Set(verificationSegments(normalized)
+      .map(commandToken)
+      .filter((token) => token in windowsPosixAlternatives))];
+    for (const posix of posixTools) {
+      errors.push(`verification command "${entry}" uses POSIX-only tool \`${posix}\` on Windows; ${windowsPosixAlternatives[posix]}.`);
+    }
+  }
+  const wordCount = normalized.split(/\s+/).filter(Boolean).length;
+  const hasPathFlagOrShellChars = /[./\\:-]|--?|[|&><]/.test(normalized);
+  if (!hasCommandShape(normalized) || (wordCount > 6 && !hasPathFlagOrShellChars)) {
+    errors.push(`verification entry "${entry}" does not look like a runnable shell command; move manual checks to acceptanceCriteria and use commands such as \`npm test\`, \`node test.mjs\`, or \`type launch.bat\`.`);
+  }
+  return errors;
+}
+
+export function validateBuildPlan(value: unknown, platform: NodeJS.Platform = process.platform): BuildPlan {
+  const plan = BuildPlanSchema.parse(value);
+  const errors = plan.verification.flatMap((entry) => validateVerificationEntry(entry, platform));
+  if (errors.length > 0) throw new Error(`Invalid BuildPlan verification:\n${errors.join("\n")}`);
+  return plan;
+}
+
 function matchResult(planEntry: string, results: CompletionReport["verificationResults"]) {
   const entry = normalizeCommand(planEntry);
   return results.find((result) => {
     const command = normalizeCommand(result.command);
-    return command.length > 0 && (command === entry || entry.includes(command) || command.includes(entry));
+    return command.length > 0 && command === entry;
   });
 }
 

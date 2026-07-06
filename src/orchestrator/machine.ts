@@ -1,10 +1,11 @@
 import { TandemConfig } from "../config/schema.js";
 import {
   BuildPlan,
-  BuildPlanSchema,
+  CompletionReportSchema,
   CompletionReport,
   ReviewVerdict,
   ReviewVerdictSchema,
+  validateBuildPlan,
   validateCompletionReport
 } from "./artifacts.js";
 
@@ -109,7 +110,7 @@ export async function runOrchestration(options: RunOptions): Promise<RunResult> 
       return { phase: "DONE", summary: planResult.answer, reports, verdicts, takeover: false };
     }
 
-    plan = BuildPlanSchema.parse(planResult.plan);
+    plan = validateBuildPlan(planResult.plan);
     emit({ type: "artifact", name: "BuildPlan", value: plan });
     emitCheckpoint();
     if (options.confirmPlan) {
@@ -128,12 +129,30 @@ export async function runOrchestration(options: RunOptions): Promise<RunResult> 
 
   const runTakeover = async (message: string): Promise<RunResult> => {
     transition("TAKEOVER", message, round);
-    const takeover = await options.agents.takeover({ plan, reports, feedback: allFeedback });
-    const report = validateCompletionReport(plan, takeover.report);
-    reports.push(report);
-    emit({ type: "artifact", name: "TakeoverReport", value: report });
-    transition("DONE", "takeover done", round);
-    return { phase: "DONE", summary: takeover.userSummary, plan, reports, verdicts, takeover: true };
+    let lastTakeover: { report: unknown; userSummary: string } | undefined;
+    let lastError: unknown;
+    for (let attempt = 1; attempt <= 3; attempt += 1) {
+      try {
+        const takeover = await options.agents.takeover({ plan, reports, feedback: allFeedback });
+        lastTakeover = takeover;
+        const report = validateCompletionReport(plan, takeover.report);
+        reports.push(report);
+        emit({ type: "artifact", name: "TakeoverReport", value: report });
+        transition("DONE", "takeover done", round);
+        return { phase: "DONE", summary: takeover.userSummary, plan, reports, verdicts, takeover: true };
+      } catch (error) {
+        if (error instanceof Error && error.name === "AbortError") throw error;
+        lastError = error;
+        emit({ type: "error", message: `TakeoverReport failed on attempt ${attempt}: ${String(error)}` });
+      }
+    }
+    if (!lastTakeover) throw lastError instanceof Error ? lastError : new Error(String(lastError));
+    const schemaOnly = CompletionReportSchema.safeParse(lastTakeover.report);
+    if (schemaOnly.success) reports.push(schemaOnly.data);
+    emit({ type: "artifact", name: "TakeoverReport", value: lastTakeover.report });
+    const summary = `Build finished under leader takeover, but takeover verification bookkeeping could not be finalized after retries: ${String(lastError)}. ${lastTakeover.userSummary}`;
+    transition("DONE", "takeover report validation failed; build preserved", round);
+    return { phase: "DONE", summary, plan, reports, verdicts, takeover: true };
   };
 
   if (options.config.maxReviewRounds === 0) return runTakeover("maxReviewRounds is 0; leader takeover");

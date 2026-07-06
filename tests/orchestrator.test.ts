@@ -118,6 +118,33 @@ describe("orchestration", () => {
     expect(result.phase).toBe("DONE");
   });
 
+  it("preserves takeover builds when takeover report validation keeps failing", async () => {
+    let takeovers = 0;
+    const result = await runOrchestration({
+      request: "build",
+      config: { maxReviewRounds: 0 },
+      agents: agents({
+        takeover: async () => {
+          takeovers += 1;
+          return {
+            report: {
+              ...report(),
+              verificationResults: [{ command: "node test.mjs", passed: true, output: "adapted command output" }]
+            },
+            userSummary: "takeover work finished"
+          };
+        }
+      })
+    });
+
+    expect(takeovers).toBe(3);
+    expect(result.phase).toBe("DONE");
+    expect(result.takeover).toBe(true);
+    expect(result.summary).toContain("takeover verification bookkeeping could not be finalized");
+    expect(result.summary).toContain("takeover work finished");
+    expect(result.reports).toHaveLength(1);
+  });
+
   it("retries artifact validation failures", async () => {
     let builds = 0;
     const result = await runOrchestration({
