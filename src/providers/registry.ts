@@ -65,6 +65,34 @@ export const builtInModels: ModelEntry[] = [
     costHints: { inputPerMillion: 0.3, outputPerMillion: 2.5 }
   },
   {
+    id: "google/gemini-3.5-flash",
+    provider: "google",
+    modelName: "gemini-3.5-flash",
+    envKey: "GEMINI_API_KEY",
+    contextWindow: 1000000
+  },
+  {
+    id: "google/gemini-3.1-pro-preview",
+    provider: "google",
+    modelName: "gemini-3.1-pro-preview",
+    envKey: "GEMINI_API_KEY",
+    contextWindow: 1000000
+  },
+  {
+    id: "google/gemini-3-pro-preview",
+    provider: "google",
+    modelName: "gemini-3-pro-preview",
+    envKey: "GEMINI_API_KEY",
+    contextWindow: 1000000
+  },
+  {
+    id: "google/gemini-3.1-flash-lite",
+    provider: "google",
+    modelName: "gemini-3.1-flash-lite",
+    envKey: "GEMINI_API_KEY",
+    contextWindow: 1000000
+  },
+  {
     id: "openai/gpt-5",
     provider: "openai",
     modelName: "gpt-5",
@@ -85,7 +113,7 @@ export const builtInModels: ModelEntry[] = [
 export function customToModelEntry(model: CustomModel): ModelEntry {
   return {
     id: model.id,
-    provider: "openai-compatible",
+    provider: model.provider ?? "openai-compatible",
     modelName: model.modelName,
     envKey: model.apiKeyEnv,
     baseURL: model.baseURL,

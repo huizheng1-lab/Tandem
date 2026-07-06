@@ -4,6 +4,8 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { globalConfigPath, loadConfig, loadConfigDetails, loadEnv, saveGlobalConfigPatch } from "../src/config/load.js";
 import { resolveModel, validateModelEnv } from "../src/providers/registry.js";
+import { makeModel } from "../src/providers/client.js";
+import { defaultConfig } from "../src/config/schema.js";
 import { sessionDir } from "../src/session/store.js";
 
 async function tempDir(name: string): Promise<string> {
@@ -78,5 +80,63 @@ describe("config", () => {
   it("names the missing env var for selected models", () => {
     const entry = resolveModel("openai/gpt-5", []);
     expect(() => validateModelEnv(entry, {})).toThrow(/OPENAI_API_KEY/);
+  });
+
+  it("allows native-provider custom models without baseURL", async () => {
+    const home = await tempDir("home");
+    await mkdir(path.join(home, ".tandem"), { recursive: true });
+    await writeFile(
+      path.join(home, ".tandem", "config.json"),
+      JSON.stringify({
+        customModels: [{ id: "google/custom-flash", provider: "google", apiKeyEnv: "GEMINI_API_KEY", modelName: "gemini-custom-flash" }]
+      })
+    );
+
+    const config = loadConfig({ homeDir: home, cwd: await tempDir("cwd") });
+    const entry = resolveModel("google/custom-flash", config.customModels);
+
+    expect(entry).toMatchObject({ id: "google/custom-flash", provider: "google", modelName: "gemini-custom-flash", envKey: "GEMINI_API_KEY" });
+    expect(entry.baseURL).toBeUndefined();
+  });
+
+  it("keeps provider-less custom models openai-compatible for back compatibility", () => {
+    const entry = resolveModel("minimax/minimax-m2.7", defaultConfig.customModels);
+
+    expect(entry).toMatchObject({ provider: "openai-compatible", baseURL: "https://api.minimax.io/v1" });
+  });
+
+  it("requires baseURL only for openai-compatible custom models", async () => {
+    const home = await tempDir("home");
+    await mkdir(path.join(home, ".tandem"), { recursive: true });
+    await writeFile(
+      path.join(home, ".tandem", "config.json"),
+      JSON.stringify({
+        customModels: [{ id: "compatible/no-url", provider: "openai-compatible", apiKeyEnv: "API_KEY", modelName: "model" }]
+      })
+    );
+
+    expect(() => loadConfig({ homeDir: home, cwd: path.join(home, "project") })).toThrow(/baseURL is required/);
+  });
+
+  it("routes google custom models through the native provider", async () => {
+    const config = {
+      ...defaultConfig,
+      customModels: [{ id: "google/custom-flash", provider: "google" as const, apiKeyEnv: "GEMINI_API_KEY", modelName: "gemini-custom-flash" }]
+    };
+
+    const resolution = await makeModel("google/custom-flash", config, { GEMINI_API_KEY: "test-key" });
+
+    expect(resolution.entry.provider).toBe("google");
+    expect(resolution.entry.modelName).toBe("gemini-custom-flash");
+    expect(resolution.model).toBeTruthy();
+  });
+
+  it("registers the current Gemini 3.x built-ins without guessed pricing", () => {
+    for (const id of ["google/gemini-3.5-flash", "google/gemini-3.1-pro-preview", "google/gemini-3-pro-preview", "google/gemini-3.1-flash-lite"]) {
+      const entry = resolveModel(id, []);
+      expect(entry).toMatchObject({ provider: "google", envKey: "GEMINI_API_KEY" });
+      expect(entry.costHints).toBeUndefined();
+    }
+    expect(() => resolveModel("google/gemini-3.5-pro", [])).toThrow(/Unknown model/);
   });
 });

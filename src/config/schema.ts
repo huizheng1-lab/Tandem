@@ -3,19 +3,34 @@ import { z } from "zod";
 export const PermissionModeSchema = z.enum(["ask", "auto-edit", "yolo"]);
 export type PermissionMode = z.infer<typeof PermissionModeSchema>;
 
-export const CustomModelSchema = z.object({
-  id: z.string().min(1),
-  baseURL: z.string().url(),
-  apiKeyEnv: z.string().min(1),
-  modelName: z.string().min(1),
-  contextWindow: z.number().int().positive().optional(),
-  costHints: z
-    .object({
-      inputPerMillion: z.number().nonnegative(),
-      outputPerMillion: z.number().nonnegative()
-    })
-    .optional()
-});
+export const ModelProviderSchema = z.enum(["google", "anthropic", "openai", "openai-compatible"]);
+export type ModelProvider = z.infer<typeof ModelProviderSchema>;
+
+export const CustomModelSchema = z
+  .object({
+    id: z.string().min(1),
+    provider: ModelProviderSchema.optional(),
+    baseURL: z.string().url().optional(),
+    apiKeyEnv: z.string().min(1),
+    modelName: z.string().min(1),
+    contextWindow: z.number().int().positive().optional(),
+    costHints: z
+      .object({
+        inputPerMillion: z.number().nonnegative(),
+        outputPerMillion: z.number().nonnegative()
+      })
+      .optional()
+  })
+  .superRefine((value, ctx) => {
+    const provider = value.provider ?? "openai-compatible";
+    if (provider === "openai-compatible" && !value.baseURL) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["baseURL"],
+        message: "baseURL is required for openai-compatible custom models"
+      });
+    }
+  });
 
 export const ConfigSchema = z.object({
   leader: z.string().min(1),

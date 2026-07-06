@@ -33,6 +33,7 @@ export async function makeModel(modelId: string, config: TandemConfig, env: Node
   }
 
   const mod = await import("@ai-sdk/openai-compatible");
+  if (!entry.baseURL) throw new Error(`Custom model ${entry.id} is openai-compatible and requires baseURL.`);
   // SDK boundary: see note above.
   const createOpenAICompatible = (mod as Record<string, unknown>).createOpenAICompatible as (options: {
     name: string;
@@ -45,7 +46,7 @@ export async function makeModel(modelId: string, config: TandemConfig, env: Node
     model: createOpenAICompatible({
       name: entry.id.split("/")[0] ?? "compatible",
       apiKey: env[entry.envKey],
-      baseURL: entry.baseURL ?? "",
+      baseURL: entry.baseURL,
       includeUsage: true
     })(entry.modelName)
   };
