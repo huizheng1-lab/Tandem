@@ -3,6 +3,8 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { editFileTool, readFileTool, writeFileTool } from "../src/tools/fs.js";
+import type { ToolActivityEvent } from "../src/tools/fs.js";
+import { makeToolSet } from "../src/tools/index.js";
 import { bashTool, effectiveBashTimeout, MAX_BASH_TIMEOUT_MS } from "../src/tools/shell.js";
 import { isDestructiveCommand } from "../src/tools/permissions.js";
 
@@ -76,6 +78,37 @@ describe("tools", () => {
     const cwd = await tempDir();
     await expect(writeFileTool({ cwd, permissionMode: "yolo" }, "../no.txt", "x")).rejects.toThrow(/escapes/);
     expect(isDestructiveCommand("rm -rf /")).toBe(true);
+  });
+
+  it("emits tool activity start and end events with timing", async () => {
+    const cwd = await tempDir();
+    await writeFile(path.join(cwd, "hello.txt"), "hello", "utf8");
+    const events: ToolActivityEvent[] = [];
+    const tools = makeToolSet({ cwd, permissionMode: "yolo", onToolEvent: (event) => events.push(event) }, "worker") as unknown as {
+      read_file: { execute(input: { path: string }): Promise<string> };
+    };
+
+    await expect(tools.read_file.execute({ path: "hello.txt" })).resolves.toContain("hello");
+
+    expect(events).toHaveLength(2);
+    expect(events[0]).toMatchObject({ role: "worker", tool: "read_file", target: "hello.txt", phase: "start" });
+    expect(events[1]).toMatchObject({ role: "worker", tool: "read_file", target: "hello.txt", phase: "end", ok: true });
+    expect(events[1]?.ms).toBeGreaterThanOrEqual(0);
+  });
+
+  it("emits failed tool activity events and preserves the thrown error", async () => {
+    const cwd = await tempDir();
+    const events: ToolActivityEvent[] = [];
+    const tools = makeToolSet({ cwd, permissionMode: "yolo", onToolEvent: (event) => events.push(event) }, "leader-readonly") as unknown as {
+      read_file: { execute(input: { path: string }): Promise<string> };
+    };
+
+    await expect(tools.read_file.execute({ path: "missing.txt" })).rejects.toThrow(/ENOENT|no such file/i);
+
+    expect(events).toHaveLength(2);
+    expect(events[0]).toMatchObject({ role: "leader", tool: "read_file", target: "missing.txt", phase: "start" });
+    expect(events[1]).toMatchObject({ role: "leader", tool: "read_file", target: "missing.txt", phase: "end", ok: false });
+    expect(events[1]?.ms).toBeGreaterThanOrEqual(0);
   });
 
   it("refuses write and bash when the project is Tandem itself", async () => {

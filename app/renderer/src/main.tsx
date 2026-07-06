@@ -12,7 +12,8 @@ import type {
   Schedule,
   SessionAutoApproveMode,
   SessionMetadata,
-  SessionStartResponse
+  SessionStartResponse,
+  ToolActivityEvent
 } from "../../shared/ipc.js";
 import type { PermissionMode, TandemConfig } from "../../../src/config/schema.js";
 import { ErrorBoundary } from "./ErrorBoundary.js";
@@ -22,7 +23,8 @@ type Role = "user" | "leader" | "worker" | "system";
 
 type TranscriptEntry =
   | { id: number; kind: "message"; role: Role; text: string; thinking?: boolean }
-  | { id: number; kind: "artifact"; name: string; value: unknown; open: boolean };
+  | { id: number; kind: "artifact"; name: string; value: unknown; open: boolean }
+  | { id: number; kind: "tool"; event: ToolActivityEvent };
 
 function pretty(value: unknown): string {
   return JSON.stringify(value, null, 2);
@@ -111,6 +113,15 @@ function relativeTime(value: string): string {
   return `${Math.floor(hours / 24)}d ago`;
 }
 
+function secondsSince(startedAt: number, now: number): number {
+  return Math.max(0, Math.floor((now - startedAt) / 1000));
+}
+
+function formatToolLine(event: ToolActivityEvent): string {
+  const status = event.phase === "start" ? "running" : event.ok ? `ok ${((event.ms ?? 0) / 1000).toFixed(1)}s` : `failed ${((event.ms ?? 0) / 1000).toFixed(1)}s`;
+  return `tool ${event.role} - ${event.tool}: ${event.target} - ${status}`;
+}
+
 function App(): React.ReactElement {
   const tandem = window.tandem;
   if (!tandem) {
@@ -139,6 +150,12 @@ function App(): React.ReactElement {
   const [sessionAutoApprove, setSessionAutoApprove] = useState<SessionAutoApproveMode>("none");
   const [showThinking, setShowThinking] = useState(false);
   const [thinkingRoles, setThinkingRoles] = useState<Set<"leader" | "worker">>(new Set());
+  const [activityPulse, setActivityPulse] = useState<{ role: "leader" | "worker"; kind: "thinking" | "writing"; startedAt: number }>();
+  const [activeTool, setActiveTool] = useState<(ToolActivityEvent & { startedAt: number }) | undefined>();
+  const [lastActivityAt, setLastActivityAt] = useState(Date.now());
+  const [activityTick, setActivityTick] = useState(Date.now());
+  const [showActivity, setShowActivity] = useState(false);
+  const [runActivityCount, setRunActivityCount] = useState(0);
   const [sessions, setSessions] = useState<SessionMetadata[]>([]);
   const [showArchived, setShowArchived] = useState(false);
   const [renamingSession, setRenamingSession] = useState<string>();
@@ -168,7 +185,19 @@ function App(): React.ReactElement {
     setEntries((current) => [...current, { id: nextId.current++, kind: "message", role, text }]);
   };
 
+  const markActivity = (role: "leader" | "worker", kind: "thinking" | "writing") => {
+    const now = Date.now();
+    setLastActivityAt(now);
+    setActivityPulse({ role, kind, startedAt: now });
+  };
+
+  const appendToolActivity = (event: ToolActivityEvent) => {
+    setEntries((current) => [...current, { id: nextId.current++, kind: "tool", event }]);
+    setRunActivityCount((count) => count + 1);
+  };
+
   const appendStream = (role: "leader" | "worker", delta: string) => {
+    if (delta) markActivity(role, "writing");
     setEntries((current) => {
       const last = current.at(-1);
       if (last?.kind === "message" && last.role === role && !last.thinking) {
@@ -191,6 +220,7 @@ function App(): React.ReactElement {
   };
 
   const markThinking = (role: "leader" | "worker") => {
+    markActivity(role, "thinking");
     setThinkingRoles((current) => new Set(current).add(role));
     const existing = thinkingTimers.current[role];
     if (existing) clearTimeout(existing);
@@ -204,6 +234,7 @@ function App(): React.ReactElement {
   };
 
   const appendThinking = (role: "leader" | "worker", delta: string) => {
+    if (delta) markActivity(role, "thinking");
     if (!showThinkingRef.current) {
       markThinking(role);
       return;
@@ -218,6 +249,7 @@ function App(): React.ReactElement {
   };
 
   const handleMachineEvent = (event: MachineEvent) => {
+    setLastActivityAt(Date.now());
     if (event.type === "transition") {
       setPhase(event.phase);
       appendMessage("system", event.message);
@@ -250,6 +282,12 @@ function App(): React.ReactElement {
     setPhase("IDLE");
     setRound(0);
     setCost(undefined);
+    setActiveTool(undefined);
+    setActivityPulse(undefined);
+    setLastActivityAt(Date.now());
+    setActivityTick(Date.now());
+    setShowActivity(false);
+    setRunActivityCount(0);
     setSessionAutoApprove("none");
     setModels(await tandem.listModels());
     await refreshSidebar();
@@ -316,6 +354,7 @@ function App(): React.ReactElement {
   useEffect(() => {
     const removers = [
       tandem.onTextEvent((event) => (event.thinking ? appendThinking(event.role, event.delta) : appendStream(event.role, event.delta))),
+      tandem.onToolEvent(handleToolEvent),
       tandem.onMachineEvent(handleMachineEvent),
       tandem.onCostEvent(setCost),
       tandem.onDoneEvent((event) => {
@@ -351,10 +390,27 @@ function App(): React.ReactElement {
     };
   }, []);
 
+  useEffect(() => {
+    if (!running) return;
+    const timer = setInterval(() => setActivityTick(Date.now()), 1000);
+    return () => clearInterval(timer);
+  }, [running]);
+
   const updateModel = async (role: "leader" | "worker", modelId: string) => {
     const nextConfig = await tandem.setConfig({ [role]: modelId });
     setConfig(nextConfig);
     setSession((current) => (current ? { ...current, config: nextConfig } : current));
+  };
+
+  const handleToolEvent = (event: ToolActivityEvent) => {
+    const now = Date.now();
+    setLastActivityAt(now);
+    if (event.phase === "start") {
+      setActiveTool({ ...event, startedAt: now });
+    } else {
+      appendToolActivity(event);
+      setActiveTool((current) => (current?.role === event.role && current.tool === event.tool && current.target === event.target ? undefined : current));
+    }
   };
 
   const updatePermissionMode = async (permissionMode: PermissionMode) => {
@@ -565,6 +621,12 @@ function App(): React.ReactElement {
       return;
     }
     setRunning(true);
+    setActiveTool(undefined);
+    setActivityPulse(undefined);
+    setLastActivityAt(Date.now());
+    setActivityTick(Date.now());
+    setShowActivity(false);
+    setRunActivityCount(0);
     setPhase("PLANNING");
     setMissingKey(undefined);
     appendMessage("user", text);
@@ -617,6 +679,16 @@ function App(): React.ReactElement {
 
   const activeSessions = sessions.filter((item) => !item.archived);
   const archivedSessions = sessions.filter((item) => item.archived);
+  const visibleEntries = showActivity ? entries : entries.filter((entry) => entry.kind !== "tool");
+  const fallbackRole: "leader" | "worker" = phase === "BUILDING" ? "worker" : "leader";
+  const noActivitySeconds = secondsSince(lastActivityAt, activityTick);
+  const stripRole = activeTool?.role ?? activityPulse?.role ?? fallbackRole;
+  const activityText = activeTool
+    ? `running: ${activeTool.target} (${secondsSince(activeTool.startedAt, activityTick)}s)`
+    : activityPulse
+      ? `${activityPulse.kind === "thinking" ? "thinking" : "writing"}... (${secondsSince(activityPulse.startedAt, activityTick)}s)`
+      : `waiting for model... (${noActivitySeconds}s)`;
+  const stripText = noActivitySeconds > 60 ? `no activity for ${noActivitySeconds}s - the model call may be stalled (Stop to abort)` : activityText;
 
   return (
     <main className="shell">
@@ -797,7 +869,12 @@ function App(): React.ReactElement {
               </div>
             </aside>
           ) : null}
-          {entries.map((entry) =>
+          {runActivityCount > 0 ? (
+            <button type="button" className="activityToggle" onClick={() => setShowActivity((value) => !value)}>
+              {showActivity ? "hide" : "show"} activity ({runActivityCount})
+            </button>
+          ) : null}
+          {visibleEntries.map((entry) =>
             entry.kind === "message" ? (
               <article
                 key={entry.id}
@@ -805,6 +882,10 @@ function App(): React.ReactElement {
               >
                 <div className="roleBadge">{roleLabel(entry.role)}</div>
                 <div className="messageText">{entry.text}</div>
+              </article>
+            ) : entry.kind === "tool" ? (
+              <article key={entry.id} className="toolLine">
+                {formatToolLine(entry.event)}
               </article>
             ) : (
               <article key={entry.id} className="artifactCard">
@@ -824,6 +905,13 @@ function App(): React.ReactElement {
           )}
           <div ref={transcriptEnd} />
         </section>
+        {running ? (
+          <section className={`activityStrip ${stripRole}${noActivitySeconds > 60 ? " stalled" : ""}`}>
+            <span className="activityDot" />
+            <strong>{stripRole.toUpperCase()}</strong>
+            <span>{stripText}</span>
+          </section>
+        ) : null}
         <footer className="composer">
           <textarea
             placeholder="Ask Tandem to build something..."

@@ -7,7 +7,8 @@ import type {
   PermissionResponse,
   PlanConfirmEvent,
   PlanResponse,
-  TextEvent
+  TextEvent,
+  ToolActivityEvent
 } from "../shared/ipc.js";
 
 function on<T>(channel: string, callback: (event: T) => void): () => void {
@@ -42,6 +43,7 @@ const api: TandemDesktopApi = {
   respondToPlan: (response: PlanResponse) => ipcRenderer.send(ipcChannels.planRespond, response),
   onMachineEvent: (callback) => on<MachineEvent>(ipcChannels.machineEvent, callback),
   onTextEvent: (callback) => on<TextEvent>(ipcChannels.textEvent, callback),
+  onToolEvent: (callback) => on<ToolActivityEvent>(ipcChannels.toolEvent, callback),
   onCostEvent: (callback) => on(ipcChannels.costEvent, callback),
   onDoneEvent: (callback) => on<PipelineDoneEvent>(ipcChannels.doneEvent, callback),
   onPermissionRequest: (callback) => on<PermissionRequestEvent>(ipcChannels.permissionRequest, callback),

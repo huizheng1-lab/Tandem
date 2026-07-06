@@ -17,6 +17,7 @@ import { runOrchestration, MachineEvent, OrchestrationCheckpoint } from "../orch
 import { BuildPlan, CompletionReport, ReviewVerdict } from "../orchestrator/artifacts.js";
 import { createDiffTracker } from "../orchestrator/diff.js";
 import { PermissionBridge, PermissionRequest } from "../tools/permissions.js";
+import type { ToolActivityEvent } from "../tools/fs.js";
 import { Transcript, TranscriptMessage } from "./Transcript.js";
 import { InputBar } from "./InputBar.js";
 import { StatusLine } from "./StatusLine.js";
@@ -78,6 +79,11 @@ export function App({ config: initialConfig, env, cwd, initialError }: { config:
       if (text === last.text) return current;
       return [...current.slice(0, -1), { ...last, text }];
     });
+  };
+
+  const addToolMessage = (event: ToolActivityEvent) => {
+    const status = event.phase === "start" ? "running" : event.ok ? `ok ${((event.ms ?? 0) / 1000).toFixed(1)}s` : `failed ${((event.ms ?? 0) / 1000).toFixed(1)}s`;
+    addMessage("SYSTEM", `tool ${event.role} - ${event.tool}: ${event.target} - ${status}`);
   };
 
   const permissionBridge: PermissionBridge = {
@@ -223,7 +229,8 @@ export function App({ config: initialConfig, env, cwd, initialError }: { config:
         onLeaderText: (text) => appendDelta("LEADER", text),
         onWorkerText: (text) => appendDelta("WORKER", text),
         onLeaderThinking: config.showThinking ? (text) => appendDelta("LEADER", text) : undefined,
-        onWorkerThinking: config.showThinking ? (text) => appendDelta("WORKER", text) : undefined
+        onWorkerThinking: config.showThinking ? (text) => appendDelta("WORKER", text) : undefined,
+        onToolEvent: addToolMessage
       });
       const result = await runOrchestration({
         request: prompt,

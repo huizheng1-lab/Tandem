@@ -5,11 +5,13 @@ import type { CostTick } from "../../src/session/cost.js";
 import type { Goal } from "../../src/session/goals.js";
 import type { SessionEvent, SessionMetadata } from "../../src/session/store.js";
 import type { Schedule } from "../../src/commands/schedule.js";
+import type { ToolActivityEvent } from "../../src/tools/fs.js";
 
 export type { MachineEvent, OrchestrationCheckpoint } from "../../src/orchestrator/machine.js";
 export type { Goal } from "../../src/session/goals.js";
 export type { Schedule } from "../../src/commands/schedule.js";
 export type { SessionMetadata } from "../../src/session/store.js";
+export type { ToolActivityEvent } from "../../src/tools/fs.js";
 
 export const ipcChannels = {
   ping: "app:ping",
@@ -40,6 +42,7 @@ export const ipcChannels = {
   machineEvent: "evt:machine",
   textEvent: "evt:text",
   costEvent: "evt:cost",
+  toolEvent: "evt:tool",
   doneEvent: "evt:done"
 } as const;
 
@@ -201,6 +204,7 @@ export interface TandemDesktopApi {
   respondToPlan(response: PlanResponse): void;
   onMachineEvent(callback: (event: MachineEvent) => void): () => void;
   onTextEvent(callback: (event: TextEvent) => void): () => void;
+  onToolEvent(callback: (event: ToolActivityEvent) => void): () => void;
   onCostEvent(callback: (event: CostTotals) => void): () => void;
   onDoneEvent(callback: (event: PipelineDoneEvent) => void): () => void;
   onPermissionRequest(callback: (event: PermissionRequestEvent) => void): () => void;

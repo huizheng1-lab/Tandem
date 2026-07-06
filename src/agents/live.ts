@@ -6,6 +6,7 @@ import { makeModel } from "../providers/client.js";
 import { ModelEntry } from "../providers/registry.js";
 import { PermissionBridge } from "../tools/permissions.js";
 import { makeToolSet } from "../tools/index.js";
+import type { ToolActivityEvent } from "../tools/fs.js";
 import { CostLedger, CostRole } from "../session/cost.js";
 import { AgentFns, PlanResult } from "../orchestrator/machine.js";
 import { BuildPlan, BuildPlanSchema, CompletionReportSchema, ReviewVerdictSchema, validateBuildPlan } from "../orchestrator/artifacts.js";
@@ -27,6 +28,7 @@ export interface LiveAgentOptions {
   onWorkerText?: (text: string) => void;
   onLeaderThinking?: (text: string) => void;
   onWorkerThinking?: (text: string) => void;
+  onToolEvent?: (event: ToolActivityEvent) => void;
 }
 
 function jsonBlock(value: unknown): string {
@@ -145,7 +147,8 @@ export async function createLiveAgents(options: LiveAgentOptions): Promise<Agent
     permissionMode: options.config.permissionMode,
     permissionBridge: options.permissionBridge,
     recordTouchedPath: options.recordTouchedPath,
-    abortSignal: options.abortSignal
+    abortSignal: options.abortSignal,
+    onToolEvent: options.onToolEvent
   };
 
   return {

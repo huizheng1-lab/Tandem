@@ -10,6 +10,19 @@ export interface ToolContext {
   permissionBridge?: PermissionBridge;
   recordTouchedPath?: (filePath: string) => void;
   abortSignal?: AbortSignal;
+  onToolEvent?: (event: ToolActivityEvent) => void;
+}
+
+export type ToolActivityRole = "leader" | "worker";
+export type ToolActivityPhase = "start" | "end";
+
+export interface ToolActivityEvent {
+  role: ToolActivityRole;
+  tool: string;
+  target: string;
+  phase: ToolActivityPhase;
+  ok?: boolean;
+  ms?: number;
 }
 
 export function resolveInside(cwd: string, target: string): string {

@@ -32,6 +32,7 @@ import {
   type SessionAutoApproveMode,
   type SessionDeleteResponse,
   type SessionResumeResponse,
+  type ToolActivityEvent,
   type SessionStartRequest,
   type SessionStartResponse
 } from "../shared/ipc.js";
@@ -175,7 +176,8 @@ export class TandemService {
         onLeaderText: (delta) => void this.emitText("leader", delta),
         onWorkerText: (delta) => void this.emitText("worker", delta),
         onLeaderThinking: (delta) => void this.emitText("leader", delta, true),
-        onWorkerThinking: (delta) => void this.emitText("worker", delta, true)
+        onWorkerThinking: (delta) => void this.emitText("worker", delta, true),
+        onToolEvent: (event) => void this.emitTool(event)
       });
       const goals = formatStandingGoals((await listGoals(this.projectDir)).filter((goal) => goal.status === "active"));
       const result = await (this.deps.runOrchestration ?? runOrchestration)({
@@ -330,6 +332,11 @@ export class TandemService {
     this.window.webContents.send(ipcChannels.costEvent, this.costTotals());
     await this.session?.append("machine", event);
     await this.session?.append("cost", this.costTotals());
+  }
+
+  private async emitTool(event: ToolActivityEvent): Promise<void> {
+    this.window.webContents.send(ipcChannels.toolEvent, event);
+    await this.session?.append("tool", event);
   }
 
   private costTotals(): CostTotals {
