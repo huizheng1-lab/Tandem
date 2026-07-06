@@ -20,6 +20,10 @@ function safeJson(value: unknown): string {
   }
 }
 
+export function stripEmbeddedHistoryDigest(content: string): string {
+  return content.replace(/^Compact session-log history:\n[\s\S]*?\n\n(?=Request:)/, "");
+}
+
 export function rebuildLeaderThread(events: SessionEvent[]): RunnerMessage[] {
   const messages: RunnerMessage[] = [];
 
@@ -34,7 +38,10 @@ export function rebuildLeaderThread(events: SessionEvent[]): RunnerMessage[] {
 
     if (event.type === "user") {
       const prompt = textField(event.payload, "prompt");
-      if (prompt) messages.push({ role: "user", content: `Request:\n${prompt}` });
+      if (prompt) {
+        const stripped = stripEmbeddedHistoryDigest(prompt);
+        messages.push({ role: "user", content: stripped.startsWith("Request:") ? stripped : `Request:\n${stripped}` });
+      }
       continue;
     }
 

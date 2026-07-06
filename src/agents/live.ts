@@ -16,6 +16,7 @@ import type { RunnerMessage } from "./runner.js";
 import { leaderPlannerPrompt, leaderReviewerPrompt, leaderTakeoverPrompt } from "./leader.js";
 import { workerPrompt } from "./worker.js";
 import { hostPlatformPrompt } from "./platform.js";
+import { stripEmbeddedHistoryDigest } from "../session/leader-thread.js";
 
 export interface LiveAgentOptions {
   config: TandemConfig;
@@ -95,6 +96,11 @@ function artifactThreadMessage(name: string, value: unknown, fallbackText: strin
 
 function threadAsText(messages: RunnerMessage[]): string {
   return messages.map((message) => `${message.role.toUpperCase()}:\n${message.content}`).join("\n\n");
+}
+
+export function buildLeaderRequestMessage(input: { request: string; goals: string[]; history?: string; includeHistoryDigest: boolean; validationFeedback?: string }): string {
+  const history = input.includeHistoryDigest && input.history?.trim() ? `Compact session-log history:\n${input.history.trim()}\n\n` : "";
+  return `${history}Request:\n${input.request}\n\nStanding goals (context only - do not redirect unrelated requests toward these):\n${input.goals.length > 0 ? input.goals.join("\n") : "none"}${input.validationFeedback ?? ""}`;
 }
 
 export type ProseObjectGenerator<T> = (options: {
@@ -211,7 +217,7 @@ export async function createLiveAgents(options: LiveAgentOptions): Promise<Agent
   };
   const projectInstructions = async () => (await options.projectInstructions?.())?.trim() || "Project instructions:\nnone";
   const memoryInstruction = "Honor Project instructions. Use remember to append one durable user preference, project convention, environment constraint, decision, or unresolved issue to TANDEM.md when it should carry into future turns and worker rounds.";
-  const leaderThread: RunnerMessage[] = [...(options.leaderThread ?? [])];
+  const leaderThread: RunnerMessage[] = [...(options.leaderThread ?? [])].map((message) => (message.role === "user" ? { ...message, content: stripEmbeddedHistoryDigest(message.content) } : message));
   const compactLeaderThread = async (system: string): Promise<void> => {
     const budgetChars = Math.max(1, options.config.leaderContextBudgetTokens) * 4;
     if (estimatePromptSize(system, leaderThread).chars <= budgetChars || leaderThread.length <= 12) return;
@@ -249,9 +255,10 @@ export async function createLiveAgents(options: LiveAgentOptions): Promise<Agent
         };
         const system = `${leaderPlannerPrompt}\n${hostPrompt}\n${await projectInstructions()}\n${memoryInstruction}\nTreat the new request in the context of this continuing session conversation; pronouns, references like "that file", and follow-ups may refer to earlier turns.\nUsers may reference standing goals by number (for example, "goal 1"); resolve those references against the Standing goals list before asking for clarification.\nStanding goals are context only; do not redirect unrelated requests toward them.\nYou may answer directly for pure questions. For implementation work, call submit_build_plan exactly once.\nThe "verification" field must contain exact runnable shell commands only (e.g. "node test.mjs"), one command per entry - never prose or manual instructions. Put manual checks in acceptanceCriteria instead. Verification commands MUST be runnable verbatim on the host platform.`;
         await compactLeaderThread(system);
+        const includeHistoryDigest = leaderThread.length === 0;
         leaderThread.push({
           role: "user",
-          content: `${history?.trim() ? `Compact session-log history:\n${history.trim()}\n\n` : ""}Request:\n${request}\n\nStanding goals (context only - do not redirect unrelated requests toward these):\n${goals.length > 0 ? goals.join("\n") : "none"}${validationFeedback}`
+          content: buildLeaderRequestMessage({ request, goals, history, includeHistoryDigest, validationFeedback })
         });
         const result = await runAgentArtifact({
           model: leader.model,

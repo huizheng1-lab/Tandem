@@ -36,4 +36,30 @@ describe("rebuildLeaderThread", () => {
       { role: "user", content: "Request:\nfollow-up" }
     ]);
   });
+
+  it("strips embedded compact history digests from rebuilt user turns", () => {
+    const thread = rebuildLeaderThread([
+      event("user", {
+        prompt: [
+          "Compact session-log history:",
+          "Turn 1:",
+          "User: create colors.txt",
+          "Outcome: created colors.txt",
+          "",
+          "Request:",
+          "add one more to that file",
+          "",
+          "Standing goals (context only - do not redirect unrelated requests toward these):",
+          "none"
+        ].join("\n")
+      })
+    ]);
+
+    expect(thread).toEqual([
+      {
+        role: "user",
+        content: "Request:\nadd one more to that file\n\nStanding goals (context only - do not redirect unrelated requests toward these):\nnone"
+      }
+    ]);
+  });
 });
