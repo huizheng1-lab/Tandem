@@ -1,10 +1,16 @@
 import { TandemConfig } from "../config/schema.js";
 import { saveProjectConfig } from "../config/load.js";
 import { modelRegistry, resolveModel } from "../providers/registry.js";
+import type { ModelEntry } from "../providers/registry.js";
+
+function mediaBadge(model: Pick<ModelEntry, "media">): string {
+  const values = [model.media?.images ? "img" : "", model.media?.pdf ? "pdf" : ""].filter(Boolean);
+  return values.length > 0 ? ` [${values.join("+")}]` : "";
+}
 
 export function listModels(config: TandemConfig, env: NodeJS.ProcessEnv): string {
   return modelRegistry(config.customModels)
-    .map((model) => `${env[model.envKey] ? "ok " : "key"} ${model.id} (${model.envKey})`)
+    .map((model) => `${env[model.envKey] ? "ok " : "key"} ${model.id}${mediaBadge(model)} (${model.envKey})`)
     .join("\n");
 }
 

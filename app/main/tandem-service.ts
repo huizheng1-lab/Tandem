@@ -13,6 +13,8 @@ import { runOrchestration, type MachineEvent, type OrchestrationCheckpoint } fro
 import { modelRegistry } from "../../src/providers/registry.js";
 import { tandemStateDir } from "../../src/paths.js";
 import { CostLedger } from "../../src/session/cost.js";
+import { copyAttachment, formatAttachmentBlock, writeAttachmentData } from "../../src/session/attachments.js";
+import type { AttachmentRef } from "../../src/session/attachments.js";
 import { addGoal, completeGoal, formatStandingGoals, listGoals } from "../../src/session/goals.js";
 import { buildConversationHistory } from "../../src/session/history.js";
 import { rebuildLeaderThread } from "../../src/session/leader-thread.js";
@@ -168,7 +170,7 @@ export class TandemService {
     };
   }
 
-  async run(prompt: string): Promise<void> {
+  async run(prompt: string, attachments: AttachmentRef[] = []): Promise<void> {
     if (this.controller) throw new Error("A Tandem run is already active.");
     if (!this.session) await this.startSession({ projectDir: this.projectDir });
     const session = this.session as SessionLike;
@@ -177,7 +179,9 @@ export class TandemService {
     const history = buildConversationHistory(sessionEvents);
     await this.emitMachine({ type: "notice", message: `context: ${history.priorTurns} prior turn${history.priorTurns === 1 ? "" : "s"}` });
     if (history.truncated) await this.emitMachine({ type: "notice", message: "including last 10 turns of context" });
-    await session.append("user", { prompt });
+    const attachmentBlock = formatAttachmentBlock(attachments);
+    const promptWithAttachments = attachmentBlock ? `${prompt}\n\n${attachmentBlock}` : prompt;
+    await session.append("user", { prompt: promptWithAttachments, attachments });
     const initialState = this.lastCheckpoint?.phase === "DONE" ? undefined : this.lastCheckpoint;
     this.lastCheckpoint = undefined;
 
@@ -206,11 +210,12 @@ export class TandemService {
       });
       const goals = formatStandingGoals((await listGoals(this.projectDir)).filter((goal) => goal.status === "active"));
       const result = await (this.deps.runOrchestration ?? runOrchestration)({
-        request: prompt,
+        request: promptWithAttachments,
         config: this.config,
         agents,
         goals,
         history: history.text,
+        attachments,
         diffProvider: diffTracker,
         initialState,
         confirmPlan: (plan) => this.confirmPlan(plan),
@@ -263,8 +268,17 @@ export class TandemService {
       provider: model.provider,
       modelName: model.modelName,
       envKey: model.envKey,
-      available: Boolean(this.env[model.envKey])
+      available: Boolean(this.env[model.envKey]),
+      media: model.media
     }));
+  }
+
+  async addAttachmentFiles(paths: string[]): Promise<AttachmentRef[]> {
+    return Promise.all(paths.map((filePath) => copyAttachment(this.projectDir, filePath)));
+  }
+
+  addAttachmentData(name: string, data: Uint8Array): Promise<AttachmentRef> {
+    return writeAttachmentData(this.projectDir, name, data);
   }
 
   listSessions(): Promise<SessionMetadata[]> {

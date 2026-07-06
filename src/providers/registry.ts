@@ -9,6 +9,10 @@ export interface ModelEntry {
   envKey: string;
   baseURL?: string;
   contextWindow: number;
+  media?: {
+    images?: boolean;
+    pdf?: boolean;
+  };
   costHints?: {
     inputPerMillion: number;
     outputPerMillion: number;
@@ -22,6 +26,7 @@ export const builtInModels: ModelEntry[] = [
     modelName: "claude-fable-5",
     envKey: "ANTHROPIC_API_KEY",
     contextWindow: 200000,
+    media: { images: true, pdf: true },
     costHints: { inputPerMillion: 15, outputPerMillion: 75 }
   },
   {
@@ -30,6 +35,7 @@ export const builtInModels: ModelEntry[] = [
     modelName: "claude-opus-4-8",
     envKey: "ANTHROPIC_API_KEY",
     contextWindow: 200000,
+    media: { images: true, pdf: true },
     costHints: { inputPerMillion: 15, outputPerMillion: 75 }
   },
   {
@@ -38,6 +44,7 @@ export const builtInModels: ModelEntry[] = [
     modelName: "claude-sonnet-5",
     envKey: "ANTHROPIC_API_KEY",
     contextWindow: 200000,
+    media: { images: true, pdf: true },
     costHints: { inputPerMillion: 3, outputPerMillion: 15 }
   },
   {
@@ -46,6 +53,7 @@ export const builtInModels: ModelEntry[] = [
     modelName: "claude-haiku-4-5",
     envKey: "ANTHROPIC_API_KEY",
     contextWindow: 200000,
+    media: { images: true, pdf: true },
     costHints: { inputPerMillion: 1, outputPerMillion: 5 }
   },
   {
@@ -54,6 +62,7 @@ export const builtInModels: ModelEntry[] = [
     modelName: "gemini-2.5-pro",
     envKey: "GEMINI_API_KEY",
     contextWindow: 1000000,
+    media: { images: true, pdf: true },
     costHints: { inputPerMillion: 1.25, outputPerMillion: 10 }
   },
   {
@@ -62,6 +71,7 @@ export const builtInModels: ModelEntry[] = [
     modelName: "gemini-2.5-flash",
     envKey: "GEMINI_API_KEY",
     contextWindow: 1000000,
+    media: { images: true, pdf: true },
     costHints: { inputPerMillion: 0.3, outputPerMillion: 2.5 }
   },
   {
@@ -69,28 +79,32 @@ export const builtInModels: ModelEntry[] = [
     provider: "google",
     modelName: "gemini-3.5-flash",
     envKey: "GEMINI_API_KEY",
-    contextWindow: 1000000
+    contextWindow: 1000000,
+    media: { images: true, pdf: true }
   },
   {
     id: "google/gemini-3.1-pro-preview",
     provider: "google",
     modelName: "gemini-3.1-pro-preview",
     envKey: "GEMINI_API_KEY",
-    contextWindow: 1000000
+    contextWindow: 1000000,
+    media: { images: true, pdf: true }
   },
   {
     id: "google/gemini-3-pro-preview",
     provider: "google",
     modelName: "gemini-3-pro-preview",
     envKey: "GEMINI_API_KEY",
-    contextWindow: 1000000
+    contextWindow: 1000000,
+    media: { images: true, pdf: true }
   },
   {
     id: "google/gemini-3.1-flash-lite",
     provider: "google",
     modelName: "gemini-3.1-flash-lite",
     envKey: "GEMINI_API_KEY",
-    contextWindow: 1000000
+    contextWindow: 1000000,
+    media: { images: true, pdf: true }
   },
   {
     id: "openai/gpt-5",
@@ -98,6 +112,7 @@ export const builtInModels: ModelEntry[] = [
     modelName: "gpt-5",
     envKey: "OPENAI_API_KEY",
     contextWindow: 256000,
+    media: { images: true },
     costHints: { inputPerMillion: 10, outputPerMillion: 30 }
   },
   {
@@ -106,6 +121,7 @@ export const builtInModels: ModelEntry[] = [
     modelName: "gpt-5-mini",
     envKey: "OPENAI_API_KEY",
     contextWindow: 128000,
+    media: { images: true },
     costHints: { inputPerMillion: 1, outputPerMillion: 4 }
   }
 ];
@@ -118,6 +134,7 @@ export function customToModelEntry(model: CustomModel): ModelEntry {
     envKey: model.apiKeyEnv,
     baseURL: model.baseURL,
     contextWindow: model.contextWindow ?? 128000,
+    media: model.media,
     costHints: model.costHints
   };
 }

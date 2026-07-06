@@ -14,6 +14,7 @@ export const CustomModelSchema = z
     apiKeyEnv: z.string().min(1),
     modelName: z.string().min(1),
     contextWindow: z.number().int().positive().optional(),
+    media: z.object({ images: z.boolean().optional(), pdf: z.boolean().optional() }).optional(),
     costHints: z
       .object({
         inputPerMillion: z.number().nonnegative(),

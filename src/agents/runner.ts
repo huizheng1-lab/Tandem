@@ -2,10 +2,11 @@ import { hasToolCall, stepCountIs, streamText } from "ai";
 import type { LanguageModel, LanguageModelUsage, ToolSet } from "ai";
 import { CostLedger, CostRole } from "../session/cost.js";
 import { ModelEntry } from "../providers/registry.js";
+import type { ContentPart } from "../session/attachments.js";
 
 export interface RunnerMessage {
   role: "system" | "user" | "assistant";
-  content: string;
+  content: string | ContentPart[];
 }
 
 export interface AgentRunOptions {
@@ -50,7 +51,12 @@ function safeJson(value: unknown): string | undefined {
 }
 
 export function estimatePromptSize(system: string, messages: RunnerMessage[]): PromptSizeEstimate {
-  const chars = system.length + messages.reduce((sum, message) => sum + message.role.length + message.content.length, 0);
+  const chars =
+    system.length +
+    messages.reduce((sum, message) => {
+      const contentLength = typeof message.content === "string" ? message.content.length : message.content.reduce((partSum, part) => partSum + (part.type === "text" ? part.text.length : 512), 0);
+      return sum + message.role.length + contentLength;
+    }, 0);
   return { chars, approxTokens: Math.ceil(chars / 4) };
 }
 
@@ -268,7 +274,7 @@ export async function runAgentText(options: AgentRunOptions): Promise<{ text: st
       const result = streamText({
         model: options.model,
         system: options.system,
-        messages: options.messages,
+        messages: options.messages as never,
         tools: options.tools,
         stopWhen: options.stopToolName ? [stepCountIs(options.maxSteps), hasToolCall(options.stopToolName)] : stepCountIs(options.maxSteps),
         toolChoice: options.toolChoice,

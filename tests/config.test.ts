@@ -134,9 +134,24 @@ describe("config", () => {
   it("registers the current Gemini 3.x built-ins without guessed pricing", () => {
     for (const id of ["google/gemini-3.5-flash", "google/gemini-3.1-pro-preview", "google/gemini-3-pro-preview", "google/gemini-3.1-flash-lite"]) {
       const entry = resolveModel(id, []);
-      expect(entry).toMatchObject({ provider: "google", envKey: "GEMINI_API_KEY" });
+      expect(entry).toMatchObject({ provider: "google", envKey: "GEMINI_API_KEY", media: { images: true, pdf: true } });
       expect(entry.costHints).toBeUndefined();
     }
     expect(() => resolveModel("google/gemini-3.5-pro", [])).toThrow(/Unknown model/);
+  });
+
+  it("allows custom models to override media capabilities", () => {
+    const entry = resolveModel("compatible/vision", [
+      {
+        id: "compatible/vision",
+        provider: "openai-compatible",
+        baseURL: "https://example.test/v1",
+        apiKeyEnv: "VISION_KEY",
+        modelName: "vision-model",
+        media: { images: true }
+      }
+    ]);
+
+    expect(entry.media).toEqual({ images: true });
   });
 });

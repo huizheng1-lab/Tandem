@@ -4,6 +4,8 @@ import path from "node:path";
 import { ipcChannels } from "../shared/ipc.js";
 import { TandemService } from "./tandem-service.js";
 import type {
+  AttachmentAddDataRequest,
+  AttachmentAddFilesRequest,
   GoalAddRequest,
   GoalCompleteRequest,
   MemoryAddRequest,
@@ -62,11 +64,13 @@ ipcMain.handle(ipcChannels.sessionStart, (_event, request: SessionStartRequest) 
   return service?.startSession(request);
 });
 ipcMain.handle(ipcChannels.pipelineRun, async (_event, request: PipelineRunRequest) => {
-  await service?.run(request.prompt);
+  await service?.run(request.prompt, request.attachments ?? []);
 });
 ipcMain.handle(ipcChannels.pipelineAbort, () => {
   service?.abort();
 });
+ipcMain.handle(ipcChannels.attachmentAddFiles, (_event, request: AttachmentAddFilesRequest) => service?.addAttachmentFiles(request.paths));
+ipcMain.handle(ipcChannels.attachmentAddData, (_event, request: AttachmentAddDataRequest) => service?.addAttachmentData(request.name, request.data));
 ipcMain.handle(ipcChannels.appStateGet, () => service?.getAppState());
 ipcMain.handle(ipcChannels.configGet, () => service?.getConfig());
 ipcMain.handle(ipcChannels.configSet, (_event, patch) => service?.setConfig(patch));

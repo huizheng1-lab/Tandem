@@ -3,6 +3,7 @@ import type { BuildPlan } from "../../src/orchestrator/artifacts.js";
 import type { MachineEvent, OrchestrationCheckpoint } from "../../src/orchestrator/machine.js";
 import type { CostTick } from "../../src/session/cost.js";
 import type { Goal } from "../../src/session/goals.js";
+import type { AttachmentRef } from "../../src/session/attachments.js";
 import type { SessionMemoryNote } from "../../src/session/memory.js";
 import type { SessionEvent, SessionMetadata } from "../../src/session/store.js";
 import type { Schedule } from "../../src/commands/schedule.js";
@@ -10,6 +11,7 @@ import type { ToolActivityEvent } from "../../src/tools/fs.js";
 
 export type { MachineEvent, OrchestrationCheckpoint } from "../../src/orchestrator/machine.js";
 export type { Goal } from "../../src/session/goals.js";
+export type { AttachmentRef } from "../../src/session/attachments.js";
 export type { SessionMemoryNote } from "../../src/session/memory.js";
 export type { Schedule } from "../../src/commands/schedule.js";
 export type { SessionMetadata } from "../../src/session/store.js";
@@ -20,6 +22,8 @@ export const ipcChannels = {
   sessionStart: "session:start",
   pipelineRun: "pipeline:run",
   pipelineAbort: "pipeline:abort",
+  attachmentAddFiles: "attachment:add-files",
+  attachmentAddData: "attachment:add-data",
   permissionRequest: "permission:request",
   permissionRespond: "permission:respond",
   planConfirm: "plan:confirm",
@@ -77,6 +81,7 @@ export interface DesktopAppStateResponse {
 
 export interface PipelineRunRequest {
   prompt: string;
+  attachments?: AttachmentRef[];
 }
 
 export interface MissingKeyInfo {
@@ -137,6 +142,16 @@ export interface ModelListItem {
   modelName: string;
   envKey: string;
   available: boolean;
+  media?: { images?: boolean; pdf?: boolean };
+}
+
+export interface AttachmentAddFilesRequest {
+  paths: string[];
+}
+
+export interface AttachmentAddDataRequest {
+  name: string;
+  data: Uint8Array;
 }
 
 export interface SessionResumeRequest {
@@ -202,6 +217,8 @@ export interface TandemDesktopApi {
   startSession(request: SessionStartRequest): Promise<SessionStartResponse>;
   runPipeline(request: PipelineRunRequest): Promise<void>;
   abortPipeline(): Promise<void>;
+  addAttachmentFiles(request: AttachmentAddFilesRequest): Promise<AttachmentRef[]>;
+  addAttachmentData(request: AttachmentAddDataRequest): Promise<AttachmentRef>;
   getAppState(): Promise<DesktopAppStateResponse>;
   getConfig(): Promise<TandemConfig>;
   setConfig(patch: Partial<TandemConfig>): Promise<TandemConfig>;

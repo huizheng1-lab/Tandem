@@ -4,6 +4,7 @@ import type {
   CostTotals,
   DesktopAppStateResponse,
   Goal,
+  AttachmentRef,
   MachineEvent,
   MissingKeyInfo,
   ModelListItem,
@@ -81,6 +82,12 @@ function displayPath(filePath: string): string {
   return parts.at(-1) ?? filePath;
 }
 
+function formatAttachmentSize(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+}
+
 function errorText(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
@@ -126,6 +133,11 @@ function formatToolLine(event: ToolActivityEvent): string {
   return `tool ${event.role} - ${event.tool}: ${event.target} - ${status}`;
 }
 
+function mediaBadge(model: Pick<ModelListItem, "media">): string {
+  const values = [model.media?.images ? "img" : "", model.media?.pdf ? "pdf" : ""].filter(Boolean);
+  return values.length > 0 ? ` [${values.join("+")}]` : "";
+}
+
 function App(): React.ReactElement {
   const tandem = window.tandem;
   if (!tandem) {
@@ -144,6 +156,7 @@ function App(): React.ReactElement {
   const [models, setModels] = useState<ModelListItem[]>([]);
   const [entries, setEntries] = useState<TranscriptEntry[]>([{ id: 1, kind: "message", role: "system", text: "Choose a project folder to start Tandem." }]);
   const [prompt, setPrompt] = useState("");
+  const [attachments, setAttachments] = useState<AttachmentRef[]>([]);
   const [running, setRunning] = useState(false);
   const [phase, setPhase] = useState("IDLE");
   const [round, setRound] = useState(0);
@@ -175,6 +188,7 @@ function App(): React.ReactElement {
   const [schedulePrompt, setSchedulePrompt] = useState("");
   const nextId = useRef(2);
   const transcriptEnd = useRef<HTMLDivElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
   const showThinkingRef = useRef(false);
   const thinkingTimers = useRef<Partial<Record<"leader" | "worker", ReturnType<typeof setTimeout>>>>({});
 
@@ -191,6 +205,45 @@ function App(): React.ReactElement {
 
   const appendMessage = (role: Role, text: string) => {
     setEntries((current) => [...current, { id: nextId.current++, kind: "message", role, text }]);
+  };
+
+  const addAttachmentsFromFiles = async (files: FileList | File[]) => {
+    const fileItems = Array.from(files);
+    const paths = fileItems.map((file) => (file as unknown as { path?: string }).path).filter((value): value is string => Boolean(value));
+    try {
+      const added: AttachmentRef[] = [];
+      if (paths.length > 0) added.push(...(await tandem.addAttachmentFiles({ paths })));
+      for (const file of fileItems) {
+        const filePath = (file as unknown as { path?: string }).path;
+        if (filePath) continue;
+        const fallbackName = file.name || `pasted-${Date.now()}.png`;
+        added.push(await tandem.addAttachmentData({ name: fallbackName, data: new Uint8Array(await file.arrayBuffer()) }));
+      }
+      setAttachments((current) => [...current, ...added]);
+    } catch (error) {
+      appendMessage("system", `Attach file failed: ${errorText(error)}`);
+    }
+  };
+
+  const handlePaste = async (event: React.ClipboardEvent<HTMLTextAreaElement>) => {
+    const imageFiles = Array.from(event.clipboardData.files).filter((file) => file.type.startsWith("image/"));
+    if (imageFiles.length === 0) return;
+    event.preventDefault();
+    try {
+      const saved: AttachmentRef[] = [];
+      const pastedAt = Date.now();
+      for (let index = 0; index < imageFiles.length; index += 1) {
+        const file = imageFiles[index] as File;
+        saved.push(await tandem.addAttachmentData({ name: `pasted-${pastedAt}${index === 0 ? "" : `-${index + 1}`}.png`, data: new Uint8Array(await file.arrayBuffer()) }));
+      }
+      setAttachments((current) => [...current, ...saved]);
+    } catch (error) {
+      appendMessage("system", `Attach pasted image failed: ${errorText(error)}`);
+    }
+  };
+
+  const removeAttachment = (filePath: string) => {
+    setAttachments((current) => current.filter((item) => item.path !== filePath));
   };
 
   const markActivity = (role: "leader" | "worker", kind: "thinking" | "writing") => {
@@ -574,7 +627,7 @@ function App(): React.ReactElement {
       if (command === "/models") {
         const items = await tandem.listModels();
         setModels(items);
-        appendMessage("system", items.map((model) => `${model.available ? "ok" : "key"} ${model.id}${model.available ? "" : ` (${model.envKey} missing)`}`).join("\n") || "No models.");
+        appendMessage("system", items.map((model) => `${model.available ? "ok" : "key"} ${model.id}${mediaBadge(model)}${model.available ? "" : ` (${model.envKey} missing)`}`).join("\n") || "No models.");
         return;
       }
       if (command === "/model") {
@@ -649,9 +702,9 @@ function App(): React.ReactElement {
 
   const send = async () => {
     const text = prompt.trim();
-    if (!text || running) return;
+    if ((!text && attachments.length === 0) || running) return;
     setPrompt("");
-    if (text.startsWith("/")) {
+    if (attachments.length === 0 && text.startsWith("/")) {
       await handleComposerCommand(text);
       return;
     }
@@ -668,9 +721,12 @@ function App(): React.ReactElement {
     setRunActivityCount(0);
     setPhase("PLANNING");
     setMissingKey(undefined);
-    appendMessage("user", text);
+    const sentAttachments = attachments;
+    setAttachments([]);
+    const attachmentBlock = sentAttachments.length > 0 ? `\n\n[Attached files: ${sentAttachments.map((item) => item.path).join(", ")}]` : "";
+    appendMessage("user", `${text}${attachmentBlock}`);
     try {
-      await tandem.runPipeline({ prompt: text });
+      await tandem.runPipeline({ prompt: text, attachments: sentAttachments });
     } catch (error) {
       setRunning(false);
       setPhase("IDLE");
@@ -731,7 +787,16 @@ function App(): React.ReactElement {
   const stripText = noActivitySeconds > 60 ? `no activity for ${noActivitySeconds}s - the model call may be stalled (Stop to abort)` : activityText;
 
   return (
-    <main className="shell">
+    <main
+      className="shell"
+      onDragOver={(event) => {
+        event.preventDefault();
+      }}
+      onDrop={(event) => {
+        event.preventDefault();
+        if (!needsProjectPick) void addAttachmentsFromFiles(event.dataTransfer.files);
+      }}
+    >
       <aside className="sidebar">
         <div className="brand">Tandem</div>
         <div className="projectPath">{contextProjectDir ?? "No project loaded"}</div>
@@ -877,6 +942,7 @@ function App(): React.ReactElement {
               {models.map((model) => (
                 <option key={model.id} value={model.id} disabled={!model.available}>
                   {model.id}
+                  {mediaBadge(model)}
                   {model.available ? "" : ` (${model.envKey} missing)`}
                 </option>
               ))}
@@ -888,6 +954,7 @@ function App(): React.ReactElement {
               {models.map((model) => (
                 <option key={model.id} value={model.id} disabled={!model.available}>
                   {model.id}
+                  {mediaBadge(model)}
                   {model.available ? "" : ` (${model.envKey} missing)`}
                 </option>
               ))}
@@ -988,12 +1055,35 @@ function App(): React.ReactElement {
           </section>
         ) : null}
         <footer className="composer">
+          {attachments.length > 0 ? (
+            <div className="attachmentTray">
+              {attachments.map((attachment) => (
+                <button key={attachment.path} type="button" className="attachmentChip" onClick={() => removeAttachment(attachment.path)}>
+                  {attachment.name} <span>{formatAttachmentSize(attachment.size)}</span> <strong>x</strong>
+                </button>
+              ))}
+            </div>
+          ) : null}
+          <input
+            ref={fileInputRef}
+            type="file"
+            multiple
+            className="hiddenFileInput"
+            onChange={(event) => {
+              if (event.currentTarget.files) void addAttachmentsFromFiles(event.currentTarget.files);
+              event.currentTarget.value = "";
+            }}
+          />
+          <button type="button" className="attachButton" disabled={running || needsProjectPick} onClick={() => fileInputRef.current?.click()}>
+            Attach
+          </button>
           <textarea
             placeholder="Ask Tandem to build something..."
             rows={3}
             value={prompt}
             disabled={running || needsProjectPick}
             onChange={(event) => setPrompt(event.target.value)}
+            onPaste={(event) => void handlePaste(event)}
             onKeyDown={(event) => {
               if (event.key === "Enter" && !event.shiftKey) {
                 event.preventDefault();

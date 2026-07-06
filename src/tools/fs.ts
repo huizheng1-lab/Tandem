@@ -3,6 +3,9 @@ import path from "node:path";
 import { PermissionBridge, ensurePermission } from "./permissions.js";
 import { PermissionMode } from "../config/schema.js";
 import { assertSafeWritePath } from "./protection.js";
+import { mediaContentForFile } from "../session/attachments.js";
+import type { ContentPart } from "../session/attachments.js";
+import type { ModelEntry } from "../providers/registry.js";
 
 export interface ToolContext {
   cwd: string;
@@ -10,6 +13,7 @@ export interface ToolContext {
   permissionBridge?: PermissionBridge;
   recordTouchedPath?: (filePath: string) => void;
   rememberNote?: (text: string, by: "leader" | "worker") => Promise<string>;
+  media?: ModelEntry["media"];
   abortSignal?: AbortSignal;
   onToolEvent?: (event: ToolActivityEvent) => void;
 }
@@ -35,7 +39,9 @@ export function resolveInside(cwd: string, target: string): string {
   return resolved;
 }
 
-export async function readFileTool(ctx: Pick<ToolContext, "cwd">, filePath: string, offset = 0, limit = 2000): Promise<string> {
+export async function readFileTool(ctx: Pick<ToolContext, "cwd" | "media">, filePath: string, offset = 0, limit = 2000): Promise<string | ContentPart[]> {
+  const media = await mediaContentForFile(ctx.cwd, filePath, { media: ctx.media });
+  if (media) return media;
   const fullPath = resolveInside(ctx.cwd, filePath);
   const content = await readFile(fullPath, "utf8");
   const lines = content.split(/\r?\n/);

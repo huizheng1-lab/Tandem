@@ -11,6 +11,8 @@ import { CostLedger, CostRole } from "../session/cost.js";
 import { AgentFns, PlanResult } from "../orchestrator/machine.js";
 import { BuildPlan, BuildPlanSchema, CompletionReport, CompletionReportSchema, ReviewFeedback, ReviewVerdictSchema, validateBuildPlan } from "../orchestrator/artifacts.js";
 import { Goal } from "../session/goals.js";
+import { buildUserContentWithAttachments } from "../session/attachments.js";
+import type { ContentPart } from "../session/attachments.js";
 import { estimatePromptSize, runAgentArtifact, runAgentText } from "./runner.js";
 import type { RunnerMessage } from "./runner.js";
 import { leaderPlannerPrompt, leaderReviewerPrompt, leaderTakeoverPrompt } from "./leader.js";
@@ -94,8 +96,19 @@ function artifactThreadMessage(name: string, value: unknown, fallbackText: strin
   return [text, artifact].filter(Boolean).join("\n\n") || `Submitted ${name}.`;
 }
 
+function contentAsText(content: string | ContentPart[]): string {
+  if (typeof content === "string") return content;
+  return content
+    .map((part) => {
+      if (part.type === "text") return part.text;
+      if (part.type === "image") return "[attached image content]";
+      return `[attached file content: ${part.filename ?? part.mediaType}]`;
+    })
+    .join("\n");
+}
+
 function threadAsText(messages: RunnerMessage[]): string {
-  return messages.map((message) => `${message.role.toUpperCase()}:\n${message.content}`).join("\n\n");
+  return messages.map((message) => `${message.role.toUpperCase()}:\n${contentAsText(message.content)}`).join("\n\n");
 }
 
 export function buildLeaderRequestMessage(input: { request: string; goals: string[]; history?: string; includeHistoryDigest: boolean; validationFeedback?: string }): string {
@@ -217,7 +230,9 @@ export async function createLiveAgents(options: LiveAgentOptions): Promise<Agent
   };
   const projectInstructions = async () => (await options.projectInstructions?.())?.trim() || "Project instructions:\nnone";
   const memoryInstruction = "Honor Project instructions. Use remember to append one durable user preference, project convention, environment constraint, decision, or unresolved issue to TANDEM.md when it should carry into future turns and worker rounds.";
-  const leaderThread: RunnerMessage[] = [...(options.leaderThread ?? [])].map((message) => (message.role === "user" ? { ...message, content: stripEmbeddedHistoryDigest(message.content) } : message));
+  const leaderThread: RunnerMessage[] = [...(options.leaderThread ?? [])].map((message) =>
+    message.role === "user" && typeof message.content === "string" ? { ...message, content: stripEmbeddedHistoryDigest(message.content) } : message
+  );
   const compactLeaderThread = async (system: string): Promise<void> => {
     const budgetChars = Math.max(1, options.config.leaderContextBudgetTokens) * 4;
     if (estimatePromptSize(system, leaderThread).chars <= budgetChars || leaderThread.length <= 12) return;
@@ -238,7 +253,7 @@ export async function createLiveAgents(options: LiveAgentOptions): Promise<Agent
   };
 
   return {
-    plan: async ({ request, goals, history }): Promise<PlanResult> => {
+    plan: async ({ request, goals, history, attachments = [] }): Promise<PlanResult> => {
       let validationFeedback = "";
       let lastError: unknown;
       for (let attempt = 1; attempt <= 3; attempt += 1) {
@@ -256,9 +271,10 @@ export async function createLiveAgents(options: LiveAgentOptions): Promise<Agent
         const system = `${leaderPlannerPrompt}\n${hostPrompt}\n${await projectInstructions()}\n${memoryInstruction}\nTreat the new request in the context of this continuing session conversation; pronouns, references like "that file", and follow-ups may refer to earlier turns.\nUsers may reference standing goals by number (for example, "goal 1"); resolve those references against the Standing goals list before asking for clarification.\nStanding goals are context only; do not redirect unrelated requests toward them.\nYou may answer directly for pure questions. For implementation work, call submit_build_plan exactly once.\nThe "verification" field must contain exact runnable shell commands only (e.g. "node test.mjs"), one command per entry - never prose or manual instructions. Put manual checks in acceptanceCriteria instead. Verification commands MUST be runnable verbatim on the host platform.`;
         await compactLeaderThread(system);
         const includeHistoryDigest = leaderThread.length === 0;
+        const userText = buildLeaderRequestMessage({ request, goals, history, includeHistoryDigest, validationFeedback });
         leaderThread.push({
           role: "user",
-          content: buildLeaderRequestMessage({ request, goals, history, includeHistoryDigest, validationFeedback })
+          content: await buildUserContentWithAttachments(options.cwd, userText, attachments, leader.entry)
         });
         const result = await runAgentArtifact({
           model: leader.model,
@@ -267,7 +283,7 @@ export async function createLiveAgents(options: LiveAgentOptions): Promise<Agent
           ledger: options.ledger,
           system,
           messages: leaderThread,
-          tools: mergeTools(makeToolSet(toolContext, "leader-readonly"), submitTools),
+          tools: mergeTools(makeToolSet({ ...toolContext, media: leader.entry.media }, "leader-readonly"), submitTools),
           maxSteps: options.config.maxStepsPerAgentTurn,
           stopToolName: "submit_build_plan",
           abortSignal: options.abortSignal,
@@ -317,7 +333,7 @@ export async function createLiveAgents(options: LiveAgentOptions): Promise<Agent
             content: buildWorkerContext({ round, plan, feedback, previousReport })
           }
         ],
-        tools: mergeTools(makeToolSet(toolContext, "worker"), submitTools),
+        tools: mergeTools(makeToolSet({ ...toolContext, media: worker.entry.media }, "worker"), submitTools),
         maxSteps: options.config.maxStepsPerAgentTurn,
         stopToolName: "submit_completion_report",
         abortSignal: options.abortSignal,
@@ -355,7 +371,7 @@ export async function createLiveAgents(options: LiveAgentOptions): Promise<Agent
         ledger: options.ledger,
         system,
         messages: leaderThread,
-        tools: mergeTools(makeToolSet(toolContext, "reviewer", plan.verification), submitTools),
+        tools: mergeTools(makeToolSet({ ...toolContext, media: leader.entry.media }, "reviewer", plan.verification), submitTools),
         maxSteps: options.config.maxStepsPerAgentTurn,
         stopToolName: "submit_review",
         abortSignal: options.abortSignal,
@@ -407,7 +423,7 @@ export async function createLiveAgents(options: LiveAgentOptions): Promise<Agent
         ledger: options.ledger,
         system,
         messages: leaderThread,
-        tools: mergeTools(makeToolSet(toolContext, "takeover"), submitTools),
+        tools: mergeTools(makeToolSet({ ...toolContext, media: leader.entry.media }, "takeover"), submitTools),
         maxSteps: options.config.maxStepsPerAgentTurn,
         stopToolName: "submit_takeover",
         abortSignal: options.abortSignal,

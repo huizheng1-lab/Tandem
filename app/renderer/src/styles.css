@@ -591,12 +591,51 @@ select {
 
 .composer {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 88px;
+  grid-template-columns: auto minmax(0, 1fr) 88px;
   gap: 12px;
   min-width: 0;
   padding: 16px;
   border-top: 1px solid #2a2d34;
   background: #15171c;
+}
+
+.attachmentTray {
+  display: flex;
+  grid-column: 1 / -1;
+  flex-wrap: wrap;
+  gap: 6px;
+  min-width: 0;
+}
+
+.attachmentChip {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  border: 1px solid #455165;
+  border-radius: 6px;
+  color: #e6e9ee;
+  background: #232a35;
+  padding: 5px 7px;
+  font-size: 12px;
+}
+
+.attachmentChip span {
+  color: #9da6b5;
+}
+
+.attachmentChip strong {
+  color: #f0b3b3;
+}
+
+.hiddenFileInput {
+  display: none;
+}
+
+.attachButton {
+  border: 1px solid #3d4654;
+  border-radius: 7px;
+  color: #f3f2ee;
+  background: #29313d;
+  padding: 0 10px;
 }
 
 .composer textarea {
