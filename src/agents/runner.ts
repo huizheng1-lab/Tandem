@@ -25,9 +25,72 @@ export interface AgentRunOptions {
   toolChoice?: { type: "tool"; toolName: string };
 }
 
+export interface PromptSizeEstimate {
+  chars: number;
+  approxTokens: number;
+}
+
 function isRetryable(error: unknown): boolean {
   const text = String(error);
   return /\b(429|500|502|503|504)\b/.test(text);
+}
+
+function truncate(value: string, max = 1200): string {
+  return value.length <= max ? value : `${value.slice(0, max)}...`;
+}
+
+function safeJson(value: unknown): string | undefined {
+  if (value === undefined) return undefined;
+  if (typeof value === "string") return truncate(value);
+  try {
+    return truncate(JSON.stringify(value));
+  } catch {
+    return truncate(String(value));
+  }
+}
+
+export function estimatePromptSize(system: string, messages: RunnerMessage[]): PromptSizeEstimate {
+  const chars = system.length + messages.reduce((sum, message) => sum + message.role.length + message.content.length, 0);
+  return { chars, approxTokens: Math.ceil(chars / 4) };
+}
+
+function valueAtPath(value: unknown, path: string[]): unknown {
+  let current = value as Record<string, unknown> | undefined;
+  for (const key of path) {
+    if (!current || typeof current !== "object") return undefined;
+    current = current[key] as Record<string, unknown> | undefined;
+  }
+  return current;
+}
+
+function providerDetail(error: unknown): string {
+  const value = error as Record<string, unknown>;
+  const fields: string[] = [];
+  const add = (label: string, detail: unknown) => {
+    const text = safeJson(detail);
+    if (text) fields.push(`${label}: ${text}`);
+  };
+  add("finishReason", value.finishReason ?? value.finish_reason ?? value.finish);
+  add("status", value.status ?? value.statusCode ?? value.status_code ?? valueAtPath(error, ["response", "status"]));
+  add("responseBody", value.responseBody ?? value.body ?? value.data ?? valueAtPath(error, ["response", "body"]) ?? valueAtPath(error, ["cause", "responseBody"]));
+  add("providerMetadata", value.providerMetadata ?? value.provider_metadata);
+  add("cause", value.cause);
+  return fields.join("; ") || "provider did not expose response detail";
+}
+
+export function isNoOutputGeneratedError(error: unknown): boolean {
+  const value = error as { name?: unknown; code?: unknown };
+  const text = `${String(value.name ?? "")} ${String(value.code ?? "")} ${String(error)}`;
+  return /NoOutputGenerated|AI_NoOutputGenerated|No output generated/i.test(text);
+}
+
+export function enrichAgentError(error: unknown, options: Pick<AgentRunOptions, "system" | "messages" | "costRole" | "modelEntry">): Error {
+  if (!isNoOutputGeneratedError(error)) return error instanceof Error ? error : new Error(String(error));
+  const estimate = estimatePromptSize(options.system, options.messages);
+  const role = options.costRole ?? "agent";
+  const model = options.modelEntry?.id ?? "unknown model";
+  const message = `${String(error)} Provider detail: ${providerDetail(error)}. Approx input: ${estimate.approxTokens} tokens (${estimate.chars} chars) for ${role} ${model}.`;
+  return new Error(message, { cause: error });
 }
 
 function finiteNumber(value: unknown): number | undefined {
@@ -243,7 +306,7 @@ export async function runAgentText(options: AgentRunOptions): Promise<{ text: st
       recordUsage(finishedUsage);
       return { text, usage: finishedUsage };
     } catch (error) {
-      lastError = error;
+      lastError = enrichAgentError(error, options);
       if (!isRetryable(error) || attempt === 2 || options.abortSignal?.aborted) break;
       await new Promise((resolve) => setTimeout(resolve, 500 * (attempt + 1)));
     }

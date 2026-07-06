@@ -9,7 +9,7 @@ import { makeToolSet } from "../tools/index.js";
 import type { ToolActivityEvent } from "../tools/fs.js";
 import { CostLedger, CostRole } from "../session/cost.js";
 import { AgentFns, PlanResult } from "../orchestrator/machine.js";
-import { BuildPlan, BuildPlanSchema, CompletionReportSchema, ReviewVerdictSchema, validateBuildPlan } from "../orchestrator/artifacts.js";
+import { BuildPlan, BuildPlanSchema, CompletionReport, CompletionReportSchema, ReviewFeedback, ReviewVerdictSchema, validateBuildPlan } from "../orchestrator/artifacts.js";
 import { Goal } from "../session/goals.js";
 import { runAgentArtifact, runAgentText } from "./runner.js";
 import { leaderPlannerPrompt, leaderReviewerPrompt, leaderTakeoverPrompt } from "./leader.js";
@@ -37,6 +37,49 @@ function jsonBlock(value: unknown): string {
 
 function mergeTools(...sets: ToolSet[]): ToolSet {
   return Object.assign({}, ...sets);
+}
+
+export const WORKER_CONTEXT_CHAR_BUDGET = 16000;
+const FEEDBACK_FIELD_CHAR_LIMIT = 700;
+const REPORT_FIELD_CHAR_LIMIT = 700;
+
+function truncateText(value: string | undefined, max = REPORT_FIELD_CHAR_LIMIT): string | undefined {
+  if (value === undefined) return undefined;
+  return value.length <= max ? value : `${value.slice(0, max)}...`;
+}
+
+export function compactFeedback(feedback: ReviewFeedback): ReviewFeedback {
+  return feedback.map((item) => ({
+    issue: truncateText(item.issue, FEEDBACK_FIELD_CHAR_LIMIT) ?? "",
+    location: truncateText(item.location, 240),
+    requiredChange: truncateText(item.requiredChange, FEEDBACK_FIELD_CHAR_LIMIT) ?? ""
+  }));
+}
+
+export function summarizePreviousReport(report: CompletionReport | undefined) {
+  if (!report) return null;
+  return {
+    status: report.status,
+    summary: truncateText(report.summary),
+    taskResults: report.taskResults.map((task) => ({ id: task.id, status: task.status, notes: truncateText(task.notes, 300) })),
+    failedVerifications: report.verificationResults
+      .filter((result) => !result.passed)
+      .map((result) => ({ command: result.command, passed: result.passed, output: truncateText(result.output) })),
+    deviationsFromPlan: report.deviationsFromPlan.map((deviation) => truncateText(deviation, 400) ?? "")
+  };
+}
+
+export function buildWorkerContext(input: { round: number; plan: BuildPlan; feedback: ReviewFeedback; previousReport?: CompletionReport }, budget = WORKER_CONTEXT_CHAR_BUDGET): string {
+  const compact = {
+    feedback: compactFeedback(input.feedback),
+    previousReport: summarizePreviousReport(input.previousReport)
+  };
+  let content = `Round ${input.round}\nBuildPlan:\n${jsonBlock(input.plan)}\n\nReview feedback:\n${jsonBlock(compact.feedback)}\n\nPrevious report summary:\n${jsonBlock(compact.previousReport)}`;
+  if (content.length > budget) {
+    const suffix = "\n[context truncated; full prior artifacts remain in the session log]";
+    content = `${content.slice(0, Math.max(0, budget - suffix.length))}${suffix}`;
+  }
+  return content;
 }
 
 export type ProseObjectGenerator<T> = (options: {
@@ -220,7 +263,7 @@ export async function createLiveAgents(options: LiveAgentOptions): Promise<Agent
         messages: [
           {
             role: "user",
-            content: `Round ${round}\nBuildPlan:\n${jsonBlock(plan)}\n\nReview feedback:\n${jsonBlock(feedback)}\n\nPrevious report:\n${jsonBlock(previousReport ?? null)}`
+            content: buildWorkerContext({ round, plan, feedback, previousReport })
           }
         ],
         tools: mergeTools(makeToolSet(toolContext, "worker"), submitTools),

@@ -138,12 +138,19 @@ select {
 }
 
 .sessionActions button {
-  border: 1px solid #343b47;
+  border: 1px solid #566276;
   border-radius: 5px;
-  color: #b9c0c9;
-  background: #17191e;
-  padding: 4px 6px;
-  font-size: 11px;
+  color: #e6e9ee;
+  background: #29313d;
+  padding: 5px 8px;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.sessionActions .dangerAction {
+  border-color: #7a4c4c;
+  color: #ffe2e2;
+  background: #422326;
 }
 
 .renameInput {
@@ -514,11 +521,24 @@ select {
   font-size: 18px;
 }
 
+.modalText {
+  margin: 0;
+  color: #d7dce4;
+  font-size: 14px;
+  line-height: 1.5;
+}
+
 .modalActions {
   display: flex;
   justify-content: flex-end;
   flex-wrap: wrap;
   gap: 10px;
+}
+
+.modalActions .dangerButton {
+  border-color: #8a5151;
+  color: #fff0f0;
+  background: #6a292f;
 }
 
 .permissionTarget {

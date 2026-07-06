@@ -160,6 +160,7 @@ function App(): React.ReactElement {
   const [showArchived, setShowArchived] = useState(false);
   const [renamingSession, setRenamingSession] = useState<string>();
   const [renameTitle, setRenameTitle] = useState("");
+  const [deleteTarget, setDeleteTarget] = useState<SessionMetadata>();
   const [goals, setGoals] = useState<Goal[]>([]);
   const [schedules, setSchedules] = useState<Schedule[]>([]);
   const [goalText, setGoalText] = useState("");
@@ -489,16 +490,22 @@ function App(): React.ReactElement {
   const archiveSession = async (id: string, archived: boolean) => {
     try {
       setSessions(await tandem.archiveSession({ id, archived }));
+      appendMessage("system", archived ? "Session moved to Archived." : "Session restored to active sessions.");
     } catch (error) {
       appendMessage("system", `${archived ? "Archive" : "Unarchive"} session failed: ${errorText(error)}`);
       await refreshSidebar();
     }
   };
 
-  const deleteSession = async (id: string) => {
-    if (!window.confirm("Delete this session log permanently? Project files will not be touched.")) return;
+  const requestDeleteSession = (item: SessionMetadata) => {
+    setDeleteTarget(item);
+  };
+
+  const confirmDeleteSession = async () => {
+    if (!deleteTarget) return;
     try {
-      const response = await tandem.deleteSession({ id });
+      const response = await tandem.deleteSession({ id: deleteTarget.id });
+      setDeleteTarget(undefined);
       setSessions(response.sessions);
       if (response.activeSession) await applyStartedSession(response.activeSession, false);
     } catch (error) {
@@ -740,7 +747,7 @@ function App(): React.ReactElement {
                     <button type="button" onClick={() => beginRenameSession(item)}>Rename</button>
                   )}
                   <button type="button" onClick={() => void archiveSession(item.id, true)}>Archive</button>
-                  <button type="button" onClick={() => void deleteSession(item.id)}>Delete</button>
+                  <button type="button" className="dangerAction" onClick={() => requestDeleteSession(item)}>Delete</button>
                 </div>
               </div>
             ))}
@@ -758,7 +765,7 @@ function App(): React.ReactElement {
                   </button>
                   <div className="sessionActions">
                     <button type="button" onClick={() => void archiveSession(item.id, false)}>Unarchive</button>
-                    <button type="button" onClick={() => void deleteSession(item.id)}>Delete</button>
+                    <button type="button" className="dangerAction" onClick={() => requestDeleteSession(item)}>Delete</button>
                   </div>
                 </div>
               ))}
@@ -974,6 +981,25 @@ function App(): React.ReactElement {
               </button>
               <button type="button" onClick={() => respondToPermission(true)}>
                 Allow
+              </button>
+            </div>
+          </section>
+        </div>
+      ) : null}
+
+      {deleteTarget ? (
+        <div className="modalShade">
+          <section className="modal">
+            <h2>Delete Session</h2>
+            <p className="modalText">
+              Delete session "{deleteTarget.title || deleteTarget.id.slice(0, 8)}"? This permanently removes its transcript. The project files are not affected.
+            </p>
+            <div className="modalActions">
+              <button type="button" className="secondary" onClick={() => setDeleteTarget(undefined)}>
+                Cancel
+              </button>
+              <button type="button" className="dangerButton" onClick={() => void confirmDeleteSession()}>
+                Yes, delete
               </button>
             </div>
           </section>
