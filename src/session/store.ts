@@ -133,6 +133,20 @@ async function updateSessionIndex(cwd: string, homeDir: string | undefined, id: 
   });
 }
 
+function noSessionError(id: string, cwd: string): Error {
+  return new Error(`No session ${id} in ${cwd}.`);
+}
+
+async function updateExistingSessionIndex(cwd: string, homeDir: string | undefined, id: string, updater: (entry: Omit<SessionMetadata, "id">) => void): Promise<void> {
+  await enqueueIndexMutation(async () => {
+    const index = await reconcileSessionIndex(cwd, homeDir, await readIndex(cwd, homeDir));
+    const entry = index[id];
+    if (!entry) throw noSessionError(id, cwd);
+    updater(entry);
+    await writeIndex(cwd, homeDir, index);
+  });
+}
+
 export class SessionStore {
   readonly id: string;
   readonly filePath: string;
@@ -198,19 +212,21 @@ export async function listSessions(cwd = process.cwd(), homeDir?: string): Promi
 }
 
 export async function renameSession(id: string, title: string, cwd = process.cwd(), homeDir?: string): Promise<void> {
-  await updateSessionIndex(cwd, homeDir, id, (entry) => {
+  await updateExistingSessionIndex(cwd, homeDir, id, (entry) => {
     entry.title = title.trim() || id.slice(0, 8);
   });
 }
 
 export async function archiveSession(id: string, archived: boolean, cwd = process.cwd(), homeDir?: string): Promise<void> {
-  await updateSessionIndex(cwd, homeDir, id, (entry) => {
+  await updateExistingSessionIndex(cwd, homeDir, id, (entry) => {
     entry.archived = archived;
   });
 }
 
 export async function deleteSession(id: string, cwd = process.cwd(), homeDir?: string): Promise<void> {
-  await rm(path.join(sessionDir(cwd, homeDir), `${id}.jsonl`), { force: true });
+  const filePath = path.join(sessionDir(cwd, homeDir), `${id}.jsonl`);
+  if (!existsSync(filePath)) throw noSessionError(id, cwd);
+  await rm(filePath);
   await enqueueIndexMutation(async () => {
     const index = await reconcileSessionIndex(cwd, homeDir, await readIndex(cwd, homeDir));
     delete index[id];

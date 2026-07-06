@@ -307,6 +307,7 @@ function App(): React.ReactElement {
       resumed = await tandem.resumeSession({ id });
     } catch (error) {
       appendMessage("system", `Resume session failed: ${errorText(error)}`);
+      await refreshSidebar();
       return;
     }
     setSession((current) => (current ? { ...current, sessionId: id, defaultProject: false } : current));
@@ -341,6 +342,17 @@ function App(): React.ReactElement {
     replayed.push({ id: nextId.current++, kind: "message", role: "system", text: `Resumed session ${id}. The next prompt will continue from its latest checkpoint.` });
     setEntries(replayed.length > 1 ? replayed : [{ id: nextId.current++, kind: "message", role: "system", text: `Session ${id} has no transcript events.` }]);
     await refreshSidebar();
+  };
+
+  const handleToolEvent = (event: ToolActivityEvent) => {
+    const now = Date.now();
+    setLastActivityAt(now);
+    if (event.phase === "start") {
+      setActiveTool({ ...event, startedAt: now });
+    } else {
+      appendToolActivity(event);
+      setActiveTool((current) => (current?.role === event.role && current.tool === event.tool && current.target === event.target ? undefined : current));
+    }
   };
 
   useEffect(() => {
@@ -400,17 +412,6 @@ function App(): React.ReactElement {
     const nextConfig = await tandem.setConfig({ [role]: modelId });
     setConfig(nextConfig);
     setSession((current) => (current ? { ...current, config: nextConfig } : current));
-  };
-
-  const handleToolEvent = (event: ToolActivityEvent) => {
-    const now = Date.now();
-    setLastActivityAt(now);
-    if (event.phase === "start") {
-      setActiveTool({ ...event, startedAt: now });
-    } else {
-      appendToolActivity(event);
-      setActiveTool((current) => (current?.role === event.role && current.tool === event.tool && current.target === event.target ? undefined : current));
-    }
   };
 
   const updatePermissionMode = async (permissionMode: PermissionMode) => {
@@ -481,6 +482,7 @@ function App(): React.ReactElement {
       setRenameTitle("");
     } catch (error) {
       appendMessage("system", `Rename session failed: ${errorText(error)}`);
+      await refreshSidebar();
     }
   };
 
@@ -489,6 +491,7 @@ function App(): React.ReactElement {
       setSessions(await tandem.archiveSession({ id, archived }));
     } catch (error) {
       appendMessage("system", `${archived ? "Archive" : "Unarchive"} session failed: ${errorText(error)}`);
+      await refreshSidebar();
     }
   };
 
@@ -500,6 +503,7 @@ function App(): React.ReactElement {
       if (response.activeSession) await applyStartedSession(response.activeSession, false);
     } catch (error) {
       appendMessage("system", `Delete session failed: ${errorText(error)}`);
+      await refreshSidebar();
     }
   };
 
@@ -679,6 +683,7 @@ function App(): React.ReactElement {
 
   const activeSessions = sessions.filter((item) => !item.archived);
   const archivedSessions = sessions.filter((item) => item.archived);
+  const sessionScopeLabel = contextProjectDir ? displayPath(contextProjectDir) : "current folder";
   const visibleEntries = showActivity ? entries : entries.filter((entry) => entry.kind !== "tool");
   const fallbackRole: "leader" | "worker" = phase === "BUILDING" ? "worker" : "leader";
   const noActivitySeconds = secondsSince(lastActivityAt, activityTick);
@@ -706,7 +711,7 @@ function App(): React.ReactElement {
           <div className="sideValue">{session?.sessionId ?? "not started"}</div>
         </div>
         <div className="sideSection">
-          <div className="sideLabel">Sessions</div>
+          <div className="sideLabel">Sessions - {sessionScopeLabel}</div>
           <div className="sideList">
             {activeSessions.map((item) => (
               <div key={item.id} className="sessionRow">

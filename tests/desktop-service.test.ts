@@ -263,6 +263,23 @@ describe("TandemService", () => {
     expect(initialStates).toEqual([checkpoint, undefined]);
   });
 
+  it("uses GUI wording when resuming a session from another folder", async () => {
+    const cwd = await tempDir();
+    const home = await tempDir();
+    const { window } = fakeWindow();
+    const service = new TandemService(window as never, {
+      registerIpcResponses: false,
+      homeDir: home,
+      openSession: async () => {
+        throw new Error("No session foreign. Run /sessions to list sessions.");
+      }
+    });
+
+    await service.startSession({ projectDir: cwd });
+
+    await expect(service.resumeSession("foreign")).rejects.toThrow("This session belongs to a different project folder - pick that folder to open it.");
+  });
+
   it("records crashes to the active session", async () => {
     const cwd = await tempDir();
     const { window, sent } = fakeWindow();

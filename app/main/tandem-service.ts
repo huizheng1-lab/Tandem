@@ -246,7 +246,15 @@ export class TandemService {
   }
 
   async resumeSession(id: string): Promise<SessionResumeResponse> {
-    const store = await (this.deps.openSession ?? ((sessionId, cwd) => SessionStore.open(sessionId, cwd, this.homeDir)))(id, this.projectDir);
+    let store: SessionLike;
+    try {
+      store = await (this.deps.openSession ?? ((sessionId, cwd) => SessionStore.open(sessionId, cwd, this.homeDir)))(id, this.projectDir);
+    } catch (error) {
+      if (/No session .*Run \/sessions to list sessions/.test(String(error))) {
+        throw new Error("This session belongs to a different project folder - pick that folder to open it.");
+      }
+      throw error;
+    }
     const events = await store.read();
     this.session = store;
     const checkpoint = this.findLastCheckpoint(events.map((event) => event.payload));

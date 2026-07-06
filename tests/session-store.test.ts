@@ -56,6 +56,26 @@ describe("SessionStore", () => {
     expect(existsSync(store.filePath)).toBe(false);
   });
 
+  it("rejects rename, archive, and delete for unknown session ids", async () => {
+    const { cwd, home } = await tempProject();
+
+    await expect(renameSession("missing-id", "Nope", cwd, home)).rejects.toThrow(/No session missing-id in /);
+    await expect(archiveSession("missing-id", true, cwd, home)).rejects.toThrow(/No session missing-id in /);
+    await expect(deleteSession("missing-id", cwd, home)).rejects.toThrow(/No session missing-id in /);
+  });
+
+  it("does not create phantom index rows when renaming an unknown id", async () => {
+    const { cwd, home } = await tempProject();
+    const store = await SessionStore.create(cwd, home);
+    await store.append("user", { prompt: "real session" });
+
+    await expect(renameSession("foreign-id", "Phantom", cwd, home)).rejects.toThrow(/No session foreign-id in /);
+
+    const sessions = await listSessions(cwd, home);
+    expect(sessions.map((session) => session.id)).toEqual([store.id]);
+    expect(sessions.some((session) => session.id === "foreign-id")).toBe(false);
+  });
+
   it("lazily rebuilds a missing or corrupt index from session logs", async () => {
     const { cwd, home } = await tempProject();
     const first = await SessionStore.create(cwd, home);
