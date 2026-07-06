@@ -55,10 +55,11 @@ describe("worker context", () => {
     expect(content).not.toContain("PASS\nPASS\nPASS");
   });
 
-  it("injects shared session notes into worker context", () => {
-    const content = buildWorkerContext({ round: 1, plan, feedback: [], sessionNotes: "- [user] Use single quotes in JS" });
+  it("keeps worker task context focused on the round brief", () => {
+    const content = buildWorkerContext({ round: 1, plan, feedback: [] });
 
-    expect(content).toContain("Session notes (shared memory):\n- [user] Use single quotes in JS");
-    expect(content.indexOf("Session notes")).toBeLessThan(content.indexOf("BuildPlan:"));
+    expect(content).toContain("Round 1");
+    expect(content).toContain("BuildPlan:");
+    expect(content).not.toContain("Session notes");
   });
 });

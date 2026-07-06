@@ -15,8 +15,10 @@ import { tandemStateDir } from "../../src/paths.js";
 import { CostLedger } from "../../src/session/cost.js";
 import { addGoal, completeGoal, formatStandingGoals, listGoals } from "../../src/session/goals.js";
 import { buildConversationHistory } from "../../src/session/history.js";
+import { rebuildLeaderThread } from "../../src/session/leader-thread.js";
 import { addNote, formatSessionNotes, removeNote, replaySessionMemory } from "../../src/session/memory.js";
 import type { MemoryAuthor, SessionMemoryNote } from "../../src/session/memory.js";
+import { appendProjectMemoryNote, formatProjectInstructions, readProjectInstructions } from "../../src/session/project-memory.js";
 import { archiveSession, deleteSession, listSessions, renameSession, SessionStore } from "../../src/session/store.js";
 import type { SessionMetadata } from "../../src/session/store.js";
 import { safeDefaultProjectDir } from "../../src/tools/protection.js";
@@ -152,7 +154,18 @@ export class TandemService {
     this.session = await (this.deps.createSession ?? ((cwd) => SessionStore.create(cwd, this.homeDir)))(this.projectDir);
     await this.session.append("session:start", { projectDir: this.projectDir });
     await this.refreshCronTasks();
-    return { projectDir: this.projectDir, sessionId: this.session.id, config: this.config, defaultProject, projectSummary: await projectSummary(this.projectDir), projectConfigOverrides: this.projectConfigOverrides };
+    const projectInstructions = await readProjectInstructions(this.projectDir);
+    return {
+      projectDir: this.projectDir,
+      sessionId: this.session.id,
+      config: this.config,
+      defaultProject,
+      projectSummary: await projectSummary(this.projectDir),
+      projectConfigOverrides: this.projectConfigOverrides,
+      projectInstructions: projectInstructions
+        ? { fileName: projectInstructions.fileName, chars: projectInstructions.chars, truncated: projectInstructions.truncated }
+        : undefined
+    };
   }
 
   async run(prompt: string): Promise<void> {
@@ -160,7 +173,8 @@ export class TandemService {
     if (!this.session) await this.startSession({ projectDir: this.projectDir });
     const session = this.session as SessionLike;
     this.controller = new AbortController();
-    const history = buildConversationHistory(await session.read());
+    const sessionEvents = await session.read();
+    const history = buildConversationHistory(sessionEvents);
     await this.emitMachine({ type: "notice", message: `context: ${history.priorTurns} prior turn${history.priorTurns === 1 ? "" : "s"}` });
     if (history.truncated) await this.emitMachine({ type: "notice", message: "including last 10 turns of context" });
     await session.append("user", { prompt });
@@ -185,8 +199,10 @@ export class TandemService {
         onLeaderThinking: (delta) => void this.emitText("leader", delta, true),
         onWorkerThinking: (delta) => void this.emitText("worker", delta, true),
         onToolEvent: (event) => void this.emitTool(event),
-        sessionNotes: () => this.currentSessionNotes(),
-        rememberNote: (text, by) => this.rememberSessionNote(text, by)
+        projectInstructions: () => this.currentProjectInstructions(),
+        rememberNote: (text, by) => this.rememberProjectNote(text, by),
+        leaderThread: rebuildLeaderThread(sessionEvents),
+        onLeaderCompaction: (event) => this.recordLeaderCompaction(event)
       });
       const goals = formatStandingGoals((await listGoals(this.projectDir)).filter((goal) => goal.status === "active"));
       const result = await (this.deps.runOrchestration ?? runOrchestration)({
@@ -198,8 +214,6 @@ export class TandemService {
         diffProvider: diffTracker,
         initialState,
         confirmPlan: (plan) => this.confirmPlan(plan),
-        addSessionNote: (text, by) => this.addSystemMemory(text, by),
-        removeSessionNotesByPrefix: (prefix) => this.removeMemoryByPrefix(prefix),
         emit: (event) => void this.emitMachine(event)
       });
       const done = { summary: result.summary, takeover: result.takeover };
@@ -387,11 +401,24 @@ export class TandemService {
     return formatSessionNotes(await this.listMemory());
   }
 
+  private async currentProjectInstructions(): Promise<string> {
+    return formatProjectInstructions(await readProjectInstructions(this.projectDir));
+  }
+
+  private async rememberProjectNote(text: string, _by: "leader" | "worker"): Promise<string> {
+    return appendProjectMemoryNote(this.projectDir, text);
+  }
+
   private async rememberSessionNote(text: string, by: "leader" | "worker"): Promise<string> {
     if (!this.session) throw new Error("No active session for memory.");
     const result = await addNote(this.session, text, by);
     if (result.added) await this.emitMemory();
     return result.added ? `Remembered: ${result.note.text}` : `Already remembered: ${result.note.text}`;
+  }
+
+  private async recordLeaderCompaction(event: { summary: string; compactedTurns: number }): Promise<void> {
+    await this.session?.append("memory:compaction", event);
+    await this.emitMachine({ type: "notice", message: `compacted ${event.compactedTurns} earlier turns.` });
   }
 
   private async addSystemMemory(text: string, by: Extract<MemoryAuthor, "system">): Promise<void> {

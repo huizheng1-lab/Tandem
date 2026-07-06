@@ -65,6 +65,7 @@ export interface SessionStartResponse {
   defaultProject: boolean;
   projectSummary: string;
   projectConfigOverrides?: string[];
+  projectInstructions?: { fileName: string; chars: number; truncated: boolean };
 }
 
 export interface DesktopAppStateResponse {

@@ -70,7 +70,10 @@ function sessionStartedText(session: SessionStartResponse): string {
   const permissionMode = session.projectConfigOverrides?.includes("permissionMode")
     ? `${session.config.permissionMode} (project override)`
     : session.config.permissionMode;
-  return `Session ${session.sessionId} started; working in ${session.projectDir} (${session.projectSummary}) - leader ${session.config.leader}, worker ${session.config.worker}, permissions ${permissionMode}`;
+  const instructions = session.projectInstructions
+    ? `, project instructions: ${session.projectInstructions.fileName} (${session.projectInstructions.chars} chars${session.projectInstructions.truncated ? ", truncated" : ""})`
+    : "";
+  return `Session ${session.sessionId} started; working in ${session.projectDir} (${session.projectSummary}) - leader ${session.config.leader}, worker ${session.config.worker}, permissions ${permissionMode}${instructions}`;
 }
 
 function displayPath(filePath: string): string {

@@ -12,7 +12,8 @@ import { parseLoop } from "../commands/loop.js";
 import { addSchedule, listSchedules, markScheduleRun, missedSchedule, removeSchedule, Schedule } from "../commands/schedule.js";
 import { appendGoalNote, formatStandingGoals, listGoals } from "../session/goals.js";
 import { buildConversationHistory } from "../session/history.js";
-import { addNote, formatSessionNotes, removeNote, replaySessionMemory } from "../session/memory.js";
+import { rebuildLeaderThread } from "../session/leader-thread.js";
+import { appendProjectMemoryNote, formatProjectInstructions, readProjectInstructions } from "../session/project-memory.js";
 import { SessionStore, listSessions } from "../session/store.js";
 import { createLiveAgents, suggestGoalProgressNotes } from "../agents/live.js";
 import { runOrchestration, MachineEvent, OrchestrationCheckpoint } from "../orchestrator/machine.js";
@@ -115,6 +116,9 @@ export function App({ config: initialConfig, env, cwd, initialError }: { config:
     void SessionStore.create(cwd).then((store) => {
       storeRef.current = store;
       addMessage("SYSTEM", `Session ${store.id}`);
+      void readProjectInstructions(cwd).then((instructions) => {
+        if (instructions) addMessage("SYSTEM", `project instructions: ${instructions.fileName} (${instructions.chars} chars${instructions.truncated ? ", truncated" : ""})`);
+      });
     });
     void listSchedules(cwd).then((schedules) => {
       for (const schedule of schedules) registerSchedule(schedule.id, schedule.cron, schedule.prompt);
@@ -217,24 +221,15 @@ export function App({ config: initialConfig, env, cwd, initialError }: { config:
     setPlan(undefined);
     setVerdict(undefined);
     try {
-      const history = buildConversationHistory((await storeRef.current?.read()) ?? []);
+      const sessionEvents = (await storeRef.current?.read()) ?? [];
+      const history = buildConversationHistory(sessionEvents);
       addMessage("SYSTEM", `context: ${history.priorTurns} prior turn${history.priorTurns === 1 ? "" : "s"}`);
       if (history.truncated) addMessage("SYSTEM", "including last 10 turns of context");
       await storeRef.current?.append("user", { prompt });
-      const currentSessionNotes = async () => formatSessionNotes(replaySessionMemory((await storeRef.current?.read()) ?? []));
-      const rememberSessionNote = async (text: string, by: "leader" | "worker") => {
-        if (!storeRef.current) throw new Error("No active session for memory.");
-        const result = await addNote(storeRef.current, text, by);
-        return result.added ? `Remembered: ${result.note.text}` : `Already remembered: ${result.note.text}`;
+      const rememberSessionNote = async (text: string, _by: "leader" | "worker") => {
+        return appendProjectMemoryNote(cwd, text);
       };
-      const addSystemMemory = async (text: string) => {
-        if (storeRef.current) await addNote(storeRef.current, text, "system");
-      };
-      const removeMemoryByPrefix = async (prefix: string) => {
-        if (!storeRef.current) return;
-        const notes = replaySessionMemory(await storeRef.current.read()).filter((note) => note.text.startsWith(prefix));
-        for (const note of notes) await removeNote(storeRef.current, note.id);
-      };
+      const currentProjectInstructions = async () => formatProjectInstructions(await readProjectInstructions(cwd));
       const activeGoalObjects = (await listGoals(cwd)).filter((goal) => goal.status === "active");
       const activeGoals = formatStandingGoals(activeGoalObjects);
       const diffTracker = createDiffTracker(cwd);
@@ -251,8 +246,13 @@ export function App({ config: initialConfig, env, cwd, initialError }: { config:
         onLeaderThinking: config.showThinking ? (text) => appendDelta("LEADER", text) : undefined,
         onWorkerThinking: config.showThinking ? (text) => appendDelta("WORKER", text) : undefined,
         onToolEvent: addToolMessage,
-        sessionNotes: currentSessionNotes,
-        rememberNote: rememberSessionNote
+        projectInstructions: currentProjectInstructions,
+        rememberNote: rememberSessionNote,
+        leaderThread: rebuildLeaderThread(sessionEvents),
+        onLeaderCompaction: async (event) => {
+          await storeRef.current?.append("memory:compaction", event);
+          addMessage("SYSTEM", `compacted ${event.compactedTurns} earlier turns.`);
+        }
       });
       const result = await runOrchestration({
         request: prompt,
@@ -263,8 +263,6 @@ export function App({ config: initialConfig, env, cwd, initialError }: { config:
         diffProvider: diffTracker,
         confirmPlan,
         initialState,
-        addSessionNote: (text) => addSystemMemory(text),
-        removeSessionNotesByPrefix: removeMemoryByPrefix,
         emit: handleEvent
       });
       trimTrailingAgentMessage();

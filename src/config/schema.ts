@@ -24,6 +24,7 @@ export const ConfigSchema = z.object({
   permissionMode: PermissionModeSchema,
   showThinking: z.boolean(),
   maxStepsPerAgentTurn: z.number().int().positive(),
+  leaderContextBudgetTokens: z.number().int().positive(),
   customModels: z.array(CustomModelSchema)
 });
 
@@ -40,6 +41,7 @@ export const defaultConfig: TandemConfig = {
   permissionMode: "ask",
   showThinking: false,
   maxStepsPerAgentTurn: 60,
+  leaderContextBudgetTokens: 60000,
   customModels: [
     {
       id: "minimax/minimax-m2.7",

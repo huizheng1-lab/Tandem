@@ -191,6 +191,65 @@ describe("TandemService", () => {
     expect(sent.some((event) => event.channel === ipcChannels.doneEvent)).toBe(true);
   });
 
+  it("passes project instructions to agents and writes remember notes to TANDEM.md", async () => {
+    const cwd = await tempDir();
+    await writeFile(path.join(cwd, "TANDEM.md"), "# Project\nUse Vitest.\n", "utf8");
+    const { window } = fakeWindow();
+    let projectInstructions = "";
+    let rememberResult = "";
+
+    const service = new TandemService(window as never, {
+      registerIpcResponses: false,
+      createSession: async () => ({
+        id: "session-1",
+        append: async () => undefined,
+        read: async () => []
+      }),
+      createAgents: async (options): Promise<AgentFns> => {
+        projectInstructions = (await options.projectInstructions?.()) ?? "";
+        rememberResult = (await options.rememberNote?.("Always use single quotes in JS here", "leader")) ?? "";
+        return fakeAgents();
+      },
+      runOrchestration: async (): Promise<RunResult> => ({ phase: "DONE", summary: "finished", reports: [], verdicts: [], takeover: false })
+    });
+
+    const started = await service.startSession({ projectDir: cwd });
+    await service.run("build");
+
+    expect(started.projectInstructions).toMatchObject({ fileName: "TANDEM.md" });
+    expect(projectInstructions).toContain("Project instructions (TANDEM.md):");
+    expect(projectInstructions).toContain("Use Vitest.");
+    expect(rememberResult).toContain("Remembered in TANDEM.md");
+    await expect(readFile(path.join(cwd, "TANDEM.md"), "utf8")).resolves.toContain("- Always use single quotes in JS here");
+  });
+
+  it("records leader compaction summaries in the session log and transcript", async () => {
+    const cwd = await tempDir();
+    const { window, sent } = fakeWindow();
+    const appended: Array<{ type: string; payload: unknown }> = [];
+    const service = new TandemService(window as never, {
+      registerIpcResponses: false,
+      createSession: async () => ({
+        id: "session-1",
+        append: async (type, payload) => {
+          appended.push({ type, payload });
+        },
+        read: async () => []
+      }),
+      createAgents: async (options): Promise<AgentFns> => {
+        await options.onLeaderCompaction?.({ summary: "Earlier colors.txt work.", compactedTurns: 4 });
+        return fakeAgents();
+      },
+      runOrchestration: async (): Promise<RunResult> => ({ phase: "DONE", summary: "finished", reports: [], verdicts: [], takeover: false })
+    });
+
+    await service.startSession({ projectDir: cwd });
+    await service.run("build");
+
+    expect(appended).toContainEqual({ type: "memory:compaction", payload: { summary: "Earlier colors.txt work.", compactedTurns: 4 } });
+    expect(sent.some((event) => event.channel === ipcChannels.machineEvent && (event.payload as { message?: string }).message === "compacted 4 earlier turns.")).toBe(true);
+  });
+
   it("does not reuse a completed checkpoint for a follow-up prompt", async () => {
     const cwd = await tempDir();
     const { window } = fakeWindow();

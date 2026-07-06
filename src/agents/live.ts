@@ -11,7 +11,8 @@ import { CostLedger, CostRole } from "../session/cost.js";
 import { AgentFns, PlanResult } from "../orchestrator/machine.js";
 import { BuildPlan, BuildPlanSchema, CompletionReport, CompletionReportSchema, ReviewFeedback, ReviewVerdictSchema, validateBuildPlan } from "../orchestrator/artifacts.js";
 import { Goal } from "../session/goals.js";
-import { runAgentArtifact, runAgentText } from "./runner.js";
+import { estimatePromptSize, runAgentArtifact, runAgentText } from "./runner.js";
+import type { RunnerMessage } from "./runner.js";
 import { leaderPlannerPrompt, leaderReviewerPrompt, leaderTakeoverPrompt } from "./leader.js";
 import { workerPrompt } from "./worker.js";
 import { hostPlatformPrompt } from "./platform.js";
@@ -29,8 +30,10 @@ export interface LiveAgentOptions {
   onLeaderThinking?: (text: string) => void;
   onWorkerThinking?: (text: string) => void;
   onToolEvent?: (event: ToolActivityEvent) => void;
-  sessionNotes?: () => string | Promise<string>;
+  projectInstructions?: () => string | Promise<string>;
   rememberNote?: (text: string, by: "leader" | "worker") => Promise<string>;
+  leaderThread?: RunnerMessage[];
+  onLeaderCompaction?: (event: { summary: string; compactedTurns: number }) => void | Promise<void>;
 }
 
 function jsonBlock(value: unknown): string {
@@ -71,17 +74,27 @@ export function summarizePreviousReport(report: CompletionReport | undefined) {
   };
 }
 
-export function buildWorkerContext(input: { round: number; plan: BuildPlan; feedback: ReviewFeedback; previousReport?: CompletionReport; sessionNotes?: string }, budget = WORKER_CONTEXT_CHAR_BUDGET): string {
+export function buildWorkerContext(input: { round: number; plan: BuildPlan; feedback: ReviewFeedback; previousReport?: CompletionReport }, budget = WORKER_CONTEXT_CHAR_BUDGET): string {
   const compact = {
     feedback: compactFeedback(input.feedback),
     previousReport: summarizePreviousReport(input.previousReport)
   };
-  let content = `Session notes (shared memory):\n${input.sessionNotes?.trim() || "none"}\n\nRound ${input.round}\nBuildPlan:\n${jsonBlock(input.plan)}\n\nReview feedback:\n${jsonBlock(compact.feedback)}\n\nPrevious report summary:\n${jsonBlock(compact.previousReport)}`;
+  let content = `Round ${input.round}\nBuildPlan:\n${jsonBlock(input.plan)}\n\nReview feedback:\n${jsonBlock(compact.feedback)}\n\nPrevious report summary:\n${jsonBlock(compact.previousReport)}`;
   if (content.length > budget) {
     const suffix = "\n[context truncated; full prior artifacts remain in the session log]";
     content = `${content.slice(0, Math.max(0, budget - suffix.length))}${suffix}`;
   }
   return content;
+}
+
+function artifactThreadMessage(name: string, value: unknown, fallbackText: string): string {
+  const text = fallbackText.trim();
+  const artifact = value === undefined ? "" : `Submitted ${name}:\n${jsonBlock(value)}`;
+  return [text, artifact].filter(Boolean).join("\n\n") || `Submitted ${name}.`;
+}
+
+function threadAsText(messages: RunnerMessage[]): string {
+  return messages.map((message) => `${message.role.toUpperCase()}:\n${message.content}`).join("\n\n");
 }
 
 export type ProseObjectGenerator<T> = (options: {
@@ -196,8 +209,27 @@ export async function createLiveAgents(options: LiveAgentOptions): Promise<Agent
     abortSignal: options.abortSignal,
     onToolEvent: options.onToolEvent
   };
-  const sessionNotes = async () => (await options.sessionNotes?.())?.trim() || "none";
-  const memoryInstruction = "Honor Session notes (shared memory); use remember when you learn a durable user preference, project convention, environment constraint, decision, or unresolved issue.";
+  const projectInstructions = async () => (await options.projectInstructions?.())?.trim() || "Project instructions:\nnone";
+  const memoryInstruction = "Honor Project instructions. Use remember to append one durable user preference, project convention, environment constraint, decision, or unresolved issue to TANDEM.md when it should carry into future turns and worker rounds.";
+  const leaderThread: RunnerMessage[] = [...(options.leaderThread ?? [])];
+  const compactLeaderThread = async (system: string): Promise<void> => {
+    const budgetChars = Math.max(1, options.config.leaderContextBudgetTokens) * 4;
+    if (estimatePromptSize(system, leaderThread).chars <= budgetChars || leaderThread.length <= 12) return;
+    const recent = leaderThread.slice(-12);
+    const older = leaderThread.slice(0, -12);
+    const { text } = await runAgentText({
+      model: leader.model,
+      modelEntry: leader.entry,
+      costRole: "leader",
+      ledger: options.ledger,
+      system: `${leaderPlannerPrompt}\nSummarize the prior Tandem leader conversation for continuing future turns. Preserve user requests, files or artifacts named, decisions, unresolved issues, and accepted plans/reviews. Be concise.`,
+      messages: [{ role: "user", content: threadAsText(older) }],
+      maxSteps: Math.min(8, options.config.maxStepsPerAgentTurn),
+      abortSignal: options.abortSignal
+    });
+    leaderThread.splice(0, leaderThread.length, { role: "assistant", content: `Conversation summary so far:\n${text.trim() || "(summary unavailable)"}` }, ...recent);
+    await options.onLeaderCompaction?.({ summary: text.trim(), compactedTurns: older.length });
+  };
 
   return {
     plan: async ({ request, goals, history }): Promise<PlanResult> => {
@@ -215,18 +247,19 @@ export async function createLiveAgents(options: LiveAgentOptions): Promise<Agent
             }
           })
         };
+        const system = `${leaderPlannerPrompt}\n${hostPrompt}\n${await projectInstructions()}\n${memoryInstruction}\nTreat the new request in the context of this continuing session conversation; pronouns, references like "that file", and follow-ups may refer to earlier turns.\nUsers may reference standing goals by number (for example, "goal 1"); resolve those references against the Standing goals list before asking for clarification.\nStanding goals are context only; do not redirect unrelated requests toward them.\nYou may answer directly for pure questions. For implementation work, call submit_build_plan exactly once.\nThe "verification" field must contain exact runnable shell commands only (e.g. "node test.mjs"), one command per entry - never prose or manual instructions. Put manual checks in acceptanceCriteria instead. Verification commands MUST be runnable verbatim on the host platform.`;
+        await compactLeaderThread(system);
+        leaderThread.push({
+          role: "user",
+          content: `${history?.trim() ? `Compact session-log history:\n${history.trim()}\n\n` : ""}Request:\n${request}\n\nStanding goals (context only - do not redirect unrelated requests toward these):\n${goals.length > 0 ? goals.join("\n") : "none"}${validationFeedback}`
+        });
         const result = await runAgentArtifact({
           model: leader.model,
           modelEntry: leader.entry,
           costRole: "leader",
           ledger: options.ledger,
-          system: `${leaderPlannerPrompt}\n${hostPrompt}\n${memoryInstruction}\nTreat the new request in the context of this conversation; pronouns, references like "that file", and follow-ups may refer to prior turns.\nUsers may reference standing goals by number (for example, "goal 1"); resolve those references against the Standing goals list before asking for clarification.\nStanding goals are context only; do not redirect unrelated requests toward them.\nYou may answer directly for pure questions. For implementation work, call submit_build_plan exactly once.\nThe "verification" field must contain exact runnable shell commands only (e.g. "node test.mjs"), one command per entry - never prose or manual instructions. Put manual checks in acceptanceCriteria instead. Verification commands MUST be runnable verbatim on the host platform.`,
-          messages: [
-            {
-              role: "user",
-              content: `Session notes (shared memory):\n${await sessionNotes()}\n\n${history?.trim() ? `Conversation so far:\n${history.trim()}\n\n` : ""}Request:\n${request}\n\nStanding goals (context only - do not redirect unrelated requests toward these):\n${goals.length > 0 ? goals.join("\n") : "none"}${validationFeedback}`
-            }
-          ],
+          system,
+          messages: leaderThread,
           tools: mergeTools(makeToolSet(toolContext, "leader-readonly"), submitTools),
           maxSteps: options.config.maxStepsPerAgentTurn,
           stopToolName: "submit_build_plan",
@@ -236,9 +269,15 @@ export async function createLiveAgents(options: LiveAgentOptions): Promise<Agent
           artifactName: "BuildPlan",
           getArtifact: () => submittedPlan
         });
-        if (!result.artifact) return { kind: "answer", answer: result.text.trim() };
+        if (!result.artifact) {
+          const answer = result.text.trim();
+          leaderThread.push({ role: "assistant", content: answer });
+          return { kind: "answer", answer };
+        }
         try {
-          return { kind: "plan", plan: validateBuildPlan(result.artifact) };
+          const plan = validateBuildPlan(result.artifact);
+          leaderThread.push({ role: "assistant", content: artifactThreadMessage("BuildPlan", plan, result.text) });
+          return { kind: "plan", plan };
         } catch (error) {
           lastError = error;
           validationFeedback = `\n\nPrevious submitted BuildPlan was rejected before execution:\n${String(error)}\nSubmit a corrected BuildPlan. Move manual checks to acceptanceCriteria and make every verification entry a host-runnable command.`;
@@ -264,11 +303,11 @@ export async function createLiveAgents(options: LiveAgentOptions): Promise<Agent
         modelEntry: worker.entry,
         costRole: "worker",
         ledger: options.ledger,
-        system: `${workerPrompt}\n${hostPrompt}\n${memoryInstruction}\nYou must run every verification command before submit_completion_report. In verificationResults[].command, repeat the BuildPlan verification command string verbatim. If you adapt a command for the host platform, still use the plan's original command as command and describe the adapted command plus real output in output.`,
+        system: `${workerPrompt}\n${hostPrompt}\n${await projectInstructions()}\n${memoryInstruction}\nYou must run every verification command before submit_completion_report. In verificationResults[].command, repeat the BuildPlan verification command string verbatim. If you adapt a command for the host platform, still use the plan's original command as command and describe the adapted command plus real output in output.`,
         messages: [
           {
             role: "user",
-            content: buildWorkerContext({ round, plan, feedback, previousReport, sessionNotes: await sessionNotes() })
+            content: buildWorkerContext({ round, plan, feedback, previousReport })
           }
         ],
         tools: mergeTools(makeToolSet(toolContext, "worker"), submitTools),
@@ -296,18 +335,19 @@ export async function createLiveAgents(options: LiveAgentOptions): Promise<Agent
           }
         })
       };
+      const system = `${leaderReviewerPrompt}\n${hostPrompt}\n${await projectInstructions()}\n${memoryInstruction}\nYou may rerun only the plan verification commands. Prose verdicts are discarded; the turn is only complete after submit_review has been called.`;
+      await compactLeaderThread(system);
+      leaderThread.push({
+        role: "user",
+        content: `Review round ${round}. Worker output is summarized here; worker tool results and streams are intentionally not part of the leader thread.\nBuildPlan:\n${jsonBlock(plan)}\n\nCompletionReport:\n${jsonBlock(report)}\n\nDiff:\n${diff || "(empty diff)"}`
+      });
       const result = await runAgentArtifact({
         model: leader.model,
         modelEntry: leader.entry,
         costRole: "leader",
         ledger: options.ledger,
-        system: `${leaderReviewerPrompt}\n${hostPrompt}\n${memoryInstruction}\nYou may rerun only the plan verification commands. Prose verdicts are discarded; the turn is only complete after submit_review has been called.`,
-        messages: [
-          {
-            role: "user",
-            content: `Session notes (shared memory):\n${await sessionNotes()}\n\nRound ${round}\nBuildPlan:\n${jsonBlock(plan)}\n\nCompletionReport:\n${jsonBlock(report)}\n\nDiff:\n${diff || "(empty diff)"}`
-          }
-        ],
+        system,
+        messages: leaderThread,
         tools: mergeTools(makeToolSet(toolContext, "reviewer", plan.verification), submitTools),
         maxSteps: options.config.maxStepsPerAgentTurn,
         stopToolName: "submit_review",
@@ -317,8 +357,11 @@ export async function createLiveAgents(options: LiveAgentOptions): Promise<Agent
         artifactName: "ReviewVerdict",
         getArtifact: () => verdict
       });
-      if (result.artifact) return result.artifact;
-      return extractFromProse({
+      if (result.artifact) {
+        leaderThread.push({ role: "assistant", content: artifactThreadMessage("ReviewVerdict", result.artifact, result.text) });
+        return result.artifact;
+      }
+      const extracted = await extractFromProse({
         resolution: leader,
         ledger: options.ledger,
         role: "leader",
@@ -328,6 +371,8 @@ export async function createLiveAgents(options: LiveAgentOptions): Promise<Agent
         abortSignal: options.abortSignal,
         originalError: new Error("Leader review finished without submit_review.")
       });
+      leaderThread.push({ role: "assistant", content: artifactThreadMessage("ReviewVerdict", extracted, result.text) });
+      return extracted;
     },
 
     takeover: async ({ plan, reports, feedback }) => {
@@ -342,18 +387,19 @@ export async function createLiveAgents(options: LiveAgentOptions): Promise<Agent
           }
         })
       };
+      const system = `${leaderTakeoverPrompt}\n${hostPrompt}\n${await projectInstructions()}\n${memoryInstruction}\nRun every verification command, then call submit_takeover. In verificationResults[].command, repeat the BuildPlan verification command string verbatim. If you adapt a command for the host platform, still use the plan's original command as command and describe the adapted command plus real output in output.`;
+      await compactLeaderThread(system);
+      leaderThread.push({
+        role: "user",
+        content: `Leader takeover requested.\nBuildPlan:\n${jsonBlock(plan)}\n\nPrevious reports:\n${jsonBlock(reports)}\n\nFeedback history:\n${jsonBlock(feedback)}`
+      });
       const result = await runAgentArtifact({
         model: leader.model,
         modelEntry: leader.entry,
         costRole: "leader",
         ledger: options.ledger,
-        system: `${leaderTakeoverPrompt}\n${hostPrompt}\n${memoryInstruction}\nRun every verification command, then call submit_takeover. In verificationResults[].command, repeat the BuildPlan verification command string verbatim. If you adapt a command for the host platform, still use the plan's original command as command and describe the adapted command plus real output in output.`,
-        messages: [
-          {
-            role: "user",
-            content: `Session notes (shared memory):\n${await sessionNotes()}\n\nBuildPlan:\n${jsonBlock(plan)}\n\nPrevious reports:\n${jsonBlock(reports)}\n\nFeedback history:\n${jsonBlock(feedback)}`
-          }
-        ],
+        system,
+        messages: leaderThread,
         tools: mergeTools(makeToolSet(toolContext, "takeover"), submitTools),
         maxSteps: options.config.maxStepsPerAgentTurn,
         stopToolName: "submit_takeover",
@@ -363,10 +409,13 @@ export async function createLiveAgents(options: LiveAgentOptions): Promise<Agent
         artifactName: "TakeoverReport",
         getArtifact: () => submitted
       });
-      if (result.artifact) return result.artifact;
+      if (result.artifact) {
+        leaderThread.push({ role: "assistant", content: artifactThreadMessage("TakeoverReport", result.artifact, result.text) });
+        return result.artifact;
+      }
 
       const takeoverSchema = z.object({ report: CompletionReportSchema, userSummary: z.string() });
-      return extractFromProse({
+      const extracted = await extractFromProse({
         resolution: leader,
         ledger: options.ledger,
         role: "leader",
@@ -376,6 +425,8 @@ export async function createLiveAgents(options: LiveAgentOptions): Promise<Agent
         abortSignal: options.abortSignal,
         originalError: new Error("Leader takeover finished without submit_takeover.")
       });
+      leaderThread.push({ role: "assistant", content: artifactThreadMessage("TakeoverReport", extracted, result.text) });
+      return extracted;
     }
   };
 }
