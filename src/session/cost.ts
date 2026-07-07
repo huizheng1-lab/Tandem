@@ -20,6 +20,17 @@ export class CostLedger {
     return tick;
   }
 
+  addDirectCost(role: CostRole, dollars: number, inputTokens: number, outputTokens: number): CostTick {
+    const tick = {
+      role,
+      inputTokens,
+      outputTokens,
+      dollars: Number.isFinite(dollars) ? Math.max(0, dollars) : 0
+    };
+    this.ticks.push(tick);
+    return tick;
+  }
+
   totals(): Record<CostRole, CostTick> {
     const empty = (role: CostRole): CostTick => ({ role, inputTokens: 0, outputTokens: 0, dollars: 0 });
     const totals: Record<CostRole, CostTick> = { leader: empty("leader"), worker: empty("worker") };

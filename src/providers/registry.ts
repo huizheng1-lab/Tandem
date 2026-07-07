@@ -1,7 +1,8 @@
 import { CustomModel } from "../config/schema.js";
 import { locateCodexCli } from "../agents/codex-cli/locate.js";
+import { locateClaudeCli } from "../agents/claude-code-cli/locate.js";
 
-export type ProviderKind = "anthropic" | "openai" | "google" | "openai-compatible" | "codex-cli";
+export type ProviderKind = "anthropic" | "openai" | "google" | "openai-compatible" | "codex-cli" | "claude-code-cli";
 
 export interface ModelEntry {
   id: string;
@@ -130,6 +131,13 @@ export const builtInModels: ModelEntry[] = [
     provider: "codex-cli",
     modelName: "",
     contextWindow: 256000
+  },
+  {
+    id: "claude-code/cli",
+    provider: "claude-code-cli",
+    modelName: "",
+    contextWindow: 200000,
+    media: { images: true, pdf: true }
   }
 ];
 
@@ -162,9 +170,14 @@ export function resolveModel(id: string, customModels: CustomModel[] = []): Mode
   return model;
 }
 
-export function validateModelEnv(entry: ModelEntry, env: NodeJS.ProcessEnv, codexCliPath?: string): void {
+export function validateModelEnv(entry: ModelEntry, env: NodeJS.ProcessEnv, paths: string | { codexCliPath?: string; claudeCliPath?: string } = {}): void {
+  const cliPaths = typeof paths === "string" ? { codexCliPath: paths } : paths;
   if (entry.provider === "codex-cli") {
-    if (!locateCodexCli({ env, overridePath: codexCliPath })) throw new Error(`Missing Codex CLI for model ${entry.id}. Install Codex CLI or set CODEX_CLI_PATH / codexCliPath.`);
+    if (!locateCodexCli({ env, overridePath: cliPaths.codexCliPath })) throw new Error(`Missing Codex CLI for model ${entry.id}. Install Codex CLI or set CODEX_CLI_PATH / codexCliPath.`);
+    return;
+  }
+  if (entry.provider === "claude-code-cli") {
+    if (!locateClaudeCli({ env, overridePath: cliPaths.claudeCliPath })) throw new Error(`Missing Claude Code CLI for model ${entry.id}. Install Claude Code or set CLAUDE_CLI_PATH / claudeCliPath.`);
     return;
   }
   if (!entry.envKey || !env[entry.envKey]) {

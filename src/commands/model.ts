@@ -3,6 +3,7 @@ import { saveProjectConfig } from "../config/load.js";
 import { modelRegistry, resolveModel } from "../providers/registry.js";
 import type { ModelEntry } from "../providers/registry.js";
 import { locateCodexCli } from "../agents/codex-cli/locate.js";
+import { locateClaudeCli } from "../agents/claude-code-cli/locate.js";
 
 function mediaBadge(model: Pick<ModelEntry, "media">): string {
   const values = [model.media?.images ? "img" : "", model.media?.pdf ? "pdf" : ""].filter(Boolean);
@@ -14,6 +15,9 @@ export function listModels(config: TandemConfig, env: NodeJS.ProcessEnv): string
     .map((model) => {
       if (model.provider === "codex-cli") {
         return `${locateCodexCli({ env, overridePath: config.codexCliPath }) ? "ok " : "key"} ${model.id} (Codex CLI)`;
+      }
+      if (model.provider === "claude-code-cli") {
+        return `${locateClaudeCli({ env, overridePath: config.claudeCliPath }) ? "ok " : "key"} ${model.id} (Claude Code CLI)${mediaBadge(model)}`;
       }
       return `${model.envKey && env[model.envKey] ? "ok " : "key"} ${model.id}${mediaBadge(model)} (${model.envKey})`;
     })

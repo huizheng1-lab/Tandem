@@ -17,6 +17,7 @@ import { appendProjectMemoryNote, formatProjectInstructions, readProjectInstruct
 import { SessionStore, listSessions } from "../session/store.js";
 import { createLiveAgents, suggestGoalProgressNotes } from "../agents/live.js";
 import { locateCodexCli } from "../agents/codex-cli/locate.js";
+import { locateClaudeCli } from "../agents/claude-code-cli/locate.js";
 import { runOrchestration, MachineEvent, OrchestrationCheckpoint } from "../orchestrator/machine.js";
 import { BuildPlan, CompletionReport, ReviewVerdict } from "../orchestrator/artifacts.js";
 import { createDiffTracker } from "../orchestrator/diff.js";
@@ -447,7 +448,18 @@ export function App({ config: initialConfig, env, cwd, initialError }: { config:
       {modelPicker ? (
         <Box borderStyle="single" flexDirection="column" paddingX={1}>
           <Text color="cyan">{modelPicker.stage === "role" ? "Choose role" : `Choose ${modelPicker.role} model`}</Text>
-          {(modelPicker.stage === "role" ? ["leader", "worker"] : modelOptions.map((model) => `${model.provider === "codex-cli" ? (locateCodexCli({ env, overridePath: config.codexCliPath }) ? "ok " : "key") : model.envKey && env[model.envKey] ? "ok " : "key"} ${model.id}`)).map((item, index) => (
+          {(modelPicker.stage === "role"
+            ? ["leader", "worker"]
+            : modelOptions.map((model) => {
+                const status =
+                  model.provider === "codex-cli"
+                    ? locateCodexCli({ env, overridePath: config.codexCliPath })
+                    : model.provider === "claude-code-cli"
+                      ? locateClaudeCli({ env, overridePath: config.claudeCliPath })
+                      : model.envKey && env[model.envKey];
+                return `${status ? "ok " : "key"} ${model.id}`;
+              })
+          ).map((item, index) => (
             <Text key={item} color={index === modelPicker.index ? "yellow" : undefined}>
               {index === modelPicker.index ? "> " : "  "}
               {item}

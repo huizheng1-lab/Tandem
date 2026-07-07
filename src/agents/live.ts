@@ -21,6 +21,8 @@ import { hostPlatformPrompt } from "./platform.js";
 import { stripEmbeddedHistoryDigest } from "../session/leader-thread.js";
 import { runCodexWorkerBuild } from "./codex-cli/worker.js";
 import { codexLeaderPlan, codexLeaderReview, codexLeaderTakeover } from "./codex-cli/leader.js";
+import { runClaudeWorkerBuild } from "./claude-code-cli/worker.js";
+import { claudeLeaderPlan, claudeLeaderReview, claudeLeaderTakeover } from "./claude-code-cli/leader.js";
 
 export interface LiveAgentOptions {
   config: TandemConfig;
@@ -355,6 +357,24 @@ export async function createLiveAgents(options: LiveAgentOptions): Promise<Agent
           { request, goals, history, attachments }
         );
       }
+      if (leader.entry.provider === "claude-code-cli") {
+        return claudeLeaderPlan(
+          {
+            config: options.config,
+            cwd: options.cwd,
+            env: options.env,
+            entry: leader.entry,
+            ledger: options.ledger,
+            abortSignal: options.abortSignal,
+            onLeaderText: options.onLeaderText,
+            onToolEvent: options.onToolEvent,
+            projectInstructions: options.projectInstructions,
+            onTriage: options.onTriage,
+            confirmCodexWrite: options.confirmCodexWrite
+          },
+          { request, goals, history, attachments }
+        );
+      }
       const triageKind =
         options.config.triage === "always-plan"
           ? "implementation"
@@ -476,6 +496,23 @@ Standing goals are context only; do not redirect unrelated requests toward them.
           { plan, round, feedback, previousReport }
         );
       }
+      if (worker.entry.provider === "claude-code-cli") {
+        return runClaudeWorkerBuild(
+          {
+            config: options.config,
+            cwd: options.cwd,
+            env: options.env,
+            entry: worker.entry,
+            ledger: options.ledger,
+            abortSignal: options.abortSignal,
+            onWorkerText: options.onWorkerText,
+            onToolEvent: options.onToolEvent,
+            projectInstructions: options.projectInstructions,
+            confirmCodexWrite: options.confirmCodexWrite
+          },
+          { plan, round, feedback, previousReport }
+        );
+      }
       let report: z.infer<typeof CompletionReportSchema> | undefined;
       const submitTools = {
         submit_completion_report: tool({
@@ -515,6 +552,23 @@ Standing goals are context only; do not redirect unrelated requests toward them.
     review: async ({ plan, report, round, diff }) => {
       if (leader.entry.provider === "codex-cli") {
         return codexLeaderReview(
+          {
+            config: options.config,
+            cwd: options.cwd,
+            env: options.env,
+            entry: leader.entry,
+            ledger: options.ledger,
+            abortSignal: options.abortSignal,
+            onLeaderText: options.onLeaderText,
+            onToolEvent: options.onToolEvent,
+            projectInstructions: options.projectInstructions,
+            confirmCodexWrite: options.confirmCodexWrite
+          },
+          { plan, report, round, diff }
+        );
+      }
+      if (leader.entry.provider === "claude-code-cli") {
+        return claudeLeaderReview(
           {
             config: options.config,
             cwd: options.cwd,
@@ -584,6 +638,23 @@ Standing goals are context only; do not redirect unrelated requests toward them.
     takeover: async ({ plan, reports, feedback }) => {
       if (leader.entry.provider === "codex-cli") {
         return codexLeaderTakeover(
+          {
+            config: options.config,
+            cwd: options.cwd,
+            env: options.env,
+            entry: leader.entry,
+            ledger: options.ledger,
+            abortSignal: options.abortSignal,
+            onLeaderText: options.onLeaderText,
+            onToolEvent: options.onToolEvent,
+            projectInstructions: options.projectInstructions,
+            confirmCodexWrite: options.confirmCodexWrite
+          },
+          { plan, reports, feedback }
+        );
+      }
+      if (leader.entry.provider === "claude-code-cli") {
+        return claudeLeaderTakeover(
           {
             config: options.config,
             cwd: options.cwd,

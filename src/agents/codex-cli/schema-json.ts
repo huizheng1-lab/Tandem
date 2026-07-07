@@ -133,6 +133,17 @@ export function jsonSchemaFor(kind: CodexSchemaKind): object {
   return planOrAnswerJsonSchema;
 }
 
+export function stripNulls(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(stripNulls);
+  if (!value || typeof value !== "object") return value;
+  const result: Record<string, unknown> = {};
+  for (const [key, item] of Object.entries(value)) {
+    if (item === null) continue;
+    result[key] = stripNulls(item);
+  }
+  return result;
+}
+
 export async function withCodexSchemaFiles<T>(kind: CodexSchemaKind, fn: (paths: { schemaPath: string; outputPath: string }) => Promise<T>): Promise<T> {
   const dir = await mkdtemp(path.join(tmpdir(), "tandem-codex-"));
   const schemaPath = path.join(dir, `${kind}.schema.json`);

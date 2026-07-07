@@ -9,9 +9,9 @@ export interface ModelResolution {
 
 export async function makeModel(modelId: string, config: TandemConfig, env: NodeJS.ProcessEnv = process.env): Promise<ModelResolution> {
   const entry = resolveModel(modelId, config.customModels);
-  validateModelEnv(entry, env, config.codexCliPath);
+  validateModelEnv(entry, env, { codexCliPath: config.codexCliPath, claudeCliPath: config.claudeCliPath });
 
-  if (entry.provider === "codex-cli") {
+  if (entry.provider === "codex-cli" || entry.provider === "claude-code-cli") {
     return { entry, model: {} as LanguageModel };
   }
 

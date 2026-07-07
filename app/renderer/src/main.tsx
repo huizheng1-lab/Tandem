@@ -140,7 +140,9 @@ function mediaBadge(model: Pick<ModelListItem, "media">): string {
 
 function unavailableModelText(model: ModelListItem): string {
   if (model.available) return "";
-  return model.provider === "codex-cli" ? " (Codex CLI missing)" : ` (${model.envKey} missing)`;
+  if (model.provider === "codex-cli") return " (Codex CLI missing)";
+  if (model.provider === "claude-code-cli") return " (Claude Code CLI missing)";
+  return ` (${model.envKey} missing)`;
 }
 
 function App(): React.ReactElement {
@@ -205,7 +207,7 @@ function App(): React.ReactElement {
   }, [cost]);
 
   const costTitle = cost
-    ? `Leader: ${cost.leader.inputTokens}/${cost.leader.outputTokens} tokens, $${cost.leader.dollars.toFixed(4)}${effectiveConfig?.leader === "codex/cli" ? " (billed via your Codex CLI account, not by token price)" : ""}\nWorker: ${cost.worker.inputTokens}/${cost.worker.outputTokens} tokens, $${cost.worker.dollars.toFixed(4)}${effectiveConfig?.worker === "codex/cli" ? " (billed via your Codex CLI account, not by token price)" : ""}`
+    ? `Leader: ${cost.leader.inputTokens}/${cost.leader.outputTokens} tokens, $${cost.leader.dollars.toFixed(4)}${effectiveConfig?.leader === "codex/cli" ? " (billed via your Codex CLI account, not by token price)" : ""}${effectiveConfig?.leader === "claude-code/cli" ? " (reported directly by Claude Code CLI)" : ""}\nWorker: ${cost.worker.inputTokens}/${cost.worker.outputTokens} tokens, $${cost.worker.dollars.toFixed(4)}${effectiveConfig?.worker === "codex/cli" ? " (billed via your Codex CLI account, not by token price)" : ""}${effectiveConfig?.worker === "claude-code/cli" ? " (reported directly by Claude Code CLI)" : ""}`
     : "No usage yet";
 
   const appendMessage = (role: Role, text: string) => {

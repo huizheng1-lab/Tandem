@@ -35,7 +35,7 @@ async function main(): Promise<void> {
       return;
     }
     for (const id of [config.leader, config.worker]) {
-      validateModelEnv(resolveModel(id, config.customModels), env, config.codexCliPath);
+      validateModelEnv(resolveModel(id, config.customModels), env, { codexCliPath: config.codexCliPath, claudeCliPath: config.claudeCliPath });
     }
     console.log("Tandem non-TTY mode. Use a TTY for chat, or pass /help, /models, /status, or other slash commands.");
     return;
@@ -44,7 +44,7 @@ async function main(): Promise<void> {
   const validationErrors: string[] = [];
   for (const id of [config.leader, config.worker]) {
     try {
-      validateModelEnv(resolveModel(id, config.customModels), env, config.codexCliPath);
+      validateModelEnv(resolveModel(id, config.customModels), env, { codexCliPath: config.codexCliPath, claudeCliPath: config.claudeCliPath });
     } catch (error) {
       validationErrors.push(String(error));
     }

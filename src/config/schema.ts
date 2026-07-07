@@ -6,7 +6,7 @@ export type PermissionMode = z.infer<typeof PermissionModeSchema>;
 export const TriageModeSchema = z.enum(["auto", "always-plan"]);
 export type TriageMode = z.infer<typeof TriageModeSchema>;
 
-export const ModelProviderSchema = z.enum(["google", "anthropic", "openai", "openai-compatible", "codex-cli"]);
+export const ModelProviderSchema = z.enum(["google", "anthropic", "openai", "openai-compatible", "codex-cli", "claude-code-cli"]);
 export type ModelProvider = z.infer<typeof ModelProviderSchema>;
 
 export const CustomModelSchema = z
@@ -27,14 +27,14 @@ export const CustomModelSchema = z
   })
   .superRefine((value, ctx) => {
     const provider = value.provider ?? "openai-compatible";
-    if (provider !== "codex-cli" && !value.apiKeyEnv) {
+    if (provider !== "codex-cli" && provider !== "claude-code-cli" && !value.apiKeyEnv) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
         path: ["apiKeyEnv"],
         message: "apiKeyEnv is required for API-backed custom models"
       });
     }
-    if (provider !== "codex-cli" && !value.modelName) {
+    if (provider !== "codex-cli" && provider !== "claude-code-cli" && !value.modelName) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
         path: ["modelName"],
@@ -57,6 +57,7 @@ export const ConfigSchema = z.object({
   permissionMode: PermissionModeSchema,
   triage: TriageModeSchema,
   codexCliPath: z.string().min(1).optional(),
+  claudeCliPath: z.string().min(1).optional(),
   showThinking: z.boolean(),
   maxStepsPerAgentTurn: z.number().int().positive(),
   leaderContextBudgetTokens: z.number().int().positive(),

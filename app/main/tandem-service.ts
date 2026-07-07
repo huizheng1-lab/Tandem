@@ -9,6 +9,7 @@ import { loadConfig, loadConfigDetails, loadEnv, saveGlobalConfigPatch, saveProj
 import type { TandemConfig } from "../../src/config/schema.js";
 import { createLiveAgents } from "../../src/agents/live.js";
 import { locateCodexCli } from "../../src/agents/codex-cli/locate.js";
+import { locateClaudeCli } from "../../src/agents/claude-code-cli/locate.js";
 import { createDiffTracker } from "../../src/orchestrator/diff.js";
 import { runOrchestration, type MachineEvent, type OrchestrationCheckpoint } from "../../src/orchestrator/machine.js";
 import { modelRegistry } from "../../src/providers/registry.js";
@@ -271,7 +272,12 @@ export class TandemService {
       provider: model.provider,
       modelName: model.modelName,
       envKey: model.envKey,
-      available: model.provider === "codex-cli" ? Boolean(locateCodexCli({ env: this.env, overridePath: this.config.codexCliPath })) : Boolean(model.envKey && this.env[model.envKey]),
+      available:
+        model.provider === "codex-cli"
+          ? Boolean(locateCodexCli({ env: this.env, overridePath: this.config.codexCliPath }))
+          : model.provider === "claude-code-cli"
+            ? Boolean(locateClaudeCli({ env: this.env, overridePath: this.config.claudeCliPath }))
+            : Boolean(model.envKey && this.env[model.envKey]),
       media: model.media
     }));
   }

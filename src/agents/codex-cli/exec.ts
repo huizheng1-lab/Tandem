@@ -6,7 +6,8 @@ import type { ModelEntry } from "../../providers/registry.js";
 import { CostLedger, CostRole } from "../../session/cost.js";
 import type { ToolActivityEvent } from "../../tools/fs.js";
 import { locateCodexCli } from "./locate.js";
-import { withCodexSchemaFiles, type CodexSchemaKind } from "./schema-json.js";
+import { stripNulls, withCodexSchemaFiles, type CodexSchemaKind } from "./schema-json.js";
+export { stripNulls } from "./schema-json.js";
 
 export interface CodexExecOptions {
   cwd: string;
@@ -71,17 +72,6 @@ function jsonText(value: unknown): string {
   } catch {
     return String(value);
   }
-}
-
-export function stripNulls(value: unknown): unknown {
-  if (Array.isArray(value)) return value.map(stripNulls);
-  if (!value || typeof value !== "object") return value;
-  const result: Record<string, unknown> = {};
-  for (const [key, item] of Object.entries(value)) {
-    if (item === null) continue;
-    result[key] = stripNulls(item);
-  }
-  return result;
 }
 
 export function handleCodexJsonLine(line: string, options: Pick<CodexExecOptions, "role" | "entry" | "ledger" | "onText" | "onToolEvent">, active = new Map<string, number>(), diagnostics?: CodexJsonDiagnostics): void {
