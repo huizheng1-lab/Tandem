@@ -72,7 +72,7 @@ export type TandemEnv = z.infer<typeof EnvSchema>;
 
 export const defaultConfig: TandemConfig = {
   leader: "anthropic/claude-fable-5",
-  worker: "minimax/minimax-m2.7",
+  worker: "minimax/minimax-m3",
   maxReviewRounds: 3,
   permissionMode: "ask",
   triage: "auto",
@@ -85,6 +85,12 @@ export const defaultConfig: TandemConfig = {
       baseURL: "https://api.minimax.io/v1",
       apiKeyEnv: "MINIMAX_API_KEY",
       modelName: "MiniMax-M2.7"
+    },
+    {
+      id: "minimax/minimax-m3",
+      baseURL: "https://api.minimax.io/v1",
+      apiKeyEnv: "MINIMAX_API_KEY",
+      modelName: "MiniMax-M3"
     }
   ]
 };
