@@ -227,11 +227,24 @@ describe("claude code cli mixed roles", () => {
 
     expect(prompts.systemPrompt).toContain("Project instructions:\n- Use the local style.");
     expect(prompts.systemPrompt).toContain("FIRST, classify the request:");
-    expect(prompts.systemPrompt).not.toContain("Request:\nWhat is 9 times 9?");
+    expect(prompts.systemPrompt).not.toContain("Single-turn user request: What is 9 times 9?");
+    expect(prompts.prompt).toMatch(/^Single-turn user request: What is 9 times 9\?/);
+    expect(prompts.prompt.indexOf("Single-turn user request: What is 9 times 9?")).toBeLessThan(prompts.prompt.indexOf("This is a single non-interactive call."));
+    expect(prompts.prompt.indexOf("Single-turn user request: What is 9 times 9?")).toBeLessThan(prompts.prompt.indexOf("Conversation so far:"));
     expect(prompts.prompt).toContain("Conversation so far:");
     expect(prompts.prompt).toContain("Standing goals:");
-    expect(prompts.prompt).toContain("Request:\nWhat is 9 times 9?");
+    expect(prompts.prompt).toContain("Single-turn user request: What is 9 times 9?");
     expect(prompts.prompt).not.toContain("FIRST, classify the request:");
+  });
+
+  it("omits empty Claude Code leader context placeholders", async () => {
+    const prompts = await buildClaudeLeaderPlanPrompts({ env: {}, projectInstructions: async () => "Project instructions:\nnone" }, { request: "What is 9 times 9?", goals: [], history: "" });
+
+    expect(prompts.prompt).toMatch(/^Single-turn user request: What is 9 times 9\?/);
+    expect(prompts.prompt).toContain("This is a single non-interactive call.");
+    expect(prompts.prompt).not.toContain("Conversation so far:");
+    expect(prompts.prompt).not.toContain("Standing goals:");
+    expect(prompts.prompt).not.toContain("\nnone");
   });
 
   it("gives Claude Code CLI workers the same verification and project instructions as SDK workers", async () => {
@@ -248,6 +261,9 @@ describe("claude code cli mixed roles", () => {
     expect(prompts.systemPrompt).toContain("If read_file says you CANNOT view a file's visual content");
     expect(prompts.systemPrompt).toContain("In verificationResults[].command, repeat the BuildPlan verification command string verbatim.");
     expect(prompts.systemPrompt).not.toContain("BuildPlan:");
+    expect(prompts.prompt).toMatch(/^Single-turn worker task: build now from this worker task context\./);
+    expect(prompts.prompt.indexOf("Single-turn worker task:")).toBeLessThan(prompts.prompt.indexOf("This is a single non-interactive call."));
+    expect(prompts.prompt.indexOf("Single-turn worker task:")).toBeLessThan(prompts.prompt.indexOf("BuildPlan:"));
     expect(prompts.prompt).toContain("BuildPlan:");
     expect(prompts.prompt).not.toContain("Project instructions:\n- Use the local style.");
   });

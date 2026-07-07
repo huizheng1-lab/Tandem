@@ -46,6 +46,14 @@ async function projectInstructions(options: Pick<ClaudeLeaderOptions, "projectIn
   return (await options.projectInstructions?.())?.trim() || "Project instructions:\nnone";
 }
 
+const singleTurnInstruction =
+  "This is a single non-interactive call. Complete the task in this message now. Do not ask a clarifying question, do not acknowledge, do not wait for a further message.";
+
+function optionalSection(title: string, value: string | undefined): string {
+  const text = value?.trim();
+  return text ? `\n\n${title}:\n${text}` : "";
+}
+
 async function claudeLeaderExec(options: ClaudeLeaderOptions, input: { schema: "plan-or-answer" | "review-verdict" | "takeover"; prompt: string; systemPrompt: string; readOnly?: boolean }): Promise<unknown> {
   if (!input.readOnly && options.config.permissionMode === "ask") {
     const approved = await options.confirmCodexWrite?.("leader", "Run this leader takeover via Claude Code CLI with write access? Claude Code cannot prompt per-command in headless print mode.");
@@ -75,6 +83,7 @@ export async function buildClaudeLeaderPlanPrompts(
   input: { request: string; goals: string[]; history?: string; attachments?: AttachmentRef[] }
 ): Promise<{ systemPrompt: string; prompt: string }> {
   const attachmentBlock = input.attachments && input.attachments.length > 0 ? `\n\n${formatAttachmentBlock(input.attachments)}` : "";
+  const goals = input.goals.length > 0 ? input.goals.join("\n") : "";
   return {
     systemPrompt: `${leaderPlannerPrompt}
 ${hostPlatformPrompt(process.platform, options.env)}
@@ -87,14 +96,8 @@ When the user explicitly asks for a direct answer, it is ALWAYS (a). Mixed reque
 
 Return JSON matching the provided schema. For question, set kind="question" and answer only. For implementation, set kind="implementation" and plan only.
 The plan verification field must contain exact runnable shell commands only, one command per entry.`,
-    prompt: `Conversation so far:
-${input.history?.trim() || "none"}
-
-Standing goals:
-${input.goals.length > 0 ? input.goals.join("\n") : "none"}
-
-Request:
-${input.request}${attachmentBlock}`
+    prompt: `Single-turn user request: ${input.request}${attachmentBlock}
+${singleTurnInstruction}${optionalSection("Conversation so far", input.history)}${optionalSection("Standing goals", goals)}`
   };
 }
 
@@ -114,7 +117,10 @@ export async function claudeLeaderReview(options: ClaudeLeaderOptions, input: { 
 ${hostPlatformPrompt(process.platform, options.env)}
 ${await projectInstructions(options)}
 You may rerun only the plan verification commands if needed. Return only the ReviewVerdict JSON.`;
-  const prompt = `Review round ${input.round}.
+  const prompt = `Single-turn review task: review the completed work now and return the verdict.
+${singleTurnInstruction}
+
+Review round ${input.round}.
 BuildPlan:
 ${jsonBlock(input.plan)}
 
@@ -131,7 +137,10 @@ export async function claudeLeaderTakeover(options: ClaudeLeaderOptions, input: 
 ${hostPlatformPrompt(process.platform, options.env)}
 ${await projectInstructions(options)}
 Run every verification command, then return takeover JSON with a CompletionReport and userSummary.`;
-  const prompt = `BuildPlan:
+  const prompt = `Single-turn takeover task: take over the implementation now and return the takeover result.
+${singleTurnInstruction}
+
+BuildPlan:
 ${jsonBlock(input.plan)}
 
 Previous reports:
