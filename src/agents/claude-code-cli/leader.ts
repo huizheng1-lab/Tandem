@@ -46,9 +46,6 @@ async function projectInstructions(options: Pick<ClaudeLeaderOptions, "projectIn
   return (await options.projectInstructions?.())?.trim() || "Project instructions:\nnone";
 }
 
-const singleTurnPreamble =
-  "This is a single non-interactive call. Act on the request below now and respond with ONLY the required JSON. Do not ask a clarifying question, do not acknowledge, do not wait for a further message.";
-
 function optionalSection(title: string, value: string | undefined): string {
   const text = value?.trim();
   return text ? `\n\n${title}:\n${text}` : "";
@@ -96,9 +93,7 @@ When the user explicitly asks for a direct answer, it is ALWAYS (a). Mixed reque
 
 Return JSON matching the provided schema. For question, set kind="question" and answer only. For implementation, set kind="implementation" and plan only.
 The plan verification field must contain exact runnable shell commands only, one command per entry.`,
-    prompt: `${singleTurnPreamble}
-
-Request: ${input.request}${attachmentBlock}${optionalSection("Conversation so far", input.history)}${optionalSection("Standing goals", goals)}`
+    prompt: `Request: ${input.request}${attachmentBlock}${optionalSection("Conversation so far", input.history)}${optionalSection("Standing goals", goals)}`
   };
 }
 
@@ -122,11 +117,7 @@ export async function buildClaudeLeaderReviewPrompts(
 ${hostPlatformPrompt(process.platform, options.env)}
 ${await projectInstructions(options)}
 You may rerun only the plan verification commands if needed. Return only the ReviewVerdict JSON.`,
-    prompt: `${singleTurnPreamble}
-
-Review task: review the completed work now and return the verdict.
-
-Review round ${input.round}.
+    prompt: `Review round ${input.round}.
 BuildPlan:
 ${jsonBlock(input.plan)}
 
@@ -147,11 +138,7 @@ export async function buildClaudeLeaderTakeoverPrompts(
 ${hostPlatformPrompt(process.platform, options.env)}
 ${await projectInstructions(options)}
 Run every verification command, then return takeover JSON with a CompletionReport and userSummary.`,
-    prompt: `${singleTurnPreamble}
-
-Takeover task: take over the implementation now and return the takeover result.
-
-BuildPlan:
+    prompt: `BuildPlan:
 ${jsonBlock(input.plan)}
 
 Previous reports:

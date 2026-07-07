@@ -19,7 +19,10 @@ function canUse(filePath: string, exists: (value: string) => boolean): boolean {
 
 function pathCandidates(env: NodeJS.ProcessEnv, pathSeparator: string, platform: NodeJS.Platform): string[] {
   const pathValue = env.PATH ?? env.Path ?? env.path ?? "";
-  const names = platform === "win32" ? ["claude.cmd", "claude.exe", "claude"] : ["claude", "claude.cmd", "claude.exe"];
+  const names =
+    platform === "win32"
+      ? [path.join("node_modules", "@anthropic-ai", "claude-code", "bin", "claude.exe"), "claude.exe", "claude", "claude.cmd"]
+      : ["claude", "claude.cmd", "claude.exe"];
   return pathValue
     .split(pathSeparator)
     .filter(Boolean)

@@ -89,7 +89,7 @@ export function buildWorkerContext(input: { round: number; plan: BuildPlan; feed
     feedback: compactFeedback(input.feedback),
     previousReport: summarizePreviousReport(input.previousReport)
   };
-  let content = `Round ${input.round}\nBuildPlan:\n${jsonBlock(input.plan)}\n\nReview feedback:\n${jsonBlock(compact.feedback)}\n\nPrevious report summary:\n${jsonBlock(compact.previousReport)}`;
+  let content = `BuildPlan:\n${jsonBlock(input.plan)}\n\nRound ${input.round}\n\nReview feedback:\n${jsonBlock(compact.feedback)}\n\nPrevious report summary:\n${jsonBlock(compact.previousReport)}`;
   if (content.length > budget) {
     const suffix = "\n[context truncated; full prior artifacts remain in the session log]";
     content = `${content.slice(0, Math.max(0, budget - suffix.length))}${suffix}`;

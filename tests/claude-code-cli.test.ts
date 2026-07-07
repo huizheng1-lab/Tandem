@@ -6,7 +6,7 @@ import { createLiveAgents } from "../src/agents/live.js";
 import { buildClaudeExecArgv, claudePermissionFor, parseClaudeEnvelope, runClaudeExec } from "../src/agents/claude-code-cli/exec.js";
 import { buildClaudeLeaderPlanPrompts, buildClaudeLeaderReviewPrompts, buildClaudeLeaderTakeoverPrompts, claudeLeaderReview, claudeLeaderTakeover } from "../src/agents/claude-code-cli/leader.js";
 import { clearClaudeCliPathCache, locateClaudeCli } from "../src/agents/claude-code-cli/locate.js";
-import { buildClaudeWorkerPrompt, buildClaudeWorkerPrompts } from "../src/agents/claude-code-cli/worker.js";
+import { buildClaudeWorkerPrompts } from "../src/agents/claude-code-cli/worker.js";
 import { buildPlanJsonSchema, completionReportJsonSchema, stripNulls } from "../src/agents/codex-cli/schema-json.js";
 import { defaultConfig } from "../src/config/schema.js";
 import type { BuildPlan, CompletionReport } from "../src/orchestrator/artifacts.js";
@@ -94,8 +94,22 @@ describe("claude code cli discovery", () => {
 
   it("finds claude on PATH", () => {
     clearClaudeCliPathCache();
-    const found = path.join("C:/bin", process.platform === "win32" ? "claude.cmd" : "claude");
+    const found = path.join("C:/bin", process.platform === "win32" ? "node_modules/@anthropic-ai/claude-code/bin/claude.exe" : "claude");
     expect(locateClaudeCli({ env: { PATH: "C:/bin" }, pathSeparator: path.delimiter, exists: (filePath) => filePath === found })).toBe(found);
+  });
+
+  it("prefers Anthropic's Windows executable over the cmd shim", () => {
+    clearClaudeCliPathCache();
+    const exe = path.join("C:/bin", "node_modules/@anthropic-ai/claude-code/bin/claude.exe");
+    const cmd = path.join("C:/bin", "claude.cmd");
+    expect(
+      locateClaudeCli({
+        env: { PATH: "C:/bin" },
+        pathSeparator: path.delimiter,
+        platform: "win32",
+        exists: (filePath) => filePath === exe || filePath === cmd
+      })
+    ).toBe(exe);
   });
 
   it("uses config or env override when PATH does not contain claude", () => {
@@ -228,21 +242,22 @@ describe("claude code cli mixed roles", () => {
     expect(prompts.systemPrompt).toContain("Project instructions:\n- Use the local style.");
     expect(prompts.systemPrompt).toContain("FIRST, classify the request:");
     expect(prompts.systemPrompt).not.toContain("Request: What is 9 times 9?");
-    expect(prompts.prompt).toMatch(/^This is a single non-interactive call\./);
-    expect(prompts.prompt.indexOf("This is a single non-interactive call.")).toBeLessThan(prompts.prompt.indexOf("Request: What is 9 times 9?"));
+    expect(prompts.prompt).toMatch(/^Request: What is 9 times 9\?/);
     expect(prompts.prompt.indexOf("Request: What is 9 times 9?")).toBeLessThan(prompts.prompt.indexOf("Conversation so far:"));
     expect(prompts.prompt).toContain("Conversation so far:");
     expect(prompts.prompt).toContain("Standing goals:");
     expect(prompts.prompt).toContain("Request: What is 9 times 9?");
     expect(prompts.prompt).not.toContain("FIRST, classify the request:");
+    // D47: must not contain the "single non-interactive call" preamble, which D44-isolated testing showed collides with Claude Code CLI's turn/session control logic and triggers an empty/error envelope.
+    expect(prompts.prompt).not.toContain("This is a single non-interactive call");
+    expect(prompts.prompt).not.toContain("Act on the request below now");
   });
 
   it("omits empty Claude Code leader context placeholders", async () => {
     const prompts = await buildClaudeLeaderPlanPrompts({ env: {}, projectInstructions: async () => "Project instructions:\nnone" }, { request: "What is 9 times 9?", goals: [], history: "" });
 
-    expect(prompts.prompt).toMatch(/^This is a single non-interactive call\./);
+    expect(prompts.prompt).toMatch(/^Request: What is 9 times 9\?/);
     expect(prompts.prompt).toContain("Request: What is 9 times 9?");
-    expect(prompts.prompt).toContain("Act on the request below now");
     expect(prompts.prompt).not.toContain("Conversation so far:");
     expect(prompts.prompt).not.toContain("Standing goals:");
     expect(prompts.prompt).not.toContain("\nnone");
@@ -262,14 +277,16 @@ describe("claude code cli mixed roles", () => {
     expect(prompts.systemPrompt).toContain("If read_file says you CANNOT view a file's visual content");
     expect(prompts.systemPrompt).toContain("In verificationResults[].command, repeat the BuildPlan verification command string verbatim.");
     expect(prompts.systemPrompt).not.toContain("BuildPlan:");
-    expect(prompts.prompt).toMatch(/^This is a single non-interactive call\./);
-    expect(prompts.prompt.indexOf("This is a single non-interactive call.")).toBeLessThan(prompts.prompt.indexOf("Worker task: build now from this worker task context."));
-    expect(prompts.prompt.indexOf("Worker task: build now from this worker task context.")).toBeLessThan(prompts.prompt.indexOf("BuildPlan:"));
+    expect(prompts.prompt).toMatch(/^BuildPlan:/);
+    expect(prompts.prompt.indexOf("BuildPlan:")).toBeLessThan(prompts.prompt.indexOf("Round 1"));
     expect(prompts.prompt).toContain("BuildPlan:");
     expect(prompts.prompt).not.toContain("Project instructions:\n- Use the local style.");
+    // D47: no preamble, no "Worker task:" lead-in.
+    expect(prompts.prompt).not.toContain("This is a single non-interactive call");
+    expect(prompts.prompt).not.toContain("Worker task: build now from this worker task context.");
   });
 
-  it("places the non-interactive preamble as the first line of leader review and takeover prompts", async () => {
+  it("places the request/BuildPlan as the first content of leader review and takeover prompts", async () => {
     const reviewOptions = {
       env: { ComSpec: "powershell.exe" },
       projectInstructions: async () => "Project instructions:\n- Use the local style."
@@ -283,24 +300,17 @@ describe("claude code cli mixed roles", () => {
       deviationsFromPlan: []
     };
     const reviewPrompts = await buildClaudeLeaderReviewPrompts(reviewOptions, { plan, report: reviewReport, round: 1, diff: "(empty diff)" });
-    expect(reviewPrompts.prompt).toMatch(/^This is a single non-interactive call\./);
-    expect(reviewPrompts.prompt).toContain("Act on the request below now");
-    expect(reviewPrompts.prompt).toContain("Review task: review the completed work now and return the verdict.");
-    expect(reviewPrompts.prompt.indexOf("This is a single non-interactive call.")).toBeLessThan(reviewPrompts.prompt.indexOf("Review round 1."));
+    expect(reviewPrompts.prompt).toMatch(/^Review round 1\./);
     expect(reviewPrompts.prompt.indexOf("Review round 1.")).toBeLessThan(reviewPrompts.prompt.indexOf("BuildPlan:"));
     expect(reviewPrompts.prompt).toContain("BuildPlan:");
+    expect(reviewPrompts.prompt).not.toContain("This is a single non-interactive call");
+    expect(reviewPrompts.prompt).not.toContain("Review task: review the completed work now");
 
     const takeoverPrompts = await buildClaudeLeaderTakeoverPrompts(reviewOptions, { plan, reports: [reviewReport], feedback: [] });
-    expect(takeoverPrompts.prompt).toMatch(/^This is a single non-interactive call\./);
-    expect(takeoverPrompts.prompt).toContain("Act on the request below now");
-    expect(takeoverPrompts.prompt).toContain("Takeover task: take over the implementation now and return the takeover result.");
-    expect(takeoverPrompts.prompt.indexOf("This is a single non-interactive call.")).toBeLessThan(takeoverPrompts.prompt.indexOf("BuildPlan:"));
-  });
-
-  it("keeps the compatibility combined Claude worker prompt available", async () => {
-    const prompt = await buildClaudeWorkerPrompt({ env: {}, projectInstructions: async () => "Project instructions:\nnone" }, { plan, round: 1, feedback: [] });
-    expect(prompt).toContain("Project instructions:");
-    expect(prompt).toContain("BuildPlan:");
+    expect(takeoverPrompts.prompt).toMatch(/^BuildPlan:/);
+    expect(takeoverPrompts.prompt).toContain("BuildPlan:");
+    expect(takeoverPrompts.prompt).not.toContain("This is a single non-interactive call");
+    expect(takeoverPrompts.prompt).not.toContain("Takeover task: take over the implementation now");
   });
 
   it("supports Gemini leader plus Claude Code CLI worker", async () => {
@@ -347,7 +357,7 @@ describe("claude code cli mixed roles", () => {
     }
   });
 
-  it("passes the non-interactive preamble as the first line of the user prompt when run through the real Claude exec path (D44-2 live verification)", async () => {
+  it("passes the user-prompt bytes verbatim through the real Claude exec path with no preamble (D47 live verification)", async () => {
     const capturePath = path.join(await tempDir("project-capture"), "captured.json");
     const shimSource = `
 const args = process.argv.slice(2);
@@ -373,12 +383,10 @@ console.log(JSON.stringify({ type: "result", subtype: "success", is_error: false
     const shimJsPath = path.join(shimDir, "claude.js");
     await (await import("node:fs/promises")).writeFile(shimJsPath, shimSource, "utf8");
 
-    const cwd = await tempDir("project-d442");
+    const cwd = await tempDir("project-d47");
     const fs = await import("node:fs/promises");
     await fs.rm(capturePath, { force: true });
 
-    // Bypass the .cmd shim newline-truncation by capturing argv directly via node.
-    // Build the same argv production would, invoke node directly, and verify the prompt shape Tandem produced.
     const { execa } = await import("execa");
     const buildClaudeExecArgvLocal = (await import("../src/agents/claude-code-cli/exec.js")).buildClaudeExecArgv;
     const { jsonSchemaFor } = await import("../src/agents/codex-cli/schema-json.js");
@@ -410,7 +418,9 @@ console.log(JSON.stringify({ type: "result", subtype: "success", is_error: false
       projectInstructions: async () => "Project instructions:\nnone"
     };
     const prompts = await buildClaudeLeaderPlanPrompts(planOptions, { request: "What is 9 times 9? Reply with only the number.", goals: [], history: "" });
-    expect(prompts.prompt).toMatch(/^This is a single non-interactive call\./);
+    expect(prompts.prompt).toMatch(/^Request: What is 9 times 9\? Reply with only the number\./);
+    expect(prompts.prompt).not.toContain("This is a single non-interactive call");
+    expect(prompts.prompt).not.toContain("Act on the request below now");
     expect(prompts.prompt).toContain("Request: What is 9 times 9? Reply with only the number.");
     const ledger = new CostLedger();
     await invokeShimDirectly({
@@ -428,12 +438,11 @@ console.log(JSON.stringify({ type: "result", subtype: "success", is_error: false
     const capturedRaw = await fs.readFile(capturePath, "utf8");
     const captured = JSON.parse(capturedRaw) as { rawPrompt: string; rawSystemPrompt: string; args: string[] };
     expect(captured.rawPrompt).toBe(prompts.prompt);
-    expect(captured.rawPrompt).toMatch(/^This is a single non-interactive call\./);
+    expect(captured.rawPrompt).toMatch(/^Request: What is 9 times 9\? Reply with only the number\./);
     expect(captured.rawPrompt).toContain("Request: What is 9 times 9? Reply with only the number.");
-    expect(captured.rawPrompt.indexOf("This is a single non-interactive call.")).toBeLessThan(captured.rawPrompt.indexOf("Request: What is 9 times 9?"));
-    expect(captured.rawPrompt).not.toContain("Understood");
-    expect(captured.rawPrompt).not.toContain("ready when you are");
-    expect(captured.rawPrompt).not.toMatch(/Conversation so far:\s*$/m);
+    expect(captured.rawPrompt).not.toContain("This is a single non-interactive call");
+    expect(captured.rawPrompt).not.toContain("Conversation so far:");
+    expect(captured.rawPrompt).not.toContain("Standing goals:");
 
     await fs.rm(capturePath, { force: true });
     const reviewPrompts = await buildClaudeLeaderReviewPrompts(planOptions, { plan, report: { status: "complete", summary: "ok", taskResults: [{ id: "T1", status: "done" }], filesChanged: [], verificationResults: [{ command: "npm test", passed: true, output: "ok" }], deviationsFromPlan: [] }, round: 1, diff: "" });
@@ -452,10 +461,10 @@ console.log(JSON.stringify({ type: "result", subtype: "success", is_error: false
     });
     const reviewCaptured = JSON.parse(await fs.readFile(capturePath, "utf8")) as { rawPrompt: string };
     expect(reviewCaptured.rawPrompt).toBe(reviewPrompts.prompt);
-    expect(reviewCaptured.rawPrompt).toMatch(/^This is a single non-interactive call\./);
-    expect(reviewCaptured.rawPrompt).toContain("Review task: review the completed work now and return the verdict.");
-    expect(reviewCaptured.rawPrompt.indexOf("This is a single non-interactive call.")).toBeLessThan(reviewCaptured.rawPrompt.indexOf("Review round 1."));
+    expect(reviewCaptured.rawPrompt).toMatch(/^Review round 1\./);
     expect(reviewCaptured.rawPrompt.indexOf("Review round 1.")).toBeLessThan(reviewCaptured.rawPrompt.indexOf("BuildPlan:"));
+    expect(reviewCaptured.rawPrompt).not.toContain("This is a single non-interactive call");
+    expect(reviewCaptured.rawPrompt).not.toContain("Review task: review the completed work now");
 
     await fs.rm(capturePath, { force: true });
     const workerPrompts = await buildClaudeWorkerPrompts(planOptions, { plan, round: 1, feedback: [] });
@@ -473,9 +482,9 @@ console.log(JSON.stringify({ type: "result", subtype: "success", is_error: false
     });
     const workerCaptured = JSON.parse(await fs.readFile(capturePath, "utf8")) as { rawPrompt: string };
     expect(workerCaptured.rawPrompt).toBe(workerPrompts.prompt);
-    expect(workerCaptured.rawPrompt).toMatch(/^This is a single non-interactive call\./);
-    expect(workerCaptured.rawPrompt).toContain("Worker task: build now from this worker task context.");
-    expect(workerCaptured.rawPrompt.indexOf("This is a single non-interactive call.")).toBeLessThan(workerCaptured.rawPrompt.indexOf("Worker task:"));
-    expect(workerCaptured.rawPrompt.indexOf("Worker task:")).toBeLessThan(workerCaptured.rawPrompt.indexOf("BuildPlan:"));
+    expect(workerCaptured.rawPrompt).toMatch(/^BuildPlan:/);
+    expect(workerCaptured.rawPrompt.indexOf("BuildPlan:")).toBeLessThan(workerCaptured.rawPrompt.indexOf("Round 1"));
+    expect(workerCaptured.rawPrompt).not.toContain("This is a single non-interactive call");
+    expect(workerCaptured.rawPrompt).not.toContain("Worker task: build now from this worker task context.");
   });
 });
