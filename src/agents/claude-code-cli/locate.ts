@@ -41,18 +41,18 @@ export function locateClaudeCli(options: LocateClaudeOptions = {}): string | und
   const exists = options.exists ?? existsSync;
   const pathSeparator = options.pathSeparator ?? path.delimiter;
 
+  if (override && canUse(override, exists)) {
+    cachedKey = key;
+    cachedPath = override;
+    return cachedPath;
+  }
+
   for (const candidate of pathCandidates(env, pathSeparator, platform)) {
     if (canUse(candidate, exists)) {
       cachedKey = key;
       cachedPath = candidate;
       return cachedPath;
     }
-  }
-
-  if (override && canUse(override, exists)) {
-    cachedKey = key;
-    cachedPath = override;
-    return cachedPath;
   }
 
   cachedKey = key;

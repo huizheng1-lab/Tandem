@@ -78,7 +78,7 @@ fs.writeFileSync(output, JSON.stringify(value));
 const claudeEntry: ModelEntry = { id: "claude-code/cli", provider: "claude-code-cli", modelName: "", contextWindow: 200000 };
 
 describe("claude code cli discovery", () => {
-  it("uses PATH before config or env override", () => {
+  it("uses config or env override before PATH", () => {
     clearClaudeCliPathCache();
     const found = path.join("C:/bin", process.platform === "win32" ? "claude.cmd" : "claude");
     expect(
@@ -88,7 +88,7 @@ describe("claude code cli discovery", () => {
         pathSeparator: path.delimiter,
         exists: (filePath) => filePath === found || filePath === "C:/Claude/claude.cmd"
       })
-    ).toBe(found);
+    ).toBe("C:/Claude/claude.cmd");
   });
 
   it("finds claude on PATH", () => {
@@ -97,7 +97,7 @@ describe("claude code cli discovery", () => {
     expect(locateClaudeCli({ env: { PATH: "C:/bin" }, pathSeparator: path.delimiter, exists: (filePath) => filePath === found })).toBe(found);
   });
 
-  it("falls back to config or env override when PATH does not contain claude", () => {
+  it("uses config or env override when PATH does not contain claude", () => {
     clearClaudeCliPathCache();
     expect(locateClaudeCli({ overridePath: "C:/Claude/claude.cmd", exists: (filePath) => filePath === "C:/Claude/claude.cmd" })).toBe("C:/Claude/claude.cmd");
   });

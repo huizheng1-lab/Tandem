@@ -1,5 +1,4 @@
-import { spawn } from "node:child_process";
-import { once } from "node:events";
+import { execa } from "execa";
 import type { PermissionMode } from "../../config/schema.js";
 import type { ModelEntry } from "../../providers/registry.js";
 import { CostLedger, CostRole } from "../../session/cost.js";
@@ -121,44 +120,31 @@ export async function runClaudeExec(options: ClaudeExecOptions): Promise<unknown
   });
   options.onToolEvent?.({ role: options.role, tool: "claude_code_cli", target: options.readOnly ? "read-only prompt" : "write prompt", phase: "start" });
   const started = Date.now();
-  const child = spawn(claudePath, args, {
+  const result = await execa(claudePath, args, {
     cwd: options.cwd,
     env: options.env,
-    stdio: ["ignore", "pipe", "pipe"],
+    stdin: "ignore",
     windowsHide: true,
-    shell: process.platform === "win32" && /\.(?:cmd|bat)$/i.test(claudePath)
+    reject: false,
+    cancelSignal: options.abortSignal
   });
-  let stdout = "";
-  let stderr = "";
-  const abort = () => child.kill("SIGTERM");
-  options.abortSignal?.addEventListener("abort", abort, { once: true });
-  child.stdout.setEncoding("utf8");
-  child.stdout.on("data", (chunk: string) => {
-    stdout += chunk;
-  });
-  child.stderr.setEncoding("utf8");
-  child.stderr.on("data", (chunk: string) => {
-    stderr += chunk;
-  });
-  const [code] = (await once(child, "close")) as [number | null];
-  options.abortSignal?.removeEventListener("abort", abort);
   options.onToolEvent?.({
     role: options.role,
     tool: "claude_code_cli",
     target: options.readOnly ? "read-only prompt" : "write prompt",
     phase: "end",
-    ok: code === 0 && !options.abortSignal?.aborted,
+    ok: result.exitCode === 0 && !options.abortSignal?.aborted,
     ms: Date.now() - started
   });
   if (options.abortSignal?.aborted) throw new Error("Claude Code CLI run aborted.");
-  if (code !== 0) {
+  if (result.exitCode !== 0) {
     let denials = "";
     try {
-      denials = formatPermissionDenials((JSON.parse(stdout) as ClaudeEnvelope).permission_denials);
+      denials = formatPermissionDenials((JSON.parse(result.stdout) as ClaudeEnvelope).permission_denials);
     } catch {
       denials = "";
     }
-    throw new Error(`Claude Code CLI exited with code ${code}: ${[stderr.trim(), denials, stdout.trim()].filter(Boolean).join("\n")}`);
+    throw new Error(`Claude Code CLI exited with code ${result.exitCode}: ${[result.stderr.trim(), denials, result.stdout.trim()].filter(Boolean).join("\n")}`);
   }
-  return parseClaudeEnvelope(stdout, options);
+  return parseClaudeEnvelope(result.stdout, options);
 }
