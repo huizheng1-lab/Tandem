@@ -140,7 +140,7 @@ export interface ModelListItem {
   id: string;
   provider: string;
   modelName: string;
-  envKey: string;
+  envKey?: string;
   available: boolean;
   media?: { images?: boolean; pdf?: boolean };
 }

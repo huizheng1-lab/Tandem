@@ -16,6 +16,7 @@ import { rebuildLeaderThread } from "../session/leader-thread.js";
 import { appendProjectMemoryNote, formatProjectInstructions, readProjectInstructions } from "../session/project-memory.js";
 import { SessionStore, listSessions } from "../session/store.js";
 import { createLiveAgents, suggestGoalProgressNotes } from "../agents/live.js";
+import { locateCodexCli } from "../agents/codex-cli/locate.js";
 import { runOrchestration, MachineEvent, OrchestrationCheckpoint } from "../orchestrator/machine.js";
 import { BuildPlan, CompletionReport, ReviewVerdict } from "../orchestrator/artifacts.js";
 import { createDiffTracker } from "../orchestrator/diff.js";
@@ -253,7 +254,8 @@ export function App({ config: initialConfig, env, cwd, initialError }: { config:
           await storeRef.current?.append("memory:compaction", event);
           addMessage("SYSTEM", `compacted ${event.compactedTurns} earlier turns.`);
         },
-        onTriage: (kind) => handleEvent({ type: "notice", message: `triage: ${kind}` })
+        onTriage: (kind) => handleEvent({ type: "notice", message: `triage: ${kind}` }),
+        confirmCodexWrite: (_role, message) => permissionBridge.approve({ action: "bash", target: message })
       });
       const result = await runOrchestration({
         request: prompt,
@@ -445,7 +447,7 @@ export function App({ config: initialConfig, env, cwd, initialError }: { config:
       {modelPicker ? (
         <Box borderStyle="single" flexDirection="column" paddingX={1}>
           <Text color="cyan">{modelPicker.stage === "role" ? "Choose role" : `Choose ${modelPicker.role} model`}</Text>
-          {(modelPicker.stage === "role" ? ["leader", "worker"] : modelOptions.map((model) => `${env[model.envKey] ? "ok " : "key"} ${model.id}`)).map((item, index) => (
+          {(modelPicker.stage === "role" ? ["leader", "worker"] : modelOptions.map((model) => `${model.provider === "codex-cli" ? (locateCodexCli({ env, overridePath: config.codexCliPath }) ? "ok " : "key") : model.envKey && env[model.envKey] ? "ok " : "key"} ${model.id}`)).map((item, index) => (
             <Text key={item} color={index === modelPicker.index ? "yellow" : undefined}>
               {index === modelPicker.index ? "> " : "  "}
               {item}

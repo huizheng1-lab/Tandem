@@ -9,27 +9,34 @@ export interface ModelResolution {
 
 export async function makeModel(modelId: string, config: TandemConfig, env: NodeJS.ProcessEnv = process.env): Promise<ModelResolution> {
   const entry = resolveModel(modelId, config.customModels);
-  validateModelEnv(entry, env);
+  validateModelEnv(entry, env, config.codexCliPath);
+
+  if (entry.provider === "codex-cli") {
+    return { entry, model: {} as LanguageModel };
+  }
 
   if (entry.provider === "anthropic") {
+    const apiKey = env[entry.envKey as string];
     const mod = await import("@ai-sdk/anthropic");
     // SDK boundary: provider factory names are version-coupled, so isolate dynamic access here.
     const createAnthropic = (mod as Record<string, unknown>).createAnthropic as (options: { apiKey?: string }) => (modelName: string) => LanguageModel;
-    return { entry, model: createAnthropic({ apiKey: env[entry.envKey] })(entry.modelName) };
+    return { entry, model: createAnthropic({ apiKey })(entry.modelName) };
   }
 
   if (entry.provider === "openai") {
+    const apiKey = env[entry.envKey as string];
     const mod = await import("@ai-sdk/openai");
     // SDK boundary: see note above.
     const createOpenAI = (mod as Record<string, unknown>).createOpenAI as (options: { apiKey?: string }) => (modelName: string) => LanguageModel;
-    return { entry, model: createOpenAI({ apiKey: env[entry.envKey] })(entry.modelName) };
+    return { entry, model: createOpenAI({ apiKey })(entry.modelName) };
   }
 
   if (entry.provider === "google") {
+    const apiKey = env[entry.envKey as string];
     const mod = await import("@ai-sdk/google");
     // SDK boundary: see note above.
     const createGoogle = (mod as Record<string, unknown>).createGoogleGenerativeAI as (options: { apiKey?: string }) => (modelName: string) => LanguageModel;
-    return { entry, model: createGoogle({ apiKey: env[entry.envKey] })(entry.modelName) };
+    return { entry, model: createGoogle({ apiKey })(entry.modelName) };
   }
 
   const mod = await import("@ai-sdk/openai-compatible");
@@ -45,7 +52,7 @@ export async function makeModel(modelId: string, config: TandemConfig, env: Node
     entry,
     model: createOpenAICompatible({
       name: entry.id.split("/")[0] ?? "compatible",
-      apiKey: env[entry.envKey],
+    apiKey: env[entry.envKey as string],
       baseURL: entry.baseURL,
       includeUsage: true
     })(entry.modelName)

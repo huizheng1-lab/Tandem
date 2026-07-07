@@ -19,6 +19,8 @@ import { leaderPlannerPrompt, leaderReviewerPrompt, leaderTakeoverPrompt } from 
 import { workerPrompt } from "./worker.js";
 import { hostPlatformPrompt } from "./platform.js";
 import { stripEmbeddedHistoryDigest } from "../session/leader-thread.js";
+import { runCodexWorkerBuild } from "./codex-cli/worker.js";
+import { codexLeaderPlan, codexLeaderReview, codexLeaderTakeover } from "./codex-cli/leader.js";
 
 export interface LiveAgentOptions {
   config: TandemConfig;
@@ -38,6 +40,7 @@ export interface LiveAgentOptions {
   leaderThread?: RunnerMessage[];
   onLeaderCompaction?: (event: { summary: string; compactedTurns: number }) => void | Promise<void>;
   onTriage?: (kind: TriageKind) => void | Promise<void>;
+  confirmCodexWrite?: (role: "leader" | "worker", message: string) => Promise<boolean>;
 }
 
 function jsonBlock(value: unknown): string {
@@ -334,6 +337,24 @@ export async function createLiveAgents(options: LiveAgentOptions): Promise<Agent
 
   return {
     plan: async ({ request, goals, history, attachments = [] }): Promise<PlanResult> => {
+      if (leader.entry.provider === "codex-cli") {
+        return codexLeaderPlan(
+          {
+            config: options.config,
+            cwd: options.cwd,
+            env: options.env,
+            entry: leader.entry,
+            ledger: options.ledger,
+            abortSignal: options.abortSignal,
+            onLeaderText: options.onLeaderText,
+            onToolEvent: options.onToolEvent,
+            projectInstructions: options.projectInstructions,
+            onTriage: options.onTriage,
+            confirmCodexWrite: options.confirmCodexWrite
+          },
+          { request, goals, history, attachments }
+        );
+      }
       const triageKind =
         options.config.triage === "always-plan"
           ? "implementation"
@@ -438,6 +459,22 @@ Standing goals are context only; do not redirect unrelated requests toward them.
     },
 
     build: async ({ plan, round, feedback, previousReport }) => {
+      if (worker.entry.provider === "codex-cli") {
+        return runCodexWorkerBuild(
+          {
+            config: options.config,
+            cwd: options.cwd,
+            env: options.env,
+            entry: worker.entry,
+            ledger: options.ledger,
+            abortSignal: options.abortSignal,
+            onWorkerText: options.onWorkerText,
+            onToolEvent: options.onToolEvent,
+            confirmCodexWrite: options.confirmCodexWrite
+          },
+          { plan, round, feedback, previousReport }
+        );
+      }
       let report: z.infer<typeof CompletionReportSchema> | undefined;
       const submitTools = {
         submit_completion_report: tool({
@@ -475,6 +512,23 @@ Standing goals are context only; do not redirect unrelated requests toward them.
     },
 
     review: async ({ plan, report, round, diff }) => {
+      if (leader.entry.provider === "codex-cli") {
+        return codexLeaderReview(
+          {
+            config: options.config,
+            cwd: options.cwd,
+            env: options.env,
+            entry: leader.entry,
+            ledger: options.ledger,
+            abortSignal: options.abortSignal,
+            onLeaderText: options.onLeaderText,
+            onToolEvent: options.onToolEvent,
+            projectInstructions: options.projectInstructions,
+            confirmCodexWrite: options.confirmCodexWrite
+          },
+          { plan, report, round, diff }
+        );
+      }
       let verdict: z.infer<typeof ReviewVerdictSchema> | undefined;
       const submitTools = {
         submit_review: tool({
@@ -527,6 +581,23 @@ Standing goals are context only; do not redirect unrelated requests toward them.
     },
 
     takeover: async ({ plan, reports, feedback }) => {
+      if (leader.entry.provider === "codex-cli") {
+        return codexLeaderTakeover(
+          {
+            config: options.config,
+            cwd: options.cwd,
+            env: options.env,
+            entry: leader.entry,
+            ledger: options.ledger,
+            abortSignal: options.abortSignal,
+            onLeaderText: options.onLeaderText,
+            onToolEvent: options.onToolEvent,
+            projectInstructions: options.projectInstructions,
+            confirmCodexWrite: options.confirmCodexWrite
+          },
+          { plan, reports, feedback }
+        );
+      }
       let submitted: { report: z.infer<typeof CompletionReportSchema>; userSummary: string } | undefined;
       const submitTools = {
         submit_takeover: tool({

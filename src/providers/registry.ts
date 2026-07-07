@@ -1,12 +1,13 @@
 import { CustomModel } from "../config/schema.js";
+import { locateCodexCli } from "../agents/codex-cli/locate.js";
 
-export type ProviderKind = "anthropic" | "openai" | "google" | "openai-compatible";
+export type ProviderKind = "anthropic" | "openai" | "google" | "openai-compatible" | "codex-cli";
 
 export interface ModelEntry {
   id: string;
   provider: ProviderKind;
   modelName: string;
-  envKey: string;
+  envKey?: string;
   baseURL?: string;
   contextWindow: number;
   media?: {
@@ -123,6 +124,12 @@ export const builtInModels: ModelEntry[] = [
     contextWindow: 128000,
     media: { images: true },
     costHints: { inputPerMillion: 1, outputPerMillion: 4 }
+  },
+  {
+    id: "codex/cli",
+    provider: "codex-cli",
+    modelName: "",
+    contextWindow: 256000
   }
 ];
 
@@ -130,7 +137,7 @@ export function customToModelEntry(model: CustomModel): ModelEntry {
   return {
     id: model.id,
     provider: model.provider ?? "openai-compatible",
-    modelName: model.modelName,
+    modelName: model.modelName ?? "",
     envKey: model.apiKeyEnv,
     baseURL: model.baseURL,
     contextWindow: model.contextWindow ?? 128000,
@@ -155,8 +162,12 @@ export function resolveModel(id: string, customModels: CustomModel[] = []): Mode
   return model;
 }
 
-export function validateModelEnv(entry: ModelEntry, env: NodeJS.ProcessEnv): void {
-  if (!env[entry.envKey]) {
+export function validateModelEnv(entry: ModelEntry, env: NodeJS.ProcessEnv, codexCliPath?: string): void {
+  if (entry.provider === "codex-cli") {
+    if (!locateCodexCli({ env, overridePath: codexCliPath })) throw new Error(`Missing Codex CLI for model ${entry.id}. Install Codex CLI or set CODEX_CLI_PATH / codexCliPath.`);
+    return;
+  }
+  if (!entry.envKey || !env[entry.envKey]) {
     throw new Error(`Missing ${entry.envKey} for model ${entry.id}. Add it to .env or ~/.tandem/.env, then retry.`);
   }
 }

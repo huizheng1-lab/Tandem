@@ -138,6 +138,11 @@ function mediaBadge(model: Pick<ModelListItem, "media">): string {
   return values.length > 0 ? ` [${values.join("+")}]` : "";
 }
 
+function unavailableModelText(model: ModelListItem): string {
+  if (model.available) return "";
+  return model.provider === "codex-cli" ? " (Codex CLI missing)" : ` (${model.envKey} missing)`;
+}
+
 function App(): React.ReactElement {
   const tandem = window.tandem;
   if (!tandem) {
@@ -192,16 +197,16 @@ function App(): React.ReactElement {
   const showThinkingRef = useRef(false);
   const thinkingTimers = useRef<Partial<Record<"leader" | "worker", ReturnType<typeof setTimeout>>>>({});
 
+  const effectiveConfig = session?.config ?? config;
+  const contextProjectDir = session?.projectDir ?? appState?.lastProjectDir ?? appState?.projectDir;
   const totalCost = useMemo(() => {
     if (!cost) return "$0.0000";
     return `$${(cost.leader.dollars + cost.worker.dollars).toFixed(4)}`;
   }, [cost]);
 
   const costTitle = cost
-    ? `Leader: ${cost.leader.inputTokens}/${cost.leader.outputTokens} tokens, $${cost.leader.dollars.toFixed(4)}\nWorker: ${cost.worker.inputTokens}/${cost.worker.outputTokens} tokens, $${cost.worker.dollars.toFixed(4)}`
+    ? `Leader: ${cost.leader.inputTokens}/${cost.leader.outputTokens} tokens, $${cost.leader.dollars.toFixed(4)}${effectiveConfig?.leader === "codex/cli" ? " (billed via your Codex CLI account, not by token price)" : ""}\nWorker: ${cost.worker.inputTokens}/${cost.worker.outputTokens} tokens, $${cost.worker.dollars.toFixed(4)}${effectiveConfig?.worker === "codex/cli" ? " (billed via your Codex CLI account, not by token price)" : ""}`
     : "No usage yet";
-  const effectiveConfig = session?.config ?? config;
-  const contextProjectDir = session?.projectDir ?? appState?.lastProjectDir ?? appState?.projectDir;
 
   const appendMessage = (role: Role, text: string) => {
     setEntries((current) => [...current, { id: nextId.current++, kind: "message", role, text }]);
@@ -627,7 +632,7 @@ function App(): React.ReactElement {
       if (command === "/models") {
         const items = await tandem.listModels();
         setModels(items);
-        appendMessage("system", items.map((model) => `${model.available ? "ok" : "key"} ${model.id}${mediaBadge(model)}${model.available ? "" : ` (${model.envKey} missing)`}`).join("\n") || "No models.");
+        appendMessage("system", items.map((model) => `${model.available ? "ok" : "key"} ${model.id}${mediaBadge(model)}${unavailableModelText(model)}`).join("\n") || "No models.");
         return;
       }
       if (command === "/model") {
@@ -943,7 +948,7 @@ function App(): React.ReactElement {
                 <option key={model.id} value={model.id} disabled={!model.available}>
                   {model.id}
                   {mediaBadge(model)}
-                  {model.available ? "" : ` (${model.envKey} missing)`}
+                  {unavailableModelText(model)}
                 </option>
               ))}
             </select>
@@ -955,7 +960,7 @@ function App(): React.ReactElement {
                 <option key={model.id} value={model.id} disabled={!model.available}>
                   {model.id}
                   {mediaBadge(model)}
-                  {model.available ? "" : ` (${model.envKey} missing)`}
+                  {unavailableModelText(model)}
                 </option>
               ))}
             </select>

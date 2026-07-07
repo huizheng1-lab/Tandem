@@ -8,6 +8,7 @@ import type { ScheduledTask } from "node-cron";
 import { loadConfig, loadConfigDetails, loadEnv, saveGlobalConfigPatch, saveProjectConfig } from "../../src/config/load.js";
 import type { TandemConfig } from "../../src/config/schema.js";
 import { createLiveAgents } from "../../src/agents/live.js";
+import { locateCodexCli } from "../../src/agents/codex-cli/locate.js";
 import { createDiffTracker } from "../../src/orchestrator/diff.js";
 import { runOrchestration, type MachineEvent, type OrchestrationCheckpoint } from "../../src/orchestrator/machine.js";
 import { modelRegistry } from "../../src/providers/registry.js";
@@ -207,7 +208,8 @@ export class TandemService {
         rememberNote: (text, by) => this.rememberProjectNote(text, by),
         leaderThread: rebuildLeaderThread(sessionEvents),
         onLeaderCompaction: (event) => this.recordLeaderCompaction(event),
-        onTriage: (kind) => this.emitMachine({ type: "notice", message: `triage: ${kind}` })
+        onTriage: (kind) => this.emitMachine({ type: "notice", message: `triage: ${kind}` }),
+        confirmCodexWrite: (_role, message) => this.requestPermission({ action: "bash", target: message })
       });
       const goals = formatStandingGoals((await listGoals(this.projectDir)).filter((goal) => goal.status === "active"));
       const result = await (this.deps.runOrchestration ?? runOrchestration)({
@@ -269,7 +271,7 @@ export class TandemService {
       provider: model.provider,
       modelName: model.modelName,
       envKey: model.envKey,
-      available: Boolean(this.env[model.envKey]),
+      available: model.provider === "codex-cli" ? Boolean(locateCodexCli({ env: this.env, overridePath: this.config.codexCliPath })) : Boolean(model.envKey && this.env[model.envKey]),
       media: model.media
     }));
   }

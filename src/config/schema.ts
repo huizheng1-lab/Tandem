@@ -6,7 +6,7 @@ export type PermissionMode = z.infer<typeof PermissionModeSchema>;
 export const TriageModeSchema = z.enum(["auto", "always-plan"]);
 export type TriageMode = z.infer<typeof TriageModeSchema>;
 
-export const ModelProviderSchema = z.enum(["google", "anthropic", "openai", "openai-compatible"]);
+export const ModelProviderSchema = z.enum(["google", "anthropic", "openai", "openai-compatible", "codex-cli"]);
 export type ModelProvider = z.infer<typeof ModelProviderSchema>;
 
 export const CustomModelSchema = z
@@ -14,8 +14,8 @@ export const CustomModelSchema = z
     id: z.string().min(1),
     provider: ModelProviderSchema.optional(),
     baseURL: z.string().url().optional(),
-    apiKeyEnv: z.string().min(1),
-    modelName: z.string().min(1),
+    apiKeyEnv: z.string().min(1).optional(),
+    modelName: z.string().min(1).optional(),
     contextWindow: z.number().int().positive().optional(),
     media: z.object({ images: z.boolean().optional(), pdf: z.boolean().optional() }).optional(),
     costHints: z
@@ -27,6 +27,20 @@ export const CustomModelSchema = z
   })
   .superRefine((value, ctx) => {
     const provider = value.provider ?? "openai-compatible";
+    if (provider !== "codex-cli" && !value.apiKeyEnv) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["apiKeyEnv"],
+        message: "apiKeyEnv is required for API-backed custom models"
+      });
+    }
+    if (provider !== "codex-cli" && !value.modelName) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["modelName"],
+        message: "modelName is required for API-backed custom models"
+      });
+    }
     if (provider === "openai-compatible" && !value.baseURL) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
@@ -42,6 +56,7 @@ export const ConfigSchema = z.object({
   maxReviewRounds: z.number().int().min(0),
   permissionMode: PermissionModeSchema,
   triage: TriageModeSchema,
+  codexCliPath: z.string().min(1).optional(),
   showThinking: z.boolean(),
   maxStepsPerAgentTurn: z.number().int().positive(),
   leaderContextBudgetTokens: z.number().int().positive(),
