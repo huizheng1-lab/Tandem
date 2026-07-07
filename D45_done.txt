@@ -1,0 +1,21 @@
+D45 done
+
+Commit: 5924838
+Summary: Wired Anthropic prompt-cache breakpoint (`cacheControl: { type: "ephemeral" }`) onto the leader system message via AI SDK providerOptions, so repeated leader calls within a session reuse the static prefix (persona + host + project instructions + memoryInstruction) instead of re-billing it.
+
+- runner.ts: AgentRunOptions gained `systemProviderOptions?: ProviderOptions`. When set, runAgentText routes the system through a leading SystemModelMessage in `messages` (instead of the top-level `system` string) and sets `allowSystemInMessages: true`, so the AI SDK forwards the providerOptions to the provider. When unset, behavior is unchanged (no regression for codex-cli, claude-code-cli, OpenAI-compatible worker).
+- live.ts: added `leaderSystemProviderOptions(entry)` helper that returns `{ anthropic: { cacheControl: { type: "ephemeral" } } }` for the anthropic provider and `undefined` for google / openai / codex-cli / claude-code-cli / openai-compatible. Attached to all four leader call sites (question, plan, review, takeover) via runAgentText / runAgentArtifact.
+- Unified the question branch's persona with leaderPlannerPrompt (was a hardcoded "answering a question" sentence). This was previously a divergent prefix that prevented any cross-call cache hits between question and plan calls.
+
+D45-2 (Anthropic explicit breakpoint): wired. Static prefix is byte-identical across calls of the same kind; trailer content placed after the prefix matches the order the handoff specifies.
+
+D45-3 (Gemini implicit): no code change required (provider returns undefined for systemProviderOptions). Confirmed live below.
+
+D45-4 (live evidence, google/gemini-2.5-pro via real AI SDK + runAgentText):
+Stable prefix 23273 chars (~5819 tokens), 3 calls with the same prefix but different trailing question, all routed through runAgentText with systemProviderOptions applied (provider=google → undefined, so the SDK's system-string path runs identically):
+  Call 1: inputTokens=5049  cachedInputTokens=4074
+  Call 2: inputTokens=5049  cachedInputTokens=4074
+  Call 3: inputTokens=5049  cachedInputTokens=4074
+Effective cache hit ~81% of prompt tokens on calls 2 and 3 (warmer cache after first response). Captured verbatim by scripts/live-cache-tandem.ts.
+
+Verification: npm run typecheck; npm test (175 passed, 4 skipped live-smoke); git diff --check.

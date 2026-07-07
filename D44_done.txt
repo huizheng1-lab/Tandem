@@ -1,0 +1,5 @@
+D44 done
+
+Commit: 323c800
+Summary: Restructured Claude Code CLI user prompts so the non-interactive preamble is the FIRST line (most salient position), the actual request/task comes next, and the multi-section "Conversation so far / Standing goals" report template is dropped. Empty Conversation/Goals sections are omitted entirely (no more `none` placeholders), so the model no longer sees a status report with empty fields followed by the buried task. Wording was also tightened to "Act on the request below now and respond with ONLY the required JSON" so the model can't pattern-match the exchange as the first turn of a longer session. Extracted buildClaudeLeaderReviewPrompts / buildClaudeLeaderTakeoverPrompts so the leader review and takeover prompts use the same restructure as the leader plan prompt.
+Verification: npm run typecheck; npm test (168 passed, 1 skipped live-smoke); git diff --check

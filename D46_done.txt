@@ -1,0 +1,30 @@
+D46 done
+
+Commit: 7b5c41a
+Summary: Added MiniMax-M3 as a worker option and made it the new default worker.
+
+- Verified the live MiniMax model identifier via `GET https://api.minimax.io/v1/models` using the user's MINIMAX_API_KEY. The official model id is `MiniMax-M3` (created 2026-06-01, sibling of `MiniMax-M2.7`/`MiniMax-M2.7-highspeed`/etc.).
+- Added a new customModels entry `minimax/minimax-m3` mirroring the existing m2.7 entry: same baseURL (`https://api.minimax.io/v1`), same apiKeyEnv (`MINIMAX_API_KEY`), modelName `MiniMax-M3`. Left `minimax/minimax-m2.7` in place unchanged for backwards compatibility.
+- Changed `defaultConfig.worker` from `"minimax/minimax-m2.7"` to `"minimax/minimax-m3"`. Note: this only affects fresh installs/configs; existing user `~/.tandem/config.json` and project-level configs are not retroactively rewritten.
+- No costHints set (matches existing m2.7 entry — pricing data not exposed by the /v1/models endpoint).
+- "google/gemini-2.5-flash" leader, "yolo" permission, fresh throwaway project, plan "create README.md", verified via the plan's own node -e command.
+
+D46-4 live verification (real Gemini leader + each MiniMax worker, real /v1/chat/completions call):
+
+M3 build:
+  status=complete summary="Created README.md containing the required 'Tandem MiniMax M3 smoke' text and verified it via the plan's node command (output: ok)."
+  taskResults=[{"id":"T1","status":"done"}]
+  filesChanged=["README.md"]
+  verificationResults=[{"command":"node -e \"...\"","passed":true,"output":"ok"}]
+  cost={"role":"worker","inputTokens":8156,"outputTokens":770,"dollars":0}
+
+M2.7 regression:
+  status=complete summary="Created README.md with \"Tandem MiniMax M3 smoke\" content. Verification passed."
+  taskResults=[{"id":"T1","status":"done"}]
+  filesChanged=["README.md"]
+  verificationResults=[{"command":"node -e \"...\"","passed":true,"output":"ok"}]
+  cost={"role":"worker","inputTokens":6750,"outputTokens":483,"dollars":0}
+
+Both workers complete a real build with real verification passing. m2.7 unchanged.
+
+Verification: npm run typecheck; npm test (175 passed); git diff --check.
