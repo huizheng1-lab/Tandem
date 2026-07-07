@@ -24,6 +24,10 @@ export interface CodexExecOptions {
   onToolEvent?: (event: ToolActivityEvent) => void;
 }
 
+interface CodexJsonDiagnostics {
+  errors: string[];
+}
+
 export function codexSandboxFor(permissionMode: PermissionMode, forceReadOnly = false): "read-only" | "workspace-write" {
   if (forceReadOnly) return "read-only";
   return permissionMode === "ask" ? "workspace-write" : "workspace-write";
@@ -60,13 +64,43 @@ function usageNumber(value: unknown): number {
   return typeof value === "number" && Number.isFinite(value) ? value : 0;
 }
 
-export function handleCodexJsonLine(line: string, options: Pick<CodexExecOptions, "role" | "entry" | "ledger" | "onText" | "onToolEvent">, active = new Map<string, number>()): void {
+function jsonText(value: unknown): string {
+  if (typeof value === "string") return value;
+  try {
+    return JSON.stringify(value);
+  } catch {
+    return String(value);
+  }
+}
+
+export function stripNulls(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(stripNulls);
+  if (!value || typeof value !== "object") return value;
+  const result: Record<string, unknown> = {};
+  for (const [key, item] of Object.entries(value)) {
+    if (item === null) continue;
+    result[key] = stripNulls(item);
+  }
+  return result;
+}
+
+export function handleCodexJsonLine(line: string, options: Pick<CodexExecOptions, "role" | "entry" | "ledger" | "onText" | "onToolEvent">, active = new Map<string, number>(), diagnostics?: CodexJsonDiagnostics): void {
   if (!line.trim()) return;
   const event = JSON.parse(line) as {
     type?: string;
     item?: { id?: string; type?: string; command?: string; text?: string; status?: string; exit_code?: number | null };
     usage?: Record<string, unknown>;
+    message?: unknown;
+    error?: unknown;
   };
+  if (event.type === "error") {
+    diagnostics?.errors.push(jsonText(event.message ?? event.error ?? event));
+    return;
+  }
+  if (event.type === "turn.failed") {
+    diagnostics?.errors.push(jsonText(event.error ?? event.message ?? event));
+    return;
+  }
   if (event.type === "item.started" && event.item) {
     const id = event.item.id ?? `${event.item.type ?? "item"}:${active.size}`;
     active.set(id, Date.now());
@@ -123,6 +157,7 @@ export async function runCodexExec(options: CodexExecOptions & { readOnly?: bool
       shell: process.platform === "win32" && /\.(?:cmd|bat)$/i.test(codexPath)
     });
     const active = new Map<string, number>();
+    const diagnostics: CodexJsonDiagnostics = { errors: [] };
     let stdoutBuffer = "";
     let stderr = "";
     const abort = () => child.kill("SIGTERM");
@@ -132,7 +167,7 @@ export async function runCodexExec(options: CodexExecOptions & { readOnly?: bool
       stdoutBuffer += chunk;
       const lines = stdoutBuffer.split(/\r?\n/);
       stdoutBuffer = lines.pop() ?? "";
-      for (const line of lines) handleCodexJsonLine(line, options, active);
+      for (const line of lines) handleCodexJsonLine(line, options, active, diagnostics);
     });
     child.stderr.setEncoding("utf8");
     child.stderr.on("data", (chunk: string) => {
@@ -140,9 +175,10 @@ export async function runCodexExec(options: CodexExecOptions & { readOnly?: bool
     });
     const [code] = (await once(child, "close")) as [number | null];
     options.abortSignal?.removeEventListener("abort", abort);
-    if (stdoutBuffer.trim()) handleCodexJsonLine(stdoutBuffer, options, active);
+    if (stdoutBuffer.trim()) handleCodexJsonLine(stdoutBuffer, options, active, diagnostics);
     if (options.abortSignal?.aborted) throw new Error("Codex CLI run aborted.");
-    if (code !== 0) throw new Error(`Codex CLI exited with code ${code}: ${stderr.trim()}`);
-    return JSON.parse(await readFile(outputPath, "utf8")) as unknown;
+    const diagnosticText = diagnostics.errors.length > 0 ? ` Codex JSON error: ${diagnostics.errors.join("\n")}` : "";
+    if (code !== 0) throw new Error(`Codex CLI exited with code ${code}: ${[stderr.trim(), diagnosticText.trim()].filter(Boolean).join("\n")}`);
+    return stripNulls(JSON.parse(await readFile(outputPath, "utf8")));
   });
 }

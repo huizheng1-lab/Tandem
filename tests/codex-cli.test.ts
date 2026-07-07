@@ -3,9 +3,9 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { createLiveAgents } from "../src/agents/live.js";
-import { buildCodexExecArgv, handleCodexJsonLine, runCodexExec } from "../src/agents/codex-cli/exec.js";
+import { buildCodexExecArgv, handleCodexJsonLine, runCodexExec, stripNulls } from "../src/agents/codex-cli/exec.js";
 import { clearCodexCliPathCache, locateCodexCli } from "../src/agents/codex-cli/locate.js";
-import { jsonSchemaFor } from "../src/agents/codex-cli/schema-json.js";
+import { buildPlanJsonSchema, completionReportJsonSchema, jsonSchemaFor, planOrAnswerJsonSchema, reviewVerdictJsonSchema, takeoverJsonSchema } from "../src/agents/codex-cli/schema-json.js";
 import { defaultConfig } from "../src/config/schema.js";
 import type { BuildPlan } from "../src/orchestrator/artifacts.js";
 import { CostLedger } from "../src/session/cost.js";
@@ -43,15 +43,15 @@ console.log(JSON.stringify({ type: "item.completed", item: { id: "item_1", type:
 console.log(JSON.stringify({ type: "turn.completed", usage: { input_tokens: 24680, cached_input_tokens: 21760, output_tokens: 51, reasoning_output_tokens: 2 } }));
 let value;
 if (schema.includes("completion-report")) {
-  value = { status: "complete", summary: "codex worker done", taskResults: [{ id: "T1", status: "done" }], filesChanged: ["hello35.txt"], verificationResults: [{ command: "npm test", passed: true, output: "ok" }], deviationsFromPlan: [] };
+  value = { status: "complete", summary: "codex worker done", taskResults: [{ id: "T1", status: "done", notes: null }], filesChanged: ["hello35.txt"], verificationResults: [{ command: "npm test", passed: true, output: "ok" }], deviationsFromPlan: [] };
 } else if (schema.includes("plan-or-answer") && (/Create hello/.test(prompt) || count > 1)) {
-  value = { kind: "implementation", plan: { title: "Hello", objective: "Create hello file", constraints: [], tasks: [{ id: "T1", description: "Create file" }], acceptanceCriteria: ["file exists"], verification: ["npm test"] } };
+  value = { kind: "implementation", answer: null, plan: { title: "Hello", objective: "Create hello file", constraints: [], tasks: [{ id: "T1", description: "Create file", files: null }], acceptanceCriteria: ["file exists"], verification: ["npm test"] } };
 } else if (schema.includes("plan-or-answer")) {
-  value = { kind: "question", answer: "4" };
+  value = { kind: "question", answer: "4", plan: null };
 } else if (schema.includes("review-verdict")) {
   value = { verdict: "approve", scores: { correctness: 5, planAdherence: 5, codeQuality: 5 }, feedback: [], userSummary: "approved" };
 } else {
-  value = { report: { status: "complete", summary: "takeover", taskResults: [{ id: "T1", status: "done" }], filesChanged: [], verificationResults: [{ command: "npm test", passed: true, output: "ok" }], deviationsFromPlan: [] }, userSummary: "takeover" };
+  value = { report: { status: "complete", summary: "takeover", taskResults: [{ id: "T1", status: "done", notes: null }], filesChanged: [], verificationResults: [{ command: "npm test", passed: true, output: "ok" }], deviationsFromPlan: [] }, userSummary: "takeover" };
 }
 fs.writeFileSync(output, JSON.stringify(value));
 console.log(JSON.stringify(value));
@@ -67,7 +67,43 @@ console.log(JSON.stringify(value));
   return script;
 }
 
+async function fakeFailingCodexScript(): Promise<string> {
+  const dir = await tempDir("fake-codex-fail");
+  const script = path.join(dir, process.platform === "win32" ? "codex.cmd" : "codex");
+  const js = path.join(dir, "fake-codex-fail.js");
+  await writeFile(
+    js,
+    `
+console.error("Reading additional input from stdin...");
+console.log(JSON.stringify({ type: "error", message: "Invalid schema for response_format codex_output_schema: Missing notes." }));
+process.exit(1);
+`,
+    "utf8"
+  );
+  if (process.platform === "win32") {
+    await writeFile(script, `@echo off\r\n"${process.execPath}" "${js}" %*\r\n`, "utf8");
+  } else {
+    await writeFile(script, `#!/bin/sh\n"${process.execPath}" "${js}" "$@"\n`, "utf8");
+    await chmod(script, 0o755);
+  }
+  return script;
+}
+
 const codexEntry: ModelEntry = { id: "codex/cli", provider: "codex-cli", modelName: "", contextWindow: 256000 };
+
+function assertRequiredCoversProperties(schema: unknown, pathLabel = "$"): void {
+  if (!schema || typeof schema !== "object") return;
+  const node = schema as { additionalProperties?: unknown; properties?: Record<string, unknown>; required?: unknown; items?: unknown; anyOf?: unknown[] };
+  if (node.additionalProperties === false && node.properties) {
+    expect(Array.isArray(node.required), `${pathLabel}.required`).toBe(true);
+    for (const key of Object.keys(node.properties)) {
+      expect(node.required, `${pathLabel}.required includes ${key}`).toContain(key);
+    }
+  }
+  for (const [key, child] of Object.entries(node.properties ?? {})) assertRequiredCoversProperties(child, `${pathLabel}.properties.${key}`);
+  if (node.items) assertRequiredCoversProperties(node.items, `${pathLabel}.items`);
+  for (const [index, child] of (node.anyOf ?? []).entries()) assertRequiredCoversProperties(child, `${pathLabel}.anyOf.${index}`);
+}
 
 describe("codex cli discovery", () => {
   it("uses config or env override first", () => {
@@ -144,6 +180,23 @@ describe("codex cli execution", () => {
     expect(ledger.totals().worker).toMatchObject({ inputTokens: 10, outputTokens: 5 });
   });
 
+  it("captures Codex JSON error events for diagnosable failures", () => {
+    const ledger = new CostLedger();
+    const diagnostics = { errors: [] as string[] };
+    handleCodexJsonLine(
+      '{"type":"error","message":"Invalid schema for response_format codex_output_schema: Missing notes."}',
+      { role: "worker", entry: codexEntry, ledger },
+      new Map<string, number>(),
+      diagnostics
+    );
+
+    expect(diagnostics.errors.join("\n")).toContain("Missing notes");
+  });
+
+  it("strips nulls from Codex output before zod validation", () => {
+    expect(stripNulls({ taskResults: [{ id: "T1", notes: null }], plan: null })).toEqual({ taskResults: [{ id: "T1" }] });
+  });
+
   it("runs a fake codex executable and validates output file JSON", async () => {
     const cwd = await tempDir("project");
     const codexCliPath = await fakeCodexScript();
@@ -160,13 +213,37 @@ describe("codex cli execution", () => {
     });
 
     expect(output).toMatchObject({ status: "complete", summary: "codex worker done" });
+    expect(JSON.stringify(output)).not.toContain("notes");
     expect(ledger.totals().worker.inputTokens).toBe(24680);
+  });
+
+  it("includes structured Codex stdout errors when exec fails", async () => {
+    const cwd = await tempDir("project");
+    const codexCliPath = await fakeFailingCodexScript();
+    await expect(
+      runCodexExec({
+        cwd,
+        prompt: "build",
+        schema: "completion-report",
+        permissionMode: "yolo",
+        codexCliPath,
+        role: "worker",
+        entry: codexEntry,
+        ledger: new CostLedger()
+      })
+    ).rejects.toThrow(/Missing notes/);
   });
 
   it("exposes hand-rolled schemas for every Codex artifact kind", () => {
     expect(jsonSchemaFor("completion-report")).toMatchObject({ type: "object" });
     expect(JSON.stringify(jsonSchemaFor("plan-or-answer"))).toContain("implementation");
     expect(JSON.stringify(jsonSchemaFor("takeover"))).toContain("userSummary");
+  });
+
+  it("requires every property key in OpenAI structured output schemas", () => {
+    for (const schema of [buildPlanJsonSchema, completionReportJsonSchema, reviewVerdictJsonSchema, takeoverJsonSchema, planOrAnswerJsonSchema]) {
+      assertRequiredCoversProperties(schema);
+    }
   });
 });
 

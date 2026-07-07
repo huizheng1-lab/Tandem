@@ -5,6 +5,7 @@ import path from "node:path";
 export type CodexSchemaKind = "build-plan" | "completion-report" | "review-verdict" | "takeover" | "plan-or-answer";
 
 const stringSchema = { type: "string" };
+const nullableStringSchema = { type: ["string", "null"] };
 
 export const buildPlanJsonSchema = {
   type: "object",
@@ -19,11 +20,11 @@ export const buildPlanJsonSchema = {
       items: {
         type: "object",
         additionalProperties: false,
-        required: ["id", "description"],
+        required: ["id", "description", "files"],
         properties: {
           id: stringSchema,
           description: stringSchema,
-          files: { type: "array", items: stringSchema }
+          files: { type: ["array", "null"], items: stringSchema }
         }
       }
     },
@@ -44,11 +45,11 @@ export const completionReportJsonSchema = {
       items: {
         type: "object",
         additionalProperties: false,
-        required: ["id", "status"],
+        required: ["id", "status", "notes"],
         properties: {
           id: stringSchema,
           status: { enum: ["done", "partial", "skipped"] },
-          notes: stringSchema
+          notes: nullableStringSchema
         }
       }
     },
@@ -91,10 +92,10 @@ export const reviewVerdictJsonSchema = {
       items: {
         type: "object",
         additionalProperties: false,
-        required: ["issue", "requiredChange"],
+        required: ["issue", "location", "requiredChange"],
         properties: {
           issue: stringSchema,
-          location: stringSchema,
+          location: nullableStringSchema,
           requiredChange: stringSchema
         }
       }
@@ -116,11 +117,11 @@ export const takeoverJsonSchema = {
 export const planOrAnswerJsonSchema = {
   type: "object",
   additionalProperties: false,
-  required: ["kind"],
+  required: ["kind", "answer", "plan"],
   properties: {
     kind: { enum: ["question", "implementation"] },
-    answer: stringSchema,
-    plan: buildPlanJsonSchema
+    answer: nullableStringSchema,
+    plan: { anyOf: [buildPlanJsonSchema, { type: "null" }] }
   }
 } as const;
 
