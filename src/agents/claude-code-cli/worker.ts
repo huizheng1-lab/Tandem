@@ -26,8 +26,8 @@ async function projectInstructions(options: Pick<ClaudeWorkerOptions, "projectIn
   return (await options.projectInstructions?.())?.trim() || "Project instructions:\nnone";
 }
 
-const singleTurnInstruction =
-  "This is a single non-interactive call. Complete the task in this message now. Do not ask a clarifying question, do not acknowledge, do not wait for a further message.";
+const singleTurnPreamble =
+  "This is a single non-interactive call. Act on the request below now and respond with ONLY the required JSON. Do not ask a clarifying question, do not acknowledge, do not wait for a further message.";
 
 export async function buildClaudeWorkerPrompt(
   options: Pick<ClaudeWorkerOptions, "env" | "projectInstructions">,
@@ -47,8 +47,9 @@ ${hostPlatformPrompt(process.platform, options.env)}
 ${await projectInstructions(options)}
 If read_file says you CANNOT view a file's visual content, never guess, infer, or claim to know what it shows. If the task depends on that content and the plan lacks sufficient leader-provided findings, submit a blocked CompletionReport.
 You must run every verification command before submit_completion_report. In verificationResults[].command, repeat the BuildPlan verification command string verbatim. If you adapt a command for the host platform, still use the plan's original command as command and describe the adapted command plus real output in output.`,
-    prompt: `Single-turn worker task: build now from this worker task context.
-${singleTurnInstruction}
+    prompt: `${singleTurnPreamble}
+
+Worker task: build now from this worker task context.
 
 ${buildWorkerContext(input)}`
   };

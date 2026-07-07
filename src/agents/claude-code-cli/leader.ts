@@ -46,8 +46,8 @@ async function projectInstructions(options: Pick<ClaudeLeaderOptions, "projectIn
   return (await options.projectInstructions?.())?.trim() || "Project instructions:\nnone";
 }
 
-const singleTurnInstruction =
-  "This is a single non-interactive call. Complete the task in this message now. Do not ask a clarifying question, do not acknowledge, do not wait for a further message.";
+const singleTurnPreamble =
+  "This is a single non-interactive call. Act on the request below now and respond with ONLY the required JSON. Do not ask a clarifying question, do not acknowledge, do not wait for a further message.";
 
 function optionalSection(title: string, value: string | undefined): string {
   const text = value?.trim();
@@ -96,8 +96,9 @@ When the user explicitly asks for a direct answer, it is ALWAYS (a). Mixed reque
 
 Return JSON matching the provided schema. For question, set kind="question" and answer only. For implementation, set kind="implementation" and plan only.
 The plan verification field must contain exact runnable shell commands only, one command per entry.`,
-    prompt: `Single-turn user request: ${input.request}${attachmentBlock}
-${singleTurnInstruction}${optionalSection("Conversation so far", input.history)}${optionalSection("Standing goals", goals)}`
+    prompt: `${singleTurnPreamble}
+
+Request: ${input.request}${attachmentBlock}${optionalSection("Conversation so far", input.history)}${optionalSection("Standing goals", goals)}`
   };
 }
 
@@ -112,13 +113,18 @@ export async function claudeLeaderPlan(
   return { kind: "plan", plan: validateBuildPlan(result.plan) };
 }
 
-export async function claudeLeaderReview(options: ClaudeLeaderOptions, input: { plan: BuildPlan; report: CompletionReport; round: number; diff: string }) {
-  const systemPrompt = `${leaderReviewerPrompt}
+export async function buildClaudeLeaderReviewPrompts(
+  options: Pick<ClaudeLeaderOptions, "env" | "projectInstructions">,
+  input: { plan: BuildPlan; report: CompletionReport; round: number; diff: string }
+): Promise<{ systemPrompt: string; prompt: string }> {
+  return {
+    systemPrompt: `${leaderReviewerPrompt}
 ${hostPlatformPrompt(process.platform, options.env)}
 ${await projectInstructions(options)}
-You may rerun only the plan verification commands if needed. Return only the ReviewVerdict JSON.`;
-  const prompt = `Single-turn review task: review the completed work now and return the verdict.
-${singleTurnInstruction}
+You may rerun only the plan verification commands if needed. Return only the ReviewVerdict JSON.`,
+    prompt: `${singleTurnPreamble}
+
+Review task: review the completed work now and return the verdict.
 
 Review round ${input.round}.
 BuildPlan:
@@ -128,17 +134,22 @@ CompletionReport:
 ${jsonBlock(input.report)}
 
 Diff:
-${input.diff || "(empty diff)"}`;
-  return ReviewVerdictSchema.parse(await claudeLeaderExec(options, { schema: "review-verdict", prompt, systemPrompt, readOnly: true }));
+${input.diff || "(empty diff)"}`
+  };
 }
 
-export async function claudeLeaderTakeover(options: ClaudeLeaderOptions, input: { plan: BuildPlan; reports: CompletionReport[]; feedback: ReviewFeedback[] }) {
-  const systemPrompt = `${leaderTakeoverPrompt}
+export async function buildClaudeLeaderTakeoverPrompts(
+  options: Pick<ClaudeLeaderOptions, "env" | "projectInstructions">,
+  input: { plan: BuildPlan; reports: CompletionReport[]; feedback: ReviewFeedback[] }
+): Promise<{ systemPrompt: string; prompt: string }> {
+  return {
+    systemPrompt: `${leaderTakeoverPrompt}
 ${hostPlatformPrompt(process.platform, options.env)}
 ${await projectInstructions(options)}
-Run every verification command, then return takeover JSON with a CompletionReport and userSummary.`;
-  const prompt = `Single-turn takeover task: take over the implementation now and return the takeover result.
-${singleTurnInstruction}
+Run every verification command, then return takeover JSON with a CompletionReport and userSummary.`,
+    prompt: `${singleTurnPreamble}
+
+Takeover task: take over the implementation now and return the takeover result.
 
 BuildPlan:
 ${jsonBlock(input.plan)}
@@ -147,7 +158,17 @@ Previous reports:
 ${jsonBlock(input.reports)}
 
 Feedback history:
-${jsonBlock(input.feedback)}`;
-  const takeover = z.object({ report: CompletionReportSchema, userSummary: z.string() }).parse(await claudeLeaderExec(options, { schema: "takeover", prompt, systemPrompt }));
+${jsonBlock(input.feedback)}`
+  };
+}
+
+export async function claudeLeaderReview(options: ClaudeLeaderOptions, input: { plan: BuildPlan; report: CompletionReport; round: number; diff: string }) {
+  const prompts = await buildClaudeLeaderReviewPrompts(options, input);
+  return ReviewVerdictSchema.parse(await claudeLeaderExec(options, { schema: "review-verdict", prompt: prompts.prompt, systemPrompt: prompts.systemPrompt, readOnly: true }));
+}
+
+export async function claudeLeaderTakeover(options: ClaudeLeaderOptions, input: { plan: BuildPlan; reports: CompletionReport[]; feedback: ReviewFeedback[] }) {
+  const prompts = await buildClaudeLeaderTakeoverPrompts(options, input);
+  const takeover = z.object({ report: CompletionReportSchema, userSummary: z.string() }).parse(await claudeLeaderExec(options, { schema: "takeover", prompt: prompts.prompt, systemPrompt: prompts.systemPrompt }));
   return takeover;
 }

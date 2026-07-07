@@ -4,12 +4,12 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { createLiveAgents } from "../src/agents/live.js";
 import { buildClaudeExecArgv, claudePermissionFor, parseClaudeEnvelope, runClaudeExec } from "../src/agents/claude-code-cli/exec.js";
-import { buildClaudeLeaderPlanPrompts } from "../src/agents/claude-code-cli/leader.js";
+import { buildClaudeLeaderPlanPrompts, buildClaudeLeaderReviewPrompts, buildClaudeLeaderTakeoverPrompts, claudeLeaderReview, claudeLeaderTakeover } from "../src/agents/claude-code-cli/leader.js";
 import { clearClaudeCliPathCache, locateClaudeCli } from "../src/agents/claude-code-cli/locate.js";
 import { buildClaudeWorkerPrompt, buildClaudeWorkerPrompts } from "../src/agents/claude-code-cli/worker.js";
 import { buildPlanJsonSchema, completionReportJsonSchema, stripNulls } from "../src/agents/codex-cli/schema-json.js";
 import { defaultConfig } from "../src/config/schema.js";
-import type { BuildPlan } from "../src/orchestrator/artifacts.js";
+import type { BuildPlan, CompletionReport } from "../src/orchestrator/artifacts.js";
 import type { ModelEntry } from "../src/providers/registry.js";
 import { CostLedger } from "../src/session/cost.js";
 
@@ -227,21 +227,22 @@ describe("claude code cli mixed roles", () => {
 
     expect(prompts.systemPrompt).toContain("Project instructions:\n- Use the local style.");
     expect(prompts.systemPrompt).toContain("FIRST, classify the request:");
-    expect(prompts.systemPrompt).not.toContain("Single-turn user request: What is 9 times 9?");
-    expect(prompts.prompt).toMatch(/^Single-turn user request: What is 9 times 9\?/);
-    expect(prompts.prompt.indexOf("Single-turn user request: What is 9 times 9?")).toBeLessThan(prompts.prompt.indexOf("This is a single non-interactive call."));
-    expect(prompts.prompt.indexOf("Single-turn user request: What is 9 times 9?")).toBeLessThan(prompts.prompt.indexOf("Conversation so far:"));
+    expect(prompts.systemPrompt).not.toContain("Request: What is 9 times 9?");
+    expect(prompts.prompt).toMatch(/^This is a single non-interactive call\./);
+    expect(prompts.prompt.indexOf("This is a single non-interactive call.")).toBeLessThan(prompts.prompt.indexOf("Request: What is 9 times 9?"));
+    expect(prompts.prompt.indexOf("Request: What is 9 times 9?")).toBeLessThan(prompts.prompt.indexOf("Conversation so far:"));
     expect(prompts.prompt).toContain("Conversation so far:");
     expect(prompts.prompt).toContain("Standing goals:");
-    expect(prompts.prompt).toContain("Single-turn user request: What is 9 times 9?");
+    expect(prompts.prompt).toContain("Request: What is 9 times 9?");
     expect(prompts.prompt).not.toContain("FIRST, classify the request:");
   });
 
   it("omits empty Claude Code leader context placeholders", async () => {
     const prompts = await buildClaudeLeaderPlanPrompts({ env: {}, projectInstructions: async () => "Project instructions:\nnone" }, { request: "What is 9 times 9?", goals: [], history: "" });
 
-    expect(prompts.prompt).toMatch(/^Single-turn user request: What is 9 times 9\?/);
-    expect(prompts.prompt).toContain("This is a single non-interactive call.");
+    expect(prompts.prompt).toMatch(/^This is a single non-interactive call\./);
+    expect(prompts.prompt).toContain("Request: What is 9 times 9?");
+    expect(prompts.prompt).toContain("Act on the request below now");
     expect(prompts.prompt).not.toContain("Conversation so far:");
     expect(prompts.prompt).not.toContain("Standing goals:");
     expect(prompts.prompt).not.toContain("\nnone");
@@ -261,11 +262,39 @@ describe("claude code cli mixed roles", () => {
     expect(prompts.systemPrompt).toContain("If read_file says you CANNOT view a file's visual content");
     expect(prompts.systemPrompt).toContain("In verificationResults[].command, repeat the BuildPlan verification command string verbatim.");
     expect(prompts.systemPrompt).not.toContain("BuildPlan:");
-    expect(prompts.prompt).toMatch(/^Single-turn worker task: build now from this worker task context\./);
-    expect(prompts.prompt.indexOf("Single-turn worker task:")).toBeLessThan(prompts.prompt.indexOf("This is a single non-interactive call."));
-    expect(prompts.prompt.indexOf("Single-turn worker task:")).toBeLessThan(prompts.prompt.indexOf("BuildPlan:"));
+    expect(prompts.prompt).toMatch(/^This is a single non-interactive call\./);
+    expect(prompts.prompt.indexOf("This is a single non-interactive call.")).toBeLessThan(prompts.prompt.indexOf("Worker task: build now from this worker task context."));
+    expect(prompts.prompt.indexOf("Worker task: build now from this worker task context.")).toBeLessThan(prompts.prompt.indexOf("BuildPlan:"));
     expect(prompts.prompt).toContain("BuildPlan:");
     expect(prompts.prompt).not.toContain("Project instructions:\n- Use the local style.");
+  });
+
+  it("places the non-interactive preamble as the first line of leader review and takeover prompts", async () => {
+    const reviewOptions = {
+      env: { ComSpec: "powershell.exe" },
+      projectInstructions: async () => "Project instructions:\n- Use the local style."
+    };
+    const reviewReport: CompletionReport = {
+      status: "complete",
+      summary: "ok",
+      taskResults: [{ id: "T1", status: "done" }],
+      filesChanged: [],
+      verificationResults: [{ command: "npm test", passed: true, output: "ok" }],
+      deviationsFromPlan: []
+    };
+    const reviewPrompts = await buildClaudeLeaderReviewPrompts(reviewOptions, { plan, report: reviewReport, round: 1, diff: "(empty diff)" });
+    expect(reviewPrompts.prompt).toMatch(/^This is a single non-interactive call\./);
+    expect(reviewPrompts.prompt).toContain("Act on the request below now");
+    expect(reviewPrompts.prompt).toContain("Review task: review the completed work now and return the verdict.");
+    expect(reviewPrompts.prompt.indexOf("This is a single non-interactive call.")).toBeLessThan(reviewPrompts.prompt.indexOf("Review round 1."));
+    expect(reviewPrompts.prompt.indexOf("Review round 1.")).toBeLessThan(reviewPrompts.prompt.indexOf("BuildPlan:"));
+    expect(reviewPrompts.prompt).toContain("BuildPlan:");
+
+    const takeoverPrompts = await buildClaudeLeaderTakeoverPrompts(reviewOptions, { plan, reports: [reviewReport], feedback: [] });
+    expect(takeoverPrompts.prompt).toMatch(/^This is a single non-interactive call\./);
+    expect(takeoverPrompts.prompt).toContain("Act on the request below now");
+    expect(takeoverPrompts.prompt).toContain("Takeover task: take over the implementation now and return the takeover result.");
+    expect(takeoverPrompts.prompt.indexOf("This is a single non-interactive call.")).toBeLessThan(takeoverPrompts.prompt.indexOf("BuildPlan:"));
   });
 
   it("keeps the compatibility combined Claude worker prompt available", async () => {
@@ -316,5 +345,137 @@ describe("claude code cli mixed roles", () => {
     if (planned.kind === "plan") {
       await expect(agents.build({ plan: planned.plan, round: 1, feedback: [] })).resolves.toMatchObject({ status: "complete" });
     }
+  });
+
+  it("passes the non-interactive preamble as the first line of the user prompt when run through the real Claude exec path (D44-2 live verification)", async () => {
+    const capturePath = path.join(await tempDir("project-capture"), "captured.json");
+    const shimSource = `
+const args = process.argv.slice(2);
+if (args.includes("--version")) { console.log("2.1.144 (Claude Code)"); process.exit(0); }
+const promptIdx = args.indexOf("-p");
+const sysPromptIdx = args.indexOf("--system-prompt");
+const rawPrompt = promptIdx >= 0 ? args[promptIdx + 1] : "";
+const rawSystemPrompt = sysPromptIdx >= 0 ? args[sysPromptIdx + 1] : "";
+const mode = process.env.TANDEM_FAKE_CLAUDE_MODE || "answer";
+const structured_output =
+  mode === "completion"
+    ? { status: "complete", summary: "done", taskResults: [{ id: "T1", status: "done" }], filesChanged: [], verificationResults: [{ command: "npm test", passed: true, output: "ok" }], deviationsFromPlan: [] }
+    : mode === "verdict"
+    ? { verdict: "approve", scores: { correctness: 5, planAdherence: 5, codeQuality: 5 }, feedback: [], userSummary: "approved" }
+    : mode === "takeover"
+    ? { report: { status: "complete", summary: "done", taskResults: [{ id: "T1", status: "done" }], filesChanged: [], verificationResults: [{ command: "npm test", passed: true, output: "ok" }], deviationsFromPlan: [] }, userSummary: "done" }
+    : { kind: "question", answer: "81", plan: null };
+const fs = require("fs");
+fs.writeFileSync(process.env.TANDEM_TEST_CAPTURE, JSON.stringify({ rawPrompt, rawSystemPrompt, args }, null, 2));
+console.log(JSON.stringify({ type: "result", subtype: "success", is_error: false, result: "ok", structured_output, usage: { input_tokens: 1, output_tokens: 1 }, total_cost_usd: 0.0001, permission_denials: [] }));
+`;
+    const shimDir = await tempDir("project-shim");
+    const shimJsPath = path.join(shimDir, "claude.js");
+    await (await import("node:fs/promises")).writeFile(shimJsPath, shimSource, "utf8");
+
+    const cwd = await tempDir("project-d442");
+    const fs = await import("node:fs/promises");
+    await fs.rm(capturePath, { force: true });
+
+    // Bypass the .cmd shim newline-truncation by capturing argv directly via node.
+    // Build the same argv production would, invoke node directly, and verify the prompt shape Tandem produced.
+    const { execa } = await import("execa");
+    const buildClaudeExecArgvLocal = (await import("../src/agents/claude-code-cli/exec.js")).buildClaudeExecArgv;
+    const { jsonSchemaFor } = await import("../src/agents/codex-cli/schema-json.js");
+    const { claudePermissionFor } = await import("../src/agents/claude-code-cli/exec.js");
+
+    async function invokeShimDirectly<T>(options: Parameters<typeof runClaudeExec>[0]): Promise<unknown> {
+      const argv = buildClaudeExecArgvLocal({
+        prompt: options.prompt,
+        systemPrompt: options.systemPrompt,
+        schema: jsonSchemaFor(options.schema),
+        permissionMode: claudePermissionFor(options.permissionMode, options.readOnly),
+        modelName: options.modelName,
+        readOnly: options.readOnly
+      });
+      const result = await execa(process.execPath, [shimJsPath, ...argv], {
+        cwd: options.cwd,
+        env: options.env,
+        stdin: "ignore",
+        reject: false,
+        windowsHide: true
+      });
+      if (result.exitCode !== 0) throw new Error(`shim exited ${result.exitCode}: ${result.stderr}\n${result.stdout}`);
+      const { parseClaudeEnvelope } = await import("../src/agents/claude-code-cli/exec.js");
+      return parseClaudeEnvelope(result.stdout, { role: options.role, entry: options.entry, ledger: options.ledger, onText: options.onText });
+    }
+
+    const planOptions = {
+      env: { ...process.env, TANDEM_TEST_CAPTURE: capturePath, TANDEM_FAKE_CLAUDE_MODE: "answer" },
+      projectInstructions: async () => "Project instructions:\nnone"
+    };
+    const prompts = await buildClaudeLeaderPlanPrompts(planOptions, { request: "What is 9 times 9? Reply with only the number.", goals: [], history: "" });
+    expect(prompts.prompt).toMatch(/^This is a single non-interactive call\./);
+    expect(prompts.prompt).toContain("Request: What is 9 times 9? Reply with only the number.");
+    const ledger = new CostLedger();
+    await invokeShimDirectly({
+      cwd,
+      prompt: prompts.prompt,
+      systemPrompt: prompts.systemPrompt,
+      schema: "plan-or-answer",
+      permissionMode: "yolo",
+      env: planOptions.env,
+      claudeCliPath: shimJsPath,
+      role: "leader",
+      entry: claudeEntry,
+      ledger
+    });
+    const capturedRaw = await fs.readFile(capturePath, "utf8");
+    const captured = JSON.parse(capturedRaw) as { rawPrompt: string; rawSystemPrompt: string; args: string[] };
+    expect(captured.rawPrompt).toBe(prompts.prompt);
+    expect(captured.rawPrompt).toMatch(/^This is a single non-interactive call\./);
+    expect(captured.rawPrompt).toContain("Request: What is 9 times 9? Reply with only the number.");
+    expect(captured.rawPrompt.indexOf("This is a single non-interactive call.")).toBeLessThan(captured.rawPrompt.indexOf("Request: What is 9 times 9?"));
+    expect(captured.rawPrompt).not.toContain("Understood");
+    expect(captured.rawPrompt).not.toContain("ready when you are");
+    expect(captured.rawPrompt).not.toMatch(/Conversation so far:\s*$/m);
+
+    await fs.rm(capturePath, { force: true });
+    const reviewPrompts = await buildClaudeLeaderReviewPrompts(planOptions, { plan, report: { status: "complete", summary: "ok", taskResults: [{ id: "T1", status: "done" }], filesChanged: [], verificationResults: [{ command: "npm test", passed: true, output: "ok" }], deviationsFromPlan: [] }, round: 1, diff: "" });
+    await invokeShimDirectly({
+      cwd,
+      prompt: reviewPrompts.prompt,
+      systemPrompt: reviewPrompts.systemPrompt,
+      schema: "review-verdict",
+      permissionMode: "yolo",
+      env: { ...planOptions.env, TANDEM_FAKE_CLAUDE_MODE: "verdict" },
+      claudeCliPath: shimJsPath,
+      readOnly: true,
+      role: "leader",
+      entry: claudeEntry,
+      ledger
+    });
+    const reviewCaptured = JSON.parse(await fs.readFile(capturePath, "utf8")) as { rawPrompt: string };
+    expect(reviewCaptured.rawPrompt).toBe(reviewPrompts.prompt);
+    expect(reviewCaptured.rawPrompt).toMatch(/^This is a single non-interactive call\./);
+    expect(reviewCaptured.rawPrompt).toContain("Review task: review the completed work now and return the verdict.");
+    expect(reviewCaptured.rawPrompt.indexOf("This is a single non-interactive call.")).toBeLessThan(reviewCaptured.rawPrompt.indexOf("Review round 1."));
+    expect(reviewCaptured.rawPrompt.indexOf("Review round 1.")).toBeLessThan(reviewCaptured.rawPrompt.indexOf("BuildPlan:"));
+
+    await fs.rm(capturePath, { force: true });
+    const workerPrompts = await buildClaudeWorkerPrompts(planOptions, { plan, round: 1, feedback: [] });
+    await invokeShimDirectly({
+      cwd,
+      prompt: workerPrompts.prompt,
+      systemPrompt: workerPrompts.systemPrompt,
+      schema: "completion-report",
+      permissionMode: "yolo",
+      env: { ...planOptions.env, TANDEM_FAKE_CLAUDE_MODE: "completion" },
+      claudeCliPath: shimJsPath,
+      role: "worker",
+      entry: claudeEntry,
+      ledger
+    });
+    const workerCaptured = JSON.parse(await fs.readFile(capturePath, "utf8")) as { rawPrompt: string };
+    expect(workerCaptured.rawPrompt).toBe(workerPrompts.prompt);
+    expect(workerCaptured.rawPrompt).toMatch(/^This is a single non-interactive call\./);
+    expect(workerCaptured.rawPrompt).toContain("Worker task: build now from this worker task context.");
+    expect(workerCaptured.rawPrompt.indexOf("This is a single non-interactive call.")).toBeLessThan(workerCaptured.rawPrompt.indexOf("Worker task:"));
+    expect(workerCaptured.rawPrompt.indexOf("Worker task:")).toBeLessThan(workerCaptured.rawPrompt.indexOf("BuildPlan:"));
   });
 });
