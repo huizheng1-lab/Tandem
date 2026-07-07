@@ -165,7 +165,7 @@ describe("codex cli execution", () => {
     ]);
   });
 
-  it("parses JSONL events into text, tool events, and usage", () => {
+  it("parses JSONL events into tool events and usage without streaming schema JSON text", () => {
     const ledger = new CostLedger();
     const text: string[] = [];
     const tools: unknown[] = [];
@@ -176,7 +176,7 @@ describe("codex cli execution", () => {
     handleCodexJsonLine('{"type":"item.completed","item":{"id":"item_1","type":"agent_message","text":"done"}}', options, active);
     handleCodexJsonLine('{"type":"turn.completed","usage":{"input_tokens":10,"cached_input_tokens":5,"output_tokens":2,"reasoning_output_tokens":3}}', options, active);
 
-    expect(text).toEqual(["done"]);
+    expect(text).toEqual([]);
     expect(tools).toHaveLength(2);
     expect(ledger.totals().worker).toMatchObject({ inputTokens: 10, outputTokens: 5 });
   });

@@ -114,7 +114,9 @@ export function handleCodexJsonLine(line: string, options: Pick<CodexExecOptions
   }
   if (event.type === "item.completed" && event.item) {
     if (event.item.type === "agent_message" && event.item.text) {
-      options.onText?.(event.item.text);
+      // All Tandem Codex CLI calls use --output-schema, so agent_message text is the final
+      // structured artifact JSON, not conversational prose. The parsed artifact is surfaced by
+      // normal machine events / done summaries instead of live transcript streaming.
       return;
     }
     const id = event.item.id ?? `${event.item.type ?? "item"}:${active.size}`;
