@@ -1,0 +1,42 @@
+D48 done
+
+Commit: 19a824c
+Summary: Preserved the original D45 `scripts/live-cache-tandem.ts` source as `scripts/live-cache-tandem-d45.ts` and replaced `scripts/live-cache-tandem.ts` with a D48 audit that uses the real production `makeModel("google/gemini-2.5-pro", defaultConfig, env)` path plus AI SDK `generateText`. The D45 `cachedInputTokens=4074` claim came from AI SDK aggregate `onUsage` output in the old script, not from a printed raw Google `usageMetadata.cachedContentTokenCount` field. The D48 script prints `usage`, full `providerMetadata`, full `providerMetadata.google.usageMetadata`, `usage.cachedInputTokens`, and `usageMetadata.cachedContentTokenCount` for each call.
+
+Docs checked: Google's Gemini API context caching docs say implicit caching is enabled by default for Gemini 2.5+ and cache hits are visible through `usage_metadata` / `cachedContentTokenCount`.
+
+Live D48 acceptance: `npx tsx scripts/live-cache-tandem.ts`
+
+Model entry: {"id":"google/gemini-2.5-pro","provider":"google","modelName":"gemini-2.5-pro","envKey":"GEMINI_API_KEY","contextWindow":1000000,"media":{"images":true,"pdf":true},"costHints":{"inputPerMillion":1.25,"outputPerMillion":10}}
+Stable prefix chars: 134628 (~33657 rough tokens)
+
+CALL 1 usage:
+{"inputTokens":25264,"totalTokens":25277,"reasoningTokens":13}
+CALL 1 providerMetadata:
+{"google":{"promptFeedback":null,"groundingMetadata":null,"urlContextMetadata":null,"safetyRatings":null,"serviceTier":null,"usageMetadata":{"thoughtsTokenCount":13,"promptTokenCount":25264,"totalTokenCount":25277,"promptTokensDetails":[{"modality":"TEXT","tokenCount":25264}]}}}
+CALL 1 usageMetadata:
+{"thoughtsTokenCount":13,"promptTokenCount":25264,"totalTokenCount":25277,"promptTokensDetails":[{"modality":"TEXT","tokenCount":25264}]}
+CALL 1 usage.cachedInputTokens: undefined
+CALL 1 usageMetadata.cachedContentTokenCount: undefined
+
+CALL 2 usage:
+{"inputTokens":25265,"totalTokens":25278,"reasoningTokens":13}
+CALL 2 providerMetadata:
+{"google":{"promptFeedback":null,"groundingMetadata":null,"urlContextMetadata":null,"safetyRatings":null,"serviceTier":null,"usageMetadata":{"thoughtsTokenCount":13,"promptTokenCount":25265,"totalTokenCount":25278,"promptTokensDetails":[{"modality":"TEXT","tokenCount":25265}]}}}
+CALL 2 usageMetadata:
+{"thoughtsTokenCount":13,"promptTokenCount":25265,"totalTokenCount":25278,"promptTokensDetails":[{"modality":"TEXT","tokenCount":25265}]}
+CALL 2 usage.cachedInputTokens: undefined
+CALL 2 usageMetadata.cachedContentTokenCount: undefined
+
+CALL 3 usage:
+{"inputTokens":25265,"totalTokens":25278,"reasoningTokens":13}
+CALL 3 providerMetadata:
+{"google":{"promptFeedback":null,"groundingMetadata":null,"urlContextMetadata":null,"safetyRatings":null,"serviceTier":null,"usageMetadata":{"thoughtsTokenCount":13,"promptTokenCount":25265,"totalTokenCount":25278,"promptTokensDetails":[{"modality":"TEXT","tokenCount":25265}]}}}
+CALL 3 usageMetadata:
+{"thoughtsTokenCount":13,"promptTokenCount":25265,"totalTokenCount":25278,"promptTokensDetails":[{"modality":"TEXT","tokenCount":25265}]}
+CALL 3 usage.cachedInputTokens: undefined
+CALL 3 usageMetadata.cachedContentTokenCount: undefined
+
+Conclusion: Gemini implicit caching was not observed through the current `@ai-sdk/google` Gemini Developer API setup. Do not claim the D45 Gemini caching win unless a future real response includes nonzero `usageMetadata.cachedContentTokenCount` or an equivalent authoritative provider field. D45's Anthropic providerOptions path remains a separate code-reviewed change.
+
+Verification: npm run typecheck; npm test (175 passed, 4 skipped); git diff --check.
