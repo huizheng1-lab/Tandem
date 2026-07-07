@@ -6,6 +6,7 @@ import { createLiveAgents } from "../src/agents/live.js";
 import { buildCodexExecArgv, handleCodexJsonLine, runCodexExec, stripNulls } from "../src/agents/codex-cli/exec.js";
 import { clearCodexCliPathCache, locateCodexCli } from "../src/agents/codex-cli/locate.js";
 import { buildPlanJsonSchema, completionReportJsonSchema, jsonSchemaFor, planOrAnswerJsonSchema, reviewVerdictJsonSchema, takeoverJsonSchema } from "../src/agents/codex-cli/schema-json.js";
+import { buildCodexWorkerPrompt } from "../src/agents/codex-cli/worker.js";
 import { defaultConfig } from "../src/config/schema.js";
 import type { BuildPlan } from "../src/orchestrator/artifacts.js";
 import { CostLedger } from "../src/session/cost.js";
@@ -256,6 +257,24 @@ describe("codex cli mixed roles", () => {
     acceptanceCriteria: ["file exists"],
     verification: ["npm test"]
   };
+
+  it("gives Codex CLI workers the same verification and project instructions as SDK workers", async () => {
+    const prompt = await buildCodexWorkerPrompt(
+      {
+        env: { ComSpec: "powershell.exe" },
+        projectInstructions: async () => "Project instructions:\n- Use the local style."
+      },
+      { plan, round: 1, feedback: [] }
+    );
+
+    expect(prompt).toContain("Project instructions:\n- Use the local style.");
+    expect(prompt).toContain("Host: Windows");
+    expect(prompt).toContain("If read_file says you CANNOT view a file's visual content");
+    expect(prompt).toContain(
+      "In verificationResults[].command, repeat the BuildPlan verification command string verbatim. If you adapt a command for the host platform, still use the plan's original command as command and describe the adapted command plus real output in output."
+    );
+    expect(prompt).toContain("BuildPlan:");
+  });
 
   it("supports API leader plus Codex CLI worker", async () => {
     const cwd = await tempDir("project");

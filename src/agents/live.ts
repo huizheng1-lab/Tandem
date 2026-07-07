@@ -470,6 +470,7 @@ Standing goals are context only; do not redirect unrelated requests toward them.
             abortSignal: options.abortSignal,
             onWorkerText: options.onWorkerText,
             onToolEvent: options.onToolEvent,
+            projectInstructions: options.projectInstructions,
             confirmCodexWrite: options.confirmCodexWrite
           },
           { plan, round, feedback, previousReport }
