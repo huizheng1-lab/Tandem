@@ -1,5 +1,6 @@
 import { generateObject, generateText, tool } from "ai";
 import type { LanguageModel, ToolSet } from "ai";
+import type { ProviderOptions } from "@ai-sdk/provider-utils";
 import { z } from "zod";
 import { TandemConfig } from "../config/schema.js";
 import { makeModel } from "../providers/client.js";
@@ -127,6 +128,19 @@ export function workerMediaWarning(attachments: { path: string; mediaType?: stri
     .map((attachment) => attachment.path);
   if (unsupported.length === 0) return "";
   return `\nMedia routing: the worker model (${workerEntry.id}) cannot view these attached media files: ${unsupported.join(", ")}. Inspect them yourself during planning. If implementation is needed, the BuildPlan may only contain tasks executable without the worker seeing the media, and the plan must include your visual/PDF findings clearly enough for the worker to act without guessing.`;
+}
+
+// Provider-specific options that mark a system message as cacheable so repeated leader calls
+// (plan/question/review/takeover) within the same session reuse the static prefix tokens instead of
+// re-billing them. Anthropic needs an explicit cache breakpoint; other providers either cache
+// implicitly (Gemini) or are out of scope for this round (OpenAI-compatible worker).
+export function leaderSystemProviderOptions(entry: ModelEntry): ProviderOptions | undefined {
+  if (entry.provider !== "anthropic") return undefined;
+  return {
+    anthropic: {
+      cacheControl: { type: "ephemeral" }
+    }
+  };
 }
 
 export function buildLeaderRequestMessage(input: { request: string; goals: string[]; history?: string; includeHistoryDigest: boolean; validationFeedback?: string }): string {
@@ -394,9 +408,10 @@ When the user explicitly asks for a direct answer, it is ALWAYS (a). A BuildPlan
       const includeHistoryDigest = leaderThread.length === 0;
       const baseUserText = buildLeaderRequestMessage({ request, goals, history, includeHistoryDigest });
       if (triageKind === "question") {
-        const system = `You are Tandem's leader answering a question or inspection request.
+        const system = `${leaderPlannerPrompt}
 ${hostPrompt}
 ${await projectInstructions()}
+${memoryInstruction}
 Honor Project instructions. Use read-only tools when useful. Answer directly and concisely.
 You cannot create or modify files, run shell commands, submit a BuildPlan, or write memory notes in this branch.
 Treat the new request in the context of this continuing session conversation; pronouns, references like "that file", and follow-ups may refer to earlier turns.
@@ -413,6 +428,7 @@ Standing goals are context only; do not redirect unrelated requests toward them.
           costRole: "leader",
           ledger: options.ledger,
           system,
+          systemProviderOptions: leaderSystemProviderOptions(leader.entry),
           messages: leaderThread,
           tools: leaderToolsForTriage({ kind: "question", toolContext, media: leader.entry.media }),
           maxSteps: options.config.maxStepsPerAgentTurn,
@@ -451,6 +467,7 @@ Standing goals are context only; do not redirect unrelated requests toward them.
           costRole: "leader",
           ledger: options.ledger,
           system,
+          systemProviderOptions: leaderSystemProviderOptions(leader.entry),
           messages: leaderThread,
           tools: leaderToolsForTriage({ kind: "implementation", toolContext, media: leader.entry.media, submitTools }),
           maxSteps: options.config.maxStepsPerAgentTurn,
@@ -607,6 +624,7 @@ Standing goals are context only; do not redirect unrelated requests toward them.
         costRole: "leader",
         ledger: options.ledger,
         system,
+        systemProviderOptions: leaderSystemProviderOptions(leader.entry),
         messages: leaderThread,
         tools: mergeTools(makeToolSet({ ...toolContext, media: leader.entry.media }, "reviewer", plan.verification), submitTools),
         maxSteps: options.config.maxStepsPerAgentTurn,
@@ -693,6 +711,7 @@ Standing goals are context only; do not redirect unrelated requests toward them.
         costRole: "leader",
         ledger: options.ledger,
         system,
+        systemProviderOptions: leaderSystemProviderOptions(leader.entry),
         messages: leaderThread,
         tools: mergeTools(makeToolSet({ ...toolContext, media: leader.entry.media }, "takeover"), submitTools),
         maxSteps: options.config.maxStepsPerAgentTurn,

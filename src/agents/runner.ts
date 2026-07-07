@@ -1,5 +1,6 @@
 import { hasToolCall, stepCountIs, streamText } from "ai";
 import type { LanguageModel, LanguageModelUsage, ToolSet } from "ai";
+import type { ProviderOptions } from "@ai-sdk/provider-utils";
 import { CostLedger, CostRole } from "../session/cost.js";
 import { ModelEntry } from "../providers/registry.js";
 import type { ContentPart } from "../session/attachments.js";
@@ -15,6 +16,7 @@ export interface AgentRunOptions {
   costRole?: CostRole;
   ledger?: CostLedger;
   system: string;
+  systemProviderOptions?: ProviderOptions;
   messages: RunnerMessage[];
   tools?: ToolSet;
   maxSteps: number;
@@ -271,10 +273,17 @@ export async function runAgentText(options: AgentRunOptions): Promise<{ text: st
         options.ledger.add(options.costRole, options.modelEntry, input, output);
         recordedUsage = true;
       };
+      // When providerOptions are attached to the system message (e.g. Anthropic cacheControl),
+      // route the system through the messages array as a SystemModelMessage rather than the
+      // top-level `system` string, so the AI SDK forwards providerOptions to the provider.
+      const streamMessages = options.systemProviderOptions
+        ? [{ role: "system" as const, content: options.system, providerOptions: options.systemProviderOptions }, ...options.messages]
+        : options.messages;
       const result = streamText({
         model: options.model,
-        system: options.system,
-        messages: options.messages as never,
+        ...(options.systemProviderOptions ? {} : { system: options.system }),
+        messages: streamMessages as never,
+        allowSystemInMessages: true,
         tools: options.tools,
         stopWhen: options.stopToolName ? [stepCountIs(options.maxSteps), hasToolCall(options.stopToolName)] : stepCountIs(options.maxSteps),
         toolChoice: options.toolChoice,
