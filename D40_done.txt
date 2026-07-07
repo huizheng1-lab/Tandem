@@ -1,0 +1,5 @@
+D40 done
+
+Commit: dff0864
+Summary: Made the desktop sidebar scroll vertically as a whole while preserving horizontal overflow clipping.
+Verification: npm run typecheck; npm test; git diff --check
