@@ -13,6 +13,7 @@ export type ClaudePermissionMode = "acceptEdits" | "auto" | "bypassPermissions" 
 export interface ClaudeExecOptions {
   cwd: string;
   prompt: string;
+  systemPrompt: string;
   schema: ClaudeSchemaKind;
   permissionMode: PermissionMode;
   env?: NodeJS.ProcessEnv;
@@ -61,6 +62,7 @@ export function claudePermissionFor(permissionMode: PermissionMode, readOnly = f
 
 export function buildClaudeExecArgv(input: {
   prompt: string;
+  systemPrompt: string;
   schema: object;
   permissionMode: ClaudePermissionMode;
   modelName?: string;
@@ -75,7 +77,9 @@ export function buildClaudeExecArgv(input: {
     JSON.stringify(input.schema),
     "--permission-mode",
     input.permissionMode,
-    "--no-session-persistence"
+    "--no-session-persistence",
+    "--system-prompt",
+    input.systemPrompt
   ];
   if (input.readOnly) args.push("--tools", "Read,Grep,Glob");
   if (input.modelName) args.push("--model", input.modelName);
@@ -113,6 +117,7 @@ export async function runClaudeExec(options: ClaudeExecOptions): Promise<unknown
   if (!claudePath) throw new Error("Claude Code CLI not found. Install Claude Code or set CLAUDE_CLI_PATH / claudeCliPath.");
   const args = buildClaudeExecArgv({
     prompt: options.prompt,
+    systemPrompt: options.systemPrompt,
     schema: jsonSchemaFor(options.schema),
     permissionMode: claudePermissionFor(options.permissionMode, options.readOnly),
     modelName: options.modelName || undefined,

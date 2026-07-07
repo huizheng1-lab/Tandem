@@ -46,7 +46,7 @@ async function projectInstructions(options: Pick<ClaudeLeaderOptions, "projectIn
   return (await options.projectInstructions?.())?.trim() || "Project instructions:\nnone";
 }
 
-async function claudeLeaderExec(options: ClaudeLeaderOptions, input: { schema: "plan-or-answer" | "review-verdict" | "takeover"; prompt: string; readOnly?: boolean }): Promise<unknown> {
+async function claudeLeaderExec(options: ClaudeLeaderOptions, input: { schema: "plan-or-answer" | "review-verdict" | "takeover"; prompt: string; systemPrompt: string; readOnly?: boolean }): Promise<unknown> {
   if (!input.readOnly && options.config.permissionMode === "ask") {
     const approved = await options.confirmCodexWrite?.("leader", "Run this leader takeover via Claude Code CLI with write access? Claude Code cannot prompt per-command in headless print mode.");
     if (approved === false) throw new Error("Claude Code CLI leader write round was not approved.");
@@ -54,6 +54,7 @@ async function claudeLeaderExec(options: ClaudeLeaderOptions, input: { schema: "
   return runClaudeExec({
     cwd: options.cwd,
     prompt: input.prompt,
+    systemPrompt: input.systemPrompt,
     schema: input.schema,
     readOnly: input.readOnly,
     permissionMode: options.config.permissionMode,
@@ -69,12 +70,13 @@ async function claudeLeaderExec(options: ClaudeLeaderOptions, input: { schema: "
   });
 }
 
-export async function claudeLeaderPlan(
-  options: ClaudeLeaderOptions,
+export async function buildClaudeLeaderPlanPrompts(
+  options: Pick<ClaudeLeaderOptions, "env" | "projectInstructions">,
   input: { request: string; goals: string[]; history?: string; attachments?: AttachmentRef[] }
-): Promise<PlanResult> {
+): Promise<{ systemPrompt: string; prompt: string }> {
   const attachmentBlock = input.attachments && input.attachments.length > 0 ? `\n\n${formatAttachmentBlock(input.attachments)}` : "";
-  const prompt = `${leaderPlannerPrompt}
+  return {
+    systemPrompt: `${leaderPlannerPrompt}
 ${hostPlatformPrompt(process.platform, options.env)}
 ${await projectInstructions(options)}
 
@@ -84,29 +86,35 @@ FIRST, classify the request:
 When the user explicitly asks for a direct answer, it is ALWAYS (a). Mixed requests are implementation.
 
 Return JSON matching the provided schema. For question, set kind="question" and answer only. For implementation, set kind="implementation" and plan only.
-The plan verification field must contain exact runnable shell commands only, one command per entry.
-
-Conversation so far:
+The plan verification field must contain exact runnable shell commands only, one command per entry.`,
+    prompt: `Conversation so far:
 ${input.history?.trim() || "none"}
 
 Standing goals:
 ${input.goals.length > 0 ? input.goals.join("\n") : "none"}
 
 Request:
-${input.request}${attachmentBlock}`;
-  const result = PlanOrAnswerSchema.parse(await claudeLeaderExec(options, { schema: "plan-or-answer", prompt, readOnly: true }));
+${input.request}${attachmentBlock}`
+  };
+}
+
+export async function claudeLeaderPlan(
+  options: ClaudeLeaderOptions,
+  input: { request: string; goals: string[]; history?: string; attachments?: AttachmentRef[] }
+): Promise<PlanResult> {
+  const prompts = await buildClaudeLeaderPlanPrompts(options, input);
+  const result = PlanOrAnswerSchema.parse(await claudeLeaderExec(options, { schema: "plan-or-answer", prompt: prompts.prompt, systemPrompt: prompts.systemPrompt, readOnly: true }));
   await options.onTriage?.(result.kind);
   if (result.kind === "question") return { kind: "answer", answer: result.answer ?? "" };
   return { kind: "plan", plan: validateBuildPlan(result.plan) };
 }
 
 export async function claudeLeaderReview(options: ClaudeLeaderOptions, input: { plan: BuildPlan; report: CompletionReport; round: number; diff: string }) {
-  const prompt = `${leaderReviewerPrompt}
+  const systemPrompt = `${leaderReviewerPrompt}
 ${hostPlatformPrompt(process.platform, options.env)}
 ${await projectInstructions(options)}
-You may rerun only the plan verification commands if needed. Return only the ReviewVerdict JSON.
-
-Review round ${input.round}.
+You may rerun only the plan verification commands if needed. Return only the ReviewVerdict JSON.`;
+  const prompt = `Review round ${input.round}.
 BuildPlan:
 ${jsonBlock(input.plan)}
 
@@ -115,16 +123,15 @@ ${jsonBlock(input.report)}
 
 Diff:
 ${input.diff || "(empty diff)"}`;
-  return ReviewVerdictSchema.parse(await claudeLeaderExec(options, { schema: "review-verdict", prompt, readOnly: true }));
+  return ReviewVerdictSchema.parse(await claudeLeaderExec(options, { schema: "review-verdict", prompt, systemPrompt, readOnly: true }));
 }
 
 export async function claudeLeaderTakeover(options: ClaudeLeaderOptions, input: { plan: BuildPlan; reports: CompletionReport[]; feedback: ReviewFeedback[] }) {
-  const prompt = `${leaderTakeoverPrompt}
+  const systemPrompt = `${leaderTakeoverPrompt}
 ${hostPlatformPrompt(process.platform, options.env)}
 ${await projectInstructions(options)}
-Run every verification command, then return takeover JSON with a CompletionReport and userSummary.
-
-BuildPlan:
+Run every verification command, then return takeover JSON with a CompletionReport and userSummary.`;
+  const prompt = `BuildPlan:
 ${jsonBlock(input.plan)}
 
 Previous reports:
@@ -132,6 +139,6 @@ ${jsonBlock(input.reports)}
 
 Feedback history:
 ${jsonBlock(input.feedback)}`;
-  const takeover = z.object({ report: CompletionReportSchema, userSummary: z.string() }).parse(await claudeLeaderExec(options, { schema: "takeover", prompt }));
+  const takeover = z.object({ report: CompletionReportSchema, userSummary: z.string() }).parse(await claudeLeaderExec(options, { schema: "takeover", prompt, systemPrompt }));
   return takeover;
 }

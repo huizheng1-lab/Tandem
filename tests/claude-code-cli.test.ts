@@ -4,8 +4,9 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { createLiveAgents } from "../src/agents/live.js";
 import { buildClaudeExecArgv, claudePermissionFor, parseClaudeEnvelope, runClaudeExec } from "../src/agents/claude-code-cli/exec.js";
+import { buildClaudeLeaderPlanPrompts } from "../src/agents/claude-code-cli/leader.js";
 import { clearClaudeCliPathCache, locateClaudeCli } from "../src/agents/claude-code-cli/locate.js";
-import { buildClaudeWorkerPrompt } from "../src/agents/claude-code-cli/worker.js";
+import { buildClaudeWorkerPrompt, buildClaudeWorkerPrompts } from "../src/agents/claude-code-cli/worker.js";
 import { buildPlanJsonSchema, completionReportJsonSchema, stripNulls } from "../src/agents/codex-cli/schema-json.js";
 import { defaultConfig } from "../src/config/schema.js";
 import type { BuildPlan } from "../src/orchestrator/artifacts.js";
@@ -108,12 +109,29 @@ describe("claude code cli execution", () => {
     expect(
       buildClaudeExecArgv({
         prompt: "answer",
+        systemPrompt: "system rules",
         schema: buildPlanJsonSchema,
         permissionMode: "plan",
         modelName: "haiku",
         readOnly: true
       })
-    ).toEqual(["-p", "answer", "--output-format", "json", "--json-schema", JSON.stringify(buildPlanJsonSchema), "--permission-mode", "plan", "--no-session-persistence", "--tools", "Read,Grep,Glob", "--model", "haiku"]);
+    ).toEqual([
+      "-p",
+      "answer",
+      "--output-format",
+      "json",
+      "--json-schema",
+      JSON.stringify(buildPlanJsonSchema),
+      "--permission-mode",
+      "plan",
+      "--no-session-persistence",
+      "--system-prompt",
+      "system rules",
+      "--tools",
+      "Read,Grep,Glob",
+      "--model",
+      "haiku"
+    ]);
   });
 
   it("maps Tandem permission modes to Claude Code permission modes", () => {
@@ -167,6 +185,7 @@ describe("claude code cli execution", () => {
     const output = await runClaudeExec({
       cwd,
       prompt: "build",
+      systemPrompt: "Return a completion report.",
       schema: "completion-report",
       permissionMode: "yolo",
       claudeCliPath,
@@ -197,8 +216,26 @@ describe("claude code cli mixed roles", () => {
     verification: ["npm test"]
   };
 
+  it("splits Claude Code leader planning rules from the user request", async () => {
+    const prompts = await buildClaudeLeaderPlanPrompts(
+      {
+        env: { ComSpec: "powershell.exe" },
+        projectInstructions: async () => "Project instructions:\n- Use the local style."
+      },
+      { request: "What is 9 times 9?", goals: ["Goal 1: Ship"], history: "USER: hello" }
+    );
+
+    expect(prompts.systemPrompt).toContain("Project instructions:\n- Use the local style.");
+    expect(prompts.systemPrompt).toContain("FIRST, classify the request:");
+    expect(prompts.systemPrompt).not.toContain("Request:\nWhat is 9 times 9?");
+    expect(prompts.prompt).toContain("Conversation so far:");
+    expect(prompts.prompt).toContain("Standing goals:");
+    expect(prompts.prompt).toContain("Request:\nWhat is 9 times 9?");
+    expect(prompts.prompt).not.toContain("FIRST, classify the request:");
+  });
+
   it("gives Claude Code CLI workers the same verification and project instructions as SDK workers", async () => {
-    const prompt = await buildClaudeWorkerPrompt(
+    const prompts = await buildClaudeWorkerPrompts(
       {
         env: { ComSpec: "powershell.exe" },
         projectInstructions: async () => "Project instructions:\n- Use the local style."
@@ -206,10 +243,18 @@ describe("claude code cli mixed roles", () => {
       { plan, round: 1, feedback: [] }
     );
 
-    expect(prompt).toContain("Project instructions:\n- Use the local style.");
-    expect(prompt).toContain("Host: Windows");
-    expect(prompt).toContain("If read_file says you CANNOT view a file's visual content");
-    expect(prompt).toContain("In verificationResults[].command, repeat the BuildPlan verification command string verbatim.");
+    expect(prompts.systemPrompt).toContain("Project instructions:\n- Use the local style.");
+    expect(prompts.systemPrompt).toContain("Host: Windows");
+    expect(prompts.systemPrompt).toContain("If read_file says you CANNOT view a file's visual content");
+    expect(prompts.systemPrompt).toContain("In verificationResults[].command, repeat the BuildPlan verification command string verbatim.");
+    expect(prompts.systemPrompt).not.toContain("BuildPlan:");
+    expect(prompts.prompt).toContain("BuildPlan:");
+    expect(prompts.prompt).not.toContain("Project instructions:\n- Use the local style.");
+  });
+
+  it("keeps the compatibility combined Claude worker prompt available", async () => {
+    const prompt = await buildClaudeWorkerPrompt({ env: {}, projectInstructions: async () => "Project instructions:\nnone" }, { plan, round: 1, feedback: [] });
+    expect(prompt).toContain("Project instructions:");
     expect(prompt).toContain("BuildPlan:");
   });
 

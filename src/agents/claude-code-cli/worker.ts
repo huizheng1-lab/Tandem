@@ -30,13 +30,22 @@ export async function buildClaudeWorkerPrompt(
   options: Pick<ClaudeWorkerOptions, "env" | "projectInstructions">,
   input: { plan: BuildPlan; round: number; feedback: ReviewFeedback; previousReport?: CompletionReport }
 ): Promise<string> {
-  return `${workerPrompt}
+  const prompts = await buildClaudeWorkerPrompts(options, input);
+  return `${prompts.systemPrompt}\n\n${prompts.prompt}`;
+}
+
+export async function buildClaudeWorkerPrompts(
+  options: Pick<ClaudeWorkerOptions, "env" | "projectInstructions">,
+  input: { plan: BuildPlan; round: number; feedback: ReviewFeedback; previousReport?: CompletionReport }
+): Promise<{ systemPrompt: string; prompt: string }> {
+  return {
+    systemPrompt: `${workerPrompt}
 ${hostPlatformPrompt(process.platform, options.env)}
 ${await projectInstructions(options)}
 If read_file says you CANNOT view a file's visual content, never guess, infer, or claim to know what it shows. If the task depends on that content and the plan lacks sufficient leader-provided findings, submit a blocked CompletionReport.
-You must run every verification command before submit_completion_report. In verificationResults[].command, repeat the BuildPlan verification command string verbatim. If you adapt a command for the host platform, still use the plan's original command as command and describe the adapted command plus real output in output.
-
-${buildWorkerContext(input)}`;
+You must run every verification command before submit_completion_report. In verificationResults[].command, repeat the BuildPlan verification command string verbatim. If you adapt a command for the host platform, still use the plan's original command as command and describe the adapted command plus real output in output.`,
+    prompt: buildWorkerContext(input)
+  };
 }
 
 export async function runClaudeWorkerBuild(
@@ -47,9 +56,11 @@ export async function runClaudeWorkerBuild(
     const approved = await options.confirmCodexWrite?.("worker", "Run this round via Claude Code CLI with write access? Claude Code cannot prompt per-command in headless print mode.");
     if (approved === false) throw new Error("Claude Code CLI worker round was not approved.");
   }
+  const prompts = await buildClaudeWorkerPrompts(options, input);
   const output = await runClaudeExec({
     cwd: options.cwd,
-    prompt: await buildClaudeWorkerPrompt(options, input),
+    prompt: prompts.prompt,
+    systemPrompt: prompts.systemPrompt,
     schema: "completion-report",
     permissionMode: options.config.permissionMode,
     env: options.env,
