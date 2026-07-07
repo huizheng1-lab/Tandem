@@ -1,0 +1,5 @@
+D43 done
+
+Commit: cb2a33e
+Summary: Split Claude Code CLI calls into --system-prompt role/rule text and positional -p task content so Claude acts on the request immediately instead of treating the whole prompt as setup.
+Verification: npm run typecheck; npm test; git diff --check
