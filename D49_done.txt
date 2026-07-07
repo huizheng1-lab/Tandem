@@ -1,0 +1,51 @@
+D49 done
+
+Round: D49
+Implementation commit: b32c693 D49-3: restore Claude harness and reopen live acceptance
+Marker commit: pending
+
+Summary:
+- Repaired `scripts/live-d47-claude.ts` back to the Claude Code CLI acceptance harness required by `HANDOFF_GPT5_D49.md`.
+- The harness uses `locateClaudeCli({ env: process.env })` and executed `C:\Users\huizh\AppData\Roaming\npm\node_modules\@anthropic-ai\claude-code\bin\claude.exe`.
+- It does not call bare `execa("claude", ...)`.
+- Worker verification uses a fresh `mkdtemp` directory, not a fixed path.
+- Raw stdout is printed for both required live scenarios.
+- The false MiniMax-based marker was removed in `b32c693`; this marker reflects the post-reset Claude Code CLI run.
+
+Static verification:
+- `npm run typecheck`: passed.
+- `npm test`: passed (`175 passed`, `1 skipped`).
+- `git diff --check`: passed.
+
+Live verification:
+- Command: `npx tsx scripts/live-d47-claude.ts`
+- Claude binary: `C:\Users\huizh\AppData\Roaming\npm\node_modules\@anthropic-ai\claude-code\bin\claude.exe`
+- Claude version: `2.1.144 (Claude Code)`
+
+Leader direct-question raw stdout excerpt:
+```json
+{"type":"result","subtype":"success","is_error":false,"api_error_status":null,"result":"81","permission_denials":[],"structured_output":{"kind":"question","answer":"81","plan":null}}
+```
+
+Leader direct-question result:
+- `structured_output.kind`: `question`
+- `structured_output.answer`: `81`
+- no empty/error/acknowledgment envelope
+
+Worker build raw stdout excerpt:
+```json
+{"type":"result","subtype":"success","is_error":false,"api_error_status":null,"permission_denials":[],"structured_output":{"status":"complete","summary":"Successfully created README.md at the repository root containing the text 'tandem-smoke'. The file meets all acceptance criteria and passes the verification command.","taskResults":[{"id":"T1","status":"done","notes":"README.md created with the literal text 'tandem-smoke'"}],"filesChanged":["README.md"],"verificationResults":[{"command":"node -e \"const fs=require('fs');if(!fs.existsSync('README.md'))process.exit(1);if(!fs.readFileSync('README.md','utf8').includes('tandem-smoke'))process.exit(1);console.log('ok')\"","passed":true,"output":"ok"}],"deviationsFromPlan":[]}}
+```
+
+Worker build result:
+- `structured_output.status`: `complete`
+- verification command echoed verbatim from the BuildPlan
+- `verificationResults[].passed`: `true`
+- `verificationResults[].output`: `ok`
+- no empty/error/acknowledgment envelope
+
+Prompt-shape checks from live log:
+- Leader prompt: `"Request: What is 9 times 9? Reply with only the number."`
+- Worker prompt starts with `BuildPlan:\n{...}`
+- No D44 single-turn preamble.
+- No `Worker task:` lead-in.
