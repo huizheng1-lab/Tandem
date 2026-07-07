@@ -1,0 +1,5 @@
+D42 done
+
+Commit: e533710
+Summary: Replaced Claude Code CLI raw spawn/shell invocation with execa so Windows .cmd shims receive large prompts and inline JSON schemas safely; restored override-first Claude CLI discovery.
+Verification: npm run typecheck; npm test; git diff --check
