@@ -1,0 +1,5 @@
+D41 done
+
+Commit: 1f9f37d
+Summary: Added Claude Code CLI as a selectable leader/worker engine with shared structured schemas, direct reported-cost ledger accounting, permission mapping, and mixed-engine coverage.
+Verification: npm run typecheck; npm test; git diff --check
