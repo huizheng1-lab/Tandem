@@ -18,6 +18,7 @@ import type {
   ToolActivityEvent
 } from "../../shared/ipc.js";
 import type { PermissionMode, TandemConfig } from "../../../src/config/schema.js";
+import { parseLoop } from "../../../src/commands/loop.js";
 import { ErrorBoundary } from "./ErrorBoundary.js";
 import "./styles.css";
 
@@ -109,7 +110,12 @@ function composerHelpText(): string {
     "/cost",
     "/goal add <text>",
     "/goal list",
-    "/goal done <n>"
+    "/goal done <n>",
+    "/loop <30s|5m|2h> <prompt>",
+    "/loop stop",
+    "/schedule \"<cron>\" <prompt>",
+    "/schedule list",
+    "/schedule rm <id>"
   ].join("\n");
 }
 
@@ -198,6 +204,8 @@ function App(): React.ReactElement {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const showThinkingRef = useRef(false);
   const thinkingTimers = useRef<Partial<Record<"leader" | "worker", ReturnType<typeof setTimeout>>>>({});
+  const loopTimerRef = useRef<ReturnType<typeof setInterval>>();
+  const loopRunningRef = useRef(false);
 
   const effectiveConfig = session?.config ?? config;
   const contextProjectDir = session?.projectDir ?? appState?.lastProjectDir ?? appState?.projectDir;
@@ -340,6 +348,12 @@ function App(): React.ReactElement {
   };
 
   const applyStartedSession = async (started: SessionStartResponse, resetTranscript: boolean) => {
+    if (loopTimerRef.current) {
+      clearInterval(loopTimerRef.current);
+      loopTimerRef.current = undefined;
+      appendMessage("system", "Loop cleared: project/session changed.");
+    }
+    loopRunningRef.current = false;
     setSession(started);
     setConfig(started.config);
     setAppState({ projectDir: started.projectDir, lastProjectDir: started.defaultProject ? appState?.lastProjectDir : started.projectDir, config: started.config, projectSummary: started.projectSummary });
@@ -469,6 +483,9 @@ function App(): React.ReactElement {
       for (const timer of Object.values(thinkingTimers.current)) {
         if (timer) clearTimeout(timer);
       }
+      if (loopTimerRef.current) clearInterval(loopTimerRef.current);
+      loopTimerRef.current = undefined;
+      loopRunningRef.current = false;
     };
   }, []);
 
@@ -701,9 +718,85 @@ function App(): React.ReactElement {
         appendMessage("system", nextGoals.length > 0 ? nextGoals.map((goal) => `${goal.id}. [${goal.status}] ${goal.text}`).join("\n") : "No goals yet. Add one with /goal add <text>.");
         return;
       }
+      if (command === "/loop") {
+        const spec = parseLoop(args);
+        if (spec === "stop") {
+          if (loopTimerRef.current) clearInterval(loopTimerRef.current);
+          loopTimerRef.current = undefined;
+          appendMessage("system", "Loop stopped.");
+          return;
+        }
+        if (loopTimerRef.current) clearInterval(loopTimerRef.current);
+        loopTimerRef.current = setInterval(() => {
+          void runSequential(spec.prompt, "loop");
+        }, spec.intervalMs);
+        void runSequential(spec.prompt, "loop");
+        appendMessage("system", `Loop started every ${Math.round(spec.intervalMs / 1000)}s.`);
+        return;
+      }
+      if (command === "/schedule") {
+        const sub = args[0];
+        if (sub === "list") {
+          const items = await tandem.listSchedules();
+          appendMessage(
+            "system",
+            items.map((item) => `${item.id} ${item.cron} ${item.prompt}`).join("\n") || "No schedules."
+          );
+          return;
+        }
+        if (sub === "rm") {
+          if (!args[1]) {
+            appendMessage("system", "Usage: /schedule rm <id>");
+            return;
+          }
+          const next = await tandem.removeSchedule({ id: args[1] });
+          setSchedules(next);
+          appendMessage("system", `Removed schedule ${args[1]}.`);
+          return;
+        }
+        const cron = args[0];
+        const text = args.slice(1).join(" ").trim();
+        if (!cron || !text) {
+          appendMessage("system", 'Usage: /schedule "<cron>" <prompt>');
+          return;
+        }
+        const next = await tandem.addSchedule({ cron, prompt: text });
+        setSchedules(next);
+        const added = next.find((item) => item.cron === cron && item.prompt === text);
+        appendMessage("system", added ? `Added schedule ${added.id}.` : "Schedule added.");
+        return;
+      }
       appendMessage("system", "Unknown command - try /help");
     } catch (error) {
       appendMessage("system", `Command failed: ${errorText(error)}`);
+    }
+  };
+
+  const runSequential = async (prompt: string, source: string): Promise<void> => {
+    if (loopRunningRef.current) {
+      appendMessage("system", `${source} skipped; previous run still active.`);
+      return;
+    }
+    loopRunningRef.current = true;
+    try {
+      appendMessage("system", `${source} running.`);
+      if (needsProjectPick) {
+        appendMessage("system", "Choose a project folder before running Tandem. The default workspace is only a safe holding area.");
+        return;
+      }
+      setRunning(true);
+      setActiveTool(undefined);
+      setActivityPulse(undefined);
+      setPhase("PLANNING");
+      try {
+        await tandem.runPipeline({ prompt, attachments: [] });
+      } catch (error) {
+        setRunning(false);
+        setPhase("IDLE");
+        appendMessage("system", `${source} failed: ${errorText(error)}`);
+      }
+    } finally {
+      loopRunningRef.current = false;
     }
   };
 
