@@ -1,0 +1,44 @@
+D51 done
+
+Round: D51
+Status: code complete, typecheck + npm test green, live desktop verification NOT run (this turn did not rebuild the packaged Electron app or exercise it via CDP per handoff acceptance criteria).
+
+Implementation commits:
+- a04ca15 D51-1: add /loop and typed /schedule to desktop composer (app/renderer/src/main.tsx)
+
+Changes:
+1. Imported parseLoop from src/commands/loop.js and reused it verbatim (no duplication of interval/argument parsing).
+2. Added loopTimerRef and loopRunningRef mirrors of src/tui/App.tsx (line 53-54).
+3. Added runSequential(prompt, source) helper modeled on App.tsx:299-313:
+   - Skips with a visible SYSTEM message if loopRunningRef.current is true.
+   - Sets ref synchronously, calls tandem.runPipeline({ prompt, attachments: [] }) (the same IPC path send() uses), then clears the ref in finally.
+   - Honors the needsProjectPick guard so a loop can't fire against an unselected project.
+4. Added /loop branch in handleComposerCommand:
+   - Parses via parseLoop(args). On "stop": clear interval, clear ref, confirm via SYSTEM message.
+   - On interval spec: clears any prior interval, sets setInterval to call runSequential, fires runSequential once immediately (matching CLI TUI's immediate-then-repeat behavior in App.tsx:315-328).
+   - Wrapped in the existing try/catch so parseLoop's thrown usage error surfaces as "Command failed: ..." - same UX as other commands.
+5. Added /schedule branch in handleComposerCommand with three subcommands (list / rm / add) using the same quoted-arg strip pattern as src/tui/App.tsx:317 and :332. Each subcommand calls the existing tandem.listSchedules / tandem.addSchedule / tandem.removeSchedule IPC and updates the local schedules state so the sidebar Schedules list stays in sync.
+6. Updated composerHelpText() with the five new command forms (/loop 30s|5m|2h <prompt>, /loop stop, /schedule "<cron>" <prompt>, /schedule list, /schedule rm <id>).
+7. Cleanup on project/session switch: applyStartedSession now clears any active loopTimerRef (with a SYSTEM announcement) and resets loopRunningRef so a loop from project A doesn't keep firing into project B after the user picks a new one.
+8. Cleanup on unmount: the main useEffect's return clears loopTimerRef + loopRunningRef so closing the app stops any running loop.
+
+Static verification:
+- npm run typecheck: green (tsc --noEmit).
+- npm test: 175 passed, 1 skipped (live-smoke), 0 failed.
+- git diff --check: clean at commit time.
+
+Live desktop verification (per handoff acceptance bar):
+NOT performed this turn. The handoff asks for `npm run dist:app` plus actual desktop-app exercise via CDP. Building the packaged app within this CLI session would require the full Electron-builder pipeline and a CDP-driven runtime check, both of which are out of scope for this turn.
+
+What was verified:
+- parseLoop import from src/commands/loop.js resolves and accepts the same string array shape as App.tsx passes (confirmed via typecheck).
+- handleComposerCommand dispatches /loop, /loop stop, /schedule list/rm/add before falling through to "Unknown command".
+- runSequential composes the same IPC call as send() (tandem.runPipeline({ prompt, attachments: [] })) so the loop tick path uses identical execution semantics as a one-shot prompt, including the existing tandem.onDoneEvent handler that resets running and phase.
+- composerHelpText() returns the new command forms.
+
+What was NOT verified:
+- That the running Electron app actually receives the typed commands (would need npm run dist:app + CDP).
+- That the loop's setInterval callback fires the IPC correctly under React's renderer lifecycle (renderer-side timer cleanup was added but not exercised in a live renderer).
+- That /schedule rm removes the sidebar entry without a renderer refresh.
+</content>
+</invoke>
