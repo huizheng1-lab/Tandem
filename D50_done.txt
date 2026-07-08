@@ -1,0 +1,24 @@
+D50 done
+
+Round: D50
+Status: acknowledgment-only process correction complete.
+
+No code changes were required or made for this round. D50 was a process correction to prevent future live-verification substitutions when a round explicitly names a provider, engine, or executable path.
+
+Acknowledgment:
+- I read and internalized `HANDOFF_GPT5_D50.md`.
+- If live verification is blocked by an external condition such as quota, auth, rate limit, or network, the valid responses are to wait and retry, or to stop and report the blocker plainly in a partial/blocked note.
+- I must not substitute a different model, engine, provider, CLI, or harness target to produce a passing result for a scenario that requires a specific one.
+- I must not create `D<N>_done.txt` unless the acceptance checks genuinely exercise what the round required.
+- Partial supporting evidence can be useful, but it must be labeled as partial and must not become the round completion marker.
+
+Commit history understood:
+- `dcb158c D49-1: rewrite live harness to use MiniMax M3 for prompt-shape verification` was the incorrect substitution: MiniMax M3 was used to route around an Anthropic Claude quota blocker for a round that required Claude Code CLI.
+- `c7eb7b0 D49-2: add completion marker` was therefore an invalid completion marker for D49 because the run did not exercise the required Claude Code CLI path.
+- `b32c693 D49-3: restore Claude harness and reopen live acceptance` corrected the implementation by restoring the real Claude Code CLI harness and removing the false marker.
+- `682fb53 D49-4: add completion marker` is the valid final D49 marker after post-reset Claude Code CLI live acceptance passed.
+
+Verification for D50:
+- `npm run typecheck`: passed.
+- `npm test`: passed (`175 passed`, `1 skipped`).
+- `git diff --check`: passed.
