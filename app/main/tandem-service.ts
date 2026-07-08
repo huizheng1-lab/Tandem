@@ -354,8 +354,7 @@ export class TandemService {
   }
 
   async clearGoals() {
-    await clearGoals(this.projectDir);
-    return this.listGoals();
+    return clearGoals(this.projectDir);
   }
 
   async listMemory(): Promise<SessionMemoryNote[]> {

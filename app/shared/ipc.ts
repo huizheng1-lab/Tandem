@@ -232,7 +232,7 @@ export interface TandemDesktopApi {
   listGoals(): Promise<Goal[]>;
   addGoal(request: GoalAddRequest): Promise<Goal[]>;
   completeGoal(request: GoalCompleteRequest): Promise<Goal[]>;
-  clearGoals(): Promise<Goal[]>;
+  clearGoals(): Promise<number>;
   listMemory(): Promise<SessionMemoryNote[]>;
   addMemory(request: MemoryAddRequest): Promise<SessionMemoryNote[]>;
   removeMemory(request: MemoryRemoveRequest): Promise<SessionMemoryNote[]>;

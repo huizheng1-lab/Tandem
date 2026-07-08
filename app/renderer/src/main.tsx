@@ -723,12 +723,12 @@ function App(): React.ReactElement {
           appendMessage("system", nextGoals.length > 0 ? nextGoals.map((goal) => `${goal.id}. [${goal.status}] ${goal.text}`).join("\n") : "No goals yet. Add one with /goal add <text>.");
           return;
         }
-        if (args.length === 1 && sub === "clear") {
-          const removed = await tandem.clearGoals();
-          setGoals([]);
-          appendMessage("system", `Cleared ${removed.length} goal(s).`);
-          return;
-        }
+if (args.length === 1 && sub === "clear") {
+  const removed = await tandem.clearGoals();
+  setGoals([]);
+  appendMessage("system", `Cleared ${removed} goal(s).`);
+  return;
+}
         if (args.length === 0) {
           const nextGoals = await tandem.listGoals();
           setGoals(nextGoals);
