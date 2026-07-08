@@ -1,0 +1,43 @@
+D55 done
+
+Round: D55
+Status: code complete; typecheck + npm test green (193 passed, +9 over baseline).
+
+Implementation commit:
+- b11f504 D55: extend verification allowlist with real media/binary tools and add heuristic fallback
+
+What changed:
+
+D55-1 (allowlist additions in src/orchestrator/artifacts.ts): extended runnableCommandStarters with the media/binary tools called out in the handoff: ffprobe, ffmpeg, ffplay, magick, convert, sox, pandoc, curl, wget, docker, docker-compose, java, ruby, php, dir, where, certutil. (dotnet was already present; kept.) Set comment now clarifies this is "not exhaustive" and that bare commands not on the list fall through to the shape-based heuristic (D55-2).
+
+D55-2 (shape-based heuristic, implemented with tight second-token check):
+
+Before: hasCommandShape returned true only if the first token was in runnableCommandStarters OR a path prefix OR a script-filename pattern. An allowlist miss meant a hard reject.
+
+After: hasCommandShape keeps the existing fast-paths, AND additionally accepts any token that (a) matches /^[A-Za-z][\w.-]*$/ (a single bare word starting with a letter) AND (b) either has a flag-shaped second token (`-x` or `--xxx`) OR the entry as a whole contains a path character (`/`, `\`, or `.`). Prose still fails because its second token is a plain word like "the" (not a flag) and its body has no path characters. Pure-prose regression tests confirm rejection.
+
+Documented over-acceptance edge case: prose starting with verb-then-dash like "verify -all the -output" passes the heuristic because the second token "-all" matches the flag regex. This is exactly what the handoff describes as accepted ("the first token is followed by flags (`-x`/`--x`)"). A test locks in this current behavior so any future tightening is a deliberate test update, not a silent regression.
+
+POSIX-tool guard (cat/grep/ls/sed/awk/head/tail/chmod) is UNTOUCHED. The check runs BEFORE hasCommandShape (separate code path), so POSIX tools still get rejected on win32 with the correct "use `findstr` instead" message. A regression test confirms grep/sed on win32 are still rejected.
+
+Tests added (tests/artifacts.test.ts, 9 new):
+- accepts ffprobe and ffmpeg (D55-1 allowlist).
+- accepts the four ffprobe commands from the original bug report.
+- accepts the rest of the D55-1 expanded allowlist (ffplay, magick, convert, sox, pandoc, curl, wget, docker, docker-compose, java, ruby, php, dir, where, certutil) - 15 commands in one test.
+- accepts an arbitrary binary that follows flag syntax (D55-2 heuristic, "somebinary --check --input path\to\file").
+- accepts an arbitrary binary invoked with a path arg (D55-2 heuristic, "mytool /var/data/file").
+- accepts an arbitrary binary invoked with a relative path (D55-2 heuristic, "mytool ./local.txt").
+- still rejects plain prose verification entries ("verify the video plays correctly with both audio tracks", "ensure the output file exists and has correct format").
+- documented over-acceptance edge case: prose starting with verb-then-dash passes (locks current behavior for any future tightening).
+- still rejects POSIX-only tools on Windows even if they're 'unrecognized binaries' (D55-2 keeps POSIX guard).
+
+Verification:
+- npm run typecheck: green.
+- npm test: 193 passed, 1 skipped (live-smoke), 0 failed. Baseline was 184 passed; +9 new tests.
+- git diff --check: clean.
+
+Live check: NOT performed this turn (re-submitting a plan whose verification uses ffprobe and confirming it passes planning validation). The unit tests cover the four real ffprobe commands from the bug report verbatim, so confidence is high.
+
+HANDOFF ORDER NOTE: the user requested both D54 and D55. D55 is small and unblocks real plans (including any video/media work and any plan-validation regression test). D54 is the large parallel-workers refactor. Per the project's "incremental order" convention and D55's smaller scope, I implemented D55 first and reverted my partial D54 edits to artifacts.ts to keep the working tree clean. D54 will resume next turn.
+</content>
+</invoke>
