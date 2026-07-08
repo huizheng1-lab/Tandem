@@ -114,3 +114,84 @@ describe("artifacts", () => {
     expect(verdict.verdict).toBe("revise");
   });
 });
+
+describe("verification entry allowlist (D55)", () => {
+  const basePlan = (verification: string[]) => ({
+    title: "Demo",
+    objective: "Build demo.",
+    constraints: [],
+    tasks: [{ id: "T1", description: "Do work" }],
+    acceptanceCriteria: ["Works"],
+    verification
+  });
+
+  // D55-1: explicit allowlist additions.
+  it("accepts ffprobe and ffmpeg (D55-1 allowlist)", () => {
+    expect(() => validateBuildPlan(basePlan(['ffprobe -v error -print_format json -show_format "video.mp4"']), "linux")).not.toThrow();
+    expect(() => validateBuildPlan(basePlan(["ffmpeg -i in.mp4 -vf scale=1280:720 out.mp4"]), "linux")).not.toThrow();
+  });
+
+  it("accepts the four ffprobe commands from the original bug report", () => {
+    const cmds = [
+      'ffprobe -v error -print_format json -show_format "C:\\\\Users\\\\me\\\\videos\\\\explainer-en.mp4"',
+      'ffprobe -v error -show_streams "input.mp4"',
+      'ffprobe -v error -select_streams v:0 -show_entries stream=codec_name,width,height "input.mp4"',
+      'ffprobe -v quiet -of csv=p=0 -show_entries format=duration "input.mp4"'
+    ];
+    expect(() => validateBuildPlan(basePlan(cmds), "linux")).not.toThrow();
+  });
+
+  it("accepts the rest of the D55-1 expanded allowlist (ffplay, magick, convert, sox, pandoc, curl, wget, docker, java, ruby, php, dir, where, certutil)", () => {
+    const cmds = [
+      "ffplay input.mp4",
+      "magick input.png -resize 50% output.png",
+      "convert input.heic output.jpg",
+      "sox input.wav output.wav norm",
+      "pandoc -o out.html in.md",
+      "curl -sSf https://example.com/file",
+      "wget -q https://example.com/file",
+      "docker compose up -d",
+      "docker build -t app .",
+      "java -jar app.jar",
+      "ruby script.rb",
+      "php index.php",
+      "dir",
+      "where node",
+      "certutil -hashfile foo.txt SHA256"
+    ];
+    expect(() => validateBuildPlan(basePlan(cmds), "linux")).not.toThrow();
+  });
+
+  // D55-2: heuristic acceptance for arbitrary binaries not on the list.
+  it("accepts an arbitrary binary that follows flag syntax (D55-2 heuristic)", () => {
+    expect(() => validateBuildPlan(basePlan(["somebinary --check --input path\\to\\file"]), "linux")).not.toThrow();
+  });
+
+  it("accepts an arbitrary binary invoked with a path arg (D55-2 heuristic)", () => {
+    expect(() => validateBuildPlan(basePlan(["mytool /var/data/file"]), "linux")).not.toThrow();
+  });
+
+  it("accepts an arbitrary binary invoked with a relative path (D55-2 heuristic)", () => {
+    expect(() => validateBuildPlan(basePlan(["mytool ./local.txt"]), "linux")).not.toThrow();
+  });
+
+  // D55-2 prose regression — these MUST still be rejected.
+  it("still rejects plain prose verification entries", () => {
+    expect(() => validateBuildPlan(basePlan(["verify the video plays correctly with both audio tracks"]), "linux")).toThrow(/does not look like a runnable shell command/);
+    expect(() => validateBuildPlan(basePlan(["ensure the output file exists and has correct format"]), "linux")).toThrow(/does not look like a runnable shell command/);
+  });
+
+  // Regression: prose with a leading hyphen could falsely match (it's a documented
+  // over-acceptance edge case in D55-2 — pure-prose commands starting with a verb + dash
+  // like "verify -all the -output" would pass). This test documents current behavior; if we
+  // tighten the heuristic later, update this expectation.
+  it("documented over-acceptance edge case: prose starting with verb-then-dash passes", () => {
+    expect(() => validateBuildPlan(basePlan(["verify -all the -output"]), "linux")).not.toThrow();
+  });
+
+  // Regression: POSIX-tool guard on win32 must be unchanged.
+  it("still rejects POSIX-only tools on Windows even if they're 'unrecognized binaries' (D55-2 keeps POSIX guard)", () => {
+    expect(() => validateBuildPlan(basePlan(["grep -r foo ."]), "win32")).toThrow(/POSIX-only tool `grep`/);
+    expect(() => validateBuildPlan(basePlan(["sed -i 's/foo/bar/' file.txt"]), "win32")).toThrow(/POSIX-only tool `sed`/);
+  });
+});

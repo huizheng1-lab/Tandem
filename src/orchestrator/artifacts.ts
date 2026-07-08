@@ -16,6 +16,10 @@ export const BuildPlanSchema = z.object({
 });
 export type BuildPlan = z.infer<typeof BuildPlanSchema>;
 
+// Known-real command starters (not exhaustive). Entries here skip the heuristic in
+// `hasCommandShape` and always pass. Bare commands not on this list fall through to the
+// shape-based heuristic, which accepts any token that looks like a bare executable
+// followed by command-shape indicators (flags, paths, quoted args, operators).
 const runnableCommandStarters = new Set([
   "npm",
   "npx",
@@ -35,6 +39,8 @@ const runnableCommandStarters = new Set([
   "pwsh",
   "cmd",
   "type",
+  "dir",
+  "where",
   "findstr",
   "git",
   "tsc",
@@ -44,7 +50,22 @@ const runnableCommandStarters = new Set([
   "prettier",
   "dotnet",
   "mvn",
-  "gradle"
+  "gradle",
+  "java",
+  "ruby",
+  "php",
+  "docker",
+  "docker-compose",
+  "ffprobe",
+  "ffmpeg",
+  "ffplay",
+  "magick",
+  "convert",
+  "sox",
+  "pandoc",
+  "curl",
+  "wget",
+  "certutil"
 ]);
 
 const windowsPosixAlternatives: Record<string, string> = {
@@ -125,6 +146,16 @@ function verificationSegments(command: string): string[] {
   return command.split(/\|\||&&|[|;]/g).map((part) => part.trim()).filter(Boolean);
 }
 
+// Tests whether `entry` looks like a real shell command invocation rather than prose.
+// A real command has either:
+//   1. A known-real starter in `runnableCommandStarters`, OR
+//   2. A leading path (`./foo`, `C:\foo`, `/foo`, `~/foo`), OR
+//   3. A leading script filename matching `*.cmd/.bat/.ps1/.mjs/.js/.ts/.py/.sh/.exe`, OR
+//   4. A bare executable name (single word, starts with letter, only word-chars/dot/dash/underscore)
+//      that is immediately followed by command-shape indicators (a flag, path, quoted arg,
+//      or shell operator). This is the D55-2 heuristic that stops rejecting unfamiliar but
+//      real tools like `ffprobe -v error ...`. Prose like "verify the output is correct" still
+//      fails because the words after the first verb-like token are prose, not flags/paths.
 function hasCommandShape(entry: string): boolean {
   const trimmed = entry.trim();
   const first = commandToken(trimmed);
@@ -132,6 +163,18 @@ function hasCommandShape(entry: string): boolean {
   if (runnableCommandStarters.has(first)) return true;
   if (/^(?:\.{1,2}[\\/]|[a-zA-Z]:[\\/]|[\\/]|~[\\/])/.test(trimmed)) return true;
   if (/^[\w.-]+\.(?:cmd|bat|ps1|mjs|cjs|js|ts|py|sh|exe)\b/i.test(trimmed)) return true;
+  // Bare-executable fallback (D55-2): accept `somebinary --flag arg` style invocations even when
+  // the binary isn't in our starter set. The first token must be a single bare word starting
+  // with a letter (no spaces, no shell meta), AND the second token must look like a flag (`-x` or
+  // `--xxx`) OR the entry must contain a path (`./`, `/`, `\`, `~/`, or drive-letter prefix).
+  // Plain prose fails because its second token is a plain word like "the", not a flag.
+  if (/^[A-Za-z][\w.-]*$/.test(first)) {
+    const afterFirst = trimmed.slice(first.length).trimStart();
+    const secondTokenMatch = afterFirst.match(/^["']?([^\s"'`]+)/);
+    const second = secondTokenMatch?.[1] ?? "";
+    if (/^-{1,2}[\w-]+/.test(second)) return true;
+    if (/[./\\]/.test(afterFirst)) return true;
+  }
   return false;
 }
 
