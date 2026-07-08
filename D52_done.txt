@@ -1,0 +1,81 @@
+D52 done
+
+Round: D52
+Status: code complete; typecheck + npm test green (184 passed, +9 over baseline).
+Live desktop verification NOT run: this turn did not rebuild the packaged Electron app or exercise it via CDP per the handoff's acceptance bar. The non-TTY script path in src/index.ts was unit-tested (handleGoal coverage) but not end-to-end run.
+
+Implementation commit:
+- de6265b D52-1: /goal <text> starts work immediately; add /goal clear
+
+Implementation summary:
+
+src/session/goals.ts:
+- New exported clearGoals(cwd): returns the number of goals removed (0 if no file or empty). Uses the same saveGoals(goals, cwd) pattern as add/complete; writes an empty array literal.
+
+src/commands/goal.ts:
+- Refactored handleGoal to return GoalOutcome | { kind: "handled"; message: string } | { kind: "run"; text: string }.
+- Disambiguation rules (also unit-tested):
+  * `add <text>` - returns handled: only records (matches existing semantics).
+  * `done <n>` - returns handled: marks complete.
+  * args.length === 0 (bare /goal) and args.length === 1 && args[0] === "list" - returns handled: lists goals. Explicit /goal list branch added to fix the previous "list the foo" misroute bug.
+  * args.length === 1 && args[0] === "clear" - returns handled: clears all goals.
+  * Any other text - returns {kind:"run", text: trimmed args.join(" ")}. The caller must record the goal (matches addGoal behavior) AND run the text through the normal pipeline.
+
+src/tui/App.tsx:
+- Imported handleGoal, addGoal.
+- Added the `/goal` short-circuit INSIDE the existing try-block, BEFORE /model and the commandResult flow. On {kind:"handled"} it surfaces the message; on {kind:"run"} it records the goal AND falls into the same runPipeline(value=outcome.text) call that plain typed messages use. Mirrors the handoff's "reuse the real path" requirement exactly.
+- `dispatchCommand` (used by /sessions / /resume / etc.) is called for non-/goal commands but now returns undefined for /goal so the dedicated short-circuit owns the /goal pipeline.
+
+src/commands/index.ts:
+- `dispatchCommand` no longer handles /goal (returns undefined for /goal). The /goal case is owned by the surfaces (TUI submit, desktop handleComposerCommand). For src/index.ts non-TTY script mode the input falls through to the existing "Tandem non-TTY mode" notice.
+
+src/commands/misc.ts (CLI TUI help):
+- Added the new forms and explicit closeouts:
+  /goal <text>                  record AND start work on the text now
+  /goal add <text>              add a standing goal (does not run)
+  /goal done <n>                mark a goal done (kept in list)
+  /goal clear                   delete every goal (distinct from done)
+- Existing /goal add text description explicitly says "(does not run)" and /goal done says "(kept in list)" so the distinction from /goal clear is unambiguous.
+
+app/renderer/src/main.tsx:
+- composerHelpText: shows /goal <text> first, then /goal add, with "(does not run)" closeout, then list/done/clear with "(kept in list)" / "(distinct from done)" closeouts so the wording matches the handoff's wording.
+
+app/renderer/src/main.tsx (handleComposerCommand /goal branch):
+- Inline /goal handler mirrors handleGoal semantics (no separate utility function imported because each renderer keeps its own copy for bundling ergonomics).
+- New branches: /goal list (lone exact), /goal clear (lone exact), /goal <free-form text> (records AND fires tandem.runPipeline({prompt: text, attachments: []}) with the same bookkeeping send() uses - running flag, phase, attachment reset, error handling).
+- /goal add is still records-only (regression check passed).
+- /goal done, bare /goal still work unchanged.
+- needsProjectPick guard applies to the run path so the goal-trigger can't fire against an unselected project (matches the D51 /loop runSequential guard).
+- Sidebar goal-add input/button is unaffected (still calls tandem.addGoal directly - regression check explicit).
+
+IPC plumbing for clearGoals:
+- app/shared/ipc.ts: new channel `goalClear: "goal:clear"` and interface method `clearGoals(): Promise<Goal[]>`.
+- app/preload/index.ts: clearGoals wires through ipcRenderer.invoke(ipcChannels.goalClear).
+- app/main/tandem-service.ts: clearGoals() method that calls clearGoals(this.projectDir) (the session/goals one) and returns this.listGoals() for state sync.
+- app/main/index.ts: ipcMain.handle(ipcChannels.goalClear, () => service?.clearGoals()).
+
+tests/goals.test.ts:
+- Existing 2 tests kept (formatting).
+- New 9 tests covering:
+  - clearGoals removes everything and returns the count.
+  - clearGoals on empty list returns 0 and is a no-op.
+  - /goal add <text> returns handled with the standard message; goal exists in storage.
+  - /goal done <n> returns handled; goal status becomes "done".
+  - bare /goal and /goal list both return handled with the goal list.
+  - /goal clear (lone exact) returns handled and empties storage.
+  - /goal <multi-word starting with "clear"> returns run with text "clear the temp build directory" (disambiguation regression check).
+  - /goal <multi-word starting with "list"> returns run with text "list the pending TODOs in this repo" (disambiguation regression check).
+  - /goal <free-form text> returns run with text "count from 1 to 100".
+- 9 new tests pass.
+
+What was NOT verified this turn:
+- npm run dist:app (electron-builder packaged build) - out of scope for this CLI surface.
+- CDP-driven live desktop exercise of /goal <text> actually starting a pipeline - requires the packaged app + CDP.
+- /goal list the foo in the actual desktop UI - covered by unit test only.
+
+Verification:
+- npm run typecheck: green (tsc --noEmit).
+- npm test: 184 passed, 1 skipped (live-smoke), 0 failed. (Baseline was 175 passed; +9 new tests.)
+- git diff --check: clean.
+</content>
+</invoke>
