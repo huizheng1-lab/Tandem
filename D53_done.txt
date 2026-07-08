@@ -1,0 +1,64 @@
+D53 done
+
+Round: D53
+Status: code complete for both fixes; static gates pass; D53-1 desktop live verification NOT performed this turn (no packaged-app rebuild / CDP runtime check); D53-2 monitor-script live verification PASSED end-to-end (created fake HANDOFF_D999.md, ran monitor, saw both D53 and D999 detected with exit 1, then deleted fake and re-ran to confirm only D53 remained).
+
+Implementation commit:
+- 5eb8654 D53: fix desktop /goal clear count and handoff-monitor detection bugs
+
+D53-1: Desktop /goal clear count bug
+
+Bug: src/session/goals.ts:56-62's clearGoals() is correct. The bug was in the desktop IPC plumbing layer:
+- tandem-service.ts clearGoals() discarded the count and returned this.listGoals() (always []).
+- ipc.ts declared the IPC return as Promise<Goal[]>.
+- main.tsx did `removed.length` on what is always an empty array, so the message always said "Cleared 0 goal(s)."
+
+Fix (3 lines total changed across 3 files):
+- app/shared/ipc.ts: clearGoals(): Promise<Goal[]> -> clearGoals(): Promise<number>.
+- app/main/tandem-service.ts: `return this.listGoals()` -> `return clearGoals(this.projectDir)`. The backend session/goals.clearGoals already returns the actual count. This matches what src/commands/goal.ts already does correctly for the CLI TUI path.
+- app/renderer/src/main.tsx: dropped .length from the message template: `Cleared ${removed} goal(s).`.
+- app/main/index.ts handler unchanged: `() => service?.clearGoals()` now returns a number, IPC forwards it, renderer prints it. The list state on the renderer is still reset via `setGoals([])` unconditionally (matches the existing pattern; the IPC return value is now only the count).
+
+Static verification:
+- npm run typecheck: green.
+- npm test: 184 passed, 1 skipped (live-smoke), 0 failed. (No test added; the bug was at IPC plumbing layer which only fires on a real desktop IPC round-trip. Adding a unit test would only test the return value of a function we just changed, not the bug class.)
+
+Live verification: NOT performed. The handoff acceptance requires rebuilding the packaged Electron app and exercising via the real running app. This CLI surface can't run npm run dist:app + CDP. The fix is small and structurally correct (the contract is now end-to-end consistent with the CLI TUI's path), so I commit it but flag the missing live verification in this marker.
+
+D53-2: handoff-monitor.ps1 fixes
+
+Three real bugs found and fixed:
+
+Bug A (file filter didn't match new convention): the script was using `Get-ChildItem -Filter "HANDOFF_GPT5_D*.md"` only. Handoffs D51+ are named `HANDOFF_D*.md` per `process/LEADER_WORKER_WORKFLOW.md`. As written the script could not see any handoff numbered D51 or higher. Fixed by enumerating both filters and de-duping by full path.
+
+Bug B (regex typo "d+" -> "\d+"): Line 25's git-log handled-detection pattern was `'^D(\d+)-d+[: ]'`. The literal `d+` only matches one or more lowercase 'd' letters, so this regex NEVER matched real commit messages like "D51-1: add /loop...". The git-log fallback was dead code. Fixed to `'^D(\d+)-\d+[: ]'`.
+
+Bug C (defensive): added deduplication (`Sort-Object -Property FullName -Unique`) on the merged handoff list because the same path can never appear twice under these disjoint filters, but it costs nothing and protects against future pattern collisions.
+
+Other improvements during final read-through:
+- Added `STATUS:\s*DEFERRED` regex (was `STATUS:s*DEFERRED` - missing backslash, so `s*` matched 0+ 's' literals, which a real "STATUS: " line wouldn't have). Now correctly matches `STATUS: DEFERRED` (with optional whitespace).
+- Wrapped `Get-Content $next.Path` in `ErrorAction SilentlyContinue` so a partial read doesn't blow up the script.
+- Updated the script header comment to list BOTH naming conventions so future readers don't fall into the same trap.
+- Updated `scripts/register-handoff-monitor.ps1`'s Description text to say "(HANDOFF_GPT5_D*.md and HANDOFF_D*.md)" instead of just the old name. The currently-registered Windows Scheduled Task TandemHandoffMonitor was NOT re-registered (description text doesn't affect behavior, and the next manual run picks up the fixed script).
+
+Live verification PASSED:
+- Created a fake HANDOFF_D999.md (with no D999_done.txt).
+- Ran `powershell -ExecutionPolicy Bypass -File scripts\handoff-monitor.ps1`:
+  Output:
+    [07:46:33] unhandled handoff(s): 53, 999
+    === D53 (highest priority) ===
+    # Handoff D53 (fix desktop /goal clear count bug; fix the handoff-monitor script)
+    Two unrelated fixes bundled since both are small.
+    ## D53-1: Desktop `/goal clear` reports the wrong count (real bug, confirmed live)
+    (see C:\Users\huizh\Apps\HZ code\HANDOFF_D53.md for full)
+  Exit code: 1. Both D53 and D999 reported; D53 picked as highest (correctly).
+- Deleted fake HANDOFF_D999.md.
+- Re-ran monitor: reports only D53, exit 1. Confirmed.
+
+Verification:
+- npm run typecheck: green.
+- npm test: 184 passed, 1 skipped (live-smoke), 0 failed.
+- git diff --check: clean.
+- D53-2 live verification: passed end-to-end per acceptance ("verify by temporarily creating a fake HANDOFF_D999.md and confirming a manual run of scripts/handoff-monitor.ps1 reports it as unhandled and exits 1; then delete the fake file").
+</content>
+</invoke>
