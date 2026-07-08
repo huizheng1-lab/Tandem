@@ -11,9 +11,11 @@ export const helpText = `Commands:
 /status                       show phase, round, models, session
 /cost                         show token and dollar totals
 /takeover                     request leader takeover
-/goal add <text>              add a standing goal
+/goal <text>                  record AND start work on the text now
+/goal add <text>              add a standing goal (does not run)
 /goal list                    list standing goals
-/goal done <n>                mark a goal done
+/goal done <n>                mark a goal done (kept in list)
+/goal clear                   delete every goal (distinct from done)
 /loop <interval> <prompt>     run a prompt repeatedly, e.g. 30s, 5m, 2h
 /loop stop                    stop the active loop
 /schedule "<cron>" <prompt>   add a schedule while Tandem is open

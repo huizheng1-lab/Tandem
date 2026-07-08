@@ -40,6 +40,7 @@ export const ipcChannels = {
   goalsList: "goals:list",
   goalAdd: "goal:add",
   goalComplete: "goal:complete",
+  goalClear: "goal:clear",
   memoryList: "memory:list",
   memoryAdd: "memory:add",
   memoryRemove: "memory:remove",
@@ -231,6 +232,7 @@ export interface TandemDesktopApi {
   listGoals(): Promise<Goal[]>;
   addGoal(request: GoalAddRequest): Promise<Goal[]>;
   completeGoal(request: GoalCompleteRequest): Promise<Goal[]>;
+  clearGoals(): Promise<Goal[]>;
   listMemory(): Promise<SessionMemoryNote[]>;
   addMemory(request: MemoryAddRequest): Promise<SessionMemoryNote[]>;
   removeMemory(request: MemoryRemoveRequest): Promise<SessionMemoryNote[]>;

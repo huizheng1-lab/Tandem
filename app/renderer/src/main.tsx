@@ -108,9 +108,11 @@ function composerHelpText(): string {
     "/rounds <n>",
     "/status",
     "/cost",
-    "/goal add <text>",
-    "/goal list",
-    "/goal done <n>",
+    "/goal <text>            record AND start work on it now",
+    "/goal add <text>        record only (does not run)",
+    "/goal list              list standing goals",
+    "/goal done <n>          mark a goal complete (kept in list)",
+    "/goal clear             delete every goal (distinct from done)",
     "/loop <30s|5m|2h> <prompt>",
     "/loop stop",
     "/schedule \"<cron>\" <prompt>",
@@ -689,6 +691,8 @@ function App(): React.ReactElement {
       }
       if (command === "/goal") {
         const sub = args[0];
+        // /goal list (lone exact token): list goals. Otherwise free-form text starting with "list"
+        // must still run as a goal (don't swallow `/goal list the foo` as a list-subcommand).
         if (sub === "add") {
           const text = args.slice(1).join(" ").trim();
           if (!text) {
@@ -713,9 +717,53 @@ function App(): React.ReactElement {
           appendMessage("system", completed ? `Completed goal ${completed.id}: ${completed.text}` : `Completed goal ${id}.`);
           return;
         }
-        const nextGoals = await tandem.listGoals();
+        if (args.length === 1 && sub === "list") {
+          const nextGoals = await tandem.listGoals();
+          setGoals(nextGoals);
+          appendMessage("system", nextGoals.length > 0 ? nextGoals.map((goal) => `${goal.id}. [${goal.status}] ${goal.text}`).join("\n") : "No goals yet. Add one with /goal add <text>.");
+          return;
+        }
+        if (args.length === 1 && sub === "clear") {
+          const removed = await tandem.clearGoals();
+          setGoals([]);
+          appendMessage("system", `Cleared ${removed.length} goal(s).`);
+          return;
+        }
+        if (args.length === 0) {
+          const nextGoals = await tandem.listGoals();
+          setGoals(nextGoals);
+          appendMessage("system", nextGoals.length > 0 ? nextGoals.map((goal) => `${goal.id}. [${goal.status}] ${goal.text}`).join("\n") : "No goals yet. Add one with /goal add <text>.");
+          return;
+        }
+        // Free-form /goal <text>: add as a standing goal AND immediately run through the same
+        // pipeline as a plain typed message (matches the user's Claude Code workflow).
+        const text = args.join(" ").trim();
+        if (!text) {
+          const nextGoals = await tandem.listGoals();
+          setGoals(nextGoals);
+          appendMessage("system", nextGoals.length > 0 ? nextGoals.map((goal) => `${goal.id}. [${goal.status}] ${goal.text}`).join("\n") : "No goals yet. Add one with /goal add <text>.");
+          return;
+        }
+        if (needsProjectPick) {
+          appendMessage("system", "Choose a project folder before running Tandem. The default workspace is only a safe holding area.");
+          return;
+        }
+        const nextGoals = await tandem.addGoal({ text });
         setGoals(nextGoals);
-        appendMessage("system", nextGoals.length > 0 ? nextGoals.map((goal) => `${goal.id}. [${goal.status}] ${goal.text}`).join("\n") : "No goals yet. Add one with /goal add <text>.");
+        const added = nextGoals.at(-1);
+        appendMessage("system", added ? `Added goal ${added.id}: ${added.text}` : "Goal added.");
+        appendMessage("user", text);
+        setRunning(true);
+        setActiveTool(undefined);
+        setActivityPulse(undefined);
+        setPhase("PLANNING");
+        try {
+          await tandem.runPipeline({ prompt: text, attachments: [] });
+        } catch (error) {
+          setRunning(false);
+          setPhase("IDLE");
+          appendMessage("system", `Run failed: ${errorText(error)}`);
+        }
         return;
       }
       if (command === "/loop") {

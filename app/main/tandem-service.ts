@@ -17,7 +17,7 @@ import { tandemStateDir } from "../../src/paths.js";
 import { CostLedger } from "../../src/session/cost.js";
 import { copyAttachment, formatAttachmentBlock, writeAttachmentData } from "../../src/session/attachments.js";
 import type { AttachmentRef } from "../../src/session/attachments.js";
-import { addGoal, completeGoal, formatStandingGoals, listGoals } from "../../src/session/goals.js";
+import { addGoal, clearGoals, completeGoal, formatStandingGoals, listGoals } from "../../src/session/goals.js";
 import { buildConversationHistory } from "../../src/session/history.js";
 import { rebuildLeaderThread } from "../../src/session/leader-thread.js";
 import { addNote, formatSessionNotes, removeNote, replaySessionMemory } from "../../src/session/memory.js";
@@ -350,6 +350,11 @@ export class TandemService {
 
   async completeGoal(id: number) {
     await completeGoal(id, this.projectDir);
+    return this.listGoals();
+  }
+
+  async clearGoals() {
+    await clearGoals(this.projectDir);
     return this.listGoals();
   }
 

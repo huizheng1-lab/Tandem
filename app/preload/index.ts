@@ -37,6 +37,7 @@ const api: TandemDesktopApi = {
   listGoals: () => ipcRenderer.invoke(ipcChannels.goalsList),
   addGoal: (request) => ipcRenderer.invoke(ipcChannels.goalAdd, request),
   completeGoal: (request) => ipcRenderer.invoke(ipcChannels.goalComplete, request),
+  clearGoals: () => ipcRenderer.invoke(ipcChannels.goalClear),
   listMemory: () => ipcRenderer.invoke(ipcChannels.memoryList),
   addMemory: (request) => ipcRenderer.invoke(ipcChannels.memoryAdd, request),
   removeMemory: (request) => ipcRenderer.invoke(ipcChannels.memoryRemove, request),

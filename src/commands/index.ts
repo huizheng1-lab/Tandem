@@ -2,7 +2,6 @@ import { TandemConfig } from "../config/schema.js";
 import { saveProjectConfig } from "../config/load.js";
 import { CostLedger } from "../session/cost.js";
 import { listSessions } from "../session/store.js";
-import { handleGoal } from "./goal.js";
 import { listModels, setModel } from "./model.js";
 import { costText, helpText, statusText } from "./misc.js";
 import { addSchedule, listSchedules, removeSchedule } from "./schedule.js";
@@ -54,7 +53,13 @@ export async function dispatchCommand(input: string, ctx: CommandContext): Promi
     case "/cost":
       return costText(ctx.ledger);
     case "/goal":
-      return handleGoal(args, ctx.cwd);
+      // /goal is handled directly by the interactive surfaces (src/tui/App.tsx, the desktop
+      // app) because the run-outcome ("record + start pipeline") needs the pipeline runner
+      // handle that's only available inside those render loops. Returning undefined here lets
+      // the caller's `commandResult !== undefined` fall-through take the TUI into its run path
+      // (and, for non-TTY script callers like src/index.ts, falls through to the "Use a TTY"
+      // notice).
+      return undefined;
     case "/sessions":
       return formatSessionList(await listSessions(ctx.cwd));
     case "/resume":

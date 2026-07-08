@@ -6,11 +6,12 @@ import type { ScheduledTask } from "node-cron";
 import { TandemConfig } from "../config/schema.js";
 import { CostLedger } from "../session/cost.js";
 import { dispatchCommand } from "../commands/index.js";
+import { handleGoal } from "../commands/goal.js";
 import { setModel } from "../commands/model.js";
 import { modelRegistry } from "../providers/registry.js";
 import { parseLoop } from "../commands/loop.js";
 import { addSchedule, listSchedules, markScheduleRun, missedSchedule, removeSchedule, Schedule } from "../commands/schedule.js";
-import { appendGoalNote, formatStandingGoals, listGoals } from "../session/goals.js";
+import { addGoal, appendGoalNote, formatStandingGoals, listGoals } from "../session/goals.js";
 import { buildConversationHistory } from "../session/history.js";
 import { rebuildLeaderThread } from "../session/leader-thread.js";
 import { appendProjectMemoryNote, formatProjectInstructions, readProjectInstructions } from "../session/project-memory.js";
@@ -388,6 +389,22 @@ export function App({ config: initialConfig, env, cwd, initialError }: { config:
     addMessage("USER", value);
     setBusy(true);
     try {
+      // /goal short-circuit: bare /goal lists, /goal add records-only, /goal done marks
+      // complete, /goal clear (lone token) clears all, /goal <free-form text> records AND runs
+      // through the same pipeline as a plain typed message (matches the user's Claude Code
+      // "type it, work begins" workflow).
+      if (value.startsWith("/goal")) {
+        const goalArgs = value.match(/"[^"]*"|\S+/g)?.slice(1).map((part) => (part.startsWith('"') && part.endsWith('"') ? part.slice(1, -1) : part)) ?? [];
+        const outcome = await handleGoal(goalArgs, cwd);
+        if (outcome.kind === "handled") {
+          addMessage("SYSTEM", outcome.message);
+        } else {
+          const goal = await addGoal(outcome.text, cwd);
+          addMessage("SYSTEM", `Added goal ${goal.id}: ${goal.text}`);
+          await runPipeline(outcome.text);
+        }
+        return;
+      }
       if (value.trim() === "/model") {
         setModelPicker({ stage: "role", role: "leader", index: 0 });
         addMessage("SYSTEM", "Choose model role with arrows, then Enter.");

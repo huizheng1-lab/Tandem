@@ -53,6 +53,14 @@ export async function completeGoal(id: number, cwd = process.cwd()): Promise<Goa
   return goal;
 }
 
+export async function clearGoals(cwd = process.cwd()): Promise<number> {
+  const goals = await listGoals(cwd);
+  const removed = goals.length;
+  if (removed === 0) return 0;
+  await saveGoals([], cwd);
+  return removed;
+}
+
 export async function appendGoalNote(id: number, note: string, cwd = process.cwd()): Promise<void> {
   const goals = await listGoals(cwd);
   const goal = goals.find((item) => item.id === id);
