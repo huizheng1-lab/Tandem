@@ -1,0 +1,31 @@
+D64 done
+
+Round: D64
+Status: code complete; npx tsc --noEmit clean (exit 0, no output); npm test green (252 passed, +2 over baseline 250; both new tests are the D64-1 transient-failure and all-fail cases).
+
+Implementation commit:
+- 5e0e3fa D64-1: wrap leader plan() in 3-attempt retry envelope; end cleanly on all-fail
+
+Sub-tasks completed (1/1 + 1 flagged for feasibility per the handoff):
+
+D64-1 (give planning the same retry resilience build/review already have):
+- src/orchestrator/machine.ts, in the if (!plan) { ... } block (around line 292): wrapped the `options.agents.plan(...)` call in the existing `retryArtifact` envelope (3 attempts, same shape build/review use). The parse function does nothing - it casts the unknown value to PlanResult. AbortError propagates unchanged. On all-3-failures the envelope throws its lastError, which is now caught in a try/catch that ends the session cleanly with a diagnosable summary:
+  "Leader planning could not produce a valid result after retries: <error message>"
+  This is the same DONE+summary shape review-exhaustion already uses; there's no plan to take over from, so this must be a clean terminal state, not a swallowed exception. The caller (tandem-service) surfaces this summary to the user.
+- Per-attempt error events (emit({type:"error", message: "BuildPlanOrAnswer failed on attempt N: ..."})) come for free from retryArtifact itself, so a transient stumble is visible in the transcript instead of silent.
+
+D64-2 (flagged feasibility, not built):
+- The handoff explicitly framed D64-2 as "only pursue if D64-1's retry still isn't enough in practice, and say so explicitly rather than making this change speculatively." I did not change `parseClaudeEnvelope` in src/agents/claude-code-cli/exec.ts. The unconditional throw-on-any-permission-denial behavior was a contributing factor to the observed failure but is not the only thing the retry fix needed. After D64-1's retry envelope, a wrong-path Read in a single attempt would now be retried and likely self-correct (the review path already does this on retry successfully, per the handoff's evidence: "the first time, during a review call which DOES have retry, it self-corrected on attempt 2 and the run succeeded normally"). If observation shows the retry envelope is not enough, the D64-2 change is the right next step. The handoff's framing for the change itself - "a denied READ during read-only exploration is a different situation than a denied WRITE that actually needed user approval" - is sound, and parseClaudeEnvelopel's current behavior may be over-conservative. But the change is not mechanically trivial (distinguishing read from write denials from a single permission_denials array requires either engine metadata or a heuristic on tool_use_id ordering), and the handoff explicitly said not to build it speculatively.
+
+Tests (2 new in tests/orchestrator.test.ts, both pass):
+- "D64-1: a transient plan() failure self-corrects on retry instead of killing the session" - mocks plan() to throw on attempt 1 ("transient hiccup: permission denied on read of C:\\Users\\me\\foo") and succeed on attempt 2 (returns a valid plan). Asserts `planAttempts === 2` and `result.summary === "approve"` (i.e. the run completes normally via the second attempt, not via the all-fail terminal state).
+- "D64-1: all 3 plan() attempts failing ends the session cleanly (no takeover path is reachable yet)" - mocks plan() to always throw "always fails". Asserts `result.phase === "DONE"`, `result.takeover === false`, and `result.summary` matches the retry-exhausted terminal message and contains "always fails". The test uses a regex + substring check (String(error) renders as "Error: always fails" so the regex matches the prefix and the substring confirms the error text).
+
+Verification:
+- npx tsc --noEmit: exit code 0, no output.
+- npm test: 252 passed, 1 skipped (live-smoke), 0 failed. Baseline 250; +2 net D64-1 tests.
+- git diff --check: clean.
+
+Live check (per the handoff's "or at minimum confirm via the new unit test that transient plan failures no longer kill the session outright"): the unit tests cover exactly this. The handoff didn't require a real runOrchestration execution with a misbehaving mock model for this round - the new unit tests directly prove the failure mode D64-1 was designed to address is fixed. If a future live run shows a different failure mode, the D64-2 change is the next step (flagged feasibility, not built, per the handoff's "say so explicitly rather than making this change speculatively" instruction).
+</content>
+</invoke>
