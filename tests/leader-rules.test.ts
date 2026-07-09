@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   finiteVerificationRule,
+  leaderOwnsVisualJudgmentRule,
   leaderPlannerPrompt,
   leaderReviewerPrompt,
   leaderTakeoverPrompt,
@@ -32,6 +33,24 @@ describe("shared leader rules (D60 + D61)", () => {
     });
     it("forbids deferring perceptual claims to acceptanceCriteria alone", () => {
       expect(perceptualVerificationRule).toMatch(/do not defer perceptual claims to acceptanceCriteria/);
+    });
+  });
+
+  describe("leaderOwnsVisualJudgmentRule (D65-1)", () => {
+    it("is a non-empty string", () => {
+      expect(leaderOwnsVisualJudgmentRule.length).toBeGreaterThan(50);
+    });
+    it("explicitly distinguishes producing evidence from judging it", () => {
+      expect(leaderOwnsVisualJudgmentRule).toMatch(/producing evidence and judging it are different jobs/i);
+    });
+    it("frames extraction as a mechanical step the worker can do", () => {
+      expect(leaderOwnsVisualJudgmentRule).toMatch(/extracting frames or screenshots is a mechanical step/i);
+    });
+    it("reserves visual judgment for the leader", () => {
+      expect(leaderOwnsVisualJudgmentRule).toMatch(/stays with you.*leader/i);
+    });
+    it("forbids worker visual-judgment tasks explicitly", () => {
+      expect(leaderOwnsVisualJudgmentRule).toMatch(/never write a BuildPlan task that requires the worker to view or judge image\/video content/i);
     });
   });
 
@@ -110,6 +129,13 @@ describe("leader prompt exports (D60 + D61 wiring)", () => {
     expect(leaderTakeoverPrompt).toContain(perceptualVerificationRule);
     expect(leaderTakeoverPrompt).toContain(rootCauseDisciplineRule);
     expect(leaderTakeoverPrompt).toContain(reversibilityCautionRule);
+  });
+  it("D65-1: all three leader prompts include leaderOwnsVisualJudgmentRule (the split between produce and judge evidence)", () => {
+    // The mis-assignment that motivated D65 happened during planning, so the planner is the
+    // most important of the three - but reviewer and takeover are threaded for consistency.
+    expect(leaderPlannerPrompt).toContain(leaderOwnsVisualJudgmentRule);
+    expect(leaderReviewerPrompt).toContain(leaderOwnsVisualJudgmentRule);
+    expect(leaderTakeoverPrompt).toContain(leaderOwnsVisualJudgmentRule);
   });
   it("all three prompts still contain the prior D54 + finiteVerificationRule rules", () => {
     for (const prompt of [leaderPlannerPrompt, leaderReviewerPrompt, leaderTakeoverPrompt]) {
