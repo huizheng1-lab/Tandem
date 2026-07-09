@@ -84,7 +84,7 @@ export const defaultConfig: TandemConfig = {
   showThinking: false,
   maxStepsPerAgentTurn: 60,
   leaderContextBudgetTokens: 60000,
-  maxParallelWorkers: 1,
+  maxParallelWorkers: 2,
   customModels: [
     {
       id: "minimax/minimax-m2.7",
