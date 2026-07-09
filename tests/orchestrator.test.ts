@@ -39,7 +39,7 @@ function agents(overrides: Partial<AgentFns> = {}): AgentFns {
 
 describe("orchestration", () => {
   it("covers approve path", async () => {
-    const result = await runOrchestration({ request: "build", config: { maxReviewRounds: 3 }, agents: agents() });
+    const result = await runOrchestration({ request: "build", config: { maxReviewRounds: 3, maxParallelWorkers: 1 }, agents: agents() });
     expect(result.takeover).toBe(false);
     expect(result.summary).toBe("approve");
   });
@@ -48,7 +48,7 @@ describe("orchestration", () => {
     let reviews = 0;
     const result = await runOrchestration({
       request: "build",
-      config: { maxReviewRounds: 3 },
+      config: { maxReviewRounds: 3, maxParallelWorkers: 1 },
       agents: agents({
         review: async () => {
           reviews += 1;
@@ -64,7 +64,7 @@ describe("orchestration", () => {
     let builds = 0;
     const result = await runOrchestration({
       request: "build",
-      config: { maxReviewRounds: 0 },
+      config: { maxReviewRounds: 0, maxParallelWorkers: 1 },
       agents: agents({
         build: async () => {
           builds += 1;
@@ -81,7 +81,7 @@ describe("orchestration", () => {
     let builds = 0;
     const result = await runOrchestration({
       request: "build",
-      config: { maxReviewRounds: 2 },
+      config: { maxReviewRounds: 2, maxParallelWorkers: 1 },
       agents: agents({
         build: async () => {
           builds += 1;
@@ -95,14 +95,14 @@ describe("orchestration", () => {
   });
 
   it("supports leader early takeover", async () => {
-    const result = await runOrchestration({ request: "build", config: { maxReviewRounds: 3 }, agents: agents({ review: async () => verdict("takeover") }) });
+    const result = await runOrchestration({ request: "build", config: { maxReviewRounds: 3, maxParallelWorkers: 1 }, agents: agents({ review: async () => verdict("takeover") }) });
     expect(result.takeover).toBe(true);
   });
 
   it("routes worker blocked to takeover", async () => {
     const result = await runOrchestration({
       request: "build",
-      config: { maxReviewRounds: 3 },
+      config: { maxReviewRounds: 3, maxParallelWorkers: 1 },
       agents: agents({ build: async () => report("blocked") })
     });
     expect(result.takeover).toBe(true);
@@ -111,7 +111,7 @@ describe("orchestration", () => {
   it("takes over when the worker cannot produce a valid report", async () => {
     const result = await runOrchestration({
       request: "build",
-      config: { maxReviewRounds: 3 },
+      config: { maxReviewRounds: 3, maxParallelWorkers: 1 },
       agents: agents({ build: async () => ({ nope: true }) })
     });
     expect(result.takeover).toBe(true);
@@ -122,7 +122,7 @@ describe("orchestration", () => {
     let takeovers = 0;
     const result = await runOrchestration({
       request: "build",
-      config: { maxReviewRounds: 0 },
+      config: { maxReviewRounds: 0, maxParallelWorkers: 1 },
       agents: agents({
         takeover: async () => {
           takeovers += 1;
@@ -149,7 +149,7 @@ describe("orchestration", () => {
     let builds = 0;
     const result = await runOrchestration({
       request: "build",
-      config: { maxReviewRounds: 3 },
+      config: { maxReviewRounds: 3, maxParallelWorkers: 1 },
       agents: agents({
         build: async () => {
           builds += 1;
@@ -166,7 +166,7 @@ describe("orchestration", () => {
     let lastCheckpoint: OrchestrationCheckpoint | undefined;
     await runOrchestration({
       request: "build",
-      config: { maxReviewRounds: 3 },
+      config: { maxReviewRounds: 3, maxParallelWorkers: 1 },
       agents: agents({
         build: async () => {
           builds += 1;
@@ -186,7 +186,7 @@ describe("orchestration", () => {
 
     const result = await runOrchestration({
       request: "build",
-      config: { maxReviewRounds: 3 },
+      config: { maxReviewRounds: 3, maxParallelWorkers: 1 },
       initialState: lastCheckpoint,
       agents: agents({
         build: async () => {
@@ -206,7 +206,7 @@ describe("orchestration", () => {
     let reviews = 0;
     const result = await runOrchestration({
       request: "build",
-      config: { maxReviewRounds: 3 },
+      config: { maxReviewRounds: 3, maxParallelWorkers: 1 },
       agents: agents({
         review: async () => {
           reviews += 1;

@@ -8,13 +8,25 @@ export const BuildPlanSchema = z.object({
     z.object({
       id: z.string(),
       description: z.string(),
-      files: z.array(z.string()).optional()
+      files: z.array(z.string()).optional(),
+      // D54: optional stream label. Tasks sharing a `stream` run in the same worker; tasks
+      // with no stream label share an implicit default stream ("__default__"). A plan where
+      // every task has no stream (or all share one label) is a single-stream plan - exactly
+      // today's behavior, same code path.
+      stream: z.string().optional()
     })
   ),
   acceptanceCriteria: z.array(z.string()),
-  verification: z.array(z.string())
+  verification: z.array(z.string()),
+  // D54: optional per-stream verification subset. Each worker runs only its own stream's
+  // commands (verbatim-echo contract). The full plan-level verification is run by the leader
+  // during review. Single-stream plans ignore this map (the worker runs plan.verification).
+  streamVerification: z.record(z.string(), z.array(z.string())).optional()
 });
 export type BuildPlan = z.infer<typeof BuildPlanSchema>;
+export type PlanStreamId = string;
+// D54: implicit stream id for tasks that don't declare one.
+export const DEFAULT_STREAM_ID = "__default__";
 
 // Known-real command starters (not exhaustive). Entries here skip the heuristic in
 // `hasCommandShape` and always pass. Bare commands not on this list fall through to the
@@ -198,11 +210,83 @@ function validateVerificationEntry(entry: string, platform: NodeJS.Platform): st
   return errors;
 }
 
+// D54: partition tasks into streams. Tasks without a `stream` label share the implicit default
+// stream id. Returns streams in a stable order: explicit labels first in first-seen order,
+// then the default stream last if it has any tasks. Within each stream, tasks keep their
+// original order.
+export interface PlanStream {
+  id: PlanStreamId;
+  tasks: BuildPlan["tasks"];
+  verification: string[];
+}
+
+export function partitionPlan(plan: BuildPlan): PlanStream[] {
+  const byId = new Map<PlanStreamId, BuildPlan["tasks"]>();
+  const order: PlanStreamId[] = [];
+  for (const task of plan.tasks) {
+    const id = (task.stream ?? DEFAULT_STREAM_ID) as PlanStreamId;
+    if (!byId.has(id)) {
+      byId.set(id, []);
+      order.push(id);
+    }
+    byId.get(id)!.push(task);
+  }
+  // Default stream last for predictability.
+  const defaultIdx = order.indexOf(DEFAULT_STREAM_ID);
+  if (defaultIdx >= 0) {
+    order.splice(defaultIdx, 1);
+    order.push(DEFAULT_STREAM_ID);
+  }
+  const streamVerification = plan.streamVerification ?? {};
+  return order.map((id) => ({
+    id,
+    tasks: byId.get(id) ?? [],
+    verification: id === DEFAULT_STREAM_ID ? plan.verification : (streamVerification[id] ?? plan.verification)
+  }));
+}
+
+// D54: disjoint-files check across streams. Every task in a multi-stream plan MUST list
+// `files`; no file path may appear in tasks of two different streams. Two workers writing the
+// same file concurrently in the same cwd is the failure mode to prevent. Overlapping reads
+// are fine and unenforceable; we only gate on declared write-ownership lists.
+export function validateStreamFileOwnership(plan: BuildPlan): string[] {
+  const streams = partitionPlan(plan);
+  if (streams.length < 2) return [];
+  const errors: string[] = [];
+  for (const stream of streams) {
+    for (const task of stream.tasks) {
+      if (!task.files || task.files.length === 0) {
+        errors.push(
+          `Task "${task.id}" in stream "${stream.id}" must list its files when the plan has multiple streams (disjoint-files invariant).`
+        );
+      }
+    }
+  }
+  const ownerByFile = new Map<string, string>();
+  for (const stream of streams) {
+    for (const task of stream.tasks) {
+      for (const file of task.files ?? []) {
+        const prev = ownerByFile.get(file);
+        if (prev && prev !== stream.id) {
+          errors.push(
+            `File "${file}" is declared by both stream "${prev}" and stream "${stream.id}" (task "${task.id}"). Streams must have disjoint file write-ownership.`
+          );
+        } else {
+          ownerByFile.set(file, stream.id);
+        }
+      }
+    }
+  }
+  return errors;
+}
+
 export function validateBuildPlan(value: unknown, platform: NodeJS.Platform = process.platform): BuildPlan {
   const plan = BuildPlanSchema.parse(value);
   if (plan.tasks.length === 0) throw new Error("no implementation tasks - answer directly instead");
-  const errors = plan.verification.flatMap((entry) => validateVerificationEntry(entry, platform));
-  if (errors.length > 0) throw new Error(`Invalid BuildPlan verification:\n${errors.join("\n")}`);
+  const errors: string[] = [];
+  errors.push(...plan.verification.flatMap((entry) => validateVerificationEntry(entry, platform)));
+  errors.push(...validateStreamFileOwnership(plan));
+  if (errors.length > 0) throw new Error(`Invalid BuildPlan:\n${errors.join("\n")}`);
   return plan;
 }
 
@@ -259,10 +343,17 @@ function detectVerificationScriptTampering(plan: BuildPlan, report: CompletionRe
   return missing;
 }
 
-export function enforceVerification(plan: BuildPlan, report: CompletionReport): void {
-  const missing = plan.verification.filter((entry) => !matchResult(entry, report.verificationResults));
+export function enforceVerification(
+  plan: BuildPlan,
+  report: CompletionReport,
+  expectedCommands: string[] = plan.verification
+): void {
+  // D54: the orchestrator passes a stream-scoped subset of plan.verification when validating
+  // per-stream worker reports. Single-stream plans and the merged-after-merge check still pass
+  // the full plan.verification (the default).
+  const missing = expectedCommands.filter((entry) => !matchResult(entry, report.verificationResults));
   if (missing.length > 0) throw new Error(`Completion report omitted verification commands: ${missing.join(", ")}`);
-  const failed = plan.verification.filter((entry) => matchResult(entry, report.verificationResults)?.passed !== true);
+  const failed = expectedCommands.filter((entry) => matchResult(entry, report.verificationResults)?.passed !== true);
   if (failed.length > 0 && report.status === "complete") {
     throw new Error(`Completion report marked complete with failing verification: ${failed.join(", ")}`);
   }
@@ -278,8 +369,61 @@ export function enforceVerification(plan: BuildPlan, report: CompletionReport): 
   }
 }
 
-export function validateCompletionReport(plan: BuildPlan, value: unknown): CompletionReport {
+export function validateCompletionReport(
+  plan: BuildPlan,
+  value: unknown,
+  expectedCommands: string[] = plan.verification
+): CompletionReport {
   const report = CompletionReportSchema.parse(value);
-  enforceVerification(plan, report);
+  enforceVerification(plan, report, expectedCommands);
   return report;
+}
+
+// D54: merge N per-stream CompletionReports into one synthetic round report. The orchestrator
+// runs one worker per stream, collects N reports, and calls this. Status is "complete" only
+// when every stream is "complete"; any blocked stream flips the merged report to "blocked".
+// taskResults are concatenated - every plan task must appear exactly once across streams
+// (caller should validate the partition). filesChanged / verificationResults /
+// deviationsFromPlan are unioned. summary is joined per-stream, prefixed with the stream id.
+export function mergeCompletionReports(
+  reports: { streamId: PlanStreamId; report: CompletionReport }[]
+): CompletionReport {
+  if (reports.length === 0) {
+    throw new Error("mergeCompletionReports: at least one per-stream report is required");
+  }
+  const allTaskResults = reports.flatMap((entry) => entry.report.taskResults);
+  const allTaskIds = new Set(allTaskResults.map((r) => r.id));
+  if (allTaskIds.size !== allTaskResults.length) {
+    const ids = allTaskResults.map((r) => r.id);
+    const dupes = ids.filter((id, i) => ids.indexOf(id) !== i);
+    throw new Error(`mergeCompletionReports: duplicate task result ids across streams: ${[...new Set(dupes)].join(", ")}`);
+  }
+  const seen = new Set<string>();
+  const filesChanged: string[] = [];
+  for (const entry of reports) {
+    for (const file of entry.report.filesChanged) {
+      if (!seen.has(file)) {
+        seen.add(file);
+        filesChanged.push(file);
+      }
+    }
+  }
+  const verificationResults: CompletionReport["verificationResults"] = reports.flatMap(
+    (entry) => entry.report.verificationResults
+  );
+  const deviationsFromPlan: string[] = reports.flatMap((entry) => entry.report.deviationsFromPlan);
+  const status: CompletionReport["status"] = reports.every((entry) => entry.report.status === "complete")
+    ? "complete"
+    : "blocked";
+  const summary = reports
+    .map((entry) => `[${entry.streamId}] ${entry.report.summary}`.trim())
+    .join(" | ");
+  return {
+    status,
+    summary,
+    taskResults: allTaskResults,
+    filesChanged,
+    verificationResults,
+    deviationsFromPlan
+  };
 }

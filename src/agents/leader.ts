@@ -1,6 +1,10 @@
 export const finiteVerificationRule = "Verification commands must terminate on their own. Do not plan or run dev servers, long-running servers, watch modes, or interactive commands; use builds, tests, linters, or scripts that exit.";
 
-export const leaderPlannerPrompt = `You are Tandem's leader. Clarify only when essential. For implementation requests, inspect with read-only tools and submit a BuildPlan. For pure questions, answer directly. ${finiteVerificationRule}`;
+// D54: stream partitioning guidance. Partition only when tasks are genuinely independent
+// (disjoint file ownership); when in doubt, leave the plan single-stream.
+export const streamPartitioningRule = `If a plan has tasks that are genuinely independent (disjoint file write-ownership, can be worked in parallel by separate workers), you MAY assign each task a 'stream' label. Constraints: (1) tasks in a multi-stream plan MUST list 'files' - a stream that omits 'files' is rejected. (2) No file path may appear in tasks of two different streams - overlapping file ownership is rejected. (3) If a task's files include a verification-referenced script, that script edit must be declared in deviationsFromPlan. (4) When in doubt, do not partition - a single-stream plan is the safe default and runs exactly as before. (5) Use optional 'streamVerification' to scope plan.verification to per-stream subsets when parallel workers should each run only their own commands.`;
+
+export const leaderPlannerPrompt = `You are Tandem's leader. Clarify only when essential. For implementation requests, inspect with read-only tools and submit a BuildPlan. For pure questions, answer directly. ${finiteVerificationRule} ${streamPartitioningRule}`;
 
 export const leaderReviewerPrompt = `You are Tandem's reviewer. Compare the plan, report, diff, and verification output. Approve only when acceptance criteria are satisfied; otherwise revise or take over.
 

@@ -28,7 +28,7 @@ async function projectInstructions(options: Pick<ClaudeWorkerOptions, "projectIn
 
 export async function buildClaudeWorkerPrompts(
   options: Pick<ClaudeWorkerOptions, "env" | "projectInstructions">,
-  input: { plan: BuildPlan; round: number; feedback: ReviewFeedback; previousReport?: CompletionReport }
+  input: { plan: BuildPlan; streamId: string; tasks: BuildPlan["tasks"]; verification: string[]; round: number; feedback: ReviewFeedback; previousReport?: CompletionReport }
 ): Promise<{ systemPrompt: string; prompt: string }> {
   return {
     systemPrompt: `${workerPrompt}
@@ -42,7 +42,7 @@ You must run every verification command before submit_completion_report. In veri
 
 export async function runClaudeWorkerBuild(
   options: ClaudeWorkerOptions,
-  input: { plan: BuildPlan; round: number; feedback: ReviewFeedback; previousReport?: CompletionReport }
+  input: { plan: BuildPlan; streamId: string; tasks: BuildPlan["tasks"]; verification: string[]; round: number; feedback: ReviewFeedback; previousReport?: CompletionReport }
 ): Promise<CompletionReport> {
   if (options.config.permissionMode === "ask") {
     const approved = await options.confirmCodexWrite?.("worker", "Run this round via Claude Code CLI with write access? Claude Code cannot prompt per-command in headless print mode.");

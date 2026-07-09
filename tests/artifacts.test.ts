@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { BuildPlan, ReviewVerdictSchema, validateBuildPlan, validateCompletionReport } from "../src/orchestrator/artifacts.js";
+import { BuildPlan, CompletionReport, mergeCompletionReports, partitionPlan, ReviewVerdictSchema, validateBuildPlan, validateCompletionReport, validateStreamFileOwnership } from "../src/orchestrator/artifacts.js";
 
 const plan: BuildPlan = {
   title: "Demo",
@@ -76,6 +76,174 @@ describe("artifacts", () => {
         deviationsFromPlan: []
       })
     ).toThrow(/omitted verification commands: node test\.mjs/);
+  });
+
+  describe("D54 schema + partition + validation", () => {
+    it("partitionPlan: tasks without `stream` all land in the default stream", () => {
+      const p: BuildPlan = {
+        ...plan,
+        tasks: [
+          { id: "T1", description: "a" },
+          { id: "T2", description: "b" }
+        ]
+      };
+      const streams = partitionPlan(p);
+      expect(streams).toHaveLength(1);
+      expect(streams[0]?.id).toBe("__default__");
+      expect(streams[0]?.tasks.map((t) => t.id)).toEqual(["T1", "T2"]);
+      expect(streams[0]?.verification).toEqual(p.verification);
+    });
+
+    it("partitionPlan: explicit streams are kept separate, default last", () => {
+      const p: BuildPlan = {
+        ...plan,
+        tasks: [
+          { id: "T1", description: "a", stream: "A" },
+          { id: "T2", description: "b", stream: "B" },
+          { id: "T3", description: "c" }
+        ]
+      };
+      const streams = partitionPlan(p);
+      expect(streams.map((s) => s.id)).toEqual(["A", "B", "__default__"]);
+      expect(streams.find((s) => s.id === "A")?.tasks.map((t) => t.id)).toEqual(["T1"]);
+      expect(streams.find((s) => s.id === "B")?.tasks.map((t) => t.id)).toEqual(["T2"]);
+      expect(streams.find((s) => s.id === "__default__")?.tasks.map((t) => t.id)).toEqual(["T3"]);
+    });
+
+    it("validateStreamFileOwnership: single-stream plan always passes", () => {
+      const p: BuildPlan = {
+        ...plan,
+        tasks: [
+          { id: "T1", description: "a", files: ["foo.js"] },
+          { id: "T2", description: "b" }
+        ]
+      };
+      expect(validateStreamFileOwnership(p)).toEqual([]);
+    });
+
+    it("validateStreamFileOwnership: rejects task in a multi-stream plan that omits files", () => {
+      const p: BuildPlan = {
+        ...plan,
+        tasks: [
+          { id: "T1", description: "a", stream: "A", files: ["a.js"] },
+          { id: "T2", description: "b", stream: "B" }
+        ]
+      };
+      const errors = validateStreamFileOwnership(p);
+      expect(errors.some((e) => e.includes("T2") && e.includes("list its files"))).toBe(true);
+    });
+
+    it("validateStreamFileOwnership: rejects overlapping file between two streams", () => {
+      const p: BuildPlan = {
+        ...plan,
+        tasks: [
+          { id: "T1", description: "a", stream: "A", files: ["shared.js"] },
+          { id: "T2", description: "b", stream: "B", files: ["shared.js"] }
+        ]
+      };
+      const errors = validateStreamFileOwnership(p);
+      expect(errors.some((e) => e.includes("shared.js") && e.includes("disjoint"))).toBe(true);
+    });
+
+    it("mergeCompletionReports: union of filesChanged, concatenation of taskResults, complete only when all complete", () => {
+      const a: CompletionReport = {
+        status: "complete",
+        summary: "stream a done",
+        taskResults: [{ id: "T1", status: "done" }],
+        filesChanged: ["a.js"],
+        verificationResults: [{ command: "npm test", passed: true, output: "ok" }],
+        deviationsFromPlan: []
+      };
+      const b: CompletionReport = {
+        status: "complete",
+        summary: "stream b done",
+        taskResults: [{ id: "T2", status: "done" }],
+        filesChanged: ["b.js", "a.js"],
+        verificationResults: [],
+        deviationsFromPlan: ["custom-flags used"]
+      };
+      const merged = mergeCompletionReports([
+        { streamId: "A", report: a },
+        { streamId: "B", report: b }
+      ]);
+      expect(merged.status).toBe("complete");
+      expect(merged.taskResults).toHaveLength(2);
+      expect(merged.filesChanged).toEqual(["a.js", "b.js"]); // deduped, A first
+      expect(merged.deviationsFromPlan).toEqual(["custom-flags used"]);
+      expect(merged.summary).toContain("[A] stream a done");
+      expect(merged.summary).toContain("[B] stream b done");
+    });
+
+    it("mergeCompletionReports: any blocked stream flips merged to blocked", () => {
+      const a: CompletionReport = {
+        status: "complete",
+        summary: "ok",
+        taskResults: [{ id: "T1", status: "done" }],
+        filesChanged: [],
+        verificationResults: [],
+        deviationsFromPlan: []
+      };
+      const b: CompletionReport = {
+        status: "blocked",
+        summary: "stuck",
+        taskResults: [{ id: "T2", status: "partial" }],
+        filesChanged: [],
+        verificationResults: [],
+        deviationsFromPlan: []
+      };
+      const merged = mergeCompletionReports([
+        { streamId: "A", report: a },
+        { streamId: "B", report: b }
+      ]);
+      expect(merged.status).toBe("blocked");
+    });
+
+    it("mergeCompletionReports: rejects duplicate task result ids across streams", () => {
+      const a: CompletionReport = {
+        status: "complete",
+        summary: "a",
+        taskResults: [{ id: "T1", status: "done" }],
+        filesChanged: [],
+        verificationResults: [],
+        deviationsFromPlan: []
+      };
+      const b: CompletionReport = {
+        status: "complete",
+        summary: "b",
+        taskResults: [{ id: "T1", status: "done" }],
+        filesChanged: [],
+        verificationResults: [],
+        deviationsFromPlan: []
+      };
+      expect(() =>
+        mergeCompletionReports([
+          { streamId: "A", report: a },
+          { streamId: "B", report: b }
+        ])
+      ).toThrow(/duplicate task result ids across streams.*T1/);
+    });
+
+    it("validateBuildPlan: rejects overlapping-file 2-stream plan with a clear message", () => {
+      const p: BuildPlan = {
+        ...plan,
+        tasks: [
+          { id: "T1", description: "a", stream: "A", files: ["shared.js"] },
+          { id: "T2", description: "b", stream: "B", files: ["shared.js"] }
+        ]
+      };
+      expect(() => validateBuildPlan(p)).toThrow(/disjoint/);
+    });
+
+    it("validateBuildPlan: accepts a clean 2-stream plan with disjoint files", () => {
+      const p: BuildPlan = {
+        ...plan,
+        tasks: [
+          { id: "T1", description: "a", stream: "A", files: ["a.js"] },
+          { id: "T2", description: "b", stream: "B", files: ["b.js"] }
+        ]
+      };
+      expect(validateBuildPlan(p).tasks).toHaveLength(2);
+    });
   });
 
   describe("verification-script-tampering detection (D56-2)", () => {

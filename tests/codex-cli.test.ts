@@ -264,7 +264,7 @@ describe("codex cli mixed roles", () => {
         env: { ComSpec: "powershell.exe" },
         projectInstructions: async () => "Project instructions:\n- Use the local style."
       },
-      { plan, round: 1, feedback: [] }
+      { plan, streamId: "__default__", tasks: plan.tasks, verification: plan.verification, round: 1, feedback: [] }
     );
 
     expect(prompt).toContain("Project instructions:\n- Use the local style.");
@@ -286,7 +286,7 @@ describe("codex cli mixed roles", () => {
       ledger: new CostLedger()
     });
 
-    await expect(agents.build({ plan, round: 1, feedback: [] })).resolves.toMatchObject({ status: "complete" });
+    await expect(agents.build({ plan, streamId: "__default__", tasks: plan.tasks, verification: plan.verification, round: 1, feedback: [] })).resolves.toMatchObject({ status: "complete" });
   });
 
   it("supports Codex CLI leader plus API worker", async () => {

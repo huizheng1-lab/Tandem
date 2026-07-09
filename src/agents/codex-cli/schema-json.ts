@@ -10,7 +10,7 @@ const nullableStringSchema = { type: ["string", "null"] };
 export const buildPlanJsonSchema = {
   type: "object",
   additionalProperties: false,
-  required: ["title", "objective", "constraints", "tasks", "acceptanceCriteria", "verification"],
+  required: ["title", "objective", "constraints", "tasks", "acceptanceCriteria", "verification", "streamVerification"],
   properties: {
     title: stringSchema,
     objective: stringSchema,
@@ -20,16 +20,23 @@ export const buildPlanJsonSchema = {
       items: {
         type: "object",
         additionalProperties: false,
-        required: ["id", "description", "files"],
+        required: ["id", "description", "files", "stream"],
         properties: {
           id: stringSchema,
           description: stringSchema,
-          files: { type: ["array", "null"], items: stringSchema }
+          files: { type: ["array", "null"], items: stringSchema },
+          // D54: optional stream label. Nullable-and-required per the D37 OpenAI structured-output rule.
+          stream: { type: ["string", "null"] }
         }
       }
     },
     acceptanceCriteria: { type: "array", items: stringSchema },
-    verification: { type: "array", items: stringSchema }
+    verification: { type: "array", items: stringSchema },
+    // D54: optional per-stream verification map. Nullable-and-required.
+    streamVerification: {
+      type: ["object", "null"],
+      additionalProperties: { type: "array", items: stringSchema }
+    }
   }
 } as const;
 

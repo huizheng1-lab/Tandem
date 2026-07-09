@@ -84,12 +84,36 @@ export function summarizePreviousReport(report: CompletionReport | undefined) {
   };
 }
 
-export function buildWorkerContext(input: { round: number; plan: BuildPlan; feedback: ReviewFeedback; previousReport?: CompletionReport }, budget = WORKER_CONTEXT_CHAR_BUDGET): string {
+// D54: extended with streamId/tasks/verification so the worker knows which slice of the plan to
+// focus on and which subset of verification commands to run. Old shape (without these) still
+// works - defaults to the implicit default stream, full plan tasks, and full plan.verification.
+export function buildWorkerContext(
+  input: {
+    round: number;
+    plan: BuildPlan;
+    feedback: ReviewFeedback;
+    previousReport?: CompletionReport;
+    streamId?: string;
+    tasks?: BuildPlan["tasks"];
+    verification?: string[];
+  },
+  budget = WORKER_CONTEXT_CHAR_BUDGET
+): string {
   const compact = {
     feedback: compactFeedback(input.feedback),
-    previousReport: summarizePreviousReport(input.previousReport)
+    previousReport: summarizePreviousReport(input.previousReport),
+    stream: input.streamId
+      ? {
+          id: input.streamId,
+          tasks: input.tasks ?? input.plan.tasks,
+          verification: input.verification ?? input.plan.verification
+        }
+      : null
   };
-  let content = `BuildPlan:\n${jsonBlock(input.plan)}\n\nRound ${input.round}\n\nReview feedback:\n${jsonBlock(compact.feedback)}\n\nPrevious report summary:\n${jsonBlock(compact.previousReport)}`;
+  const streamBlock = compact.stream
+    ? `\n\nThis worker invocation is responsible for stream "${compact.stream.id}". The full plan is shown for context; focus on the tasks in this stream and run only this stream's verification commands (verbatim).\n\nStream "${compact.stream.id}" tasks:\n${jsonBlock(compact.stream.tasks)}\n\nStream "${compact.stream.id}" verification:\n${jsonBlock(compact.stream.verification)}`
+    : "";
+  let content = `BuildPlan:\n${jsonBlock(input.plan)}\n\nRound ${input.round}\n\nReview feedback:\n${jsonBlock(compact.feedback)}\n\nPrevious report summary:\n${jsonBlock(compact.previousReport)}${streamBlock}`;
   if (content.length > budget) {
     const suffix = "\n[context truncated; full prior artifacts remain in the session log]";
     content = `${content.slice(0, Math.max(0, budget - suffix.length))}${suffix}`;
@@ -495,7 +519,7 @@ Standing goals are context only; do not redirect unrelated requests toward them.
       throw lastError instanceof Error ? lastError : new Error(String(lastError));
     },
 
-    build: async ({ plan, round, feedback, previousReport }) => {
+    build: async ({ plan, streamId, tasks, verification, round, feedback, previousReport }) => {
       if (worker.entry.provider === "codex-cli") {
         return runCodexWorkerBuild(
           {
@@ -510,7 +534,7 @@ Standing goals are context only; do not redirect unrelated requests toward them.
             projectInstructions: options.projectInstructions,
             confirmCodexWrite: options.confirmCodexWrite
           },
-          { plan, round, feedback, previousReport }
+          { plan, streamId, tasks, verification, round, feedback, previousReport }
         );
       }
       if (worker.entry.provider === "claude-code-cli") {
@@ -527,7 +551,7 @@ Standing goals are context only; do not redirect unrelated requests toward them.
             projectInstructions: options.projectInstructions,
             confirmCodexWrite: options.confirmCodexWrite
           },
-          { plan, round, feedback, previousReport }
+          { plan, streamId, tasks, verification, round, feedback, previousReport }
         );
       }
       let report: z.infer<typeof CompletionReportSchema> | undefined;
@@ -550,7 +574,7 @@ Standing goals are context only; do not redirect unrelated requests toward them.
         messages: [
           {
             role: "user",
-            content: buildWorkerContext({ round, plan, feedback, previousReport })
+            content: buildWorkerContext({ round, plan, feedback, previousReport, streamId, tasks, verification })
           }
         ],
         tools: mergeTools(makeToolSet({ ...toolContext, media: worker.entry.media }, "worker"), submitTools),

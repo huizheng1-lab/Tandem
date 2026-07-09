@@ -4,8 +4,11 @@ import {
   BuildPlan,
   CompletionReportSchema,
   CompletionReport,
+  PlanStream,
   ReviewVerdict,
   ReviewVerdictSchema,
+  mergeCompletionReports,
+  partitionPlan,
   validateBuildPlan,
   validateCompletionReport
 } from "./artifacts.js";
@@ -29,16 +32,31 @@ export type MachineEvent =
 
 export type PlanResult = { kind: "answer"; answer: string } | { kind: "plan"; plan: BuildPlan };
 
+// D54: extended `build` signature. `streams` lists the per-stream task slices for this round;
+// `streamId` identifies which stream THIS worker invocation is responsible for; `plan` and
+// `previousReport` keep their previous semantics (full plan context, last round's report).
+// Single-stream callers (old AgentFns implementations) can ignore `streams` since the orchestrator
+// always passes a one-element array for them, and `streamId` defaults to the only entry.
+export interface BuildStreamInput {
+  plan: BuildPlan;
+  streamId: string;
+  tasks: BuildPlan["tasks"];
+  verification: string[];
+  round: number;
+  feedback: ReviewVerdict["feedback"];
+  previousReport?: CompletionReport;
+}
+
 export interface AgentFns {
   plan(input: { request: string; goals: string[]; history?: string; attachments?: AttachmentRef[] }): Promise<PlanResult>;
-  build(input: { plan: BuildPlan; round: number; feedback: ReviewVerdict["feedback"]; previousReport?: CompletionReport }): Promise<unknown>;
+  build(input: BuildStreamInput): Promise<unknown>;
   review(input: { plan: BuildPlan; report: CompletionReport; round: number; diff: string }): Promise<unknown>;
   takeover(input: { plan: BuildPlan; reports: CompletionReport[]; feedback: ReviewVerdict["feedback"][] }): Promise<{ report: CompletionReport; userSummary: string }>;
 }
 
 export interface RunOptions {
   request: string;
-  config: Pick<TandemConfig, "maxReviewRounds">;
+  config: Pick<TandemConfig, "maxReviewRounds" | "maxParallelWorkers">;
   agents: AgentFns;
   goals?: string[];
   history?: string;
@@ -68,6 +86,136 @@ async function retryArtifact<T>(name: string, emit: (event: MachineEvent) => voi
   throw lastError instanceof Error ? lastError : new Error(String(lastError));
 }
 
+// D54: build a synthetic carry-forward report for a stream that didn't run in this round.
+// Only used as a defensive fallback when the previous report for a stream is missing entirely
+// (which shouldn't happen in practice - it would mean a round-1 stream was never built).
+function syntheticCarryReport(stream: PlanStream, fallback: CompletionReport | undefined): CompletionReport {
+  if (fallback) return fallback;
+  return {
+    status: "blocked",
+    summary: `[${stream.id}] no previous report carried forward`,
+    taskResults: stream.tasks.map((task) => ({ id: task.id, status: "skipped" as const, notes: "stream did not run this round" })),
+    filesChanged: [],
+    verificationResults: [],
+    deviationsFromPlan: []
+  };
+}
+
+// D54: for a revise round, determine which streams actually need to be re-run. A feedback
+// item targets a specific stream if its `location` (or its task-id-bearing `issue`/`requiredChange`
+// text) names any task that belongs to that stream. Items with no attributable stream make
+// the resolver fall back to re-running every stream (safe).
+function streamsToRerun(
+  streams: PlanStream[],
+  feedback: ReviewVerdict["feedback"],
+  allStreamIds: string[]
+): Set<string> {
+  const taskToStream = new Map<string, string>();
+  for (const stream of streams) {
+    for (const task of stream.tasks) {
+      taskToStream.set(task.id, stream.id);
+    }
+  }
+  const targeted = new Set<string>();
+  for (const item of feedback) {
+    const haystacks = [item.location ?? "", item.issue, item.requiredChange];
+    let matched = false;
+    for (const hay of haystacks) {
+      for (const [taskId, streamId] of taskToStream) {
+        if (hay.includes(taskId)) {
+          targeted.add(streamId);
+          matched = true;
+        }
+      }
+      if (matched) break;
+    }
+    if (!matched) {
+      // No attribution: conservative re-run of all streams.
+      for (const id of allStreamIds) targeted.add(id);
+      return targeted;
+    }
+  }
+  if (targeted.size === 0) {
+    // Empty feedback - shouldn't happen on a `revise` verdict, but be conservative.
+    for (const id of allStreamIds) targeted.add(id);
+  }
+  return targeted;
+}
+
+// D54: run a single stream's build. Returns the parsed CompletionReport. Throws after the
+// existing 3-attempt retry envelope (caller handles takeover).
+async function runOneStreamBuild(
+  agents: AgentFns,
+  stream: PlanStream,
+  plan: BuildPlan,
+  currentRound: number,
+  feedback: ReviewVerdict["feedback"],
+  previousReport: CompletionReport | undefined,
+  emit: (event: MachineEvent) => void
+): Promise<CompletionReport> {
+  emit({ type: "transition", phase: "BUILDING", message: `round ${currentRound} worker build [stream ${stream.id}: ${stream.tasks.length} task(s)]` });
+  return retryArtifact(
+    "CompletionReport",
+    emit,
+    () =>
+      agents.build({
+        plan,
+        streamId: stream.id,
+        tasks: stream.tasks,
+        verification: stream.verification,
+        round: currentRound,
+        feedback,
+        previousReport
+      }),
+    (value) => validateCompletionReport(plan, value, stream.verification)
+  );
+}
+
+// D54: dispatch a list of streams under a concurrency cap using a worker-pool. cap-many
+// workers run in parallel; as each finishes the next pending stream starts. If cap >=
+// streams.length this is just Promise.all. The workers share the run's abort signal: if any
+// call throws, the rest of the pool is rejected and the error propagates so the takeover
+// fallback fires.
+async function dispatchStreams(
+  agents: AgentFns,
+  streams: PlanStream[],
+  cap: number,
+  plan: BuildPlan,
+  currentRound: number,
+  feedback: ReviewVerdict["feedback"],
+  previousReports: Map<string, CompletionReport>,
+  emit: (event: MachineEvent) => void
+): Promise<CompletionReport[]> {
+  if (streams.length === 0) return [];
+  const poolSize = Math.max(1, cap);
+  const results: CompletionReport[] = new Array(streams.length);
+  const cursor = { next: 0 };
+  const inflight = new Set<Promise<void>>();
+
+  for (let i = 0; i < Math.min(poolSize, streams.length); i++) {
+    inflight.add(spawnOne(cursor, inflight));
+  }
+  while (inflight.size > 0) {
+    await Promise.race(inflight);
+  }
+  return results;
+
+  function spawnOne(cursor: { next: number }, inflight: Set<Promise<void>>): Promise<void> {
+    const index = cursor.next++;
+    const stream = streams[index];
+    if (!stream) return Promise.resolve();
+    const p = runOneStreamBuild(agents, stream, plan, currentRound, feedback, previousReports.get(stream.id), emit)
+      .then((report) => {
+        results[index] = report;
+      })
+      .finally(() => {
+        inflight.delete(p);
+      });
+    inflight.add(p);
+    return p;
+  }
+}
+
 export interface RunResult {
   phase: MachinePhase;
   summary: string;
@@ -82,6 +230,12 @@ export async function runOrchestration(options: RunOptions): Promise<RunResult> 
   const reports: CompletionReport[] = [...(options.initialState?.reports ?? [])];
   const verdicts: ReviewVerdict[] = [...(options.initialState?.verdicts ?? [])];
   const allFeedback: ReviewVerdict["feedback"][] = [...(options.initialState?.feedbackHistory ?? [])];
+  // D54: per-stream report history, kept in stream-id order. The most recent entry per stream
+  // is the previous report for the next round. We do NOT serialize this into the checkpoint
+  // payload in this round (single-stream resume path doesn't need it) - the merged `reports`
+  // array is what gets checkpointed, and the per-stream details are reconstructible from the
+  // feedback history + plan partitioning on resume.
+  const streamReportHistory: { streamId: string; report: CompletionReport }[][] = [];
   let phase: MachinePhase = options.initialState?.phase ?? "PLANNING";
   let round = options.initialState?.round ?? 0;
 
@@ -178,16 +332,59 @@ export async function runOrchestration(options: RunOptions): Promise<RunResult> 
     } else {
       transition("BUILDING", `round ${currentRound}/${options.config.maxReviewRounds} worker build`, currentRound);
       if (options.diffProvider && typeof options.diffProvider !== "function") await options.diffProvider.beforeBuild?.();
-      try {
-        report = await retryArtifact(
-          "CompletionReport",
-          emit,
-          () => options.agents.build({ plan, round: currentRound, feedback, previousReport: reports.at(-1) }),
-          (value) => validateCompletionReport(plan, value)
-        );
-      } catch (error) {
-        emit({ type: "error", message: `worker could not produce a valid CompletionReport: ${String(error)}` });
-        return runTakeover("worker artifact failure; leader takeover");
+      // D54: partition the plan into streams. Decide which streams to run this round.
+      // First round: all streams. Revise rounds: only streams targeted by the feedback.
+      const allStreams = partitionPlan(plan);
+      const lastStreamReportList = streamReportHistory.at(-1);
+      const previousReportsByStream = new Map<string, CompletionReport>(
+        (lastStreamReportList ?? []).map((entry) => [entry.streamId, entry.report])
+      );
+      const targetStreamIds = (() => {
+        if (currentRound === 1) return new Set(allStreams.map((s) => s.id));
+        if (allFeedback.length === 0) return new Set(allStreams.map((s) => s.id));
+        // Use the most recent feedback (the revise reason).
+        return streamsToRerun(allStreams, allFeedback.at(-1) ?? [], allStreams.map((s) => s.id));
+      })();
+      const targetStreams = allStreams.filter((stream) => targetStreamIds.has(stream.id));
+      // Streams that aren't re-run this round carry forward their previous report (unchanged).
+      const carryForward = allStreams
+        .filter((stream) => !targetStreamIds.has(stream.id))
+        .map((stream) => ({
+          streamId: stream.id,
+          report:
+            previousReportsByStream.get(stream.id) ??
+            syntheticCarryReport(stream, previousReportsByStream.get(stream.id))
+        }));
+
+      if (targetStreams.length === 0) {
+        // Defensive: revise with no targets - skip build, reuse previous merged report.
+        report = reports.at(-1) as CompletionReport;
+      } else {
+        try {
+          const cap = options.config.maxParallelWorkers;
+          const newReports = await dispatchStreams(
+            options.agents,
+            targetStreams,
+            cap,
+            plan,
+            currentRound,
+            feedback,
+            previousReportsByStream,
+            emit
+          );
+          // Build the round's effective stream list (newly-built + carry-forward).
+          const roundStreams: { streamId: string; report: CompletionReport }[] = [
+            ...newReports.map((report, i) => ({ streamId: targetStreams[i]?.id ?? "?", report })),
+            ...carryForward
+          ];
+          streamReportHistory.push(roundStreams);
+          report = mergeCompletionReports(
+            newReports.map((r, i) => ({ streamId: targetStreams[i]?.id ?? "?", report: r }))
+          );
+        } catch (error) {
+          emit({ type: "error", message: `worker could not produce a valid CompletionReport: ${String(error)}` });
+          return runTakeover("worker artifact failure; leader takeover");
+        }
       }
       reports.push(report);
       emitCheckpoint();

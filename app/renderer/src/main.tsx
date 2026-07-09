@@ -640,6 +640,7 @@ function App(): React.ReactElement {
       `round: ${round}/${effectiveConfig?.maxReviewRounds ?? 0}`,
       `leader: ${effectiveConfig?.leader ?? "unknown"}`,
       `worker: ${effectiveConfig?.worker ?? "unknown"}`,
+      `parallel: ${effectiveConfig?.maxParallelWorkers ?? 1} worker(s) per round`,
       `session: ${session?.sessionId ?? "starting"}`
     ].join("\n");
 

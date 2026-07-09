@@ -269,7 +269,7 @@ describe("claude code cli mixed roles", () => {
         env: { ComSpec: "powershell.exe" },
         projectInstructions: async () => "Project instructions:\n- Use the local style."
       },
-      { plan, round: 1, feedback: [] }
+      { plan, streamId: "__default__", tasks: plan.tasks, verification: plan.verification, round: 1, feedback: [] }
     );
 
     expect(prompts.systemPrompt).toContain("Project instructions:\n- Use the local style.");
@@ -323,7 +323,7 @@ describe("claude code cli mixed roles", () => {
       ledger: new CostLedger()
     });
 
-    await expect(agents.build({ plan, round: 1, feedback: [] })).resolves.toMatchObject({ status: "complete" });
+    await expect(agents.build({ plan, streamId: "__default__", tasks: plan.tasks, verification: plan.verification, round: 1, feedback: [] })).resolves.toMatchObject({ status: "complete" });
   });
 
   it("supports Claude Code CLI leader plus MiniMax worker", async () => {
@@ -353,7 +353,7 @@ describe("claude code cli mixed roles", () => {
     const planned = await agents.plan({ request: "Create hello.txt with hi", goals: [] });
     expect(planned).toMatchObject({ kind: "plan" });
     if (planned.kind === "plan") {
-      await expect(agents.build({ plan: planned.plan, round: 1, feedback: [] })).resolves.toMatchObject({ status: "complete" });
+      await expect(agents.build({ plan: planned.plan, streamId: "__default__", tasks: planned.plan.tasks, verification: planned.plan.verification, round: 1, feedback: [] })).resolves.toMatchObject({ status: "complete" });
     }
   });
 
@@ -467,7 +467,7 @@ console.log(JSON.stringify({ type: "result", subtype: "success", is_error: false
     expect(reviewCaptured.rawPrompt).not.toContain("Review task: review the completed work now");
 
     await fs.rm(capturePath, { force: true });
-    const workerPrompts = await buildClaudeWorkerPrompts(planOptions, { plan, round: 1, feedback: [] });
+    const workerPrompts = await buildClaudeWorkerPrompts(planOptions, { plan, streamId: "__default__", tasks: plan.tasks, verification: plan.verification, round: 1, feedback: [] });
     await invokeShimDirectly({
       cwd,
       prompt: workerPrompts.prompt,

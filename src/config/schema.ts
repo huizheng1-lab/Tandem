@@ -61,6 +61,11 @@ export const ConfigSchema = z.object({
   showThinking: z.boolean(),
   maxStepsPerAgentTurn: z.number().int().positive(),
   leaderContextBudgetTokens: z.number().int().positive(),
+  // D54: cap on concurrent stream workers. At 1 (default) even multi-stream plans run
+  // sequentially - zero risk to existing users. >1 enables real concurrency, capped at
+  // that many simultaneous workers. Streams beyond the cap are scheduled as earlier ones
+  // finish. Settable like maxReviewRounds.
+  maxParallelWorkers: z.number().int().min(1),
   customModels: z.array(CustomModelSchema)
 });
 
@@ -79,6 +84,7 @@ export const defaultConfig: TandemConfig = {
   showThinking: false,
   maxStepsPerAgentTurn: 60,
   leaderContextBudgetTokens: 60000,
+  maxParallelWorkers: 1,
   customModels: [
     {
       id: "minimax/minimax-m2.7",

@@ -29,7 +29,7 @@ async function projectInstructions(options: Pick<CodexWorkerOptions, "projectIns
 
 export async function buildCodexWorkerPrompt(
   options: Pick<CodexWorkerOptions, "env" | "projectInstructions">,
-  input: { plan: BuildPlan; round: number; feedback: ReviewFeedback; previousReport?: CompletionReport }
+  input: { plan: BuildPlan; streamId: string; tasks: BuildPlan["tasks"]; verification: string[]; round: number; feedback: ReviewFeedback; previousReport?: CompletionReport }
 ): Promise<string> {
   return `${workerPrompt}
 ${hostPlatformPrompt(process.platform, options.env)}
@@ -42,7 +42,7 @@ ${buildWorkerContext(input)}`;
 
 export async function runCodexWorkerBuild(
   options: CodexWorkerOptions,
-  input: { plan: BuildPlan; round: number; feedback: ReviewFeedback; previousReport?: CompletionReport }
+  input: { plan: BuildPlan; streamId: string; tasks: BuildPlan["tasks"]; verification: string[]; round: number; feedback: ReviewFeedback; previousReport?: CompletionReport }
 ): Promise<CompletionReport> {
   assertSafeProjectDir(options.cwd);
   if (options.config.permissionMode === "ask") {

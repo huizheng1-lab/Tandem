@@ -26,7 +26,7 @@ export const helpText = `Commands:
 /clear                        start a new session`;
 
 export function statusText(config: TandemConfig, phase = "IDLE", round = 0, sessionId = "new"): string {
-  return `phase: ${phase}\nround: ${round}/${config.maxReviewRounds}\nleader: ${config.leader}\nworker: ${config.worker}\nsession: ${sessionId}`;
+  return `phase: ${phase}\nround: ${round}/${config.maxReviewRounds}\nleader: ${config.leader}\nworker: ${config.worker}\nparallel: ${config.maxParallelWorkers} worker(s) per round\nsession: ${sessionId}`;
 }
 
 export function costText(ledger: CostLedger): string {
