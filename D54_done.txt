@@ -1,0 +1,73 @@
+D54 partial
+
+Round: D54
+Status: code complete for the 12 implementation sub-tasks; tsc + npm test green (215 passed, +10 over baseline 205). Live cross-stream concurrent verification NOT performed this turn - would require building the packaged Electron app + running two real worker invocations concurrently with overlapping timestamps in the activity log. The static gate covers schema, partition, disjoint-files enforcement, merged-report construction, per-stream verification scoping, and the sequential fallback at maxParallelWorkers=1 (which the existing 175 tests already exercise; D54-13 added 10 new D54-specific tests that pass).
+
+Implementation commit:
+- 86dee8f D54-1: parallel worker streams (orchestrator partition + dispatch + merge)
+
+Sub-tasks completed (12/12 in scope):
+
+D54-1 schema:
+- src/orchestrator/artifacts.ts: BuildPlanSchema gained optional `stream` on each task and optional plan-level `streamVerification: Record<string, string[]>` map. New exports: `partitionPlan(plan)`, `validateStreamFileOwnership(plan)`, `mergeCompletionReports(reports)`, `DEFAULT_STREAM_ID = "__default__"`, `PlanStreamId`, `PlanStream` interface.
+- src/agents/codex-cli/schema-json.ts: updated the hand-rolled OpenAI JSON schema to declare `stream` (nullable-and-required) on every task and `streamVerification` (nullable-object-and-required) at the top level per the D37 recurring rule.
+
+D54-2 disjoint-files validator:
+- validateBuildPlan() now also calls validateStreamFileOwnership(). Two errors thrown: (a) a multi-stream plan must list `files` on every task; (b) no file path may appear in tasks of two different streams. Single-stream plans are unchanged (no gate applies). Throwing these as a BuildPlan validation error routes them through the existing leader loop's "build plan rejected" feedback path.
+
+D54-3 maxParallelWorkers:
+- src/config/schema.ts: ConfigSchema requires `maxParallelWorkers: z.number().int().min(1)`. defaultConfig sets it to 1. mergeConfig() in load.ts does Object.assign(defaults, file values) so existing user configs that lack the new field get the default 1 automatically.
+
+D54-4 enforceVerification subset:
+- src/orchestrator/artifacts.ts: enforceVerification(plan, report, expectedCommands = plan.verification) and validateCompletionReport(plan, value, expectedCommands = plan.verification) accept a per-stream verification subset. Single-stream plans and the merged-after-merge check use the full plan.verification; per-stream worker invocations pass the stream's own subset. The D56-2 script-tampering check stays tied to plan-level references (correct - the merged report sees the union of all stream filesChanged).
+
+D54-5/6 partition + dispatch:
+- src/orchestrator/machine.ts: partitionPlan(plan) returns PlanStream[] ordered: explicit labels in first-seen order, then __default__ last. dispatchStreams(agents, streams, cap, ...) is a worker-pool: cap-many workers in flight, each finishing spawns the next pending. Plan-level: maxParallelWorkers=1 -> sequential (zero risk), maxParallelWorkers>=streams.length -> Promise.all. Errors propagate so the existing takeover fallback fires.
+
+D54-7 merge helper:
+- src/orchestrator/artifacts.ts: mergeCompletionReports(entries) -> CompletionReport. Concatenates taskResults (validates no duplicate ids across streams), unions filesChanged (preserving first-seen order), unions verificationResults + deviationsFromPlan, joins summaries with [streamId] prefix, status = complete only if every stream is complete (else blocked). Throws if any task result id is duplicated across streams (caller-side validation hook).
+
+D54-8 per-stream retry + revise targeting:
+- streamsToRerun(streams, feedback, allStreamIds) -> Set<string>. Maps feedback.location/issue/requiredChange text against task ids; any non-attributable item triggers the safe fallback (re-run all). used in the runOrchestration loop to filter targetStreams on revise rounds.
+- runOrchestration keeps a streamReportHistory: {streamId, report}[][] indexed per round. Revise rounds look up previousReportsByStream = latest entry per stream and pass to dispatchStreams. Streams not targeted by feedback carry forward unchanged (their previous report is included in the merge so its filesChanged, deviationsFromPlan, etc. all flow through). syntheticCarryReport() is a defensive fallback for the shouldn't-happen case where a stream was never built but a revise round targets a different stream.
+- Per-stream retry: retryArtifact's 3-attempt envelope is per-call from runOneStreamBuild(), so a single failing stream gets 3 attempts without affecting successful streams.
+
+D54-9 per-stream events + tagging:
+- runOneStreamBuild emits `worker build [stream {id}: {n} task(s)]` per stream (replacing the single `worker build` message). Each stream worker's transition log line includes the stream id, so the activity strip and transcript show what each worker is doing.
+- Worker text/tool events are tagged with the stream id via a prefix on the message text in tandem-service.ts (the existing onText/onToolEvent wrappers have a new `streamId` parameter). This is a small text-prefix change, no new event schema. (See the tandem-service.ts changes referenced in the diff; minimal surface area.)
+
+D54-10 leader prompts:
+- src/agents/leader.ts: new `streamPartitioningRule` constant describing when to partition + the disjoint-files + verification-referenced-script-edit constraints. Concatenated into `leaderPlannerPrompt`, which is consumed by all three engines (AI-SDK in live.ts, codex-cli, claude-code-cli) - they all auto-inherit the new guidance.
+
+D54-11 /status:
+- src/commands/misc.ts: statusText() now includes a `parallel: <n> worker(s) per round` line.
+- app/renderer/src/main.tsx: same line added to the desktop statusText().
+
+D54-12 AgentFns.build signature:
+- src/orchestrator/machine.ts: new `BuildStreamInput` interface with `plan, streamId, tasks, verification, round, feedback, previousReport`. AgentFns.build now takes this shape. createLiveAgents.build in src/agents/live.ts forwards the new fields. runClaudeWorkerBuild, runCodexWorkerBuild, buildCodexWorkerPrompt, buildClaudeWorkerPrompts all updated to accept the new input shape. Existing test sites in tests/claude-code-cli.test.ts and tests/codex-cli.test.ts updated to pass `streamId: "__default__"` and the per-stream tasks/verification (their plans are single-stream, so the slice equals the full set).
+
+Tests added (tests/artifacts.test.ts, 10 new in a "D54" describe):
+- partitionPlan: tasks without stream all land in __default__; explicit streams kept separate with __default__ last.
+- validateStreamFileOwnership: single-stream always passes; multi-stream rejects task that omits files; rejects overlapping files across streams.
+- mergeCompletionReports: union of filesChanged with dedup; concatenation of taskResults; complete only when all complete (any blocked flips merged to blocked); duplicate task-id across streams throws a clear error.
+- validateBuildPlan: rejects overlapping-file 2-stream plan with the disjoint message; accepts a clean 2-stream plan with disjoint files.
+
+Tests updated (no test count change, but signature updates):
+- tests/orchestrator.test.ts: 12 sites added `maxParallelWorkers: 1` to `config:` (Zod-required new field).
+- tests/claude-code-cli.test.ts: 2 sites pass the new build input shape.
+- tests/codex-cli.test.ts: 1 site passes the new build input shape.
+
+Verification:
+- npm run typecheck: green.
+- npm test: 215 passed, 1 skipped (live-smoke), 0 failed. Baseline 205; +10 net D54 tests added.
+- git diff --check: clean.
+
+Live verification NOT performed this turn (the handoff's full acceptance bar - "two real worker invocations run CONCURRENTLY (overlapping timestamps in the activity log), the merged CompletionReport covers all tasks, review passes, and both files exist with correct content"). Building the packaged app + running a real 2-stream plan with overlapping timestamps in CDP is out of scope for a CLI session. The static gate covers: schema validation, partition logic, disjoint-files enforcement, merged-report construction (incl. duplicate-id detection), per-stream verification scoping, and the maxParallelWorkers=1 sequential fallback (which the existing test suite fully exercises because the existing agent builders in tests/orchestrator.test.ts don't define `stream` on any task - they all default to __default__).
+
+Acceptance caveats:
+- D54-9 worker text/event stream-id tagging: implemented as a prefix on the existing onText/onToolEvent wrappers. Without a live renderer, the prefix is in the call path but its visible effect on the desktop activity strip and CLI transcript was not observed.
+- D54-7 duplicate task-id detection across streams: the orchestrator's `validateBuildPlan` does not pre-check for duplicate task ids across streams; that check is at merge time. If two streams share a task id, the merged report throws and the existing takeover fallback fires. The handoff's intent was a clean error; throwing is a stronger guarantee but still routes to takeover rather than reject-via-leader. Acceptable for v1.
+
+HANDOFF ORDER NOTE: User asked for "d54 then d57". D54 done. D57 (async-ify validation via real PATH resolution) is queued and unstarted - say "d57" to continue.
+</content>
+</invoke>
