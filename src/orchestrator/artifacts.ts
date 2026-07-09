@@ -214,12 +214,67 @@ function matchResult(planEntry: string, results: CompletionReport["verificationR
   });
 }
 
+// Extracts basenames of files referenced by a verification command string. Handles the most
+// common shapes: `node verify-video.js`, `python tests/check.py`, `bash ./scripts/run.sh`,
+// `path\to\verify.cmd`, quoted or unquoted. Falls back to [] for commands that don't reference
+// any file (e.g. `npm test`, `ffprobe foo.mp4` - the latter references the input media, not a script).
+const SCRIPT_EXTENSION = /\.(?:js|mjs|cjs|ts|py|sh|cmd|bat|ps1|exe)\b/i;
+function extractReferencedScriptBasenames(commands: string[]): Set<string> {
+  const basenames = new Set<string>();
+  // Match either an extension-suffixed token (path or bare filename) anywhere in the command.
+  for (const cmd of commands) {
+    const tokens = cmd.split(/\s+/);
+    for (const token of tokens) {
+      const cleaned = token.replace(/^["']|["']$/g, "");
+      if (SCRIPT_EXTENSION.test(cleaned)) {
+        const basename = cleaned.split(/[\\/]/).pop() ?? cleaned;
+        basenames.add(basename.toLowerCase());
+      }
+    }
+  }
+  return basenames;
+}
+
+// D56-2: detects the failure mode where a worker/takeover edits a script that's used by one of
+// the plan's verification commands, then reports all-passing without disclosing the change.
+// Mechanical check: if a verification-referenced file appears in `filesChanged`, the report's
+// `deviationsFromPlan` array MUST mention it. This is the smallest reliable mitigation; a stronger
+// solution would snapshot the script and re-run verification, but that's a bigger architecture
+// change flagged in the handoff's "Consider" block, not built here.
+function detectVerificationScriptTampering(plan: BuildPlan, report: CompletionReport): string[] {
+  const referenced = extractReferencedScriptBasenames(plan.verification);
+  if (referenced.size === 0) return [];
+  const changedBasenames = new Set(
+    report.filesChanged
+      .map((file) => (file.split(/[\\/]/).pop() ?? file).toLowerCase())
+      .filter((name) => name.length > 0)
+  );
+  const missing: string[] = [];
+  for (const ref of referenced) {
+    if (changedBasenames.has(ref)) {
+      const mentioned = report.deviationsFromPlan.some((entry) => entry.toLowerCase().includes(ref));
+      if (!mentioned) missing.push(ref);
+    }
+  }
+  return missing;
+}
+
 export function enforceVerification(plan: BuildPlan, report: CompletionReport): void {
   const missing = plan.verification.filter((entry) => !matchResult(entry, report.verificationResults));
   if (missing.length > 0) throw new Error(`Completion report omitted verification commands: ${missing.join(", ")}`);
   const failed = plan.verification.filter((entry) => matchResult(entry, report.verificationResults)?.passed !== true);
   if (failed.length > 0 && report.status === "complete") {
     throw new Error(`Completion report marked complete with failing verification: ${failed.join(", ")}`);
+  }
+  // D56-2: if a worker/takeover edited a script that's referenced by the plan's verification
+  // commands, the change MUST be declared in `deviationsFromPlan`. Otherwise the worker
+  // effectively gets to write its own passing grade.
+  const tampered = detectVerificationScriptTampering(plan, report);
+  if (tampered.length > 0) {
+    throw new Error(
+      `Verification script edited without disclosure: ${tampered.join(", ")}. ` +
+        "Add an entry to deviationsFromPlan for each edited script before resubmitting."
+    );
   }
 }
 

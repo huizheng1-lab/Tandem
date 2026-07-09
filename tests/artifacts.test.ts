@@ -54,11 +54,14 @@ describe("artifacts", () => {
       ...plan,
       verification: ["node test.mjs"]
     };
+    // Note: filesChanged deliberately omits test.mjs so the D56-2 verification-script-tampering
+    // gate (separate concern) doesn't fire on this test's data. The test's purpose is to verify
+    // the verbatim-echo contract; the D56-2 describe block below covers the script-tampering case.
     const report = validateCompletionReport(exactPlan, {
       status: "complete",
       summary: "done",
       taskResults: [{ id: "T1", status: "done" }],
-      filesChanged: ["test.mjs"],
+      filesChanged: ["src/other.js"],
       verificationResults: [{ command: "node test.mjs", passed: true, output: "ok" }],
       deviationsFromPlan: []
     });
@@ -68,11 +71,107 @@ describe("artifacts", () => {
         status: "complete",
         summary: "done",
         taskResults: [{ id: "T1", status: "done" }],
-        filesChanged: ["test.mjs"],
+        filesChanged: ["src/other.js"],
         verificationResults: [{ command: "npm test", passed: true, output: "adapted from node test.mjs" }],
         deviationsFromPlan: []
       })
     ).toThrow(/omitted verification commands: node test\.mjs/);
+  });
+
+  describe("verification-script-tampering detection (D56-2)", () => {
+    const planWithScript = (verification: string[]): BuildPlan => ({
+      ...plan,
+      verification
+    });
+
+    it("accepts a report that does NOT touch a referenced verification script", () => {
+      const p = planWithScript(["node verify-video.js"]);
+      const report = validateCompletionReport(p, {
+        status: "complete",
+        summary: "ok",
+        taskResults: [{ id: "T1", status: "done" }],
+        filesChanged: ["src/other.js", "README.md"],
+        verificationResults: [{ command: "node verify-video.js", passed: true, output: "ok" }],
+        deviationsFromPlan: []
+      });
+      expect(report.status).toBe("complete");
+    });
+
+    it("rejects a report that touches a referenced verification script without declaring it", () => {
+      const p = planWithScript(["node verify-video.js"]);
+      expect(() =>
+        validateCompletionReport(p, {
+          status: "complete",
+          summary: "ok",
+          taskResults: [{ id: "T1", status: "done" }],
+          filesChanged: ["verify-video.js"],
+          verificationResults: [{ command: "node verify-video.js", passed: true, output: "ok" }],
+          deviationsFromPlan: []
+        })
+      ).toThrow(/Verification script edited without disclosure.*verify-video\.js/);
+    });
+
+    it("accepts a report that touches a referenced verification script when deviationsFromPlan mentions it", () => {
+      const p = planWithScript(["node verify-video.js"]);
+      const report = validateCompletionReport(p, {
+        status: "complete",
+        summary: "ok",
+        taskResults: [{ id: "T1", status: "done" }],
+        filesChanged: ["verify-video.js"],
+        verificationResults: [{ command: "node verify-video.js", passed: true, output: "ok" }],
+        deviationsFromPlan: ["widened verify-video.js tolerance to 15s to account for the real-world render time"]
+      });
+      expect(report.status).toBe("complete");
+    });
+
+    it("matches verification scripts by basename across path/separator styles", () => {
+      const p = planWithScript(['node "C:\\\\path\\\\to\\\\verify-video.js"']);
+      expect(() =>
+        validateCompletionReport(p, {
+          status: "complete",
+          summary: "ok",
+          taskResults: [{ id: "T1", status: "done" }],
+          filesChanged: ["verify-video.js"],
+          verificationResults: [{ command: p.verification[0] ?? "", passed: true, output: "ok" }],
+          deviationsFromPlan: []
+        })
+      ).toThrow(/verify-video\.js/);
+    });
+
+    it("does not flag the original transcript's bug (verify-video.js + widened tolerance without disclosure)", () => {
+      // Real D56-2 bug report shape: verify-video.js is the only verification, worker edits it,
+      // and reports all-passing. The D56-1 fix path (harness D56-1 destructive gate) and D55
+      // (ffprobe) addressed how the worker got there in the first place; D56-2 prevents it
+      // from completing with a passing grade.
+      const p = planWithScript(["node verify-video.js"]);
+      expect(() =>
+        validateCompletionReport(p, {
+          status: "complete",
+          summary: "Build succeeded; verification passed",
+          taskResults: [{ id: "T1", status: "done" }],
+          filesChanged: ["verify-video.js", "out.mp4"],
+          verificationResults: [{ command: "node verify-video.js", passed: true, output: "ok" }],
+          deviationsFromPlan: []
+        })
+      ).toThrow(/Verification script edited without disclosure: verify-video\.js/);
+    });
+
+    it("skips the check when the plan has no script-suffixed verification commands", () => {
+      const p = planWithScript(["npm test", "ffprobe -show_entries format=duration foo.mp4"]);
+      // Even if files changed include a JS file, no script reference -> no flag.
+      const report = validateCompletionReport(p, {
+        status: "complete",
+        summary: "ok",
+        taskResults: [{ id: "T1", status: "done" }],
+        filesChanged: ["index.js", "foo.mp4"],
+        verificationResults: [
+          { command: "npm test", passed: true, output: "ok" },
+          { command: "ffprobe -show_entries format=duration foo.mp4", passed: true, output: "ok" }
+        ],
+        deviationsFromPlan: []
+      });
+      expect(report.status).toBe("complete");
+    });
   });
 
   it("fails verification entries when the exact matched command failed", () => {

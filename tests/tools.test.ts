@@ -80,6 +80,79 @@ describe("tools", () => {
     expect(isDestructiveCommand("rm -rf /")).toBe(true);
   });
 
+  describe("isDestructiveCommand regression set (D56)", () => {
+    // D56-1: the original bug - the bare-word `\bformat\b/i` matched the very common
+    // ffprobe/ffmpeg idiom `-show_entries format=duration`, hard-blocking it as "destructive"
+    // even with full permissions (the gate runs BEFORE the yolo bypass).
+    it("does NOT flag the exact bug-report ffprobe command", () => {
+      expect(
+        isDestructiveCommand(
+          'ffprobe -v error -print_format json -show_format "...tandem-explainer-en.mp4"'
+        )
+      ).toBe(false);
+    });
+
+    it("does NOT flag common ffprobe invocations for the format/duration idiom", () => {
+      const cmds = [
+        'ffprobe -v error -print_format json -show_format "input.mp4"',
+        'ffprobe -v error -show_streams "input.mp4"',
+        'ffprobe -v error -select_streams v:0 -show_entries stream=codec_name,width,height "input.mp4"',
+        'ffprobe -v quiet -of csv=p=0 -show_entries format=duration "input.mp4"',
+        'ffprobe -show_entries format=duration -of default=noprint_wrappers=1 file.mkv'
+      ];
+      for (const cmd of cmds) expect(isDestructiveCommand(cmd), cmd).toBe(false);
+    });
+
+    it("does NOT flag common ffmpeg invocations", () => {
+      const cmds = [
+        "ffmpeg -i in.mp4 -vf scale=1280:720 out.mp4",
+        'ffmpeg -i "input with spaces.mov" -c:v libx264 -crf 18 -preset slow output.mp4',
+        "ffmpeg -formats",
+        "ffmpeg -codecs | grep -E 'encoders'",
+        "ffplay input.mp4",
+        "ffprobe -v error -print_format json file.mkv"
+      ];
+      for (const cmd of cmds) expect(isDestructiveCommand(cmd), cmd).toBe(false);
+    });
+
+    it("does NOT flag `format=...` flag-style usage anywhere (other patterns audited)", () => {
+      // The D55 allowlist doesn't apply here - this test guards every pattern in
+      // destructivePatterns against flag-style false positives.
+      const cmds = [
+        "ffprobe -show_entries format=duration",
+        "somebinary --format json",
+        "convert input.png -format png output.png",
+        "magick -format '%w' input.png"
+      ];
+      for (const cmd of cmds) expect(isDestructiveCommand(cmd), cmd).toBe(false);
+    });
+
+    it("STILL flags real disk-format commands (positive regression guards)", () => {
+      const cmds = [
+        "format C:",
+        "format c:",
+        "format /FS:NTFS C:",
+        "format C: /FS:exFAT /Q",
+        "format D: /FS:FAT32 /V:STICK",
+        "format a:"
+      ];
+      for (const cmd of cmds) expect(isDestructiveCommand(cmd), cmd).toBe(true);
+    });
+
+    it("STILL flags rm -rf root variants and other unchanged patterns", () => {
+      expect(isDestructiveCommand("rm -rf /")).toBe(true);
+      expect(isDestructiveCommand("rm -rf ~")).toBe(true);
+      // The /usr/local/bin variant still matches because the regex matches the leading `rm -rf /`.
+      // This is a known over-match in the destructivePatterns set (out of scope for D56-1).
+      expect(isDestructiveCommand("rm -rf /usr/local/bin")).toBe(true);
+      // Truncated rm -rf (e.g. only `rm -rf file.txt` without a leading root) does not match.
+      expect(isDestructiveCommand("rm -rf build/")).toBe(false);
+      expect(isDestructiveCommand("del /f C:\\Windows\\System32\\foo.dll")).toBe(true);
+      // Fork bomb
+      expect(isDestructiveCommand(":(){ :|:& };:")).toBe(true);
+    });
+  });
+
   it("emits tool activity start and end events with timing", async () => {
     const cwd = await tempDir();
     await writeFile(path.join(cwd, "hello.txt"), "hello", "utf8");

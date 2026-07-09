@@ -15,7 +15,11 @@ export class PermissionDeniedError extends Error {}
 
 const destructivePatterns = [
   /\brm\s+-rf\s+[/~]/i,
-  /\bformat\b/i,
+  // Disk-format gate. The bare-word `\bformat\b` was over-eager (matched the very common
+  // ffprobe/ffmpeg idiom `-show_entries format=duration`). Narrowed to require `format` followed
+  // by whitespace and a drive-letter-shaped argument, with optional Windows switches in between
+  // (e.g. `format C:`, `format c:`, `format /FS:NTFS C:`, `format C: /FS:exFAT /Q`).
+  /\bformat\s+(?:\/[a-z]+(?::[a-z]+)?\s+)*[a-z]:/i,
   /:\s*\(\s*\)\s*\{\s*:\s*\|\s*:\s*&\s*\}/,
   /\bdel\s+\/[fsq]\s+[a-z]:\\/i
 ];
