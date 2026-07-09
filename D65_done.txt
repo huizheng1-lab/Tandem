@@ -1,0 +1,28 @@
+D65 done
+
+Round: D65
+Status: code complete; npx tsc --noEmit clean (exit 0, no output); npm test green (258 passed, +6 over D64's 252). Live real-planning check NOT performed (per the handoff's "optional but valuable if cheap" framing - this is a prompt-amendment round where the real test is observed behavior in a future planning call, not a unit test). Static gate covers schema/text/wiring.
+
+Implementation commit:
+- da801a5 D65-1: split 'produce evidence' from 'judge evidence' in leader rules
+
+Sub-tasks completed (2/2):
+
+D65-1 (split produce vs judge):
+- src/agents/leader.ts: new exported constant `leaderOwnsVisualJudgmentRule` (adjacent to the existing `perceptualVerificationRule`, following the same shared-rule-constant pattern that D54/D60/D61 already use). Rule text adapted from the handoff's suggested wording: "Producing evidence and judging it are different jobs. Extracting frames or screenshots is a mechanical step and may be a worker task. Actually looking at them and judging whether they are correct is not - that stays with you (the leader), during review or takeover, using your own vision tool. Never write a BuildPlan task that requires the worker to view or judge image/video content; the worker's job is only to produce the raw evidence files." Chose an adjacent constant rather than amending the existing one because the existing rule talks about what evidence to produce and how to inspect; this new rule talks about WHO does which part. Cleaner to keep them as two named rules.
+- Wired into all three leader prompts (planner, reviewer, takeover) following the existing pattern. Planner is the most important call site - the mis-assignment that motivated D65 happened during planning. Reviewer and takeover are threaded for consistency with `perceptualVerificationRule` (same three call sites).
+
+D65-2 (regression coverage):
+- Added a "leaderOwnsVisualJudgmentRule (D65-1)" describe block to tests/leader-rules.test.ts with 5 tests covering the new constant (non-empty, distinguish produce vs judge, frames are mechanical, visual judgment reserved for leader, forbids worker visual-judgment tasks).
+- Added a wiring test confirming the rule appears in all three leader prompts (planner, reviewer, takeover).
+
+Verification:
+- npx tsc --noEmit: exit code 0, no output.
+- npm test: 258 passed, 1 skipped (live-smoke), 0 failed. Baseline 252; +6 net D65-1 tests (5 content checks + 1 wiring check).
+- git diff --check: clean.
+
+Live check (per the handoff's optional "small real planning call for a task with a visual deliverable, confirming the resulting plan's worker-facing tasks don't require the worker to judge images - only to produce them"): not performed this turn. The handoff framed it as optional and the unit tests cover the rule-text presence + wiring. The actual behavioral test would be: make a real call to a leader plan and confirm the resulting BuildPlan's worker tasks say "extract frame at t=N" not "visually inspect frame at t=N for X". A future round could add a real mock-leader integration test for this; documenting here that the rule is in place but the live verification is a follow-up, not a blocker for this round.
+
+D65-1 is the structural fix for the workflow issue. D60-1's `perceptualVerificationRule` already required "produce inspectable evidence" but didn't say who judges it; D65-1 closes that gap by explicitly keeping the judgment with the leader regardless of which worker is configured. Combined with the existing blind-worker-never-guess safeguard (which produced the "blocked" CompletionReport in the live incident), the system now has both a leader-side instruction to do the visual judgment AND a worker-side safeguard against being asked to fake it.
+</content>
+</invoke>
