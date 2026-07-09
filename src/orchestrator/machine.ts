@@ -190,30 +190,57 @@ async function dispatchStreams(
   const poolSize = Math.max(1, cap);
   const results: CompletionReport[] = new Array(streams.length);
   const cursor = { next: 0 };
-  const inflight = new Set<Promise<void>>();
 
-  for (let i = 0; i < Math.min(poolSize, streams.length); i++) {
-    inflight.add(spawnOne(cursor, inflight));
-  }
-  while (inflight.size > 0) {
-    await Promise.race(inflight);
-  }
-  return results;
-
-  function spawnOne(cursor: { next: number }, inflight: Set<Promise<void>>): Promise<void> {
+  function spawnOne(): Promise<unknown> {
     const index = cursor.next++;
     const stream = streams[index];
     if (!stream) return Promise.resolve();
-    const p = runOneStreamBuild(agents, stream, plan, currentRound, feedback, previousReports.get(stream.id), emit)
-      .then((report) => {
+    return runOneStreamBuild(agents, stream, plan, currentRound, feedback, previousReports.get(stream.id), emit).then(
+      (report) => {
         results[index] = report;
-      })
-      .finally(() => {
-        inflight.delete(p);
-      });
-    inflight.add(p);
-    return p;
+      }
+    );
   }
+
+  // Pool: keep at most `poolSize` workers in flight. When a worker resolves, if there are
+  // more streams queued, start the next one. Loop until the queue is exhausted and no workers
+  // are still running. We use `Promise.allSettled` semantics via a settled-promise sentinel:
+  // any rejection from a worker is captured and re-thrown ONCE at the end, so the build loop's
+  // outer try/catch can convert it to a takeover.
+  const inflight = new Set<Promise<unknown>>();
+  let firstError: unknown;
+  for (let i = 0; i < Math.min(poolSize, streams.length); i++) {
+    const p = spawnOne();
+    p.then(
+      () => inflight.delete(p),
+      (err) => {
+        inflight.delete(p);
+        if (firstError === undefined) firstError = err;
+      }
+    );
+    inflight.add(p);
+  }
+  while (inflight.size > 0) {
+    // Wait for any worker to settle. Promise.race resolves when the first one does; the
+    // .then/.catch above update inflight membership on each settlement.
+    await Promise.race(inflight);
+    // Refill any free slot - the .then/.catch will no-op on already-deleted promises.
+    while (inflight.size < poolSize && cursor.next < streams.length) {
+      const p = spawnOne();
+      p.then(
+        () => inflight.delete(p),
+        (err) => {
+          inflight.delete(p);
+          if (firstError === undefined) firstError = err;
+        }
+      );
+      inflight.add(p);
+    }
+  }
+  if (firstError !== undefined) {
+    throw firstError instanceof Error ? firstError : new Error(String(firstError));
+  }
+  return results;
 }
 
 export interface RunResult {
@@ -270,7 +297,7 @@ export async function runOrchestration(options: RunOptions): Promise<RunResult> 
       return { phase: "DONE", summary: planResult.answer, reports, verdicts, takeover: false };
     }
 
-    plan = validateBuildPlan(planResult.plan);
+    plan = await validateBuildPlan(planResult.plan);
     emit({ type: "artifact", name: "BuildPlan", value: plan });
     emitCheckpoint();
     if (options.confirmPlan) {
@@ -378,9 +405,11 @@ export async function runOrchestration(options: RunOptions): Promise<RunResult> 
             ...carryForward
           ];
           streamReportHistory.push(roundStreams);
-          report = mergeCompletionReports(
-            newReports.map((r, i) => ({ streamId: targetStreams[i]?.id ?? "?", report: r }))
-          );
+          // D58-1: pass roundStreams (new + carry-forward), not newReports alone. Without this
+          // fix, revise rounds that re-run only some streams produced a merged report that
+          // dropped every carried-forward stream's task results / filesChanged, leaving the
+          // leader reviewer with an incomplete picture and the final report missing work.
+          report = mergeCompletionReports(roundStreams);
         } catch (error) {
           emit({ type: "error", message: `worker could not produce a valid CompletionReport: ${String(error)}` });
           return runTakeover("worker artifact failure; leader takeover");

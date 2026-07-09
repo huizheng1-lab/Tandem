@@ -1,6 +1,7 @@
 import { existsSync, readdirSync, statSync } from "node:fs";
 import path from "node:path";
 import { execa } from "execa";
+import { resolveOnPath } from "../../tools/resolve-on-path.js";
 
 export interface LocateCodexOptions {
   overridePath?: string;
@@ -17,15 +18,6 @@ let cachedKey: string | undefined;
 
 function canUse(filePath: string, exists: (value: string) => boolean): boolean {
   return exists(filePath);
-}
-
-function pathCandidates(env: NodeJS.ProcessEnv, pathSeparator: string): string[] {
-  const pathValue = env.PATH ?? env.Path ?? env.path ?? "";
-  const names = process.platform === "win32" ? ["codex.exe", "codex"] : ["codex", "codex.exe"];
-  return pathValue
-    .split(pathSeparator)
-    .filter(Boolean)
-    .flatMap((dir) => names.map((name) => path.join(dir, name)));
 }
 
 function newestWindowsFallback(options: Required<Pick<LocateCodexOptions, "exists" | "stat" | "readdir">> & { env: NodeJS.ProcessEnv }): string | undefined {
@@ -50,14 +42,14 @@ export function clearCodexCliPathCache(): void {
 export function locateCodexCli(options: LocateCodexOptions = {}): string | undefined {
   const env = options.env ?? process.env;
   const override = options.overridePath || env.CODEX_CLI_PATH;
-  const key = JSON.stringify({ override, path: env.PATH ?? env.Path ?? env.path, local: env.LOCALAPPDATA, platform: options.platform ?? process.platform });
+  const platform = options.platform ?? process.platform;
+  const key = JSON.stringify({ override, path: env.PATH ?? env.Path ?? env.path, local: env.LOCALAPPDATA, platform });
   if (cachedKey === key) return cachedPath;
 
   const exists = options.exists ?? existsSync;
   const stat = options.stat ?? statSync;
   const readdir = options.readdir ?? readdirSync;
   const pathSeparator = options.pathSeparator ?? path.delimiter;
-  const platform = options.platform ?? process.platform;
 
   if (override && canUse(override, exists)) {
     cachedKey = key;
@@ -65,12 +57,13 @@ export function locateCodexCli(options: LocateCodexOptions = {}): string | undef
     return cachedPath;
   }
 
-  for (const candidate of pathCandidates(env, pathSeparator)) {
-    if (canUse(candidate, exists)) {
-      cachedKey = key;
-      cachedPath = candidate;
-      return cachedPath;
-    }
+  // D57-1: use the shared resolveOnPath helper instead of the inline pathCandidates loop.
+  const names = platform === "win32" ? ["codex.exe", "codex"] : ["codex", "codex.exe"];
+  const resolved = resolveOnPath({ token: "codex", names, env, pathSeparator, exists });
+  if (resolved) {
+    cachedKey = key;
+    cachedPath = resolved;
+    return cachedPath;
   }
 
   const fallback = platform === "win32" ? newestWindowsFallback({ env, exists, stat, readdir }) : undefined;

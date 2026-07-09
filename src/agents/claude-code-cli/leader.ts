@@ -105,7 +105,7 @@ export async function claudeLeaderPlan(
   const result = PlanOrAnswerSchema.parse(await claudeLeaderExec(options, { schema: "plan-or-answer", prompt: prompts.prompt, systemPrompt: prompts.systemPrompt, readOnly: true }));
   await options.onTriage?.(result.kind);
   if (result.kind === "question") return { kind: "answer", answer: result.answer ?? "" };
-  return { kind: "plan", plan: validateBuildPlan(result.plan) };
+  return { kind: "plan", plan: await validateBuildPlan(result.plan) };
 }
 
 export async function buildClaudeLeaderReviewPrompts(

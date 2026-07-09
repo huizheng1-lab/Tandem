@@ -508,7 +508,7 @@ Standing goals are context only; do not redirect unrelated requests toward them.
           return { kind: "answer", answer };
         }
         try {
-          const plan = validateBuildPlan(result.artifact);
+          const plan = await validateBuildPlan(result.artifact);
           leaderThread.push({ role: "assistant", content: artifactThreadMessage("BuildPlan", plan, result.text) });
           return { kind: "plan", plan };
         } catch (error) {

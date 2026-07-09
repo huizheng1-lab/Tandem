@@ -1,6 +1,7 @@
 import { existsSync } from "node:fs";
 import path from "node:path";
 import { execa } from "execa";
+import { resolveOnPath } from "../../tools/resolve-on-path.js";
 
 export interface LocateClaudeOptions {
   overridePath?: string;
@@ -15,18 +16,6 @@ let cachedKey: string | undefined;
 
 function canUse(filePath: string, exists: (value: string) => boolean): boolean {
   return exists(filePath);
-}
-
-function pathCandidates(env: NodeJS.ProcessEnv, pathSeparator: string, platform: NodeJS.Platform): string[] {
-  const pathValue = env.PATH ?? env.Path ?? env.path ?? "";
-  const names =
-    platform === "win32"
-      ? [path.join("node_modules", "@anthropic-ai", "claude-code", "bin", "claude.exe"), "claude.exe", "claude", "claude.cmd"]
-      : ["claude", "claude.cmd", "claude.exe"];
-  return pathValue
-    .split(pathSeparator)
-    .filter(Boolean)
-    .flatMap((dir) => names.map((name) => path.join(dir, name)));
 }
 
 export function clearClaudeCliPathCache(): void {
@@ -50,12 +39,18 @@ export function locateClaudeCli(options: LocateClaudeOptions = {}): string | und
     return cachedPath;
   }
 
-  for (const candidate of pathCandidates(env, pathSeparator, platform)) {
-    if (canUse(candidate, exists)) {
-      cachedKey = key;
-      cachedPath = candidate;
-      return cachedPath;
-    }
+  // D57-1: use the shared resolveOnPath helper. Claude's PATH lookup is the more elaborate
+  // of the two CLIs - the local-install node_modules path is tried first so the user
+  // doesn't need a global install.
+  const names =
+    platform === "win32"
+      ? [path.join("node_modules", "@anthropic-ai", "claude-code", "bin", "claude.exe"), "claude.exe", "claude", "claude.cmd"]
+      : ["claude", "claude.cmd", "claude.exe"];
+  const resolved = resolveOnPath({ token: "claude", names, env, pathSeparator, exists });
+  if (resolved) {
+    cachedKey = key;
+    cachedPath = resolved;
+    return cachedPath;
   }
 
   cachedKey = key;

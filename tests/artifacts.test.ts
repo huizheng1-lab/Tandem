@@ -1,3 +1,4 @@
+import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { BuildPlan, CompletionReport, mergeCompletionReports, partitionPlan, ReviewVerdictSchema, validateBuildPlan, validateCompletionReport, validateStreamFileOwnership } from "../src/orchestrator/artifacts.js";
 
@@ -11,7 +12,7 @@ const plan: BuildPlan = {
 };
 
 describe("artifacts", () => {
-  it("rejects reports that omit plan verification commands", () => {
+  it("rejects reports that omit plan verification commands", async () => {
     expect(() =>
       validateCompletionReport(plan, {
         status: "complete",
@@ -24,8 +25,8 @@ describe("artifacts", () => {
     ).toThrow(/omitted verification/);
   });
 
-  it("rejects prose verification entries in build plans", () => {
-    expect(() =>
+  it("rejects prose verification entries in build plans", async () => {
+    await expect(
       validateBuildPlan(
         {
           ...plan,
@@ -33,23 +34,23 @@ describe("artifacts", () => {
         },
         "win32"
       )
-    ).toThrow(/does not look like a runnable shell command/);
+    ).rejects.toThrow(/does not look like a runnable shell command/);
   });
 
-  it("rejects zero-task build plans as direct-answer work", () => {
-    expect(() => validateBuildPlan({ ...plan, tasks: [] })).toThrow(/no implementation tasks - answer directly instead/);
+  it("rejects zero-task build plans as direct-answer work", async () => {
+    await expect((async () => validateBuildPlan({ ...plan, tasks: [] }))()).rejects.toThrow(/no implementation tasks - answer directly instead/);
   });
 
-  it("rejects POSIX verification commands on Windows with safer alternatives", () => {
-    expect(() => validateBuildPlan({ ...plan, verification: ["cat launch.bat"] }, "win32")).toThrow(/POSIX-only tool `cat`.*type <file>/s);
-    expect(() => validateBuildPlan({ ...plan, verification: ["cat index.html | grep -E 'src=|title='"] }, "win32")).toThrow(/POSIX-only tool `cat`.*POSIX-only tool `grep`.*findstr/s);
+  it("rejects POSIX verification commands on Windows with safer alternatives", async () => {
+    await expect((async () => validateBuildPlan({ ...plan, verification: ["cat launch.bat"] }, "win32"))()).rejects.toThrow(/POSIX-only tool `cat`.*type <file>/s);
+    await expect((async () => validateBuildPlan({ ...plan, verification: ["cat index.html | grep -E 'src=|title='"] }, "win32"))()).rejects.toThrow(/POSIX-only tool `cat`.*POSIX-only tool `grep`.*findstr/s);
   });
 
-  it("accepts Windows-safe and cross-platform verification commands", () => {
-    expect(validateBuildPlan({ ...plan, verification: ["npm test", "node test.mjs", "type launch.bat"] }, "win32").verification).toHaveLength(3);
+  it("accepts Windows-safe and cross-platform verification commands", async () => {
+    expect((await validateBuildPlan({ ...plan, verification: ["npm test", "node test.mjs", "type launch.bat"] }, "win32")).verification).toHaveLength(3);
   });
 
-  it("requires completion reports to echo plan verification commands exactly", () => {
+  it("requires completion reports to echo plan verification commands exactly", async () => {
     const exactPlan: BuildPlan = {
       ...plan,
       verification: ["node test.mjs"]
@@ -79,7 +80,7 @@ describe("artifacts", () => {
   });
 
   describe("D54 schema + partition + validation", () => {
-    it("partitionPlan: tasks without `stream` all land in the default stream", () => {
+    it("partitionPlan: tasks without `stream` all land in the default stream", async () => {
       const p: BuildPlan = {
         ...plan,
         tasks: [
@@ -94,7 +95,7 @@ describe("artifacts", () => {
       expect(streams[0]?.verification).toEqual(p.verification);
     });
 
-    it("partitionPlan: explicit streams are kept separate, default last", () => {
+    it("partitionPlan: explicit streams are kept separate, default last", async () => {
       const p: BuildPlan = {
         ...plan,
         tasks: [
@@ -110,7 +111,7 @@ describe("artifacts", () => {
       expect(streams.find((s) => s.id === "__default__")?.tasks.map((t) => t.id)).toEqual(["T3"]);
     });
 
-    it("validateStreamFileOwnership: single-stream plan always passes", () => {
+    it("validateStreamFileOwnership: single-stream plan always passes", async () => {
       const p: BuildPlan = {
         ...plan,
         tasks: [
@@ -121,7 +122,7 @@ describe("artifacts", () => {
       expect(validateStreamFileOwnership(p)).toEqual([]);
     });
 
-    it("validateStreamFileOwnership: rejects task in a multi-stream plan that omits files", () => {
+    it("validateStreamFileOwnership: rejects task in a multi-stream plan that omits files", async () => {
       const p: BuildPlan = {
         ...plan,
         tasks: [
@@ -133,7 +134,7 @@ describe("artifacts", () => {
       expect(errors.some((e) => e.includes("T2") && e.includes("list its files"))).toBe(true);
     });
 
-    it("validateStreamFileOwnership: rejects overlapping file between two streams", () => {
+    it("validateStreamFileOwnership: rejects overlapping file between two streams", async () => {
       const p: BuildPlan = {
         ...plan,
         tasks: [
@@ -145,7 +146,7 @@ describe("artifacts", () => {
       expect(errors.some((e) => e.includes("shared.js") && e.includes("disjoint"))).toBe(true);
     });
 
-    it("mergeCompletionReports: union of filesChanged, concatenation of taskResults, complete only when all complete", () => {
+    it("mergeCompletionReports: union of filesChanged, concatenation of taskResults, complete only when all complete", async () => {
       const a: CompletionReport = {
         status: "complete",
         summary: "stream a done",
@@ -174,7 +175,7 @@ describe("artifacts", () => {
       expect(merged.summary).toContain("[B] stream b done");
     });
 
-    it("mergeCompletionReports: any blocked stream flips merged to blocked", () => {
+    it("mergeCompletionReports: any blocked stream flips merged to blocked", async () => {
       const a: CompletionReport = {
         status: "complete",
         summary: "ok",
@@ -198,7 +199,7 @@ describe("artifacts", () => {
       expect(merged.status).toBe("blocked");
     });
 
-    it("mergeCompletionReports: rejects duplicate task result ids across streams", () => {
+    it("mergeCompletionReports: rejects duplicate task result ids across streams", async () => {
       const a: CompletionReport = {
         status: "complete",
         summary: "a",
@@ -223,7 +224,7 @@ describe("artifacts", () => {
       ).toThrow(/duplicate task result ids across streams.*T1/);
     });
 
-    it("validateBuildPlan: rejects overlapping-file 2-stream plan with a clear message", () => {
+    it("validateBuildPlan: rejects overlapping-file 2-stream plan with a clear message", async () => {
       const p: BuildPlan = {
         ...plan,
         tasks: [
@@ -231,10 +232,10 @@ describe("artifacts", () => {
           { id: "T2", description: "b", stream: "B", files: ["shared.js"] }
         ]
       };
-      expect(() => validateBuildPlan(p)).toThrow(/disjoint/);
+      await expect((async () => validateBuildPlan(p))()).rejects.toThrow(/disjoint/);
     });
 
-    it("validateBuildPlan: accepts a clean 2-stream plan with disjoint files", () => {
+    it("validateBuildPlan: accepts a clean 2-stream plan with disjoint files", async () => {
       const p: BuildPlan = {
         ...plan,
         tasks: [
@@ -242,7 +243,7 @@ describe("artifacts", () => {
           { id: "T2", description: "b", stream: "B", files: ["b.js"] }
         ]
       };
-      expect(validateBuildPlan(p).tasks).toHaveLength(2);
+      expect((await validateBuildPlan(p)).tasks).toHaveLength(2);
     });
   });
 
@@ -252,7 +253,7 @@ describe("artifacts", () => {
       verification
     });
 
-    it("accepts a report that does NOT touch a referenced verification script", () => {
+    it("accepts a report that does NOT touch a referenced verification script", async () => {
       const p = planWithScript(["node verify-video.js"]);
       const report = validateCompletionReport(p, {
         status: "complete",
@@ -265,7 +266,7 @@ describe("artifacts", () => {
       expect(report.status).toBe("complete");
     });
 
-    it("rejects a report that touches a referenced verification script without declaring it", () => {
+    it("rejects a report that touches a referenced verification script without declaring it", async () => {
       const p = planWithScript(["node verify-video.js"]);
       expect(() =>
         validateCompletionReport(p, {
@@ -279,7 +280,7 @@ describe("artifacts", () => {
       ).toThrow(/Verification script edited without disclosure.*verify-video\.js/);
     });
 
-    it("accepts a report that touches a referenced verification script when deviationsFromPlan mentions it", () => {
+    it("accepts a report that touches a referenced verification script when deviationsFromPlan mentions it", async () => {
       const p = planWithScript(["node verify-video.js"]);
       const report = validateCompletionReport(p, {
         status: "complete",
@@ -292,7 +293,7 @@ describe("artifacts", () => {
       expect(report.status).toBe("complete");
     });
 
-    it("matches verification scripts by basename across path/separator styles", () => {
+    it("matches verification scripts by basename across path/separator styles", async () => {
       const p = planWithScript(['node "C:\\\\path\\\\to\\\\verify-video.js"']);
       expect(() =>
         validateCompletionReport(p, {
@@ -306,7 +307,7 @@ describe("artifacts", () => {
       ).toThrow(/verify-video\.js/);
     });
 
-    it("does not flag the original transcript's bug (verify-video.js + widened tolerance without disclosure)", () => {
+    it("does not flag the original transcript's bug (verify-video.js + widened tolerance without disclosure)", async () => {
       // Real D56-2 bug report shape: verify-video.js is the only verification, worker edits it,
       // and reports all-passing. The D56-1 fix path (harness D56-1 destructive gate) and D55
       // (ffprobe) addressed how the worker got there in the first place; D56-2 prevents it
@@ -324,7 +325,7 @@ describe("artifacts", () => {
       ).toThrow(/Verification script edited without disclosure: verify-video\.js/);
     });
 
-    it("skips the check when the plan has no script-suffixed verification commands", () => {
+    it("skips the check when the plan has no script-suffixed verification commands", async () => {
       const p = planWithScript(["npm test", "ffprobe -show_entries format=duration foo.mp4"]);
       // Even if files changed include a JS file, no script reference -> no flag.
       const report = validateCompletionReport(p, {
@@ -342,7 +343,7 @@ describe("artifacts", () => {
     });
   });
 
-  it("fails verification entries when the exact matched command failed", () => {
+  it("fails verification entries when the exact matched command failed", async () => {
     const exactPlan: BuildPlan = {
       ...plan,
       verification: ["node test.mjs"]
@@ -359,7 +360,7 @@ describe("artifacts", () => {
     ).toThrow(/failing verification/);
   });
 
-  it("rejects approve verdicts with severe scores", () => {
+  it("rejects approve verdicts with severe scores", async () => {
     expect(() =>
       ReviewVerdictSchema.parse({
         verdict: "approve",
@@ -370,7 +371,7 @@ describe("artifacts", () => {
     ).toThrow(/approve verdict requires scores above 2/);
   });
 
-  it("allows revise verdicts with severe scores", () => {
+  it("allows revise verdicts with severe scores", async () => {
     const verdict = ReviewVerdictSchema.parse({
       verdict: "revise",
       scores: { correctness: 1, planAdherence: 2, codeQuality: 2 },
@@ -393,22 +394,22 @@ describe("verification entry allowlist (D55)", () => {
   });
 
   // D55-1: explicit allowlist additions.
-  it("accepts ffprobe and ffmpeg (D55-1 allowlist)", () => {
-    expect(() => validateBuildPlan(basePlan(['ffprobe -v error -print_format json -show_format "video.mp4"']), "linux")).not.toThrow();
-    expect(() => validateBuildPlan(basePlan(["ffmpeg -i in.mp4 -vf scale=1280:720 out.mp4"]), "linux")).not.toThrow();
+  it("accepts ffprobe and ffmpeg (D55-1 allowlist)", async () => {
+    await (expect(async () => validateBuildPlan(basePlan(['ffprobe -v error -print_format json -show_format "video.mp4"']), "linux"))).not.toThrow();
+    await (expect(async () => validateBuildPlan(basePlan(["ffmpeg -i in.mp4 -vf scale=1280:720 out.mp4"]), "linux"))).not.toThrow();
   });
 
-  it("accepts the four ffprobe commands from the original bug report", () => {
+  it("accepts the four ffprobe commands from the original bug report", async () => {
     const cmds = [
       'ffprobe -v error -print_format json -show_format "C:\\\\Users\\\\me\\\\videos\\\\explainer-en.mp4"',
       'ffprobe -v error -show_streams "input.mp4"',
       'ffprobe -v error -select_streams v:0 -show_entries stream=codec_name,width,height "input.mp4"',
       'ffprobe -v quiet -of csv=p=0 -show_entries format=duration "input.mp4"'
     ];
-    expect(() => validateBuildPlan(basePlan(cmds), "linux")).not.toThrow();
+    await (expect(async () => validateBuildPlan(basePlan(cmds), "linux"))).not.toThrow();
   });
 
-  it("accepts the rest of the D55-1 expanded allowlist (ffplay, magick, convert, sox, pandoc, curl, wget, docker, java, ruby, php, dir, where, certutil)", () => {
+  it("accepts the rest of the D55-1 expanded allowlist (ffplay, magick, convert, sox, pandoc, curl, wget, docker, java, ruby, php, dir, where, certutil)", async () => {
     const cmds = [
       "ffplay input.mp4",
       "magick input.png -resize 50% output.png",
@@ -426,39 +427,97 @@ describe("verification entry allowlist (D55)", () => {
       "where node",
       "certutil -hashfile foo.txt SHA256"
     ];
-    expect(() => validateBuildPlan(basePlan(cmds), "linux")).not.toThrow();
+    await (expect(async () => validateBuildPlan(basePlan(cmds), "linux"))).not.toThrow();
   });
 
   // D55-2: heuristic acceptance for arbitrary binaries not on the list.
-  it("accepts an arbitrary binary that follows flag syntax (D55-2 heuristic)", () => {
-    expect(() => validateBuildPlan(basePlan(["somebinary --check --input path\\to\\file"]), "linux")).not.toThrow();
+  it("accepts an arbitrary binary that follows flag syntax (D55-2 heuristic)", async () => {
+    await (expect(async () => validateBuildPlan(basePlan(["somebinary --check --input path\\to\\file"]), "linux"))).not.toThrow();
   });
 
-  it("accepts an arbitrary binary invoked with a path arg (D55-2 heuristic)", () => {
-    expect(() => validateBuildPlan(basePlan(["mytool /var/data/file"]), "linux")).not.toThrow();
+  it("accepts an arbitrary binary invoked with a path arg (D55-2 heuristic)", async () => {
+    await (expect(async () => validateBuildPlan(basePlan(["mytool /var/data/file"]), "linux"))).not.toThrow();
   });
 
-  it("accepts an arbitrary binary invoked with a relative path (D55-2 heuristic)", () => {
-    expect(() => validateBuildPlan(basePlan(["mytool ./local.txt"]), "linux")).not.toThrow();
+  it("accepts an arbitrary binary invoked with a relative path (D55-2 heuristic)", async () => {
+    await (expect(async () => validateBuildPlan(basePlan(["mytool ./local.txt"]), "linux"))).not.toThrow();
   });
 
   // D55-2 prose regression — these MUST still be rejected.
-  it("still rejects plain prose verification entries", () => {
-    expect(() => validateBuildPlan(basePlan(["verify the video plays correctly with both audio tracks"]), "linux")).toThrow(/does not look like a runnable shell command/);
-    expect(() => validateBuildPlan(basePlan(["ensure the output file exists and has correct format"]), "linux")).toThrow(/does not look like a runnable shell command/);
+  it("still rejects plain prose verification entries", async () => {
+    await expect((async () => validateBuildPlan(basePlan(["verify the video plays correctly with both audio tracks"]), "linux"))()).rejects.toThrow(/does not look like a runnable shell command/);
+    await expect((async () => validateBuildPlan(basePlan(["ensure the output file exists and has correct format"]), "linux"))()).rejects.toThrow(/does not look like a runnable shell command/);
   });
 
   // Regression: prose with a leading hyphen could falsely match (it's a documented
   // over-acceptance edge case in D55-2 — pure-prose commands starting with a verb + dash
   // like "verify -all the -output" would pass). This test documents current behavior; if we
   // tighten the heuristic later, update this expectation.
-  it("documented over-acceptance edge case: prose starting with verb-then-dash passes", () => {
-    expect(() => validateBuildPlan(basePlan(["verify -all the -output"]), "linux")).not.toThrow();
+  it("documented over-acceptance edge case: prose starting with verb-then-dash passes", async () => {
+    await (expect(async () => validateBuildPlan(basePlan(["verify -all the -output"]), "linux"))).not.toThrow();
   });
 
   // Regression: POSIX-tool guard on win32 must be unchanged.
-  it("still rejects POSIX-only tools on Windows even if they're 'unrecognized binaries' (D55-2 keeps POSIX guard)", () => {
-    expect(() => validateBuildPlan(basePlan(["grep -r foo ."]), "win32")).toThrow(/POSIX-only tool `grep`/);
-    expect(() => validateBuildPlan(basePlan(["sed -i 's/foo/bar/' file.txt"]), "win32")).toThrow(/POSIX-only tool `sed`/);
+  it("still rejects POSIX-only tools on Windows even if they're 'unrecognized binaries' (D55-2 keeps POSIX guard)", async () => {
+    await expect((async () => validateBuildPlan(basePlan(["grep -r foo ."]), "win32"))()).rejects.toThrow(/POSIX-only tool `grep`/);
+    await expect((async () => validateBuildPlan(basePlan(["sed -i 's/foo/bar/' file.txt"]), "win32"))()).rejects.toThrow(/POSIX-only tool `sed`/);
+  });
+
+  describe("D57 PATH-resolution primary signal", () => {
+    // The primary signal is real PATH lookup. Built-ins (interpreter-internal) bypass
+    // PATH. The D55-2 shape heuristic is a soft fallback for tools that may not be on the
+    // validation machine. These tests inject a fake env + exists to keep behavior deterministic.
+    it("accepts a token that resolves on PATH (D57 primary signal)", async () => {
+      const env = { PATH: "/usr/bin:/bin" };
+      const target = path.join("/usr/bin", "ffprobe");
+      const exists = (p: string) => p === target;
+      // We can't easily call validateBuildPlan with a custom exists/lookup, so we call the
+      // helper directly to verify the primary signal contract.
+      const { resolveOnPath } = await import("../src/tools/resolve-on-path.js");
+      expect(
+        resolveOnPath({ token: "ffprobe", names: ["ffprobe"], env, pathSeparator: ":", exists })
+      ).toBe(target);
+    });
+
+    it("accepts a win32 PATH lookup that finds a .cmd shim (D57 win32 .cmd/.exe names)", async () => {
+      const env = { PATH: "C:\\Windows\\System32;C:\\Program Files\\nodejs" };
+      const exists = (p: string) => p === path.join("C:\\Program Files\\nodejs", "node.cmd");
+      const { resolveOnPath } = await import("../src/tools/resolve-on-path.js");
+      expect(
+        resolveOnPath({ token: "node", names: ["node.exe", "node.cmd", "node"], env, pathSeparator: ";", exists })
+      ).toBe(path.join("C:\\Program Files\\nodejs", "node.cmd"));
+    });
+
+    it("rejects a fake-binary command even when it has flag syntax (D57: PATH resolution, not shape, is primary)", async () => {
+      // 'totally-not-a-real-tool-xyz' has flag syntax and a path arg. Old D55-2 heuristic
+      // would have accepted it. D57 must reject because PATH resolution (the primary
+      // signal) returns nothing.
+      const env = { PATH: "/usr/bin" };
+      const exists = () => false; // not installed
+      const { resolveOnPath } = await import("../src/tools/resolve-on-path.js");
+      expect(
+        resolveOnPath({
+          token: "totally-not-a-real-tool-xyz",
+          names: ["totally-not-a-real-tool-xyz"],
+          env,
+          pathSeparator: ":",
+          exists
+        })
+      ).toBeUndefined();
+    });
+
+    it("accepts a shell built-in command without PATH lookup (D57-2 small built-ins set)", async () => {
+      // `cd` is a shell built-in; never resolves via PATH. The built-ins set allows it.
+      const env = { PATH: "" };
+      const exists = () => false;
+      const { resolveOnPath } = await import("../src/tools/resolve-on-path.js");
+      expect(
+        resolveOnPath({ token: "cd", names: ["cd"], env, pathSeparator: ":", exists })
+      ).toBeUndefined();
+      // The validator still passes `cd` because shellBuiltIns.has("cd") === true.
+      await expect(
+        (async () => validateBuildPlan(basePlan(["cd /tmp"]), "linux"))()
+      ).resolves.toBeDefined();
+    });
   });
 });

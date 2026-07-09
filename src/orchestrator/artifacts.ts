@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { resolveOnPath } from "../tools/resolve-on-path.js";
 
 export const BuildPlanSchema = z.object({
   title: z.string(),
@@ -28,56 +29,67 @@ export type PlanStreamId = string;
 // D54: implicit stream id for tasks that don't declare one.
 export const DEFAULT_STREAM_ID = "__default__";
 
-// Known-real command starters (not exhaustive). Entries here skip the heuristic in
-// `hasCommandShape` and always pass. Bare commands not on this list fall through to the
-// shape-based heuristic, which accepts any token that looks like a bare executable
-// followed by command-shape indicators (flags, paths, quoted args, operators).
-const runnableCommandStarters = new Set([
-  "npm",
-  "npx",
-  "pnpm",
-  "yarn",
-  "bun",
-  "node",
-  "deno",
-  "python",
-  "python3",
-  "py",
-  "pytest",
-  "go",
-  "cargo",
-  "make",
-  "powershell",
-  "pwsh",
-  "cmd",
-  "type",
+// D57-2: small explicit allowlist of SHELL BUILT-INS that don't resolve via PATH lookup
+// (they're interpreter internals, not separate executables). This list must stay tiny and
+// only grow for genuine built-ins, not general tools - the primary signal is now PATH
+// resolution (D57-3), and the D55-2 shape heuristic is the fallback for tools that aren't
+// installed on the validation machine but might be on the execution machine.
+const shellBuiltIns = new Set([
+  "cd",
+  "echo",
+  "exit",
+  "set",
+  "export",
+  "unset",
+  "read",
+  "true",
+  "false",
+  "test",
+  "[",
+  "pwd",
+  "pushd",
+  "popd",
+  "if",
+  "then",
+  "else",
+  "fi",
+  "do",
+  "done",
+  "for",
+  "while",
+  "case",
+  "function",
+  "return",
+  "type", // shell builtin on POSIX; on win32 it's an executable
+  "where", // win32 builtin equivalent
+  "dir" // bash builtin on most shells; win32 cmd.exe builtin
+]);
+// Windows shell built-ins (cmd.exe + PowerShell). These are interpreter-internal, not
+// separate files. They bypass the PATH-resolution primary signal.
+const windowsShellBuiltIns = new Set([
   "dir",
-  "where",
   "findstr",
-  "git",
-  "tsc",
-  "vitest",
-  "jest",
-  "eslint",
-  "prettier",
-  "dotnet",
-  "mvn",
-  "gradle",
-  "java",
-  "ruby",
-  "php",
-  "docker",
-  "docker-compose",
-  "ffprobe",
-  "ffmpeg",
-  "ffplay",
-  "magick",
-  "convert",
-  "sox",
-  "pandoc",
-  "curl",
-  "wget",
-  "certutil"
+  "where",
+  "type",
+  "cd",
+  "dir",
+  "copy",
+  "move",
+  "del",
+  "ren",
+  "echo",
+  "set",
+  "if",
+  "for",
+  "goto",
+  "call",
+  "exit",
+  "pushd",
+  "popd",
+  "start",
+  "cls",
+  "powershell",
+  "pwsh"
 ]);
 
 const windowsPosixAlternatives: Record<string, string> = {
@@ -158,28 +170,40 @@ function verificationSegments(command: string): string[] {
   return command.split(/\|\||&&|[|;]/g).map((part) => part.trim()).filter(Boolean);
 }
 
-// Tests whether `entry` looks like a real shell command invocation rather than prose.
-// A real command has either:
-//   1. A known-real starter in `runnableCommandStarters`, OR
-//   2. A leading path (`./foo`, `C:\foo`, `/foo`, `~/foo`), OR
-//   3. A leading script filename matching `*.cmd/.bat/.ps1/.mjs/.js/.ts/.py/.sh/.exe`, OR
-//   4. A bare executable name (single word, starts with letter, only word-chars/dot/dash/underscore)
-//      that is immediately followed by command-shape indicators (a flag, path, quoted arg,
-//      or shell operator). This is the D55-2 heuristic that stops rejecting unfamiliar but
-//      real tools like `ffprobe -v error ...`. Prose like "verify the output is correct" still
-//      fails because the words after the first verb-like token are prose, not flags/paths.
-function hasCommandShape(entry: string): boolean {
+// D57-3: tests whether `entry` looks like a real shell command invocation rather than prose.
+// Primary signal: the first token resolves to a real executable on PATH - that's what Claude
+// Code does, and it's the authoritative signal that can't have a "some legitimate tool I forgot
+// to list" false-rejection class. Falls back to:
+//   - a shell built-in (built into the interpreter, no separate PATH entry)
+//   - a leading path (`./foo`, `C:\foo`, `/foo`, `~/foo`)
+//   - a script filename matching common interpreter extensions
+//   - the D55-2 shape heuristic (bare executable + flag/path indicators) for tools that may
+//     not be installed on the validation machine but are on the execution machine (D57-3
+//     fallback per the handoff).
+async function hasCommandShape(
+  entry: string,
+  platform: NodeJS.Platform,
+  env: NodeJS.ProcessEnv
+): Promise<boolean> {
   const trimmed = entry.trim();
+  if (!trimmed) return false;
   const first = commandToken(trimmed);
   if (!first) return false;
-  if (runnableCommandStarters.has(first)) return true;
+  // Primary: real PATH resolution. Use the actual env's path separator (path.delimiter) -
+  // tests can pass a custom env that matches the platform parameter. This handles the case
+  // where the test platform label and the env's separator differ.
+  const pathSep = (env.PATH ?? env.Path ?? env.path ?? "").includes(";") ? ";" : ":";
+  const names = platform === "win32" ? [`${first}.exe`, `${first}.cmd`, `${first}.bat`, first] : [first];
+  if (resolveOnPath({ token: first, names, env, pathSeparator: pathSep })) return true;
+  // Fallback: shell built-in (interpreter-internal, no PATH entry).
+  if (shellBuiltIns.has(first)) return true;
+  if (platform === "win32" && windowsShellBuiltIns.has(first)) return true;
+  // Fallback: leading path or script filename.
   if (/^(?:\.{1,2}[\\/]|[a-zA-Z]:[\\/]|[\\/]|~[\\/])/.test(trimmed)) return true;
   if (/^[\w.-]+\.(?:cmd|bat|ps1|mjs|cjs|js|ts|py|sh|exe)\b/i.test(trimmed)) return true;
-  // Bare-executable fallback (D55-2): accept `somebinary --flag arg` style invocations even when
-  // the binary isn't in our starter set. The first token must be a single bare word starting
-  // with a letter (no spaces, no shell meta), AND the second token must look like a flag (`-x` or
-  // `--xxx`) OR the entry must contain a path (`./`, `/`, `\`, `~/`, or drive-letter prefix).
-  // Plain prose fails because its second token is a plain word like "the", not a flag.
+  // Final fallback (D55-2): bare executable + flag/path indicators. Lets through commands for
+  // tools installed on the execution machine but not the validation machine (e.g. task 1 of
+  // a plan installs a CLI; task 2's verification runs it).
   if (/^[A-Za-z][\w.-]*$/.test(first)) {
     const afterFirst = trimmed.slice(first.length).trimStart();
     const secondTokenMatch = afterFirst.match(/^["']?([^\s"'`]+)/);
@@ -190,7 +214,7 @@ function hasCommandShape(entry: string): boolean {
   return false;
 }
 
-function validateVerificationEntry(entry: string, platform: NodeJS.Platform): string[] {
+async function validateVerificationEntry(entry: string, platform: NodeJS.Platform, env: NodeJS.ProcessEnv = process.env): Promise<string[]> {
   const errors: string[] = [];
   const normalized = normalizeCommand(entry);
   if (!normalized) return ["verification entry is empty"];
@@ -204,7 +228,8 @@ function validateVerificationEntry(entry: string, platform: NodeJS.Platform): st
   }
   const wordCount = normalized.split(/\s+/).filter(Boolean).length;
   const hasPathFlagOrShellChars = /[./\\:-]|--?|[|&><]/.test(normalized);
-  if (!hasCommandShape(normalized) || (wordCount > 6 && !hasPathFlagOrShellChars)) {
+  const shapeOk = await hasCommandShape(normalized, platform, env);
+  if (!shapeOk || (wordCount > 6 && !hasPathFlagOrShellChars)) {
     errors.push(`verification entry "${entry}" does not look like a runnable shell command; move manual checks to acceptanceCriteria and use commands such as \`npm test\`, \`node test.mjs\`, or \`type launch.bat\`.`);
   }
   return errors;
@@ -280,11 +305,18 @@ export function validateStreamFileOwnership(plan: BuildPlan): string[] {
   return errors;
 }
 
-export function validateBuildPlan(value: unknown, platform: NodeJS.Platform = process.platform): BuildPlan {
+export async function validateBuildPlan(
+  value: unknown,
+  platform: NodeJS.Platform = process.platform,
+  env: NodeJS.ProcessEnv = process.env
+): Promise<BuildPlan> {
   const plan = BuildPlanSchema.parse(value);
   if (plan.tasks.length === 0) throw new Error("no implementation tasks - answer directly instead");
   const errors: string[] = [];
-  errors.push(...plan.verification.flatMap((entry) => validateVerificationEntry(entry, platform)));
+  const verifResults = await Promise.all(
+    plan.verification.map((entry) => validateVerificationEntry(entry, platform, env))
+  );
+  errors.push(...verifResults.flat());
   errors.push(...validateStreamFileOwnership(plan));
   if (errors.length > 0) throw new Error(`Invalid BuildPlan:\n${errors.join("\n")}`);
   return plan;

@@ -102,7 +102,7 @@ ${input.request}${attachmentBlock}`;
   const result = PlanOrAnswerSchema.parse(await codexLeaderExec(options, { schema: "plan-or-answer", prompt, readOnly: true }));
   await options.onTriage?.(result.kind);
   if (result.kind === "question") return { kind: "answer", answer: result.answer ?? "" };
-  return { kind: "plan", plan: validateBuildPlan(result.plan) };
+  return { kind: "plan", plan: await validateBuildPlan(result.plan) };
 }
 
 export async function codexLeaderReview(options: CodexLeaderOptions, input: { plan: BuildPlan; report: CompletionReport; round: number; diff: string }) {
