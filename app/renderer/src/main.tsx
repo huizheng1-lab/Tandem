@@ -201,6 +201,8 @@ function App(): React.ReactElement {
   const [goalText, setGoalText] = useState("");
   const [scheduleCron, setScheduleCron] = useState("");
   const [schedulePrompt, setSchedulePrompt] = useState("");
+  // D59: last-copied entry id; used to swap the copy button label to "Copied" briefly.
+  const [copiedId, setCopiedId] = useState<number | null>(null);
   const nextId = useRef(2);
   const transcriptEnd = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -1173,6 +1175,26 @@ if (args.length === 1 && sub === "clear") {
               >
                 <div className="roleBadge">{roleLabel(entry.role)}</div>
                 <div className="messageText">{entry.text}</div>
+                <button
+                  type="button"
+                  className={`copyButton${copiedId === entry.id ? " copied" : ""}`}
+                  aria-label="Copy message"
+                  title="Copy message"
+                  onClick={async (event) => {
+                    event.stopPropagation();
+                    try {
+                      await navigator.clipboard.writeText(entry.text);
+                      setCopiedId(entry.id);
+                      window.setTimeout(() => {
+                        setCopiedId((current) => (current === entry.id ? null : current));
+                      }, 1500);
+                    } catch (error) {
+                      appendMessage("system", `Copy failed: ${errorText(error)}`);
+                    }
+                  }}
+                >
+                  {copiedId === entry.id ? "Copied" : "Copy"}
+                </button>
               </article>
             ) : entry.kind === "tool" ? (
               <article key={entry.id} className="toolLine">

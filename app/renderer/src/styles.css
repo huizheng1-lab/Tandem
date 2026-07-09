@@ -440,9 +440,45 @@ select {
 }
 
 .bubble {
+  position: relative;
   display: grid;
   gap: 8px;
   padding: 13px 15px;
+}
+
+.bubble .copyButton {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  border: 1px solid #3a4658;
+  background: #1d2027;
+  color: #aeb7c4;
+  border-radius: 4px;
+  padding: 2px 8px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0;
+  text-transform: uppercase;
+  cursor: pointer;
+  opacity: 0;
+  user-select: none;
+  transition: opacity 120ms ease;
+}
+
+.bubble:hover .copyButton,
+.bubble .copyButton:focus-visible,
+.bubble .copyButton.copied {
+  opacity: 1;
+}
+
+.bubble .copyButton:hover {
+  border-color: #4f5b73;
+  color: #f3f2ee;
+}
+
+.bubble .copyButton.copied {
+  border-color: #375844;
+  color: #b8e0c4;
 }
 
 .bubble.thinking {
