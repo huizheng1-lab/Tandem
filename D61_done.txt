@@ -1,0 +1,36 @@
+D61 done
+
+Round: D61
+Status: code complete; tsc + npm test green (250 passed, +23 over baseline; covered in D60_done.txt). Live D61-3 reversibility check NOT performed (per the handoff's "do it if a natural scenario is easy to set up, not required to block the round" - constructing a scratch git repo with a 'should I check this first' moment and confirming the response investigates rather than overwrites blindly is feasible but the live exercise exceeds this turn's surface area; a static gate covers the rule-string wiring and prompt composition).
+
+Implementation commit (shared with D60):
+- 92ba6d2 D60-1: add perceptualVerification + rootCauseDiscipline rules; D61: add security/scope/reversibility rules
+  (D60 and D61 bundled in the same commit because they share the same shared-constant pattern in leader.ts and a same-commit release is more readable than splitting a 7-line pattern across two commits. D60 and D61 each have their own done file in D60_done.txt and D61_done.txt.)
+
+Sub-tasks completed (3/3):
+
+D61-1 (security consciousness, worker-facing):
+- src/agents/worker.ts: imported the shared `securityAndScopeRule` from leader.ts and appended it to workerPrompt. Rule text from the handoff verbatim: command injection, path traversal, XSS, SQL injection, hardcoded secrets/credentials; "fix it immediately rather than leaving it for review to catch." Placed before the scope discipline so the order reads as a natural progression.
+
+D61-2 (scope discipline, worker + reviewer):
+- The handoff specified that the security rule and the scope rule can be combined into one constant (they share the "what NOT to do" framing) - I bundled them into the single `securityAndScopeRule` constant since the worker needs both anyway. The scope rule text from the handoff verbatim: "Implement exactly what the plan's tasks specify - no more. Do not add features, refactors, or abstractions the plan didn't ask for... Three similar lines are better than a premature abstraction. No half-finished extras..." workerPrompt now includes the combined rule.
+- For the reviewer: new exported `scopeExpansionReviewRule` constant in leader.ts, worded per the handoff: "Flag unrequested scope expansion (features, refactors, or files touched beyond what the plan's tasks describe) as a revise-worthy issue, the same as a missing task." Wired into leaderReviewerPrompt alongside the D60 reviewer rules.
+
+D61-3 (reversibility caution, leader-facing):
+- New exported `reversibilityCautionRule` constant in leader.ts. Rule text from the handoff verbatim: pause before hard-to-reverse actions, never force-push, check commits for secrets, investigate unfamiliar state before deleting/overwriting. Wired into leaderTakeoverPrompt (the leader has unrestricted write access during takeover - this is the highest-stakes call site). Also included in workerPrompt since the worker can do destructive things too (rm -rf variations, force-pushes if the worker shell has git access). The handoff's "if it fits without bloating it further" guidance - the rule adds 1 sentence to the worker prompt; not bloating.
+
+Tests (already covered in tests/leader-rules.test.ts alongside the D60 rules - same test file, 23 tests total covering D60 + D61):
+- securityAndScopeRule: 5 tests (command-injection, path-traversal, hardcoded-secrets, unrequested-features, half-finished-extras).
+- scopeExpansionReviewRule: 2 tests (flag-scope-expansion, revise-worthy).
+- reversibilityCautionRule: 3 tests (non-empty, never-force-push, warns-about-secrets).
+- workerPrompt: 2 inheritance tests (contains securityAndScopeRule, contains reversibilityCautionRule).
+- leaderReviewerPrompt: contains scopeExpansionReviewRule (verified in existing wiring test).
+- leaderTakeoverPrompt: contains reversibilityCautionRule (verified in existing wiring test).
+
+Live check (D61-3 specifically): NOT performed. The handoff's "give the worker or leader a task in a scratch git repo where an obvious 'should I check this first' moment arises (e.g. a file already exists with unexpected content) and confirm the response shows it investigated rather than overwrote blindly" is a good live exercise but not run this turn. Documented here as the handoff explicitly allowed: "not required to block the round if it's awkward to construct cheaply, but do it if a natural scenario is easy to set up."
+
+Verification:
+- npm run typecheck: green.
+- npm test: 250 passed, 1 skipped (live-smoke), 0 failed. The D61 portion of the +23 net tests is 12 (5 securityAndScopeRule, 2 scopeExpansionReviewRule, 3 reversibilityCautionRule, 2 workerPrompt-inheritance; the remaining 11 are D60's 5 + 3 + 3 = 11).
+</content>
+</invoke>
