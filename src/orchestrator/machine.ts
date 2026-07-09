@@ -291,7 +291,27 @@ export async function runOrchestration(options: RunOptions): Promise<RunResult> 
 
   if (!plan) {
     transition("PLANNING", "leader planning", 0);
-    const planResult = await options.agents.plan({ request: options.request, goals: options.goals ?? [], history: options.history, attachments: options.attachments });
+    let planResult: PlanResult;
+    try {
+      // D64-1: wrap the plan() call in the same 3-attempt envelope build and review
+      // already use. A transient leader hiccup (e.g. a permission-denial-style throw from
+      // a read-only explore step) previously killed the whole session outright; the retry
+      // self-corrects on a later attempt the way the build/review path already does.
+      planResult = await retryArtifact<PlanResult>(
+        "BuildPlanOrAnswer",
+        emit,
+        () => options.agents.plan({ request: options.request, goals: options.goals ?? [], history: options.history, attachments: options.attachments }),
+        (value) => value as PlanResult
+      );
+    } catch (error) {
+      // D64-1: if all 3 attempts fail (the retryArtifact envelope throws its lastError),
+      // there's no plan to take over from - end the session cleanly with a diagnosable
+      // summary, same shape as review-exhaustion. This must be a clean terminal state, not
+      // a swallowed exception - the caller (tandem-service) will surface this to the user.
+      const message = `Leader planning could not produce a valid result after retries: ${String(error)}`;
+      transition("DONE", message, 0);
+      return { phase: "DONE", summary: message, reports, verdicts, takeover: false };
+    }
     if (planResult.kind === "answer") {
       transition("DONE", "leader answered without build plan", 0);
       return { phase: "DONE", summary: planResult.answer, reports, verdicts, takeover: false };

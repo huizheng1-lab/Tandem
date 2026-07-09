@@ -99,6 +99,45 @@ describe("orchestration", () => {
     expect(result.takeover).toBe(true);
   });
 
+  it("D64-1: a transient plan() failure self-corrects on retry instead of killing the session", async () => {
+    // Simulates a transient leader hiccup (e.g. a permission-denial-style throw on the
+    // first attempt's read-only explore step) that previously killed the whole session
+    // outright. The 3-attempt retry envelope should self-correct and let the run complete.
+    let planAttempts = 0;
+    const result = await runOrchestration({
+      request: "build",
+      config: { maxReviewRounds: 3, maxParallelWorkers: 1 },
+      agents: agents({
+        plan: async () => {
+          planAttempts += 1;
+          if (planAttempts === 1) throw new Error("transient hiccup: permission denied on read of C:\\Users\\me\\foo");
+          return { kind: "plan" as const, plan };
+        }
+      })
+    });
+    expect(planAttempts).toBe(2);
+    expect(result.takeover).toBe(false);
+    expect(result.summary).toBe("approve");
+  });
+
+  it("D64-1: all 3 plan() attempts failing ends the session cleanly (no takeover path is reachable yet)", async () => {
+    // When retryArtifact exhausts its 3 attempts it throws. The orchestrator catches that
+    // and ends with a clean DONE + a diagnosable summary rather than crashing the session.
+    const result = await runOrchestration({
+      request: "build",
+      config: { maxReviewRounds: 3, maxParallelWorkers: 1 },
+      agents: agents({
+        plan: async () => {
+          throw new Error("always fails");
+        }
+      })
+    });
+    expect(result.phase).toBe("DONE");
+    expect(result.takeover).toBe(false);
+    expect(result.summary).toMatch(/Leader planning could not produce a valid result after retries/);
+    expect(result.summary).toContain("always fails");
+  });
+
   it("routes worker blocked to takeover", async () => {
     const result = await runOrchestration({
       request: "build",
