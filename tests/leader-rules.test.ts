@@ -5,7 +5,6 @@ import {
   leaderReviewerPrompt,
   leaderTakeoverPrompt,
   perceptualVerificationRule,
-  reactivityCautionRule,
   reversibilityCautionRule,
   rootCauseDisciplineRule,
   scopeExpansionReviewRule,
@@ -119,9 +118,3 @@ describe("leader prompt exports (D60 + D61 wiring)", () => {
     expect(leaderPlannerPrompt).toContain(streamPartitioningRule);
   });
 });
-
-// Re-export the rule strings from leader.js, but the test file already imports them at the
-// top. The `reactivityCautionRule` import is a misnamed placeholder from an earlier iteration -
-// leave it (it's the same value as reversibilityCautionRule) so the test file's import list
-// remains correct for any future renames.
-void reactivityCautionRule;
