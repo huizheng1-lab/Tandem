@@ -1,0 +1,21 @@
+D63 done
+
+Round: D63
+Status: code complete; npx tsc --noEmit clean (exit 0, no output); npm test green (250 passed, 1 skipped live-smoke, 0 failed).
+
+Implementation commit:
+- dfeb33e D63-1: raise default maxParallelWorkers from 1 to 2
+
+Sub-task completed (1/1):
+
+D63-1 (change the default):
+- src/config/schema.ts: defaultConfig.maxParallelWorkers changed from 1 to 2. One-line change at the spot where it was first introduced (D54). All 13 test sites that pass `maxParallelWorkers: 1` do so as EXPLICIT overrides - none of them asserts the default value, so no test changes were needed. The grep for "maxParallelWorkers: 1" / "maxParallelWorkers.*=== 1" / "maxParallelWorkers.*1" patterns in tests/ only surfaced the explicit overrides, not an assertion against the default - confirmed by reading the surrounding test names (they all use `maxParallelWorkers: 1` to test the sequential fallback path that D54's design required cap=1 to exercise).
+
+Verification:
+- npx tsc --noEmit: exit code 0, no output.
+- npm test: 250 passed, 1 skipped (live-smoke), 0 failed. No test was modified.
+- git diff --check: clean.
+
+User's live config was already manually bumped to 2 (per the handoff context - that's the runtime-data fix, not a source change). This handoff is just the source default for fresh installs going forward. Behavior for single-stream plans is unchanged - the cap only matters once there are 2+ streams to dispatch, and `streamPartitioningRule` (added in D54) already guards against the leader partitioning plans that don't warrant it.
+</content>
+</invoke>
