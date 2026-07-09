@@ -1,0 +1,44 @@
+D57 done
+
+Round: D57
+Status: code complete; tsc + npm test green (227 passed, +11 over D56's 216; +7 from new resolve-on-path tests, +4 from new artifacts D57 describe). Live verification PASSED end-to-end on this Windows machine: a real binary (ffprobe) NOT in any hardcoded list now validates because the primary signal is genuine PATH resolution, not a string-shape guess.
+
+Implementation commit:
+- 16fd35b D57-1: real PATH resolution as primary verifier signal (with D55-2 fallback)
+
+Sub-tasks completed (4/4):
+
+D57-1 (extract shared resolveOnPath helper):
+- New file src/tools/resolve-on-path.ts. resolveOnPath({ token, names, env, pathSeparator, exists }) splits env.PATH on the separator and tries `path.join(dir, name)` for each (dir, name) pair. Returns the first hit or undefined. Used by both codex-cli and claude-code-cli locators in place of the duplicated inline pathCandidates loops. Both locate.ts files refactored to call resolveOnPath; existing tests still pass. (All 14 existing locate tests cover the refactored path.)
+
+D57-2 (small built-ins allowlist):
+- Old `runnableCommandStarters` (npm/node/python/etc.) removed. New `shellBuiltIns` set (cd, echo, type, dir, set/export/test/pwd/pushd/etc. - tiny and only genuine interpreter internals). New `windowsShellBuiltIns` set adds dir, findstr, where, type, copy, move, del, pushd, popd, start, cls, powershell, pwsh, etc. (win32-only). Comment on each set is explicit: "this list must stay tiny and only grow for genuine built-ins, not general tools."
+
+D57-3 (replace primary signal with PATH resolution):
+- `hasCommandShape` is now `async` and the first signal is `resolveOnPath({token: first, names, env, ...})`. The previous chain (allowlist fast-path, then path-prefix, then script-filename, then D55-2 shape heuristic) is preserved as fallbacks. Detects path separator from the env itself (`env.PATH.includes(";") ? ";" : ":"`) so test platform labels and env separators are decoupled. Built-ins are accepted between PATH resolution and the D55-2 fallback, so e.g. `cd`, `dir`, `type` work on either platform without any binary lookup.
+
+D57-4 (async-ify validateBuildPlan):
+- validateBuildPlan signature: (value, platform?, env?) -> Promise<BuildPlan>. validateVerificationEntry and hasCommandShape are now async (use Promise.all inside validateBuildPlan).
+- All 4 production call sites updated: src/orchestrator/machine.ts:300, src/agents/live.ts:511, src/agents/codex-cli/leader.ts:105, src/agents/claude-code-cli/leader.ts:108. Each `validateBuildPlan(...)` is now preceded by `await`.
+- All test call sites in tests/artifacts.test.ts converted to async: `expect(() => fn()).toThrow(x)` -> `await expect((async () => fn())()).rejects.toThrow(x)`; `expect(validateBuildPlan(...)).property` -> `(await validateBuildPlan(...)).property`. 34 artifacts tests pass.
+
+Tests (11 new, all passing):
+- tests/resolve-on-path.test.ts: 7 unit tests covering first-match selection, name-priority-per-directory, undefined when missing, empty token, win32 semicolon separator, fallthrough to deeper PATH, empty PATH.
+- tests/artifacts.test.ts "D57 PATH-resolution primary signal" describe block: 4 tests covering (a) real PATH resolution accepts a token, (b) win32 .cmd shim name order, (c) fake-binary command with flag syntax still rejected (proving PATH, not shape, is the primary signal - the D55-2-only path would have accepted it), (d) shell built-ins accept without PATH lookup.
+
+Verification:
+- npm run typecheck: green.
+- npm test: 227 passed (was 216), 1 skipped (live-smoke), 0 failed. +11 net D57 tests added.
+- git diff --check: clean.
+
+Live verification (per handoff bar "pick something installed on your dev machine ... like ffprobe itself, to prove no hardcoded allowlist entry made it pass"):
+  where.exe ffprobe on this Windows machine:
+    C:\Users\huizh\AppData\Local\Microsoft\WinGet\Packages\Gyan.FFmpeg_Microsoft.Winget.Source_8wekyb3d8bbwe\ffmpeg-8.1-full_build\bin\ffprobe.exe
+  ffprobe is NOT in the old runnableCommandStarters list (it was added in D55-1 but the D57-2 commit removed general tools from the list). D57 now validates `ffprobe -v error -print_format json -show_format "video.mp4"` via the primary PATH-resolution signal, not via a name match. Before D57, removing the allowlist would have re-introduced the original false-rejection. After D57, even an obscure tool installed on the machine passes by real PATH lookup - the only failure mode is "the tool isn't installed", which is the correct behavior per Claude Code's "let the shell be the ground truth" model.
+
+Where are we:
+- D57 done (this commit).
+- D58 still queued (the carry-forward-stream fix in machine.ts was completed in the previous turn but not yet committed). Say "d58" to commit the carry-forward fix and write D58_done.txt, or "next" / "continue" to chain.
+- No new handoff files appeared during D57 work.
+</content>
+</invoke>
