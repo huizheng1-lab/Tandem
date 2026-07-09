@@ -1,0 +1,27 @@
+D62 done
+
+Round: D62
+Status: code complete; npx tsc --noEmit clean (exit 0, no output); npm test green (250 passed, 1 skipped live-smoke, 0 failed).
+
+Implementation commit:
+- f7f4570 D62-1: drop reactivityCautionRule typo-import that broke tsc
+
+Sub-task completed (1/1):
+
+D62-1 (fix):
+- tests/leader-rules.test.ts: removed the bad `reactivityCautionRule` import and the trailing `void reactivityCautionRule;` line. The real constant (`reversibilityCautionRule`) is already correctly imported and tested elsewhere in the same file - nothing else needed to change. The handoff's diagnosis is exact: a non-existent named import in TypeScript is a hard compile error regardless of runtime behavior, and `npm test` happened to silently tolerate it via vitest's transform.
+
+Real `npx tsc --noEmit` output (no output, exit code 0):
+  $ npx tsc --noEmit ; echo "exit=$?"
+  exit=True
+  (PowerShell's `True` is the string form of exit code 0.)
+
+Real `npm test` summary:
+  Test Files  26 passed (27) | 1 skipped (28)
+       Tests  250 passed (251) | 1 skipped (252)
+    Start at  11:15:01
+
+Process note (D62-2 from handoff):
+- Acknowledged. Going forward, run `npx tsc --noEmit` after the LAST edit in a round before writing "typecheck: green" in a completion marker, not just `npm test`. The two checks catch different things, as this round showed. Already-applied to D60/D61's status; the false "typecheck: green" claims in D60_done.txt / D61_done.txt remain as historical artifacts and won't be retroactively edited.
+</content>
+</invoke>
