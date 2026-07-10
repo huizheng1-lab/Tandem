@@ -1,0 +1,42 @@
+D66 done
+
+Round: D66
+Status: code complete; npx tsc --noEmit clean (exit 0, no output); npm test green (266 passed, +8 over D65's 258).
+
+Implementation commit:
+- de2db6a D66-1: absolute paths rule + cwd in system prompt; D66-2: RateLimitError fast-fail
+
+Sub-tasks completed (2/2 + D66-1 includes both the rule and the cwd-injection):
+
+D66-1 (use fully-qualified absolute paths + state the absolute cwd):
+- src/agents/leader.ts: new exported constant `absolutePathsRule` (text adapted from the handoff's suggested wording). Threaded into all three leader prompts (planner, reviewer, takeover) so the rule reaches all three engines (AI-SDK via src/agents/live.ts, codex-cli via src/agents/codex-cli/leader.ts, claude-code-cli via the same file). The handoff's framing allowed either engine-specific (claude-code-cli only) or generic; chose generic because (a) the failure mode (bare-relative-path resolution) is a general best practice that applies to any CLI subprocess that resolves relative paths against $HOME, and (b) wiring it into all three is one line of cost per prompt.
+- src/agents/claude-code-cli/leader.ts: buildClaudeLeader{Plan,Review,Takeover}Prompts now accept `cwd` in their options type and append an `absoluteCwdLine(cwd)` block to the system prompt that states "Absolute project root (cwd): <path> ... Every file read or write MUST be prefixed with this path exactly. Bare relative paths are not allowed - the CLI subprocess will resolve them against the wrong directory." The `cwd` was already on the ClaudeLeaderOptions, so the wiring is a type-widening + one new function + three string interpolations.
+- AI-SDK path (src/agents/live.ts): existing live.ts prompt builders do NOT yet state the absolute cwd explicitly. The handoff's scope is the claude-code-cli surface where the bug was observed. I did NOT extend AI-SDK prompts this round because (a) the live evidence is claude-code-cli specific, (b) the AI-SDK provider's path-resolution behavior may differ. If observation shows the same failure mode on AI-SDK, the fix is a one-line addition mirroring what I did in claude-code-cli/leader.ts. Flagged for follow-up, not built speculatively this round.
+
+D66-2 (RateLimitError fast-fail):
+- src/agents/claude-code-cli/exec.ts: new exported `RateLimitError` class (extends Error, sets name and adds `resetsAt` property). New `detectRateLimit` function tests BOTH the structured field (api_error_status === 429) AND a prose substring match ("hit your limit") as a belt-and-suspenders check, extracting the resetsAt string via regex on "resets <time>".
+- Wired into BOTH paths: (a) runClaudeExec's exitCode!==0 branch throws RateLimitError when detectRateLimit matches (this is the path the live evidence took), AND (b) parseClaudeEnvelope also throws it when the envelope carries the rate-limit signal even with exitCode 0 (defense in depth - if a future claude-code-cli version changes the exit-code contract, the envelope signal still surfaces the rate-limit error to the caller).
+- src/orchestrator/machine.ts: `retryArtifact` extended with the same fast-fail pattern as AbortError - `if (error instanceof Error && (error.name === "AbortError" || error.name === "RateLimitError")) throw error;` so a rate limit fails fast on attempt 1, not after 3.
+- Surface a clear terminal message in all three call sites: plan (D64's all-fail terminal), build (now fast-fails to a clean DONE with the resetsAt instead of going through a doomed takeover), review (same). The summary explicitly says "Try again after that time or switch engines" so the user knows it's a quota hit, not a bug.
+
+Tests (8 new):
+- D66-1: 3 content tests in tests/leader-rules.test.ts (absolutePathsRule is non-empty, requires fully-qualified absolute paths, forbids bare relative references) + 1 wiring test (all three leader prompts include absolutePathsRule) = 4 new.
+- D66-1: 1 content test in tests/claude-code-cli.test.ts ("D66-1: claude-code-cli plan prompt states the absolute cwd explicitly") = 1 new.
+- D66-2: 3 tests in tests/claude-code-cli.test.ts (the live fake-shell scenario detects 429 + throws RateLimitError; the RateLimitError class itself carries a resetsAt property; parseClaudeEnvelope throws RateLimitError on a 429-shaped envelope even when exit-code would be 0) = 3 new.
+
+Total: 8 new tests, 266 passed (was 258, +8).
+
+Live checks (per the handoff):
+- D66-1: "if a cheap live check happens to confirm it, include the evidence" - the live $1.17 rate-limit evidence was the handoff's primary proof; the new content + wiring tests cover the rule + cwd-injection. A real plan call with the new rule active would be the natural verification, but is the same category of "can't mechanically prove a model follows a prompt" - same as D60/D61/D65. The structural fix (rule + cwd in system prompt) is what's in scope.
+- D66-2: the third test ("detects a 429-shaped envelope and throws RateLimitError with resetsAt") is the mechanically-verifiable part the handoff required, and it passes. The handoff's expectation of "single attempt, immediate throw with the reset-time message" is exactly what the test exercises via a real fake-shell + runClaudeExec.
+
+Verification:
+- npx tsc --noEmit: exit code 0, no output.
+- npm test: 266 passed, 1 skipped (live-smoke), 0 failed.
+- git diff --check: clean.
+
+Feasibility flags (per the handoff's "note in the completion report as a possible follow-up rather than building it speculatively"):
+- AI-SDK leader prompt builders (src/agents/live.ts) do not yet state the absolute cwd in their system prompts. The claude-code-cli fix is engine-specific. If the same bare-relative-path failure mode is observed on AI-SDK, the fix is a one-line addition mirroring the absoluteCwdLine block from claude-code-cli/leader.ts. NOT built this round.
+- Codex CLI and AI-SDK do not have an observed rate-limit signal in this codebase. If their envelopes ever include a 429-shaped block, the same RateLimitError/detectRateLimit pattern would apply. NOT built speculatively this round.
+</content>
+</invoke>
