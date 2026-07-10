@@ -1,0 +1,31 @@
+D76 completed
+
+Implementation commit: 80448be D76-1: consolidate CLI model dropdown options
+
+Summary:
+- Consolidated CLI model picking into the main Leader and Worker dropdowns.
+- Expanded `claude-code/cli` into CLI default, haiku, sonnet, and opus options.
+- Expanded `codex/cli` into CLI default, minimal, low, medium, and high reasoning-effort options.
+- Removed the separate D75/D74-style CLI models popover and inline CLI model controls.
+- Kept free-form Codex CLI model names out of the dropdown as requested; `/model codex-cli <name>` remains the escape hatch for account-specific model names.
+
+Pre-existing limitation:
+- `claudeCliModel` and `codexCliReasoningEffort` are global config fields, not per-role fields. If both Leader and Worker use the same CLI provider, choosing a Claude variant or Codex effort for one role changes the shared displayed variant for the other role too. D76 preserved this existing D69 behavior.
+
+Verification:
+- npm run typecheck: passed
+- npm test: passed (27 files passed, 1 skipped; 274 tests passed, 1 skipped)
+- npx electron-vite build: passed
+- git diff --check: passed
+- Live Electron smoke: passed via Playwright _electron using an isolated user-data-dir, temp TANDEM_HOME, temp project, and fake CLI paths.
+
+Live smoke evidence:
+- Screenshot: C:\Users\huizh\AppData\Local\Temp\tandem-d76-config-6xDzA3\d76-config-dropdown.png
+- Leader dropdown CLI options included 4 Claude CLI variants and 5 Codex CLI effort variants.
+- Worker dropdown CLI options included the same 4 Claude CLI variants and 5 Codex CLI effort variants.
+- `.cliModelsPopover` / `.cliModelsTrigger` DOM count: 0.
+- Selecting `claude-code/cli::model:sonnet` wrote `leader: "claude-code/cli"` and `claudeCliModel: "sonnet"` to the project config.
+- Selecting `codex/cli::effort:medium` wrote `worker: "codex/cli"` and `codexCliReasoningEffort: "medium"` to the project config.
+- Selecting `codex/cli::effort:default` cleared `codexCliReasoningEffort` from the project config.
+- Leader select bounding box: x=370.55 y=8 width=190 height=32.67.
+- Worker select bounding box: x=619.92 y=8 width=190 height=32.67.
