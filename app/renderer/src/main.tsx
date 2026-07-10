@@ -19,6 +19,7 @@ import type {
 } from "../../shared/ipc.js";
 import type { PermissionMode, TandemConfig } from "../../../src/config/schema.js";
 import { parseLoop } from "../../../src/commands/loop.js";
+import { modelDisplayName } from "../../../src/providers/cli-models.js";
 import { ErrorBoundary } from "./ErrorBoundary.js";
 import "./styles.css";
 
@@ -75,7 +76,7 @@ function sessionStartedText(session: SessionStartResponse): string {
   const instructions = session.projectInstructions
     ? `, project instructions: ${session.projectInstructions.fileName} (${session.projectInstructions.chars} chars${session.projectInstructions.truncated ? ", truncated" : ""})`
     : "";
-  return `Session ${session.sessionId} started; working in ${session.projectDir} (${session.projectSummary}) - leader ${session.config.leader}, worker ${session.config.worker}, permissions ${permissionMode}${instructions}`;
+  return `Session ${session.sessionId} started; working in ${session.projectDir} (${session.projectSummary}) - leader ${modelDisplayName(session.config.leader, session.config)}, worker ${modelDisplayName(session.config.worker, session.config)}, permissions ${permissionMode}${instructions}`;
 }
 
 function displayPath(filePath: string): string {
@@ -640,8 +641,8 @@ function App(): React.ReactElement {
     [
       `phase: ${phase}`,
       `round: ${round}/${effectiveConfig?.maxReviewRounds ?? 0}`,
-      `leader: ${effectiveConfig?.leader ?? "unknown"}`,
-      `worker: ${effectiveConfig?.worker ?? "unknown"}`,
+      `leader: ${modelDisplayName(effectiveConfig?.leader, effectiveConfig)}`,
+      `worker: ${modelDisplayName(effectiveConfig?.worker, effectiveConfig)}`,
       `parallel: ${effectiveConfig?.maxParallelWorkers ?? 1} worker(s) per round`,
       `session: ${session?.sessionId ?? "starting"}`
     ].join("\n");
@@ -656,7 +657,7 @@ function App(): React.ReactElement {
       if (command === "/models") {
         const items = await tandem.listModels();
         setModels(items);
-        appendMessage("system", items.map((model) => `${model.available ? "ok" : "key"} ${model.id}${mediaBadge(model)}${unavailableModelText(model)}`).join("\n") || "No models.");
+        appendMessage("system", items.map((model) => `${model.available ? "ok" : "key"} ${modelDisplayName(model.id, effectiveConfig)}${mediaBadge(model)}${unavailableModelText(model)}`).join("\n") || "No models.");
         return;
       }
       if (command === "/model") {
@@ -1092,7 +1093,7 @@ if (args.length === 1 && sub === "clear") {
             <select value={effectiveConfig?.leader ?? ""} onChange={(event) => void updateModel("leader", event.target.value)}>
               {models.map((model) => (
                 <option key={model.id} value={model.id} disabled={!model.available}>
-                  {model.id}
+                  {modelDisplayName(model.id, effectiveConfig)}
                   {mediaBadge(model)}
                   {unavailableModelText(model)}
                 </option>
@@ -1104,7 +1105,7 @@ if (args.length === 1 && sub === "clear") {
             <select value={effectiveConfig?.worker ?? ""} onChange={(event) => void updateModel("worker", event.target.value)}>
               {models.map((model) => (
                 <option key={model.id} value={model.id} disabled={!model.available}>
-                  {model.id}
+                  {modelDisplayName(model.id, effectiveConfig)}
                   {mediaBadge(model)}
                   {unavailableModelText(model)}
                 </option>

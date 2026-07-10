@@ -57,6 +57,7 @@ export async function runCodexWorkerBuild(
     env: options.env,
     codexCliPath: options.config.codexCliPath,
     modelName: options.entry.modelName,
+    modelReasoningEffort: options.config.codexCliReasoningEffort,
     abortSignal: options.abortSignal,
     role: "worker",
     entry: options.entry,

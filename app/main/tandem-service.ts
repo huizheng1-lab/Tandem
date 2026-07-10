@@ -13,6 +13,7 @@ import { locateClaudeCli } from "../../src/agents/claude-code-cli/locate.js";
 import { createDiffTracker } from "../../src/orchestrator/diff.js";
 import { runOrchestration, type MachineEvent, type OrchestrationCheckpoint } from "../../src/orchestrator/machine.js";
 import { modelRegistry } from "../../src/providers/registry.js";
+import { withConfiguredCliModel } from "../../src/providers/cli-models.js";
 import { tandemStateDir } from "../../src/paths.js";
 import { CostLedger } from "../../src/session/cost.js";
 import { copyAttachment, formatAttachmentBlock, writeAttachmentData } from "../../src/session/attachments.js";
@@ -267,7 +268,9 @@ export class TandemService {
   }
 
   listModels() {
-    return modelRegistry(this.config.customModels).map((model) => ({
+    return modelRegistry(this.config.customModels).map((registryModel) => {
+      const model = withConfiguredCliModel(registryModel, this.config);
+      return {
       id: model.id,
       provider: model.provider,
       modelName: model.modelName,
@@ -279,7 +282,8 @@ export class TandemService {
             ? Boolean(locateClaudeCli({ env: this.env, overridePath: this.config.claudeCliPath }))
             : Boolean(model.envKey && this.env[model.envKey]),
       media: model.media
-    }));
+      };
+    });
   }
 
   async addAttachmentFiles(paths: string[]): Promise<AttachmentRef[]> {

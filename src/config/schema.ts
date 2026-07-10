@@ -6,6 +6,9 @@ export type PermissionMode = z.infer<typeof PermissionModeSchema>;
 export const TriageModeSchema = z.enum(["auto", "always-plan"]);
 export type TriageMode = z.infer<typeof TriageModeSchema>;
 
+export const CodexCliReasoningEffortSchema = z.enum(["minimal", "low", "medium", "high"]);
+export type CodexCliReasoningEffort = z.infer<typeof CodexCliReasoningEffortSchema>;
+
 export const ModelProviderSchema = z.enum(["google", "anthropic", "openai", "openai-compatible", "codex-cli", "claude-code-cli"]);
 export type ModelProvider = z.infer<typeof ModelProviderSchema>;
 
@@ -58,6 +61,9 @@ export const ConfigSchema = z.object({
   triage: TriageModeSchema,
   codexCliPath: z.string().min(1).optional(),
   claudeCliPath: z.string().min(1).optional(),
+  codexCliModel: z.string().min(1).optional(),
+  claudeCliModel: z.string().min(1).optional(),
+  codexCliReasoningEffort: CodexCliReasoningEffortSchema.optional(),
   showThinking: z.boolean(),
   maxStepsPerAgentTurn: z.number().int().positive(),
   leaderContextBudgetTokens: z.number().int().positive(),

@@ -1,4 +1,5 @@
 import { TandemConfig } from "../config/schema.js";
+import { modelDisplayName } from "../providers/cli-models.js";
 import { CostLedger } from "../session/cost.js";
 
 export const helpText = `Commands:
@@ -26,7 +27,7 @@ export const helpText = `Commands:
 /clear                        start a new session`;
 
 export function statusText(config: TandemConfig, phase = "IDLE", round = 0, sessionId = "new"): string {
-  return `phase: ${phase}\nround: ${round}/${config.maxReviewRounds}\nleader: ${config.leader}\nworker: ${config.worker}\nparallel: ${config.maxParallelWorkers} worker(s) per round\nsession: ${sessionId}`;
+  return `phase: ${phase}\nround: ${round}/${config.maxReviewRounds}\nleader: ${modelDisplayName(config.leader, config)}\nworker: ${modelDisplayName(config.worker, config)}\nparallel: ${config.maxParallelWorkers} worker(s) per round\nsession: ${sessionId}`;
 }
 
 export function costText(ledger: CostLedger): string {

@@ -1,0 +1,23 @@
+D69 complete
+
+Commit: included in the D69-1 commit that adds this marker.
+
+Implementation summary:
+- Added optional CLI model pin config fields: claudeCliModel and codexCliModel.
+- Added optional codexCliReasoningEffort for lower-cost Codex CLI reasoning mode selection.
+- Threaded configured CLI model names into makeModel so existing Claude Code CLI --model and Codex CLI -m plumbing receives the configured value.
+- Threaded codexCliReasoningEffort into Codex CLI exec as -c model_reasoning_effort=<value>.
+- Surfaced CLI active/configured model labels in TUI status/model picker, desktop session/status/model dropdowns, desktop /models output, and CLI /status and /models output.
+- Documented cheaper opt-in CLI model pins in README.
+
+Verification:
+- npm run typecheck: passed.
+- npm test: passed (26 passed, 1 skipped; 268 passed, 1 skipped).
+- git diff --check: passed.
+- Focused tests for config-to-argv passthrough passed via npm test.
+
+Live verification notes:
+- claude --help confirms --model accepts aliases such as sonnet/opus and full model names.
+- codex exec --help could not be checked in this environment: codex.exe failed with Access is denied.
+- A low-budget Claude haiku structured-output probe was attempted with --max-budget-usd 0.05, but it timed out before returning evidence.
+- No Codex cheaper-alias structured-output live call was run because the local codex executable is not runnable here.

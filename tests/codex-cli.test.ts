@@ -144,7 +144,8 @@ describe("codex cli execution", () => {
         schemaPath: "schema.json",
         outputPath: "out.json",
         prompt: "do work",
-        modelName: "gpt-5.5"
+        modelName: "gpt-5-mini",
+        modelReasoningEffort: "medium"
       })
     ).toEqual([
       "exec",
@@ -160,7 +161,9 @@ describe("codex cli execution", () => {
       "--output-last-message",
       "out.json",
       "-m",
-      "gpt-5.5",
+      "gpt-5-mini",
+      "-c",
+      "model_reasoning_effort=medium",
       "do work"
     ]);
   });
@@ -293,7 +296,7 @@ describe("codex cli mixed roles", () => {
     const cwd = await tempDir("project");
     const codexCliPath = await fakeCodexScript();
     const agents = await createLiveAgents({
-      config: { ...defaultConfig, leader: "codex/cli", worker: "openai/gpt-5-mini", permissionMode: "yolo", codexCliPath },
+      config: { ...defaultConfig, leader: "codex/cli", worker: "openai/gpt-5-mini", permissionMode: "yolo", codexCliPath, codexCliModel: "gpt-5-mini", codexCliReasoningEffort: "medium" },
       cwd,
       env: { OPENAI_API_KEY: "test-key" },
       ledger: new CostLedger()

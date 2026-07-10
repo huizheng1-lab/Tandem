@@ -62,6 +62,7 @@ async function codexLeaderExec(options: CodexLeaderOptions, input: { schema: "pl
     env: options.env,
     codexCliPath: options.config.codexCliPath,
     modelName: options.entry.modelName,
+    modelReasoningEffort: options.config.codexCliReasoningEffort,
     abortSignal: options.abortSignal,
     role: "leader",
     entry: options.entry,

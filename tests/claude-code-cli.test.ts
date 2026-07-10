@@ -351,7 +351,7 @@ describe("claude code cli mixed roles", () => {
     const cwd = await tempDir("project");
     const claudeCliPath = await fakeClaudeScript("answer");
     const agents = await createLiveAgents({
-      config: { ...defaultConfig, leader: "claude-code/cli", worker: "minimax/minimax-m2.7", permissionMode: "yolo", claudeCliPath },
+      config: { ...defaultConfig, leader: "claude-code/cli", worker: "minimax/minimax-m2.7", permissionMode: "yolo", claudeCliPath, claudeCliModel: "haiku" },
       cwd,
       env: { ...process.env, PATH: path.dirname(claudeCliPath), MINIMAX_API_KEY: "test-key" },
       ledger: new CostLedger()

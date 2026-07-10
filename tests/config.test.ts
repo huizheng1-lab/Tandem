@@ -5,6 +5,8 @@ import { describe, expect, it } from "vitest";
 import { globalConfigPath, loadConfig, loadConfigDetails, loadEnv, saveGlobalConfigPatch } from "../src/config/load.js";
 import { resolveModel, validateModelEnv } from "../src/providers/registry.js";
 import { makeModel } from "../src/providers/client.js";
+import { buildCodexExecArgv } from "../src/agents/codex-cli/exec.js";
+import { buildClaudeExecArgv } from "../src/agents/claude-code-cli/exec.js";
 import { defaultConfig } from "../src/config/schema.js";
 import { sessionDir } from "../src/session/store.js";
 
@@ -139,6 +141,43 @@ describe("config", () => {
     expect(resolution.entry.provider).toBe("google");
     expect(resolution.entry.modelName).toBe("gemini-custom-flash");
     expect(resolution.model).toBeTruthy();
+  });
+
+  it("pins built-in CLI model names from config without changing defaults", async () => {
+    const cwd = await tempDir("cli-models");
+    const codexCliPath = path.join(cwd, process.platform === "win32" ? "codex.exe" : "codex");
+    const claudeCliPath = path.join(cwd, process.platform === "win32" ? "claude.exe" : "claude");
+    await writeFile(codexCliPath, "", "utf8");
+    await writeFile(claudeCliPath, "", "utf8");
+
+    const codexDefault = await makeModel("codex/cli", { ...defaultConfig, codexCliPath }, { CODEX_CLI_PATH: codexCliPath });
+    expect(codexDefault.entry.modelName).toBe("");
+
+    const codexPinned = await makeModel("codex/cli", { ...defaultConfig, codexCliPath, codexCliModel: "gpt-5-mini", codexCliReasoningEffort: "medium" }, { CODEX_CLI_PATH: codexCliPath });
+    expect(codexPinned.entry.modelName).toBe("gpt-5-mini");
+    expect(
+      buildCodexExecArgv({
+        cwd,
+        sandbox: "workspace-write",
+        schemaPath: "schema.json",
+        outputPath: "out.json",
+        prompt: "do work",
+        modelName: codexPinned.entry.modelName,
+        modelReasoningEffort: "medium"
+      })
+    ).toEqual(expect.arrayContaining(["-m", "gpt-5-mini", "-c", "model_reasoning_effort=medium"]));
+
+    const claudePinned = await makeModel("claude-code/cli", { ...defaultConfig, claudeCliPath, claudeCliModel: "haiku" }, { CLAUDE_CLI_PATH: claudeCliPath });
+    expect(claudePinned.entry.modelName).toBe("haiku");
+    expect(
+      buildClaudeExecArgv({
+        prompt: "answer",
+        systemPrompt: "rules",
+        schema: { type: "object" },
+        permissionMode: "plan",
+        modelName: claudePinned.entry.modelName
+      })
+    ).toEqual(expect.arrayContaining(["--model", "haiku"]));
   });
 
   it("registers the current Gemini 3.x built-ins without guessed pricing", () => {

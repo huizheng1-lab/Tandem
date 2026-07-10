@@ -9,6 +9,7 @@ import { dispatchCommand } from "../commands/index.js";
 import { handleGoal } from "../commands/goal.js";
 import { setModel } from "../commands/model.js";
 import { modelRegistry } from "../providers/registry.js";
+import { modelDisplayName } from "../providers/cli-models.js";
 import { parseLoop } from "../commands/loop.js";
 import { addSchedule, listSchedules, markScheduleRun, missedSchedule, removeSchedule, Schedule } from "../commands/schedule.js";
 import { addGoal, appendGoalNote, formatStandingGoals, listGoals } from "../session/goals.js";
@@ -474,7 +475,7 @@ export function App({ config: initialConfig, env, cwd, initialError }: { config:
                     : model.provider === "claude-code-cli"
                       ? locateClaudeCli({ env, overridePath: config.claudeCliPath })
                       : model.envKey && env[model.envKey];
-                return `${status ? "ok " : "key"} ${model.id}`;
+                return `${status ? "ok " : "key"} ${modelDisplayName(model.id, config)}`;
               })
           ).map((item, index) => (
             <Text key={item} color={index === modelPicker.index ? "yellow" : undefined}>
@@ -489,7 +490,7 @@ export function App({ config: initialConfig, env, cwd, initialError }: { config:
       {pendingResume ? <Text color="yellow">Resume continuation pending</Text> : null}
       {pendingMissedSchedule ? <Text color="yellow">Missed schedule prompt pending</Text> : null}
       {busy ? <Text color="cyan"><Spinner type="dots" /> working</Text> : null}
-      <StatusLine leader={config.leader} worker={config.worker} phase={phase} round={round} maxRounds={config.maxReviewRounds} cost={ledger.totalDollars()} />
+      <StatusLine leader={modelDisplayName(config.leader, config)} worker={modelDisplayName(config.worker, config)} phase={phase} round={round} maxRounds={config.maxReviewRounds} cost={ledger.totalDollars()} />
       <InputBar value={input} onChange={setInput} onSubmit={submit} />
     </Box>
   );

@@ -1,7 +1,7 @@
 import { readFile } from "node:fs/promises";
 import { spawn } from "node:child_process";
 import { once } from "node:events";
-import type { PermissionMode } from "../../config/schema.js";
+import type { CodexCliReasoningEffort, PermissionMode } from "../../config/schema.js";
 import type { ModelEntry } from "../../providers/registry.js";
 import { CostLedger, CostRole } from "../../session/cost.js";
 import type { ToolActivityEvent } from "../../tools/fs.js";
@@ -17,6 +17,7 @@ export interface CodexExecOptions {
   env?: NodeJS.ProcessEnv;
   codexCliPath?: string;
   modelName?: string;
+  modelReasoningEffort?: CodexCliReasoningEffort;
   abortSignal?: AbortSignal;
   role: CostRole;
   entry: ModelEntry;
@@ -41,6 +42,7 @@ export function buildCodexExecArgv(input: {
   outputPath: string;
   prompt: string;
   modelName?: string;
+  modelReasoningEffort?: CodexCliReasoningEffort;
 }): string[] {
   const args = [
     "exec",
@@ -57,6 +59,7 @@ export function buildCodexExecArgv(input: {
     input.outputPath
   ];
   if (input.modelName) args.push("-m", input.modelName);
+  if (input.modelReasoningEffort) args.push("-c", `model_reasoning_effort=${input.modelReasoningEffort}`);
   args.push(input.prompt);
   return args;
 }
@@ -139,7 +142,8 @@ export async function runCodexExec(options: CodexExecOptions & { readOnly?: bool
       schemaPath,
       outputPath,
       prompt: options.prompt,
-      modelName: options.modelName || undefined
+      modelName: options.modelName || undefined,
+      modelReasoningEffort: options.modelReasoningEffort
     });
     const child = spawn(codexPath, args, {
       cwd: options.cwd,

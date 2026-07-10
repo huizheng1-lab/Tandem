@@ -51,6 +51,19 @@ Set `TANDEM_HOME` to relocate global Tandem state; when set, Tandem reads global
 
 Custom model `provider` may be `google`, `anthropic`, `openai`, or `openai-compatible`; omitted provider entries default to `openai-compatible` for older configs. `baseURL` is required only for `openai-compatible`.
 
+When using `claude-code/cli` or `codex/cli`, Tandem normally preserves your CLI account defaults. To opt into cheaper leader calls, pin the CLI model in `.tandem/config.json` or `~/.tandem/config.json`:
+
+```json
+{
+  "leader": "claude-code/cli",
+  "claudeCliModel": "haiku",
+  "codexCliModel": "gpt-5-mini",
+  "codexCliReasoningEffort": "medium"
+}
+```
+
+Use aliases only after verifying they still satisfy Tandem's structured output for your workflow.
+
 Built-in model ids include `anthropic/claude-fable-5`, `anthropic/claude-opus-4-8`, `anthropic/claude-sonnet-5`, `anthropic/claude-haiku-4-5`, `google/gemini-2.5-pro`, `google/gemini-2.5-flash`, `google/gemini-3.5-flash`, `google/gemini-3.1-pro-preview`, `google/gemini-3-pro-preview`, `google/gemini-3.1-flash-lite`, `openai/gpt-5`, and `openai/gpt-5-mini`. Gemini 3.x built-ins omit cost hints until pricing is confirmed; cost will show as `$0` unless you supply `costHints` through a custom model override.
 
 ## How A Request Flows
