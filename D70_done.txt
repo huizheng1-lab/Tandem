@@ -1,6 +1,6 @@
 D70 complete
 
-Commit: included in the D70 implementation commit that adds this marker.
+Commit: 3b92cd1 (D70-1: add CLI model slash commands).
 
 Implementation summary:
 - Added /model claude-cli <model|clear> to set or unset claudeCliModel.
