@@ -61,6 +61,12 @@ export const ConfigSchema = z.object({
   showThinking: z.boolean(),
   maxStepsPerAgentTurn: z.number().int().positive(),
   leaderContextBudgetTokens: z.number().int().positive(),
+  // D68-2: per-call safety cap on claude-code-cli internal spending. Real incident (D66's
+  // live evidence) showed a single planning call cost $1.17 over 36 internal turns before
+  // hitting an unrelated failure - there's no current ceiling. A normal single call should
+  // never legitimately need to exceed $2; if it does, the call stops with a diagnosable error
+  // rather than running away.
+  claudeMaxBudgetUsdPerCall: z.number().positive(),
   // D54: cap on concurrent stream workers. At 1 (default) even multi-stream plans run
   // sequentially - zero risk to existing users. >1 enables real concurrency, capped at
   // that many simultaneous workers. Streams beyond the cap are scheduled as earlier ones
@@ -84,6 +90,7 @@ export const defaultConfig: TandemConfig = {
   showThinking: false,
   maxStepsPerAgentTurn: 60,
   leaderContextBudgetTokens: 60000,
+  claudeMaxBudgetUsdPerCall: 2.0,
   maxParallelWorkers: 2,
   customModels: [
     {

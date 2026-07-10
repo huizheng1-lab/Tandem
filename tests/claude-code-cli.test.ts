@@ -148,6 +148,25 @@ describe("claude code cli execution", () => {
     ]);
   });
 
+  it("D68-2: appends --max-budget-usd when maxBudgetUsd is set (omits when not)", () => {
+    const baseInput = {
+      prompt: "answer",
+      systemPrompt: "system rules",
+      schema: buildPlanJsonSchema,
+      permissionMode: "bypassPermissions" as const,
+      modelName: "haiku"
+    };
+    // Without maxBudgetUsd - flag should be absent.
+    expect(buildClaudeExecArgv(baseInput)).not.toContain("--max-budget-usd");
+    // With maxBudgetUsd set - flag should be present with the stringified value.
+    expect(buildClaudeExecArgv({ ...baseInput, maxBudgetUsd: 2.0 })).toEqual(
+      expect.arrayContaining(["--max-budget-usd", "2"])
+    );
+    // With maxBudgetUsd 0 - flag should be absent (the buildClaudeExecArgv guard
+    // `> 0` skips zero/negative).
+    expect(buildClaudeExecArgv({ ...baseInput, maxBudgetUsd: 0 })).not.toContain("--max-budget-usd");
+  });
+
   it("maps Tandem permission modes to Claude Code permission modes", () => {
     expect(claudePermissionFor("ask")).toBe("bypassPermissions");
     expect(claudePermissionFor("auto-edit")).toBe("acceptEdits");

@@ -71,7 +71,8 @@ async function claudeLeaderExec(options: ClaudeLeaderOptions, input: { schema: "
     entry: options.entry,
     ledger: options.ledger,
     onText: options.onLeaderText,
-    onToolEvent: options.onToolEvent
+    onToolEvent: options.onToolEvent,
+    maxBudgetUsd: options.config.claudeMaxBudgetUsdPerCall
   });
 }
 

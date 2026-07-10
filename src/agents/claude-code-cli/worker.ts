@@ -63,7 +63,8 @@ export async function runClaudeWorkerBuild(
     entry: options.entry,
     ledger: options.ledger,
     onText: options.onWorkerText,
-    onToolEvent: options.onToolEvent
+    onToolEvent: options.onToolEvent,
+    maxBudgetUsd: options.config.claudeMaxBudgetUsdPerCall
   });
   return validateCompletionReport(input.plan, output);
 }

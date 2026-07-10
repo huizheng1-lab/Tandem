@@ -15,6 +15,10 @@ export interface ClaudeExecOptions {
   prompt: string;
   systemPrompt: string;
   schema: ClaudeSchemaKind;
+  // D68-2: per-call safety cap. Real incident: a single planning call cost $1.17 over 36
+  // internal turns before failing. A normal single call should never legitimately exceed
+  // $2; if it does, claude-code-cli stops with a diagnosable error.
+  maxBudgetUsd?: number;
   permissionMode: PermissionMode;
   env?: NodeJS.ProcessEnv;
   claudeCliPath?: string;
@@ -70,6 +74,10 @@ export function buildClaudeExecArgv(input: {
   permissionMode: ClaudePermissionMode;
   modelName?: string;
   readOnly?: boolean;
+  // D68-2: per-call safety cap. Real incident: a single planning call cost $1.17 over 36
+  // internal turns before failing. A normal single call should never legitimately exceed
+  // $2; if it does, claude-code-cli stops with a diagnosable error.
+  maxBudgetUsd?: number;
 }): string[] {
   const args = [
     "-p",
@@ -86,6 +94,9 @@ export function buildClaudeExecArgv(input: {
   ];
   if (input.readOnly) args.push("--tools", "Read,Grep,Glob");
   if (input.modelName) args.push("--model", input.modelName);
+  if (typeof input.maxBudgetUsd === "number" && input.maxBudgetUsd > 0) {
+    args.push("--max-budget-usd", String(input.maxBudgetUsd));
+  }
   return args;
 }
 
@@ -165,7 +176,8 @@ export async function runClaudeExec(options: ClaudeExecOptions): Promise<unknown
     schema: jsonSchemaFor(options.schema),
     permissionMode: claudePermissionFor(options.permissionMode, options.readOnly),
     modelName: options.modelName || undefined,
-    readOnly: options.readOnly
+    readOnly: options.readOnly,
+    maxBudgetUsd: options.maxBudgetUsd
   });
   options.onToolEvent?.({ role: options.role, tool: "claude_code_cli", target: options.readOnly ? "read-only prompt" : "write prompt", phase: "start" });
   const started = Date.now();
