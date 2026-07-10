@@ -16,6 +16,7 @@ export interface AgentRunOptions {
   costRole?: CostRole;
   ledger?: CostLedger;
   system: string;
+  providerOptions?: ProviderOptions;
   systemProviderOptions?: ProviderOptions;
   messages: RunnerMessage[];
   tools?: ToolSet;
@@ -284,6 +285,7 @@ export async function runAgentText(options: AgentRunOptions): Promise<{ text: st
         ...(options.systemProviderOptions ? {} : { system: options.system }),
         messages: streamMessages as never,
         allowSystemInMessages: true,
+        providerOptions: options.providerOptions,
         tools: options.tools,
         stopWhen: options.stopToolName ? [stepCountIs(options.maxSteps), hasToolCall(options.stopToolName)] : stepCountIs(options.maxSteps),
         toolChoice: options.toolChoice,

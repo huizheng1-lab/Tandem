@@ -1,6 +1,7 @@
 import { generateObject, generateText, tool } from "ai";
 import type { LanguageModel, ToolSet } from "ai";
 import type { ProviderOptions } from "@ai-sdk/provider-utils";
+import { createHash } from "node:crypto";
 import { z } from "zod";
 import { TandemConfig } from "../config/schema.js";
 import { makeModel } from "../providers/client.js";
@@ -163,6 +164,19 @@ export function leaderSystemProviderOptions(entry: ModelEntry): ProviderOptions 
   return {
     anthropic: {
       cacheControl: { type: "ephemeral" }
+    }
+  };
+}
+
+function shortHash(value: string): string {
+  return createHash("sha256").update(value).digest("hex").slice(0, 16);
+}
+
+export function openAiPromptCacheProviderOptions(entry: ModelEntry, cwd: string, role: "leader" | "worker"): ProviderOptions | undefined {
+  if (entry.provider !== "openai") return undefined;
+  return {
+    openai: {
+      promptCacheKey: `tandem:${role}:v1:${shortHash([entry.id, entry.modelName, cwd].join("\n"))}`
     }
   };
 }
@@ -367,6 +381,7 @@ export async function createLiveAgents(options: LiveAgentOptions): Promise<Agent
       costRole: "leader",
       ledger: options.ledger,
       system: `${leaderPlannerPrompt}\nSummarize the prior Tandem leader conversation for continuing future turns. Preserve user requests, files or artifacts named, decisions, unresolved issues, and accepted plans/reviews. Be concise.`,
+      providerOptions: openAiPromptCacheProviderOptions(leader.entry, options.cwd, "leader"),
       messages: [{ role: "user", content: threadAsText(older) }],
       maxSteps: Math.min(8, options.config.maxStepsPerAgentTurn),
       abortSignal: options.abortSignal
@@ -452,6 +467,7 @@ Standing goals are context only; do not redirect unrelated requests toward them.
           costRole: "leader",
           ledger: options.ledger,
           system,
+          providerOptions: openAiPromptCacheProviderOptions(leader.entry, options.cwd, "leader"),
           systemProviderOptions: leaderSystemProviderOptions(leader.entry),
           messages: leaderThread,
           tools: leaderToolsForTriage({ kind: "question", toolContext, media: leader.entry.media }),
@@ -491,6 +507,7 @@ Standing goals are context only; do not redirect unrelated requests toward them.
           costRole: "leader",
           ledger: options.ledger,
           system,
+          providerOptions: openAiPromptCacheProviderOptions(leader.entry, options.cwd, "leader"),
           systemProviderOptions: leaderSystemProviderOptions(leader.entry),
           messages: leaderThread,
           tools: leaderToolsForTriage({ kind: "implementation", toolContext, media: leader.entry.media, submitTools }),
@@ -571,6 +588,7 @@ Standing goals are context only; do not redirect unrelated requests toward them.
         costRole: "worker",
         ledger: options.ledger,
         system: `${workerPrompt}\n${hostPrompt}\n${await projectInstructions()}\n${memoryInstruction}\nIf read_file says you CANNOT view a file's visual content, never guess, infer, or claim to know what it shows. If the task depends on that content and the plan lacks sufficient leader-provided findings, submit a blocked CompletionReport.\nYou must run every verification command before submit_completion_report. In verificationResults[].command, repeat the BuildPlan verification command string verbatim. If you adapt a command for the host platform, still use the plan's original command as command and describe the adapted command plus real output in output.`,
+        providerOptions: openAiPromptCacheProviderOptions(worker.entry, options.cwd, "worker"),
         messages: [
           {
             role: "user",
@@ -648,6 +666,7 @@ Standing goals are context only; do not redirect unrelated requests toward them.
         costRole: "leader",
         ledger: options.ledger,
         system,
+        providerOptions: openAiPromptCacheProviderOptions(leader.entry, options.cwd, "leader"),
         systemProviderOptions: leaderSystemProviderOptions(leader.entry),
         messages: leaderThread,
         tools: mergeTools(makeToolSet({ ...toolContext, media: leader.entry.media }, "reviewer", plan.verification), submitTools),
@@ -735,6 +754,7 @@ Standing goals are context only; do not redirect unrelated requests toward them.
         costRole: "leader",
         ledger: options.ledger,
         system,
+        providerOptions: openAiPromptCacheProviderOptions(leader.entry, options.cwd, "leader"),
         systemProviderOptions: leaderSystemProviderOptions(leader.entry),
         messages: leaderThread,
         tools: mergeTools(makeToolSet({ ...toolContext, media: leader.entry.media }, "takeover"), submitTools),
@@ -803,6 +823,7 @@ export async function suggestGoalProgressNotes(options: Pick<LiveAgentOptions, "
     costRole: "leader",
     ledger: options.ledger,
     system: "You update Tandem standing goals. If the completed run advanced a goal, call submit_goal_notes with a short past-tense note. Omit unrelated goals.",
+    providerOptions: openAiPromptCacheProviderOptions(leader.entry, options.cwd, "leader"),
     messages: [
       {
         role: "user",

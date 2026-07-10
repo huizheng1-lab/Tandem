@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { leaderSystemProviderOptions } from "../src/agents/live.js";
+import { leaderSystemProviderOptions, openAiPromptCacheProviderOptions } from "../src/agents/live.js";
 import { leaderPlannerPrompt, leaderReviewerPrompt, leaderTakeoverPrompt } from "../src/agents/leader.js";
 import { hostPlatformPrompt } from "../src/agents/platform.js";
 import { defaultConfig } from "../src/config/schema.js";
@@ -7,6 +7,7 @@ import type { ModelEntry } from "../src/providers/registry.js";
 
 const anthropicEntry: ModelEntry = { id: "anthropic/claude-sonnet-5", provider: "anthropic", modelName: "claude-sonnet-5", contextWindow: 200000 };
 const googleEntry: ModelEntry = { id: "google/gemini-2.5-pro", provider: "google", modelName: "gemini-2.5-pro", contextWindow: 1000000 };
+const openaiEntry: ModelEntry = { id: "openai/gpt-5", provider: "openai", modelName: "gpt-5", contextWindow: 400000 };
 const openaiCompatibleEntry: ModelEntry = { id: "minimax/minimax-m2.7", provider: "openai-compatible", modelName: "minimax-M2.7", contextWindow: 128000 };
 
 describe("leader system-prompt caching (D45)", () => {
@@ -32,6 +33,36 @@ describe("leader system-prompt caching (D45)", () => {
     expect(options).toBeDefined();
     const anthropicOptions = (options as { anthropic: { cacheControl: { type: string } } }).anthropic;
     expect(anthropicOptions.cacheControl.type).toBe("ephemeral");
+  });
+});
+
+describe("OpenAI prompt cache key routing (D73)", () => {
+  it("returns deterministic role-scoped OpenAI prompt cache keys", () => {
+    const cwd = "C:\\Users\\demo\\Secret Project";
+    const leaderOptions = openAiPromptCacheProviderOptions(openaiEntry, cwd, "leader") as { openai: { promptCacheKey: string } };
+    const sameLeaderOptions = openAiPromptCacheProviderOptions(openaiEntry, cwd, "leader") as { openai: { promptCacheKey: string } };
+    const workerOptions = openAiPromptCacheProviderOptions(openaiEntry, cwd, "worker") as { openai: { promptCacheKey: string } };
+
+    expect(leaderOptions.openai.promptCacheKey).toBe(sameLeaderOptions.openai.promptCacheKey);
+    expect(leaderOptions.openai.promptCacheKey).toMatch(/^tandem:leader:v1:[a-f0-9]{16}$/);
+    expect(workerOptions.openai.promptCacheKey).toMatch(/^tandem:worker:v1:[a-f0-9]{16}$/);
+    expect(workerOptions.openai.promptCacheKey).not.toBe(leaderOptions.openai.promptCacheKey);
+    expect(leaderOptions.openai.promptCacheKey.length).toBeLessThanOrEqual(64);
+    expect(workerOptions.openai.promptCacheKey.length).toBeLessThanOrEqual(64);
+  });
+
+  it("does not leak raw local paths into OpenAI prompt cache keys", () => {
+    const options = openAiPromptCacheProviderOptions(openaiEntry, "C:\\Users\\demo\\Secret Project", "leader") as { openai: { promptCacheKey: string } };
+
+    expect(options.openai.promptCacheKey).not.toContain("Users");
+    expect(options.openai.promptCacheKey).not.toContain("Secret");
+    expect(options.openai.promptCacheKey).not.toContain("\\");
+  });
+
+  it("only applies OpenAI prompt cache keys to the official OpenAI provider", () => {
+    expect(openAiPromptCacheProviderOptions(anthropicEntry, process.cwd(), "leader")).toBeUndefined();
+    expect(openAiPromptCacheProviderOptions(googleEntry, process.cwd(), "leader")).toBeUndefined();
+    expect(openAiPromptCacheProviderOptions(openaiCompatibleEntry, process.cwd(), "worker")).toBeUndefined();
   });
 });
 
