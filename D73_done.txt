@@ -1,0 +1,15 @@
+D73 completed
+
+Implementation commit: 63878f1 D73-1: add OpenAI prompt cache keys
+
+Summary:
+- Added HANDOFF_D73.md for OpenAI GPT prompt cache key wiring.
+- Added runner-level providerOptions forwarding to streamText.
+- Added deterministic OpenAI promptCacheKey provider options for API-backed Tandem leader and worker calls.
+- Kept Anthropic cache-control behavior unchanged and left openai-compatible/CLI providers untouched.
+- Added D73 tests for deterministic role-scoped keys, path sanitization, provider gating, and key length.
+
+Verification:
+- npm run typecheck: passed
+- npm test: passed (27 files passed, 1 skipped; 274 tests passed, 1 skipped)
+- git diff --check: passed
