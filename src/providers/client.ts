@@ -20,8 +20,8 @@ export async function makeModel(modelId: string, config: TandemConfig, env: Node
     const apiKey = env[entry.envKey as string];
     const mod = await import("@ai-sdk/anthropic");
     // SDK boundary: provider factory names are version-coupled, so isolate dynamic access here.
-    const createAnthropic = (mod as Record<string, unknown>).createAnthropic as (options: { apiKey?: string }) => (modelName: string) => LanguageModel;
-    return { entry, model: createAnthropic({ apiKey })(entry.modelName) };
+    const createAnthropic = (mod as Record<string, unknown>).createAnthropic as (options: { apiKey?: string; baseURL?: string }) => (modelName: string) => LanguageModel;
+    return { entry, model: createAnthropic({ apiKey, baseURL: "https://api.anthropic.com/v1" })(entry.modelName) };
   }
 
   if (entry.provider === "openai") {
