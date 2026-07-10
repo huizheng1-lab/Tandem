@@ -2,7 +2,7 @@ import { TandemConfig } from "../config/schema.js";
 import { saveProjectConfig } from "../config/load.js";
 import { CostLedger } from "../session/cost.js";
 import { listSessions } from "../session/store.js";
-import { listModels, setModel } from "./model.js";
+import { listModels, modelCommandUsage, setCliModelConfig, setModel } from "./model.js";
 import { costText, helpText, statusText } from "./misc.js";
 import { addSchedule, listSchedules, removeSchedule } from "./schedule.js";
 
@@ -35,7 +35,12 @@ export async function dispatchCommand(input: string, ctx: CommandContext): Promi
     case "/model": {
       const role = args[0];
       const id = args[1];
-      if ((role !== "leader" && role !== "worker") || !id) return `leader: ${ctx.config.leader}\nworker: ${ctx.config.worker}`;
+      if (role === "claude-cli" || role === "codex-cli" || role === "codex-effort") {
+        const result = await setCliModelConfig(ctx.config, role, id, ctx.cwd);
+        if (result.config) ctx.setConfig?.(result.config);
+        return result.message;
+      }
+      if ((role !== "leader" && role !== "worker") || !id) return `leader: ${ctx.config.leader}\nworker: ${ctx.config.worker}\n${modelCommandUsage}`;
       const next = await setModel(ctx.config, role, id, ctx.cwd);
       ctx.setConfig?.(next);
       return `Set ${role} model to ${id}.`;

@@ -1,0 +1,23 @@
+D70 complete
+
+Commit: included in the D70 implementation commit that adds this marker.
+
+Implementation summary:
+- Added /model claude-cli <model|clear> to set or unset claudeCliModel.
+- Added /model codex-cli <model|clear> to set or unset codexCliModel.
+- Added /model codex-effort <minimal|low|medium|high|clear> to set or unset codexCliReasoningEffort with enum validation.
+- Reused the same config persist paths as the existing /model leader and /model worker commands.
+- Updated desktop composer help and CLI help text with the new command forms.
+- Updated the desktop /model command handler to use the same shared CLI-model patch helper.
+- Left model-name validation free-form for CLI-account-dependent model strings; invalid values surface from the real CLI on use.
+
+Verification:
+- npm run typecheck: passed.
+- npm test: passed (27 passed, 1 skipped; 271 passed, 1 skipped).
+- git diff --check: passed.
+- Added tests/commands.test.ts coverage for set and clear semantics for claude-cli, codex-cli, and codex-effort, plus invalid codex-effort rejection.
+
+Live verification notes:
+- Automated CLI command-path tests verify the persisted config and clear/default semantics.
+- Real CLI TUI and rebuilt desktop-app live verification were not completed in this turn; no running rebuilt Electron/CDP session was available here.
+- No real leader call was made for D70; D70 changes only the config-setting surface, while D69 already covers argv plumbing from the configured values.

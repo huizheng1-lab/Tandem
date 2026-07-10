@@ -19,6 +19,7 @@ import type {
 } from "../../shared/ipc.js";
 import type { PermissionMode, TandemConfig } from "../../../src/config/schema.js";
 import { parseLoop } from "../../../src/commands/loop.js";
+import { cliModelPatch, modelCommandUsage } from "../../../src/commands/model.js";
 import { modelDisplayName } from "../../../src/providers/cli-models.js";
 import { ErrorBoundary } from "./ErrorBoundary.js";
 import "./styles.css";
@@ -106,6 +107,9 @@ function composerHelpText(): string {
     "/models",
     "/model leader <id>",
     "/model worker <id>",
+    "/model claude-cli <model|clear>",
+    "/model codex-cli <model|clear>",
+    "/model codex-effort <minimal|low|medium|high|clear>",
     "/rounds <n>",
     "/status",
     "/cost",
@@ -663,8 +667,20 @@ function App(): React.ReactElement {
       if (command === "/model") {
         const role = args[0];
         const id = args[1];
+        if (role === "claude-cli" || role === "codex-cli" || role === "codex-effort") {
+          const result = cliModelPatch(role, id);
+          if (result.usage || !result.patch) {
+            appendMessage("system", result.usage ?? modelCommandUsage);
+            return;
+          }
+          const nextConfig = await tandem.setConfig(result.patch);
+          setConfig(nextConfig);
+          setSession((current) => (current ? { ...current, config: nextConfig } : current));
+          appendMessage("system", result.message ?? "Updated CLI model config.");
+          return;
+        }
         if ((role !== "leader" && role !== "worker") || !id) {
-          appendMessage("system", "Usage: /model leader <id> or /model worker <id>");
+          appendMessage("system", modelCommandUsage);
           return;
         }
         const nextConfig = await tandem.setConfig({ [role]: id });

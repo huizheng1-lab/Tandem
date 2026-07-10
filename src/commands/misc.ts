@@ -8,6 +8,9 @@ export const helpText = `Commands:
 /model                        open TUI model picker; non-TTY shows current models
 /model leader <id>            set leader model
 /model worker <id>            set worker model
+/model claude-cli <model|clear> set Claude Code CLI --model pin
+/model codex-cli <model|clear> set Codex CLI --model pin
+/model codex-effort <level|clear> set Codex reasoning effort
 /rounds <n>                   set max review rounds
 /status                       show phase, round, models, session
 /cost                         show token and dollar totals
