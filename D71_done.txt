@@ -1,0 +1,28 @@
+D71 complete
+
+Commit: included in the D71 implementation commit that adds this marker.
+
+Implementation summary:
+- Added conditional desktop status-bar controls for CLI model pins.
+- Shows "Claude CLI model" free-form input when leader or worker is claude-code/cli.
+- Shows "Codex CLI model" free-form input and "Codex effort" select when leader or worker is codex/cli.
+- Text inputs save on blur or Enter, not on every keystroke.
+- Empty text input commits through cliModelPatch as clear/default, preserving undefined-vs-empty-string semantics.
+- Codex effort options are sourced from CodexCliReasoningEffortSchema.options.
+- Moved cliModelPatch/modelCommandUsage to browser-safe src/providers/cli-models.ts so the renderer bundle does not import Node-only command/config modules.
+
+Verification:
+- npm run typecheck: passed.
+- npm test: passed (27 passed, 1 skipped; 271 passed, 1 skipped).
+- npx electron-vite build: passed after moving shared CLI-model helper out of src/commands/model.ts.
+- git diff --check: passed.
+
+Live desktop smoke:
+- Launched rebuilt Electron output with Playwright _electron using local node_modules/electron/dist/electron.exe.
+- Used a temporary TANDEM_HOME and fake CLAUDE_CLI_PATH/CODEX_CLI_PATH so CLI model options were enabled without changing user config.
+- Confirmed no extra CLI controls appear initially.
+- Switched Leader to claude-code/cli and confirmed the "Claude CLI model" input appears.
+- Typed haiku and pressed Enter; confirmed config leader=claude-code/cli and claudeCliModel=haiku, and the Leader dropdown label showed "claude-code/cli (model haiku)".
+- Cleared the input and pressed Enter; confirmed the Leader dropdown label returned to "claude-code/cli (model CLI default)".
+- Switched Leader to codex/cli and confirmed both "Codex CLI model" input and "Codex effort" select appear.
+- Switched Leader to google/gemini-2.5-flash and confirmed the extra CLI controls disappear.

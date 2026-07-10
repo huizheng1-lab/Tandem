@@ -17,14 +17,14 @@ import type {
   SessionStartResponse,
   ToolActivityEvent
 } from "../../shared/ipc.js";
-import type { PermissionMode, TandemConfig } from "../../../src/config/schema.js";
+import { CodexCliReasoningEffortSchema, type PermissionMode, type TandemConfig } from "../../../src/config/schema.js";
 import { parseLoop } from "../../../src/commands/loop.js";
-import { cliModelPatch, modelCommandUsage } from "../../../src/commands/model.js";
-import { modelDisplayName } from "../../../src/providers/cli-models.js";
+import { cliModelPatch, modelCommandUsage, modelDisplayName } from "../../../src/providers/cli-models.js";
 import { ErrorBoundary } from "./ErrorBoundary.js";
 import "./styles.css";
 
 type Role = "user" | "leader" | "worker" | "system";
+const codexEffortOptions = CodexCliReasoningEffortSchema.options;
 
 type TranscriptEntry =
   | { id: number; kind: "message"; role: Role; text: string; thinking?: boolean }
@@ -186,6 +186,8 @@ function App(): React.ReactElement {
   const [missingKey, setMissingKey] = useState<MissingKeyInfo>();
   const [sessionAutoApprove, setSessionAutoApprove] = useState<SessionAutoApproveMode>("none");
   const [showThinking, setShowThinking] = useState(false);
+  const [claudeCliModelDraft, setClaudeCliModelDraft] = useState("");
+  const [codexCliModelDraft, setCodexCliModelDraft] = useState("");
   const [thinkingRoles, setThinkingRoles] = useState<Set<"leader" | "worker">>(new Set());
   const [activityPulse, setActivityPulse] = useState<{ role: "leader" | "worker"; kind: "thinking" | "writing"; startedAt: number }>();
   const [activeTool, setActiveTool] = useState<(ToolActivityEvent & { startedAt: number }) | undefined>();
@@ -217,6 +219,8 @@ function App(): React.ReactElement {
   const loopRunningRef = useRef(false);
 
   const effectiveConfig = session?.config ?? config;
+  const usesClaudeCli = effectiveConfig?.leader === "claude-code/cli" || effectiveConfig?.worker === "claude-code/cli";
+  const usesCodexCli = effectiveConfig?.leader === "codex/cli" || effectiveConfig?.worker === "codex/cli";
   const contextProjectDir = session?.projectDir ?? appState?.lastProjectDir ?? appState?.projectDir;
   const totalCost = useMemo(() => {
     if (!cost) return "$0.0000";
@@ -504,6 +508,11 @@ function App(): React.ReactElement {
     return () => clearInterval(timer);
   }, [running]);
 
+  useEffect(() => {
+    setClaudeCliModelDraft(effectiveConfig?.claudeCliModel ?? "");
+    setCodexCliModelDraft(effectiveConfig?.codexCliModel ?? "");
+  }, [effectiveConfig?.claudeCliModel, effectiveConfig?.codexCliModel]);
+
   const updateModel = async (role: "leader" | "worker", modelId: string) => {
     const nextConfig = await tandem.setConfig({ [role]: modelId });
     setConfig(nextConfig);
@@ -523,6 +532,22 @@ function App(): React.ReactElement {
     const nextConfig = await tandem.setConfig({ showThinking: value });
     setConfig(nextConfig);
     setSession((current) => (current ? { ...current, config: nextConfig } : current));
+  };
+
+  const updateCliModelPin = async (target: "claude-cli" | "codex-cli" | "codex-effort", value: string) => {
+    const result = cliModelPatch(target, value || "clear");
+    if (result.usage || !result.patch) {
+      appendMessage("system", result.usage ?? modelCommandUsage);
+      return;
+    }
+    const nextConfig = await tandem.setConfig(result.patch);
+    setConfig(nextConfig);
+    setSession((current) => (current ? { ...current, config: nextConfig } : current));
+  };
+
+  const commitTextInputOnEnter = (event: React.KeyboardEvent<HTMLInputElement>) => {
+    if (event.key !== "Enter") return;
+    event.currentTarget.blur();
   };
 
   const pickProject = async () => {
@@ -1128,6 +1153,45 @@ if (args.length === 1 && sub === "clear") {
               ))}
             </select>
           </label>
+          {usesClaudeCli ? (
+            <label>
+              Claude CLI model
+              <input
+                className="cliPinInput"
+                value={claudeCliModelDraft}
+                placeholder="CLI default (e.g. haiku, sonnet)"
+                onChange={(event) => setClaudeCliModelDraft(event.target.value)}
+                onBlur={() => void updateCliModelPin("claude-cli", claudeCliModelDraft.trim())}
+                onKeyDown={(event) => commitTextInputOnEnter(event)}
+              />
+            </label>
+          ) : null}
+          {usesCodexCli ? (
+            <>
+              <label>
+                Codex CLI model
+                <input
+                  className="cliPinInput"
+                  value={codexCliModelDraft}
+                  placeholder="CLI default"
+                  onChange={(event) => setCodexCliModelDraft(event.target.value)}
+                  onBlur={() => void updateCliModelPin("codex-cli", codexCliModelDraft.trim())}
+                  onKeyDown={(event) => commitTextInputOnEnter(event)}
+                />
+              </label>
+              <label>
+                Codex effort
+                <select value={effectiveConfig?.codexCliReasoningEffort ?? ""} onChange={(event) => void updateCliModelPin("codex-effort", event.target.value)}>
+                  <option value="">CLI default</option>
+                  {codexEffortOptions.map((effort) => (
+                    <option key={effort} value={effort}>
+                      {effort}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            </>
+          ) : null}
           <label>
             Permissions
             <select value={effectiveConfig?.permissionMode ?? "ask"} onChange={(event) => void updatePermissionMode(event.target.value as PermissionMode)}>

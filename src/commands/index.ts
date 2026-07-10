@@ -2,7 +2,8 @@ import { TandemConfig } from "../config/schema.js";
 import { saveProjectConfig } from "../config/load.js";
 import { CostLedger } from "../session/cost.js";
 import { listSessions } from "../session/store.js";
-import { listModels, modelCommandUsage, setCliModelConfig, setModel } from "./model.js";
+import { modelCommandUsage } from "../providers/cli-models.js";
+import { listModels, setCliModelConfig, setModel } from "./model.js";
 import { costText, helpText, statusText } from "./misc.js";
 import { addSchedule, listSchedules, removeSchedule } from "./schedule.js";
 

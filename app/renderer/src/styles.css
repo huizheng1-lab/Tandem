@@ -335,7 +335,8 @@ select {
   font-size: 12px;
 }
 
-.statusBar select {
+.statusBar select,
+.statusBar input {
   width: min(190px, 100%);
   max-width: 190px;
   min-width: 0;
@@ -344,6 +345,11 @@ select {
   color: #f3f2ee;
   background: #101114;
   padding: 7px 8px;
+}
+
+.statusBar .cliPinInput {
+  width: min(240px, 100%);
+  max-width: 240px;
 }
 
 .statusBar span {
