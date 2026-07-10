@@ -1,0 +1,32 @@
+D82 complete
+
+Implementation commit:
+- 3c3c175 D82-1: guard diff output against binary null bytes
+
+Changes:
+- Updated src/orchestrator/diff.ts to read candidate diff files as Buffer before decoding.
+- Files containing a NUL byte are represented as a clear placeholder: [binary file, N bytes].
+- Applied the same binary handling to snapshot-based diffs and git untracked-file diff blocks.
+- Added sanitizePromptText() to final assembled diff strings from gitDiff() and DiffTracker.snapshotDiff() as defense-in-depth.
+
+Regression coverage:
+- tests/diff.test.ts creates a real NUL-containing binary file in a non-git project, records it as touched, and verifies DiffTracker.diff() includes a binary placeholder and no raw null bytes.
+- tests/diff.test.ts also covers git-backed untracked binary files with the same no-null guarantee.
+
+Live reproduction:
+- Created a clean non-git temp directory.
+- Took a DiffTracker snapshot.
+- Wrote a WAV-like binary file voice.en.wav with NUL bytes.
+- Marked the file touched and generated the diff.
+- Result: containsNull=false, containsPlaceholder=true, preview showed +[binary file, 24 bytes].
+
+Prompt-input audit:
+- D82 fixed the confirmed unaudited diff.ts paths: snapshot fallback and git untracked-file reads.
+- D79 already covers shell/read_file/list_dir/grep tool output and parsed artifacts.
+- readProjectInstructions() still reads project-controlled TANDEM.md/AGENTS.md/CLAUDE.md directly as UTF-8 before prompt insertion. I did not patch it in D82 because the live blocker was confirmed in diff.ts; this should be considered for a future broad prompt-input hardening round if desired.
+
+Verification:
+- npm run typecheck: pass
+- npx vitest run tests/diff.test.ts: pass, 5 tests
+- npm test: pass, 29 passed and 1 skipped test files; 285 passed and 1 skipped tests
+- git diff --check: pass
