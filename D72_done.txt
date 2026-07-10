@@ -1,0 +1,29 @@
+D72 complete
+
+Commit: included in the D72 implementation commit that adds this marker.
+
+Implementation summary:
+- Replaced the desktop "Claude CLI model" free-text input with a select.
+- Options are exactly CLI default, haiku, sonnet, opus.
+- Selecting CLI default routes through updateCliModelPin("claude-cli", "clear") and removes claudeCliModel from persisted config.
+- Removed the now-dead claudeCliModelDraft state and sync effect.
+- Left Codex CLI model unchanged as a free-text input.
+- Left Codex effort unchanged as a select.
+
+Verification:
+- npm run typecheck: passed.
+- npm test: passed (27 passed, 1 skipped; 271 passed, 1 skipped).
+- npx electron-vite build: passed.
+- git diff --check: passed.
+
+Live alias check:
+- claude --help still documents aliases including sonnet and opus.
+- Fresh real alias calls for haiku, sonnet, and opus were attempted, but all returned api_error_status 429 with "You've hit your limit - resets 11:50am (America/New_York)" before model resolution. I therefore used the handoff's pre-verified alias list and did not claim fresh success evidence.
+
+Live desktop smoke:
+- Launched rebuilt Electron output with Playwright _electron using an isolated --user-data-dir, temporary TANDEM_HOME, and fake CLI paths.
+- Confirmed Claude CLI model control is a select, not an input.
+- Confirmed options are exactly CLI default, haiku, sonnet, opus.
+- Confirmed selecting haiku, sonnet, and opus updates the Leader dropdown label to "claude-code/cli (model <alias>)" and writes the matching claudeCliModel to on-disk config.
+- Confirmed selecting CLI default updates the label to "claude-code/cli (model CLI default)" and removes claudeCliModel from on-disk config.
+- Confirmed Codex CLI model remains a free-text input and Codex effort remains a select with CLI default/minimal/low/medium/high.

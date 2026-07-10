@@ -25,6 +25,7 @@ import "./styles.css";
 
 type Role = "user" | "leader" | "worker" | "system";
 const codexEffortOptions = CodexCliReasoningEffortSchema.options;
+const claudeCliModelOptions = ["haiku", "sonnet", "opus"] as const;
 
 type TranscriptEntry =
   | { id: number; kind: "message"; role: Role; text: string; thinking?: boolean }
@@ -186,7 +187,6 @@ function App(): React.ReactElement {
   const [missingKey, setMissingKey] = useState<MissingKeyInfo>();
   const [sessionAutoApprove, setSessionAutoApprove] = useState<SessionAutoApproveMode>("none");
   const [showThinking, setShowThinking] = useState(false);
-  const [claudeCliModelDraft, setClaudeCliModelDraft] = useState("");
   const [codexCliModelDraft, setCodexCliModelDraft] = useState("");
   const [thinkingRoles, setThinkingRoles] = useState<Set<"leader" | "worker">>(new Set());
   const [activityPulse, setActivityPulse] = useState<{ role: "leader" | "worker"; kind: "thinking" | "writing"; startedAt: number }>();
@@ -509,9 +509,8 @@ function App(): React.ReactElement {
   }, [running]);
 
   useEffect(() => {
-    setClaudeCliModelDraft(effectiveConfig?.claudeCliModel ?? "");
     setCodexCliModelDraft(effectiveConfig?.codexCliModel ?? "");
-  }, [effectiveConfig?.claudeCliModel, effectiveConfig?.codexCliModel]);
+  }, [effectiveConfig?.codexCliModel]);
 
   const updateModel = async (role: "leader" | "worker", modelId: string) => {
     const nextConfig = await tandem.setConfig({ [role]: modelId });
@@ -1156,14 +1155,14 @@ if (args.length === 1 && sub === "clear") {
           {usesClaudeCli ? (
             <label>
               Claude CLI model
-              <input
-                className="cliPinInput"
-                value={claudeCliModelDraft}
-                placeholder="CLI default (e.g. haiku, sonnet)"
-                onChange={(event) => setClaudeCliModelDraft(event.target.value)}
-                onBlur={() => void updateCliModelPin("claude-cli", claudeCliModelDraft.trim())}
-                onKeyDown={(event) => commitTextInputOnEnter(event)}
-              />
+              <select value={effectiveConfig?.claudeCliModel ?? ""} onChange={(event) => void updateCliModelPin("claude-cli", event.target.value || "clear")}>
+                <option value="">CLI default</option>
+                {claudeCliModelOptions.map((model) => (
+                  <option key={model} value={model}>
+                    {model}
+                  </option>
+                ))}
+              </select>
             </label>
           ) : null}
           {usesCodexCli ? (
