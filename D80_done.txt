@@ -1,0 +1,25 @@
+D80 complete
+
+Outcome:
+- No new code changes were needed for D80.
+- D79 already landed the required source-layer fix: bashTool() sanitizes captured output before returning it to the model as a tool result.
+
+Relevant D79 commits:
+- 8cbdb9e D79-1: sanitize prompt-bound tool output
+- 419723f D79-2: record null-byte output hardening
+
+Direct live verification:
+- Ran bashTool() directly with a command that emitted bytes [97,0,98,27,99,10,9,100].
+- Raw intended bytes were: a, NUL, b, ESC, c, newline, tab, d.
+- Returned output was: "abc\n\td".
+- containsNull=false.
+- Returned char codes were [97,98,99,10,9,100], confirming NUL and ESC were stripped before the worker model could receive the tool result while normal newline/tab formatting remained.
+
+Existing regression coverage:
+- tests/tools.test.ts asserts bashTool() returned output is sanitized directly, not merely sanitized later in prompt construction.
+- tests/orchestrator.test.ts asserts sanitized report fields are what review receives.
+
+Acceptance checks:
+- npm run typecheck: pass
+- npm test: pass, 28 passed and 1 skipped test files; 279 passed and 1 skipped tests
+- git diff --check: pass
