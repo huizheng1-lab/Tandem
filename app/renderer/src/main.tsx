@@ -26,6 +26,7 @@ import "./styles.css";
 type Role = "user" | "leader" | "worker" | "system";
 const codexEffortOptions = CodexCliReasoningEffortSchema.options;
 const claudeCliModelOptions = ["haiku", "sonnet", "opus"] as const;
+const cliDefaultOption = "default";
 
 type TranscriptEntry =
   | { id: number; kind: "message"; role: Role; text: string; thinking?: boolean }
@@ -159,6 +160,65 @@ function unavailableModelText(model: ModelListItem): string {
   return ` (${model.envKey} missing)`;
 }
 
+type ModelSelectOption = {
+  value: string;
+  label: string;
+  disabled?: boolean;
+};
+
+function claudeCliSelectValue(model: string): string {
+  return `claude-code/cli::model:${model}`;
+}
+
+function codexCliSelectValue(effort: string): string {
+  return `codex/cli::effort:${effort}`;
+}
+
+function roleModelSelectValue(modelId: string | undefined, config: TandemConfig | undefined): string {
+  if (modelId === "claude-code/cli") return claudeCliSelectValue(config?.claudeCliModel ?? cliDefaultOption);
+  if (modelId === "codex/cli") return codexCliSelectValue(config?.codexCliReasoningEffort ?? cliDefaultOption);
+  return modelId ?? "";
+}
+
+function cliLabel(modelId: "claude-code/cli" | "codex/cli", config: TandemConfig | undefined, patch: Partial<TandemConfig>): string {
+  return modelDisplayName(modelId, config ? { ...config, ...patch } : config);
+}
+
+function modelSelectOptions(models: ModelListItem[], config: TandemConfig | undefined): ModelSelectOption[] {
+  return models.flatMap((model) => {
+    const suffix = `${mediaBadge(model)}${unavailableModelText(model)}`;
+    if (model.id === "claude-code/cli") {
+      return [
+        {
+          value: claudeCliSelectValue(cliDefaultOption),
+          label: `${cliLabel("claude-code/cli", config, { claudeCliModel: undefined })}${suffix}`,
+          disabled: !model.available
+        },
+        ...claudeCliModelOptions.map((variant) => ({
+          value: claudeCliSelectValue(variant),
+          label: `${cliLabel("claude-code/cli", config, { claudeCliModel: variant })}${suffix}`,
+          disabled: !model.available
+        }))
+      ];
+    }
+    if (model.id === "codex/cli") {
+      return [
+        {
+          value: codexCliSelectValue(cliDefaultOption),
+          label: `${cliLabel("codex/cli", config, { codexCliReasoningEffort: undefined })}${suffix}`,
+          disabled: !model.available
+        },
+        ...codexEffortOptions.map((effort) => ({
+          value: codexCliSelectValue(effort),
+          label: `${cliLabel("codex/cli", config, { codexCliReasoningEffort: effort })}${suffix}`,
+          disabled: !model.available
+        }))
+      ];
+    }
+    return [{ value: model.id, label: `${modelDisplayName(model.id, config)}${suffix}`, disabled: !model.available }];
+  });
+}
+
 function App(): React.ReactElement {
   const tandem = window.tandem;
   if (!tandem) {
@@ -187,7 +247,6 @@ function App(): React.ReactElement {
   const [missingKey, setMissingKey] = useState<MissingKeyInfo>();
   const [sessionAutoApprove, setSessionAutoApprove] = useState<SessionAutoApproveMode>("none");
   const [showThinking, setShowThinking] = useState(false);
-  const [codexCliModelDraft, setCodexCliModelDraft] = useState("");
   const [thinkingRoles, setThinkingRoles] = useState<Set<"leader" | "worker">>(new Set());
   const [activityPulse, setActivityPulse] = useState<{ role: "leader" | "worker"; kind: "thinking" | "writing"; startedAt: number }>();
   const [activeTool, setActiveTool] = useState<(ToolActivityEvent & { startedAt: number }) | undefined>();
@@ -219,8 +278,7 @@ function App(): React.ReactElement {
   const loopRunningRef = useRef(false);
 
   const effectiveConfig = session?.config ?? config;
-  const usesClaudeCli = effectiveConfig?.leader === "claude-code/cli" || effectiveConfig?.worker === "claude-code/cli";
-  const usesCodexCli = effectiveConfig?.leader === "codex/cli" || effectiveConfig?.worker === "codex/cli";
+  const roleModelOptions = useMemo(() => modelSelectOptions(models, effectiveConfig), [models, effectiveConfig]);
   const contextProjectDir = session?.projectDir ?? appState?.lastProjectDir ?? appState?.projectDir;
   const totalCost = useMemo(() => {
     if (!cost) return "$0.0000";
@@ -508,14 +566,30 @@ function App(): React.ReactElement {
     return () => clearInterval(timer);
   }, [running]);
 
-  useEffect(() => {
-    setCodexCliModelDraft(effectiveConfig?.codexCliModel ?? "");
-  }, [effectiveConfig?.codexCliModel]);
-
   const updateModel = async (role: "leader" | "worker", modelId: string) => {
     const nextConfig = await tandem.setConfig({ [role]: modelId });
     setConfig(nextConfig);
     setSession((current) => (current ? { ...current, config: nextConfig } : current));
+  };
+
+  const updateRoleModelSelection = async (role: "leader" | "worker", value: string) => {
+    if (value.startsWith("claude-code/cli::model:")) {
+      const variant = value.slice("claude-code/cli::model:".length);
+      const pin = cliModelPatch("claude-cli", variant === cliDefaultOption ? "clear" : variant);
+      const nextConfig = await tandem.setConfig({ [role]: "claude-code/cli", ...pin.patch });
+      setConfig(nextConfig);
+      setSession((current) => (current ? { ...current, config: nextConfig } : current));
+      return;
+    }
+    if (value.startsWith("codex/cli::effort:")) {
+      const effort = value.slice("codex/cli::effort:".length);
+      const pin = cliModelPatch("codex-effort", effort === cliDefaultOption ? "clear" : effort);
+      const nextConfig = await tandem.setConfig({ [role]: "codex/cli", ...pin.patch });
+      setConfig(nextConfig);
+      setSession((current) => (current ? { ...current, config: nextConfig } : current));
+      return;
+    }
+    await updateModel(role, value);
   };
 
   const updatePermissionMode = async (permissionMode: PermissionMode) => {
@@ -531,22 +605,6 @@ function App(): React.ReactElement {
     const nextConfig = await tandem.setConfig({ showThinking: value });
     setConfig(nextConfig);
     setSession((current) => (current ? { ...current, config: nextConfig } : current));
-  };
-
-  const updateCliModelPin = async (target: "claude-cli" | "codex-cli" | "codex-effort", value: string) => {
-    const result = cliModelPatch(target, value || "clear");
-    if (result.usage || !result.patch) {
-      appendMessage("system", result.usage ?? modelCommandUsage);
-      return;
-    }
-    const nextConfig = await tandem.setConfig(result.patch);
-    setConfig(nextConfig);
-    setSession((current) => (current ? { ...current, config: nextConfig } : current));
-  };
-
-  const commitTextInputOnEnter = (event: React.KeyboardEvent<HTMLInputElement>) => {
-    if (event.key !== "Enter") return;
-    event.currentTarget.blur();
   };
 
   const pickProject = async () => {
@@ -1130,67 +1188,24 @@ if (args.length === 1 && sub === "clear") {
         <header className="statusBar">
           <label>
             Leader
-            <select value={effectiveConfig?.leader ?? ""} onChange={(event) => void updateModel("leader", event.target.value)}>
-              {models.map((model) => (
-                <option key={model.id} value={model.id} disabled={!model.available}>
-                  {modelDisplayName(model.id, effectiveConfig)}
-                  {mediaBadge(model)}
-                  {unavailableModelText(model)}
+            <select value={roleModelSelectValue(effectiveConfig?.leader, effectiveConfig)} onChange={(event) => void updateRoleModelSelection("leader", event.target.value)}>
+              {roleModelOptions.map((option) => (
+                <option key={`leader-${option.value}`} value={option.value} disabled={option.disabled}>
+                  {option.label}
                 </option>
               ))}
             </select>
           </label>
           <label>
             Worker
-            <select value={effectiveConfig?.worker ?? ""} onChange={(event) => void updateModel("worker", event.target.value)}>
-              {models.map((model) => (
-                <option key={model.id} value={model.id} disabled={!model.available}>
-                  {modelDisplayName(model.id, effectiveConfig)}
-                  {mediaBadge(model)}
-                  {unavailableModelText(model)}
+            <select value={roleModelSelectValue(effectiveConfig?.worker, effectiveConfig)} onChange={(event) => void updateRoleModelSelection("worker", event.target.value)}>
+              {roleModelOptions.map((option) => (
+                <option key={`worker-${option.value}`} value={option.value} disabled={option.disabled}>
+                  {option.label}
                 </option>
               ))}
             </select>
           </label>
-          {usesClaudeCli ? (
-            <label>
-              Claude CLI model
-              <select value={effectiveConfig?.claudeCliModel ?? ""} onChange={(event) => void updateCliModelPin("claude-cli", event.target.value || "clear")}>
-                <option value="">CLI default</option>
-                {claudeCliModelOptions.map((model) => (
-                  <option key={model} value={model}>
-                    {model}
-                  </option>
-                ))}
-              </select>
-            </label>
-          ) : null}
-          {usesCodexCli ? (
-            <>
-              <label>
-                Codex CLI model
-                <input
-                  className="cliPinInput"
-                  value={codexCliModelDraft}
-                  placeholder="CLI default"
-                  onChange={(event) => setCodexCliModelDraft(event.target.value)}
-                  onBlur={() => void updateCliModelPin("codex-cli", codexCliModelDraft.trim())}
-                  onKeyDown={(event) => commitTextInputOnEnter(event)}
-                />
-              </label>
-              <label>
-                Codex effort
-                <select value={effectiveConfig?.codexCliReasoningEffort ?? ""} onChange={(event) => void updateCliModelPin("codex-effort", event.target.value)}>
-                  <option value="">CLI default</option>
-                  {codexEffortOptions.map((effort) => (
-                    <option key={effort} value={effort}>
-                      {effort}
-                    </option>
-                  ))}
-                </select>
-              </label>
-            </>
-          ) : null}
           <label>
             Permissions
             <select value={effectiveConfig?.permissionMode ?? "ask"} onChange={(event) => void updatePermissionMode(event.target.value as PermissionMode)}>

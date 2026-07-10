@@ -347,11 +347,6 @@ select {
   padding: 7px 8px;
 }
 
-.statusBar .cliPinInput {
-  width: min(240px, 100%);
-  max-width: 240px;
-}
-
 .statusBar span {
   min-width: 0;
   overflow-wrap: anywhere;
