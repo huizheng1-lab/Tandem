@@ -1,6 +1,6 @@
 D71 complete
 
-Commit: included in the D71 implementation commit that adds this marker.
+Commit: 62adfd9 (D71-1: add desktop CLI model pin controls).
 
 Implementation summary:
 - Added conditional desktop status-bar controls for CLI model pins.
