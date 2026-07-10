@@ -1,0 +1,49 @@
+D68 done
+
+Round: D68
+Status: code complete for the mechanical D68-2 portion (--max-budget-usd safety cap). D68-1 (session reuse) investigated via live A/B and explicitly NOT implemented this round per the handoff's "say so and stop rather than force it" instruction - the contamination risk + cleanup complexity outweigh the cost win. D68-3 is report-only. tsc + npm test green (267 passed, +1 from D66 baseline 266).
+
+Implementation commit:
+- c2fb378 D68-2: add --max-budget-usd safety cap per claude-code-cli call
+
+Sub-tasks completed:
+
+D68-2 (concrete, low-risk, mechanical - SHIPPED):
+- src/config/schema.ts: new config field claudeMaxBudgetUsdPerCall (z.number().positive()). Default 2.0 (sensible per the handoff's "a normal single call should never legitimately need to exceed $2"). Threaded via the same mergeConfig path as maxStepsPerAgentTurn etc., so existing user configs get the default automatically.
+- src/agents/claude-code-cli/exec.ts: buildClaudeExecArgv accepts optional maxBudgetUsd; appends --max-budget-usd <value> to argv when set and > 0. runClaudeExec threads options.maxBudgetUsd into buildClaudeExecArgv. The ClaudeExecOptions interface gets the optional field.
+- src/agents/claude-code-cli/leader.ts + worker.ts: pass options.config.claudeMaxBudgetUsdPerCall as the maxBudgetUsd arg on every claude-code-cli call (plan, review, takeover, worker build).
+- tests/claude-code-cli.test.ts: added a D68-2 argv test ("appends --max-budget-usd when maxBudgetUsd is set (omits when not)") with 3 sub-cases: flag absent when no maxBudgetUsd, flag present when set, flag absent when maxBudgetUsd is 0 (the > 0 guard skips the zero/negative case).
+
+D68-2 live verification (the handoff required this): a real `claude.exe -p` call with `--max-budget-usd 0.01`, real `haiku` model on the installed CLI. Ran via `Start-Process -Wait`. Output:
+  exit=0
+  {"type":"result","subtype":"error_max_budget_usd","duration_ms":1330,"duration_api_ms":0,"is_error":true,
+   "num_turns":1,"stop_reason":"end_turn","session_id":"...","total_cost_usd":0.07876775,
+   "errors":["Reached maximum budget ($0.01)"]}
+Confirmed: --max-budget-usd is actually passed through to the underlying CLI; the CLI fires the `error_max_budget_usd` subtype; the error message "Reached maximum budget ($0.01)" is clear and tells the user why the call aborted. The handoff's "confirm via a real or carefully-isolated test that the flag is actually passed and that a low budget on a real call causes it to stop early with a diagnosable error" is satisfied.
+
+D68-1 (NOT implemented this round, per the handoff's "say so honestly and do not implement D68-1"):
+- The handoff's specific test: two real claude -p calls with an IDENTICAL long system prompt, one cold, one via --resume, compare total_cost_usd and usage. Live result:
+  COLD:   turns=1 cost=$0.0174  cache_read=13700  cache_creation=3385
+  RESUMED: turns=1 cost=$0.0053  cache_read=17085  cache_creation=21
+- Real, reproducible cost win: ~3.3x cheaper on the resumed call (and the cache_creation dropping from 3385 to 21 shows almost the entire system-prompt was served from cache on the second call).
+- However, the handoff's HARD constraint is "session reuse must be scoped to ONE orchestration run and never bleed across separate user requests/turns (a resumed session carrying stale context into an unrelated future request would be a correctness bug, not just a cost issue - this is more important than the cost savings)." Multiple issues with meeting that constraint:
+  1. Tandem currently passes --no-session-persistence on every call, which by definition doesn't persist. The first call to a new run would have to drop --no-session-persistence AND generate a per-run session id AND the second call would have to use --resume. So the change is a non-trivial refactor.
+  2. The session is stored in ~/.claude/<session-id>/. There is no auto-cleanup in the CLI; the session persists after the orchestration run finishes. If Tandem crashes mid-run or the run is interrupted, the session file lingers. A subsequent unrelated user request using the same session id (improbable but not impossible) would inherit stale context - exactly the contamination risk the handoff warns about.
+  3. The plan/review/takeover calls in a single orchestration run each have different "conversations" (different schemas, different prompts, different system-prompt sections like the worker context vs. the reviewer context). A resumed session carries ALL of that history into the next call, which is more noise than signal. The cache wins come from the system-prompt's shared prefix, not from the conversation history.
+  4. The right architectural alternative (not implemented this round) is Anthropic's prompt caching as a primitive, separate from session persistence - which is closer to what D57's reasoning was. A future round could expose a session-id field that's scoped per-run with a teardown, if the gain is worth the risk + cleanup complexity.
+- The handoff explicitly allows this: "If the live test doesn't show a clear win or shows contamination risk, report that honestly and do not implement D68-1 - this one is genuinely allowed to come back 'not worth it,' unlike a normal bug-fix handoff." The contamination risk + cleanup complexity are too high for a structural change that produces a real but not game-changing cost win. NOT implemented; reported in this done file.
+
+D68-3 (report-only, NOT implemented):
+- The handoff asks me to investigate --exclude-dynamic-system-prompt-sections. Per the handoff's own note, it's "ignored with --system-prompt" and Tandem always passes --system-prompt (full replace, not --append-system-prompt) by deliberate past design (D43/D44 saga). Switching to --append-system-prompt would let the caching flag apply but would also let Claude Code's own default persona/behavior mix with Tandem's rules - the D41-D47 findings showed system/user-channel separation was important for Claude Code CLI's behavior. Investigating this would require re-validating the D41-D47 findings still hold if this changes - not a clean fit. Per the handoff: "This is explicitly lower-confidence and lower-priority than D68-1/D68-2 - a feasibility note in the completion report is an acceptable outcome if it doesn't look clean." Not a clean fit; reported in this done file.
+
+Verification:
+- npx tsc --noEmit: exit code 0, no output.
+- npm test: 267 passed, 1 skipped (live-smoke), 0 failed. Baseline 266; +1 net D68-2 test.
+- git diff --check: clean.
+
+Live checks (per the handoff):
+- D68-2: confirmed via a real claude.exe -p call (above). Output: exit 0, subtype "error_max_budget_usd", error message "Reached maximum budget ($0.01)" - the diagnostic the handoff required.
+- D68-1: live A/B test conducted (above). Cost win confirmed (~3.3x), contamination risk + cleanup complexity too high for the structural change. NOT implemented per the handoff's explicit "say so honestly" permission.
+- D68-3: feasibility noted; the --system-prompt vs --append-system-prompt tradeoff is bound up in the D41-D47 findings; switching is not a clean fit without re-validating that those findings still hold. NOT implemented.
+</content>
+</invoke>
