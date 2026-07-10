@@ -1,6 +1,7 @@
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { sanitizePromptText } from "../../tools/sanitize.js";
 
 export type CodexSchemaKind = "build-plan" | "completion-report" | "review-verdict" | "takeover" | "plan-or-answer";
 
@@ -142,6 +143,7 @@ export function jsonSchemaFor(kind: CodexSchemaKind): object {
 
 export function stripNulls(value: unknown): unknown {
   if (Array.isArray(value)) return value.map(stripNulls);
+  if (typeof value === "string") return sanitizePromptText(value);
   if (!value || typeof value !== "object") return value;
   const result: Record<string, unknown> = {};
   for (const [key, item] of Object.entries(value)) {

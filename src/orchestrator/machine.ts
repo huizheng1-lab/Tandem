@@ -12,6 +12,7 @@ import {
   validateBuildPlan,
   validateCompletionReport
 } from "./artifacts.js";
+import { sanitizePromptValue } from "../tools/sanitize.js";
 
 export type MachinePhase = "IDLE" | "PLANNING" | "BUILDING" | "REVIEWING" | "FEEDBACK" | "TAKEOVER" | "DONE";
 export interface OrchestrationCheckpoint {
@@ -69,18 +70,26 @@ export interface RunOptions {
   emit?: (event: MachineEvent) => void;
 }
 
+function isNullByteArgumentError(error: unknown): boolean {
+  return (
+    error instanceof TypeError &&
+    (error as NodeJS.ErrnoException).code === "ERR_INVALID_ARG_VALUE" &&
+    /without null bytes|null bytes/i.test(error.message)
+  );
+}
+
 async function retryArtifact<T>(name: string, emit: (event: MachineEvent) => void, producer: () => Promise<unknown>, parse: (value: unknown) => T): Promise<T> {
   let lastError: unknown;
   for (let attempt = 1; attempt <= 3; attempt += 1) {
     try {
       const value = await producer();
-      const parsed = parse(value);
+      const parsed = sanitizePromptValue(parse(value));
       emit({ type: "artifact", name, value: parsed });
       return parsed;
     } catch (error) {
       // D66-2: rate-limit outcomes are not transient - retrying now (before the reset time)
       // is guaranteed to fail identically. Same AbortError fast-fail pattern.
-      if (error instanceof Error && (error.name === "AbortError" || error.name === "RateLimitError")) throw error;
+      if (error instanceof Error && (error.name === "AbortError" || error.name === "RateLimitError" || isNullByteArgumentError(error))) throw error;
       lastError = error;
       emit({ type: "error", message: `${name} failed on attempt ${attempt}: ${String(error)}` });
     }

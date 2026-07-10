@@ -6,6 +6,7 @@ import { assertSafeWritePath } from "./protection.js";
 import { mediaContentForFile } from "../session/attachments.js";
 import type { ContentPart } from "../session/attachments.js";
 import type { ModelEntry } from "../providers/registry.js";
+import { sanitizePromptText } from "./sanitize.js";
 
 export interface ToolContext {
   cwd: string;
@@ -43,7 +44,7 @@ export async function readFileTool(ctx: Pick<ToolContext, "cwd" | "media">, file
   const media = await mediaContentForFile(ctx.cwd, filePath, { media: ctx.media });
   if (media) return media;
   const fullPath = resolveInside(ctx.cwd, filePath);
-  const content = await readFile(fullPath, "utf8");
+  const content = sanitizePromptText(await readFile(fullPath, "utf8"));
   const lines = content.split(/\r?\n/);
   return lines
     .slice(offset, offset + limit)
@@ -81,7 +82,7 @@ export async function listDirTool(ctx: Pick<ToolContext, "cwd">, dirPath = "."):
   const rows = await Promise.all(
     entries.map(async (entry) => {
       const entryStat = await stat(path.join(fullPath, entry));
-      return `${entryStat.isDirectory() ? "dir " : "file"} ${entry}`;
+      return `${entryStat.isDirectory() ? "dir " : "file"} ${sanitizePromptText(entry)}`;
     })
   );
   return rows.join("\n");

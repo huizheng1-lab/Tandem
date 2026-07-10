@@ -2,6 +2,7 @@ import { execa } from "execa";
 import { ToolContext, resolveInside } from "./fs.js";
 import { ensurePermission } from "./permissions.js";
 import { assertSafeBash } from "./protection.js";
+import { sanitizePromptText } from "./sanitize.js";
 
 export interface ShellResult {
   command: string;
@@ -17,8 +18,9 @@ export function effectiveBashTimeout(timeoutMs = DEFAULT_BASH_TIMEOUT_MS): numbe
 }
 
 export function tailOutput(output: string, maxChars = 2000): string {
-  if (output.length <= maxChars) return output;
-  return output.slice(output.length - maxChars);
+  const safeOutput = sanitizePromptText(output);
+  if (safeOutput.length <= maxChars) return safeOutput;
+  return safeOutput.slice(safeOutput.length - maxChars);
 }
 
 interface DescendantTracker {

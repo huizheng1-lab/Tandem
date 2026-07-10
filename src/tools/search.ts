@@ -2,6 +2,7 @@ import { readFile } from "node:fs/promises";
 import path from "node:path";
 import fg from "fast-glob";
 import { resolveInside } from "./fs.js";
+import { sanitizePromptText } from "./sanitize.js";
 
 export async function globTool(cwd: string, pattern: string): Promise<string[]> {
   return fg(pattern, { cwd, dot: true, onlyFiles: false, ignore: ["node_modules/**", "dist/**", ".git/**"] });
@@ -16,7 +17,7 @@ export async function grepTool(cwd: string, pattern: string, globPattern = "**/*
     const fullPath = path.join(root, file);
     let content = "";
     try {
-      content = await readFile(fullPath, "utf8");
+      content = sanitizePromptText(await readFile(fullPath, "utf8"));
     } catch {
       continue;
     }

@@ -200,6 +200,56 @@ describe("orchestration", () => {
     expect(result.takeover).toBe(false);
   });
 
+  it("sanitizes prompt-unsafe control characters in reports before review", async () => {
+    let reviewedOutput = "";
+    const result = await runOrchestration({
+      request: "build",
+      config: { maxReviewRounds: 3, maxParallelWorkers: 1 },
+      agents: agents({
+        build: async () => ({
+          ...report(),
+          summary: "done\0with controls",
+          verificationResults: [{ command: "npm test", passed: true, output: "a\0b\x1Bc" }]
+        }),
+        review: async ({ report }) => {
+          reviewedOutput = report.verificationResults[0]?.output ?? "";
+          return verdict("approve");
+        }
+      })
+    });
+
+    expect(result.takeover).toBe(false);
+    expect(result.reports[0]?.summary).toContain("donewith controls");
+    expect(result.reports[0]?.summary).not.toContain("\0");
+    expect(reviewedOutput).toBe("abc");
+  });
+
+  it("fast-fails deterministic null-byte subprocess argument errors", async () => {
+    let reviews = 0;
+    const events: string[] = [];
+    const result = await runOrchestration({
+      request: "build",
+      config: { maxReviewRounds: 3, maxParallelWorkers: 1 },
+      agents: agents({
+        review: async () => {
+          reviews += 1;
+          const error = new TypeError("The argument 'args[1]' must be a string without null bytes. Received 'a\\x00b'") as NodeJS.ErrnoException;
+          error.code = "ERR_INVALID_ARG_VALUE";
+          throw error;
+        }
+      }),
+      emit: (event) => {
+        if (event.type === "error") events.push(event.message);
+      }
+    });
+
+    expect(reviews).toBe(1);
+    expect(events.some((message) => message.includes("ReviewVerdict failed on attempt"))).toBe(false);
+    expect(result.phase).toBe("DONE");
+    expect(result.takeover).toBe(false);
+    expect(result.summary).toContain("automated review could not be finalized");
+  });
+
   it("resumes from a mid-review checkpoint without rerunning earlier build rounds", async () => {
     let builds = 0;
     let lastCheckpoint: OrchestrationCheckpoint | undefined;

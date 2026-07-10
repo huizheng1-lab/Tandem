@@ -5,7 +5,7 @@ import { describe, expect, it } from "vitest";
 import { editFileTool, readFileTool, writeFileTool } from "../src/tools/fs.js";
 import type { ToolActivityEvent } from "../src/tools/fs.js";
 import { makeToolSet } from "../src/tools/index.js";
-import { bashTool, effectiveBashTimeout, MAX_BASH_TIMEOUT_MS } from "../src/tools/shell.js";
+import { bashTool, effectiveBashTimeout, MAX_BASH_TIMEOUT_MS, tailOutput } from "../src/tools/shell.js";
 import { isDestructiveCommand } from "../src/tools/permissions.js";
 
 async function tempDir(): Promise<string> {
@@ -78,6 +78,24 @@ describe("tools", () => {
     const cwd = await tempDir();
     await expect(writeFileTool({ cwd, permissionMode: "yolo" }, "../no.txt", "x")).rejects.toThrow(/escapes/);
     expect(isDestructiveCommand("rm -rf /")).toBe(true);
+  });
+
+  it("sanitizes prompt-unsafe control characters from captured shell output", async () => {
+    expect(tailOutput("a\0b\x1Bc\nok\tkept")).toBe("abc\nok\tkept");
+
+    const cwd = await tempDir();
+    const result = await bashTool({ cwd, permissionMode: "yolo" }, "node -e \"process.stdout.write(Buffer.from([97,0,98]))\"");
+
+    expect(result.passed).toBe(true);
+    expect(result.output).toBe("ab");
+    expect(result.output).not.toContain("\0");
+  });
+
+  it("sanitizes prompt-unsafe control characters from read_file output", async () => {
+    const cwd = await tempDir();
+    await writeFile(path.join(cwd, "binary-ish.txt"), "one\0two\x1B\nthree", "utf8");
+
+    await expect(readFileTool({ cwd }, "binary-ish.txt")).resolves.toBe("1: onetwo\n2: three");
   });
 
   describe("isDestructiveCommand regression set (D56)", () => {

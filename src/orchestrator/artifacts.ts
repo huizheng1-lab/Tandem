@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { resolveOnPath } from "../tools/resolve-on-path.js";
+import { sanitizePromptValue } from "../tools/sanitize.js";
 
 export const BuildPlanSchema = z.object({
   title: z.string(),
@@ -310,7 +311,7 @@ export async function validateBuildPlan(
   platform: NodeJS.Platform = process.platform,
   env: NodeJS.ProcessEnv = process.env
 ): Promise<BuildPlan> {
-  const plan = BuildPlanSchema.parse(value);
+  const plan = sanitizePromptValue(BuildPlanSchema.parse(value));
   if (plan.tasks.length === 0) throw new Error("no implementation tasks - answer directly instead");
   const errors: string[] = [];
   const verifResults = await Promise.all(
@@ -406,7 +407,7 @@ export function validateCompletionReport(
   value: unknown,
   expectedCommands: string[] = plan.verification
 ): CompletionReport {
-  const report = CompletionReportSchema.parse(value);
+  const report = sanitizePromptValue(CompletionReportSchema.parse(value));
   enforceVerification(plan, report, expectedCommands);
   return report;
 }
