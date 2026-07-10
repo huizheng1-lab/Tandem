@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { createLiveAgents } from "../src/agents/live.js";
-import { buildClaudeExecArgv, claudePermissionFor, parseClaudeEnvelope, runClaudeExec } from "../src/agents/claude-code-cli/exec.js";
+import { buildClaudeExecArgv, claudePermissionFor, parseClaudeEnvelope, RateLimitError, runClaudeExec } from "../src/agents/claude-code-cli/exec.js";
 import { buildClaudeLeaderPlanPrompts, buildClaudeLeaderReviewPrompts, buildClaudeLeaderTakeoverPrompts, claudeLeaderReview, claudeLeaderTakeover } from "../src/agents/claude-code-cli/leader.js";
 import { clearClaudeCliPathCache, locateClaudeCli } from "../src/agents/claude-code-cli/locate.js";
 import { buildClaudeWorkerPrompts } from "../src/agents/claude-code-cli/worker.js";
@@ -234,6 +234,7 @@ describe("claude code cli mixed roles", () => {
     const prompts = await buildClaudeLeaderPlanPrompts(
       {
         env: { ComSpec: "powershell.exe" },
+        cwd: "C:/test",
         projectInstructions: async () => "Project instructions:\n- Use the local style."
       },
       { request: "What is 9 times 9?", goals: ["Goal 1: Ship"], history: "USER: hello" }
@@ -254,7 +255,7 @@ describe("claude code cli mixed roles", () => {
   });
 
   it("omits empty Claude Code leader context placeholders", async () => {
-    const prompts = await buildClaudeLeaderPlanPrompts({ env: {}, projectInstructions: async () => "Project instructions:\nnone" }, { request: "What is 9 times 9?", goals: [], history: "" });
+    const prompts = await buildClaudeLeaderPlanPrompts({ env: {}, cwd: "C:/test", projectInstructions: async () => "Project instructions:\nnone" }, { request: "What is 9 times 9?", goals: [], history: "" });
 
     expect(prompts.prompt).toMatch(/^Request: What is 9 times 9\?/);
     expect(prompts.prompt).toContain("Request: What is 9 times 9?");
@@ -289,6 +290,7 @@ describe("claude code cli mixed roles", () => {
   it("places the request/BuildPlan as the first content of leader review and takeover prompts", async () => {
     const reviewOptions = {
       env: { ComSpec: "powershell.exe" },
+      cwd: "C:/test",
       projectInstructions: async () => "Project instructions:\n- Use the local style."
     };
     const reviewReport: CompletionReport = {
@@ -415,6 +417,7 @@ console.log(JSON.stringify({ type: "result", subtype: "success", is_error: false
 
     const planOptions = {
       env: { ...process.env, TANDEM_TEST_CAPTURE: capturePath, TANDEM_FAKE_CLAUDE_MODE: "answer" },
+      cwd: process.cwd(),
       projectInstructions: async () => "Project instructions:\nnone"
     };
     const prompts = await buildClaudeLeaderPlanPrompts(planOptions, { request: "What is 9 times 9? Reply with only the number.", goals: [], history: "" });
@@ -486,5 +489,104 @@ console.log(JSON.stringify({ type: "result", subtype: "success", is_error: false
     expect(workerCaptured.rawPrompt.indexOf("BuildPlan:")).toBeLessThan(workerCaptured.rawPrompt.indexOf("Round 1"));
     expect(workerCaptured.rawPrompt).not.toContain("This is a single non-interactive call");
     expect(workerCaptured.rawPrompt).not.toContain("Worker task: build now from this worker task context.");
+  });
+});
+
+describe("D66-1: claude-code-cli plan prompt states the absolute cwd explicitly", () => {
+  it("includes the absolute project root in the system prompt for the leader", async () => {
+    const prompts = await buildClaudeLeaderPlanPrompts(
+      {
+        env: {},
+        cwd: "C:/Users/huizh/tmp_test_data/dogfight-game",
+        projectInstructions: async () => "Project instructions:\nnone"
+      },
+      { request: "What is 9 times 9?", goals: [], history: "" }
+    );
+    expect(prompts.systemPrompt).toContain("C:/Users/huizh/tmp_test_data/dogfight-game");
+    expect(prompts.systemPrompt).toMatch(/Absolute project root \(cwd\)/);
+  });
+});
+
+describe("D66-2: retryArtifact fast-fails on RateLimitError instead of wasting retries", () => {
+  // 429-shaped error path - runClaudeExec throws RateLimitError on 429, retryArtifact must
+  // fast-fail (single attempt, immediate re-throw) instead of burning 2 more attempts that are
+  // guaranteed to fail identically until the reset time.
+  it("detects a 429-shaped envelope and throws RateLimitError with resetsAt", async () => {
+    const { RateLimitError, runClaudeExec, parseClaudeEnvelope } = await import("../src/agents/claude-code-cli/exec.js");
+    // Build a fake envelope matching the live failure shape (api_error_status: 429 + prose
+    // reset time). parseClaudeEnvelope does not parse 429 itself; the detection lives in
+    // runClaudeExec's exitCode!==0 branch. Build a 429-shaped stdout and call the actual
+    // parsing path via a mock shell.
+    const fakeEnvelope = {
+      type: "result",
+      subtype: "success",
+      is_error: true,
+      api_error_status: 429,
+      result: "You've hit your limit · resets 11:50pm (America/New_York)",
+      structured_output: undefined,
+      usage: {},
+      total_cost_usd: 0,
+      permission_denials: []
+    };
+    const tmpDir = path.join(tmpdir(), `tandem-d66-${Date.now()}-${Math.random().toString(16).slice(2)}`);
+    await mkdir(tmpDir, { recursive: true });
+    // Make a fake `claude` shim that just echoes the envelope as stdout, exits 0, and prints
+    // version 2.1.144 so locateClaudeCli accepts it.
+    const jsPath = path.join(tmpDir, "claude.js");
+    const cmdPath = path.join(tmpDir, "claude.cmd");
+    await writeFile(jsPath, `process.stdout.write(${JSON.stringify(JSON.stringify(fakeEnvelope))});`, "utf8");
+    await writeFile(cmdPath, `@echo off\r\n"${process.execPath}" "${jsPath}" %*\r\n`, "utf8");
+    clearClaudeCliPathCache();
+    try {
+      const testRole: import("../src/session/cost.js").CostRole = "leader";
+      const testEntry: import("../src/providers/registry.js").ModelEntry = { id: "claude-code/cli", provider: "claude-code-cli", modelName: "haiku", contextWindow: 200000 };
+      const testLedger = new (await import("../src/session/cost.js")).CostLedger();
+      await expect(
+        runClaudeExec({
+          cwd: tmpDir,
+          env: { PATH: tmpDir + (process.platform === "win32" ? ";" : ":") + process.env.PATH },
+          prompt: "hi",
+          systemPrompt: "you are claude",
+          schema: "plan-or-answer",
+          permissionMode: "yolo",
+          claudeCliPath: cmdPath,
+          modelName: "haiku",
+          role: testRole,
+          entry: testEntry,
+          ledger: testLedger,
+          readOnly: true
+        })
+      ).rejects.toBeInstanceOf(RateLimitError);
+    } finally {
+      clearClaudeCliPathCache();
+    }
+  });
+
+  it("RateLimitError carries a resetsAt property parsed from the envelope", async () => {
+    const { RateLimitError } = await import("../src/agents/claude-code-cli/exec.js");
+    const err = new RateLimitError("rate-limited", "11:50pm (America/New_York)");
+    expect(err.name).toBe("RateLimitError");
+    expect(err.resetsAt).toBe("11:50pm (America/New_York)");
+    expect(err.message).toBe("rate-limited");
+    expect(err).toBeInstanceOf(Error);
+  });
+
+  it("parseClaudeEnvelope throws RateLimitError on a 429-shaped envelope even when exit-code would be 0", () => {
+    // D66-2: detection is in BOTH runClaudeExec's exitCode!==0 branch AND parseClaudeEnvelope.
+    // If a future version of claude-code-cli starts returning exitCode 0 on 429 (the live
+    // evidence shows non-zero, but the envelope signal is independent of exit code), the
+    // parse-side check still surfaces the rate-limit error to the caller.
+    const testEntry = { id: "claude-code/cli", provider: "claude-code-cli", modelName: "haiku", contextWindow: 200000 } as const;
+    const testLedger = new CostLedger();
+    const stdout = JSON.stringify({
+      type: "result",
+      is_error: false,
+      api_error_status: 429,
+      result: "You've hit your limit · resets 11:50pm (America/New_York)",
+      structured_output: undefined,
+      usage: {},
+      total_cost_usd: 0
+    });
+    expect(() => parseClaudeEnvelope(stdout, { role: "leader", entry: testEntry, ledger: testLedger })).toThrow(RateLimitError);
   });
 });

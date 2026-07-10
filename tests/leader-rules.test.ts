@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  absolutePathsRule,
   finiteVerificationRule,
   leaderOwnsVisualJudgmentRule,
   leaderPlannerPrompt,
@@ -51,6 +52,18 @@ describe("shared leader rules (D60 + D61)", () => {
     });
     it("forbids worker visual-judgment tasks explicitly", () => {
       expect(leaderOwnsVisualJudgmentRule).toMatch(/never write a BuildPlan task that requires the worker to view or judge image\/video content/i);
+    });
+  });
+
+  describe("absolutePathsRule (D66-1)", () => {
+    it("is a non-empty string", () => {
+      expect(absolutePathsRule.length).toBeGreaterThan(50);
+    });
+    it("requires fully-qualified absolute paths for every file access", () => {
+      expect(absolutePathsRule).toMatch(/fully-qualified absolute paths/i);
+    });
+    it("explicitly forbids bare relative references", () => {
+      expect(absolutePathsRule).toMatch(/never a bare relative reference/i);
     });
   });
 
@@ -136,6 +149,11 @@ describe("leader prompt exports (D60 + D61 wiring)", () => {
     expect(leaderPlannerPrompt).toContain(leaderOwnsVisualJudgmentRule);
     expect(leaderReviewerPrompt).toContain(leaderOwnsVisualJudgmentRule);
     expect(leaderTakeoverPrompt).toContain(leaderOwnsVisualJudgmentRule);
+  });
+  it("D66-1: all three leader prompts include absolutePathsRule (the bare-relative-path bug class)", () => {
+    expect(leaderPlannerPrompt).toContain(absolutePathsRule);
+    expect(leaderReviewerPrompt).toContain(absolutePathsRule);
+    expect(leaderTakeoverPrompt).toContain(absolutePathsRule);
   });
   it("all three prompts still contain the prior D54 + finiteVerificationRule rules", () => {
     for (const prompt of [leaderPlannerPrompt, leaderReviewerPrompt, leaderTakeoverPrompt]) {

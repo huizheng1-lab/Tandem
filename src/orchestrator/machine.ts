@@ -78,7 +78,9 @@ async function retryArtifact<T>(name: string, emit: (event: MachineEvent) => voi
       emit({ type: "artifact", name, value: parsed });
       return parsed;
     } catch (error) {
-      if (error instanceof Error && error.name === "AbortError") throw error;
+      // D66-2: rate-limit outcomes are not transient - retrying now (before the reset time)
+      // is guaranteed to fail identically. Same AbortError fast-fail pattern.
+      if (error instanceof Error && (error.name === "AbortError" || error.name === "RateLimitError")) throw error;
       lastError = error;
       emit({ type: "error", message: `${name} failed on attempt ${attempt}: ${String(error)}` });
     }
@@ -431,6 +433,16 @@ export async function runOrchestration(options: RunOptions): Promise<RunResult> 
           // leader reviewer with an incomplete picture and the final report missing work.
           report = mergeCompletionReports(roundStreams);
         } catch (error) {
+          // D66-2: rate-limit errors should not trigger a takeover (the failure isn't in the
+          // worker's output, it's a transient quota hit). Surface the resetsAt so the user
+          // knows when to retry, and end the run cleanly rather than going through a doomed
+          // takeover attempt.
+          if (error instanceof Error && error.name === "RateLimitError") {
+            const message = `Worker build is rate-limited: ${(error as { resetsAt?: string }).resetsAt ?? "unknown reset time"}. Try again after that time or switch engines.`;
+            emit({ type: "error", message });
+            transition("DONE", message, currentRound);
+            return { phase: "DONE", summary: message, plan, reports, verdicts, takeover: false };
+          }
           emit({ type: "error", message: `worker could not produce a valid CompletionReport: ${String(error)}` });
           return runTakeover("worker artifact failure; leader takeover");
         }
@@ -450,6 +462,14 @@ export async function runOrchestration(options: RunOptions): Promise<RunResult> 
         (value) => ReviewVerdictSchema.parse(value)
       );
     } catch (error) {
+      // D66-2: rate-limit errors should not be mis-reported as "review could not be finalized";
+      // surface the resetsAt so the user knows when to retry.
+      if (error instanceof Error && error.name === "RateLimitError") {
+        const message = `Leader review is rate-limited: ${(error as { resetsAt?: string }).resetsAt ?? "unknown reset time"}. Try again after that time or switch engines.`;
+        emit({ type: "error", message });
+        transition("DONE", message, currentRound);
+        return { phase: "DONE", summary: message, plan, reports, verdicts, takeover: false };
+      }
       const summary = `Build completed, but automated review could not be finalized after retries. Last worker report: ${report.summary}`;
       emit({ type: "error", message: `leader review could not produce a valid ReviewVerdict: ${String(error)}` });
       transition("DONE", "leader review failed; build report preserved", currentRound);

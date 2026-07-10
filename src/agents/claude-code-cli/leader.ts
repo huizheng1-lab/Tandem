@@ -75,8 +75,15 @@ async function claudeLeaderExec(options: ClaudeLeaderOptions, input: { schema: "
   });
 }
 
+// D66-1: state the absolute project root explicitly in the system prompt so the leader
+// has something concrete to prefix paths with. Prevents the bare-relative-path bug class
+// (a real Claude-Code-CLI failure mode observed repeatedly in live sessions).
+function absoluteCwdLine(cwd: string): string {
+  return `\n\nAbsolute project root (cwd): ${cwd}\nEvery file read or write MUST be prefixed with this path exactly. Bare relative paths are not allowed - the CLI subprocess will resolve them against the wrong directory.`;
+}
+
 export async function buildClaudeLeaderPlanPrompts(
-  options: Pick<ClaudeLeaderOptions, "env" | "projectInstructions">,
+  options: Pick<ClaudeLeaderOptions, "env" | "projectInstructions" | "cwd">,
   input: { request: string; goals: string[]; history?: string; attachments?: AttachmentRef[] }
 ): Promise<{ systemPrompt: string; prompt: string }> {
   const attachmentBlock = input.attachments && input.attachments.length > 0 ? `\n\n${formatAttachmentBlock(input.attachments)}` : "";
@@ -84,7 +91,7 @@ export async function buildClaudeLeaderPlanPrompts(
   return {
     systemPrompt: `${leaderPlannerPrompt}
 ${hostPlatformPrompt(process.platform, options.env)}
-${await projectInstructions(options)}
+${await projectInstructions(options)}${absoluteCwdLine(options.cwd)}
 
 FIRST, classify the request:
 (a) QUESTION/INSPECTION - answering, explaining, reading/summarizing files, images, PDFs, or status queries. Do the inspection yourself with read-only tools and ANSWER DIRECTLY.
@@ -109,13 +116,13 @@ export async function claudeLeaderPlan(
 }
 
 export async function buildClaudeLeaderReviewPrompts(
-  options: Pick<ClaudeLeaderOptions, "env" | "projectInstructions">,
+  options: Pick<ClaudeLeaderOptions, "env" | "projectInstructions" | "cwd">,
   input: { plan: BuildPlan; report: CompletionReport; round: number; diff: string }
 ): Promise<{ systemPrompt: string; prompt: string }> {
   return {
     systemPrompt: `${leaderReviewerPrompt}
 ${hostPlatformPrompt(process.platform, options.env)}
-${await projectInstructions(options)}
+${await projectInstructions(options)}${absoluteCwdLine(options.cwd)}
 You may rerun only the plan verification commands if needed. Return only the ReviewVerdict JSON.`,
     prompt: `Review round ${input.round}.
 BuildPlan:
@@ -130,13 +137,13 @@ ${input.diff || "(empty diff)"}`
 }
 
 export async function buildClaudeLeaderTakeoverPrompts(
-  options: Pick<ClaudeLeaderOptions, "env" | "projectInstructions">,
+  options: Pick<ClaudeLeaderOptions, "env" | "projectInstructions" | "cwd">,
   input: { plan: BuildPlan; reports: CompletionReport[]; feedback: ReviewFeedback[] }
 ): Promise<{ systemPrompt: string; prompt: string }> {
   return {
     systemPrompt: `${leaderTakeoverPrompt}
 ${hostPlatformPrompt(process.platform, options.env)}
-${await projectInstructions(options)}
+${await projectInstructions(options)}${absoluteCwdLine(options.cwd)}
 Run every verification command, then return takeover JSON with a CompletionReport and userSummary.`,
     prompt: `BuildPlan:
 ${jsonBlock(input.plan)}

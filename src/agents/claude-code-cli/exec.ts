@@ -38,6 +38,9 @@ interface ClaudeEnvelope {
   total_cost_usd?: unknown;
   permission_denials?: unknown[];
   error?: unknown;
+  // D66-2: 429-shaped rate-limit envelopes include this structured field. The prose-side
+  // substring check ("hit your limit") is the secondary signal.
+  api_error_status?: number;
 }
 
 function usageNumber(value: unknown): number {
@@ -91,6 +94,36 @@ function formatPermissionDenials(denials: unknown[] | undefined): string {
   return `Claude Code permission denials: ${jsonText(denials)}`;
 }
 
+// D66-2: dedicated error class for rate-limit outcomes so retryArtifact can fast-fail on
+// attempt 1 instead of burning 2 more attempts that are guaranteed to fail identically
+// until the reset time. The handoff's live evidence: a single 429 attempt cost $1.17 (36
+// turns, 20535 output tokens) before hitting the limit; subsequent retries added no value.
+export class RateLimitError extends Error {
+  readonly resetsAt: string;
+  constructor(message: string, resetsAt: string) {
+    super(message);
+    this.name = "RateLimitError";
+    this.resetsAt = resetsAt;
+  }
+}
+
+// Detects the 429-shaped envelope Claude returns when a rate limit is hit. Tests BOTH the
+// structured field (api_error_status === 429) AND a substring match on the prose
+// ("hit your limit") as a belt-and-suspenders check. Returns the resetsAt string
+// (e.g. "11:50pm (America/New_York)") or "rate-limited" if no reset time is parseable.
+function detectRateLimit(envelope: ClaudeEnvelope): string {
+  if (envelope.api_error_status === 429) {
+    const resultText = typeof envelope.result === "string" ? envelope.result : "";
+    const m = /resets\s+([^\n.]+?)(?:\s*$|\.|\n)/.exec(resultText);
+    return m ? m[1].trim() : "rate-limited";
+  }
+  if (typeof envelope.result === "string" && /hit your limit/i.test(envelope.result)) {
+    const m = /resets\s+([^\n.]+?)(?:\s*$|\.|\n)/.exec(envelope.result);
+    return m ? m[1].trim() : "rate-limited";
+  }
+  return "";
+}
+
 export function parseClaudeEnvelope(stdout: string, options: Pick<ClaudeExecOptions, "role" | "ledger" | "entry" | "onText">): unknown {
   const envelope = JSON.parse(stdout) as ClaudeEnvelope;
   const usage = envelope.usage ?? {};
@@ -100,6 +133,17 @@ export function parseClaudeEnvelope(stdout: string, options: Pick<ClaudeExecOpti
 
   if (typeof envelope.result === "string" && envelope.result.trim()) {
     options.onText?.(envelope.result);
+  }
+
+  // D66-2: detect 429-shaped envelope here too, so a rate-limit signal reaches the caller
+  // even if exitCode is 0 (the 429-path observed in the live evidence exited non-zero, but
+  // this is the belt-and-suspenders position for the same risk).
+  const rateLimitReset = detectRateLimit(envelope);
+  if (rateLimitReset) {
+    throw new RateLimitError(
+      `Claude Code CLI is rate-limited (resets ${rateLimitReset}). Try again after that time or switch engines.`,
+      rateLimitReset
+    );
   }
 
   const denials = formatPermissionDenials(envelope.permission_denials);
@@ -144,10 +188,24 @@ export async function runClaudeExec(options: ClaudeExecOptions): Promise<unknown
   if (options.abortSignal?.aborted) throw new Error("Claude Code CLI run aborted.");
   if (result.exitCode !== 0) {
     let denials = "";
+    let rateLimitReset = "";
     try {
-      denials = formatPermissionDenials((JSON.parse(result.stdout) as ClaudeEnvelope).permission_denials);
+      const env = JSON.parse(result.stdout) as ClaudeEnvelope;
+      denials = formatPermissionDenials(env.permission_denials);
+      rateLimitReset = detectRateLimit(env);
     } catch {
       denials = "";
+      rateLimitReset = "";
+    }
+    if (rateLimitReset) {
+      // D66-2: throw a RateLimitError so retryArtifact fast-fails on attempt 1 instead of
+      // burning 2 more attempts that are guaranteed to fail identically until the reset
+      // time. The handoff's live evidence: a single 429 attempt cost $1.17 + 36 turns
+      // before the second attempt hit the same 429.
+      throw new RateLimitError(
+        `Claude Code CLI is rate-limited (resets ${rateLimitReset}). Try again after that time or switch engines.`,
+        rateLimitReset
+      );
     }
     throw new Error(`Claude Code CLI exited with code ${result.exitCode}: ${[result.stderr.trim(), denials, result.stdout.trim()].filter(Boolean).join("\n")}`);
   }
