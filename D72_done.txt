@@ -1,6 +1,6 @@
 D72 complete
 
-Commit: included in the D72 implementation commit that adds this marker.
+Commit: 51474d7 (D72-1: replace Claude CLI model input with dropdown).
 
 Implementation summary:
 - Replaced the desktop "Claude CLI model" free-text input with a select.
