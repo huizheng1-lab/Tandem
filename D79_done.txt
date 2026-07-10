@@ -1,0 +1,26 @@
+D79 complete
+
+Implementation commit:
+- 8cbdb9e D79-1: sanitize prompt-bound tool output
+
+Changes:
+- Added src/tools/sanitize.ts with shared prompt-safe sanitizers that preserve normal whitespace while stripping NUL and other non-printing C0/DEL control characters.
+- Sanitized captured bash output in tailOutput(), covering both success and error/timeout paths in src/tools/shell.ts.
+- Sanitized read_file, list_dir, and grep text outputs before they can be embedded in prompts or reports.
+- Sanitized structured CLI output strings in stripNulls(), and sanitized validated BuildPlan/CompletionReport artifacts plus retryArtifact results before downstream reuse.
+- Added retryArtifact fast-fail for Node TypeError code ERR_INVALID_ARG_VALUE when the message identifies null-byte CLI arguments, avoiding three doomed attempts.
+
+Regression coverage:
+- Literal NUL shell output via node byte output is sanitized before returning from bashTool.
+- read_file output containing NUL/control characters is sanitized.
+- CompletionReport strings containing NUL/control characters are sanitized before review receives them.
+- Deterministic null-byte subprocess argument errors fast-fail after one review attempt.
+
+Verification:
+- npm run typecheck: pass
+- npm test: pass, 28 passed and 1 skipped test files; 279 passed and 1 skipped tests
+- git diff --check: pass
+
+Notes:
+- The worker step-budget observation from the incident remains out of scope for D79.
+- HANDOFF_D80.md appeared during this round and was left untracked/untouched.
