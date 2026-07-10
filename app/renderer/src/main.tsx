@@ -216,9 +216,6 @@ function App(): React.ReactElement {
   const showThinkingRef = useRef(false);
   const thinkingTimers = useRef<Partial<Record<"leader" | "worker", ReturnType<typeof setTimeout>>>>({});
   const loopTimerRef = useRef<ReturnType<typeof setInterval>>();
-  // D74: CLI-models popover state and outside-click close.
-  const cliModelsPopoverRef = useRef<HTMLDivElement>(null);
-  const [cliModelsOpen, setCliModelsOpen] = useState(false);
   const loopRunningRef = useRef(false);
 
   const effectiveConfig = session?.config ?? config;
@@ -461,25 +458,6 @@ function App(): React.ReactElement {
   useEffect(() => {
     showThinkingRef.current = showThinking;
   }, [showThinking]);
-
-  // D74: close the CLI-models popover on outside mousedown or Escape.
-  useEffect(() => {
-    if (!cliModelsOpen) return;
-    const onMouseDown = (event: MouseEvent) => {
-      if (cliModelsPopoverRef.current && !cliModelsPopoverRef.current.contains(event.target as Node)) {
-        setCliModelsOpen(false);
-      }
-    };
-    const onKey = (event: KeyboardEvent) => {
-      if (event.key === "Escape") setCliModelsOpen(false);
-    };
-    document.addEventListener("mousedown", onMouseDown);
-    document.addEventListener("keydown", onKey);
-    return () => {
-      document.removeEventListener("mousedown", onMouseDown);
-      document.removeEventListener("keydown", onKey);
-    };
-  }, [cliModelsOpen]);
 
   useEffect(() => {
     const removers = [
@@ -1213,67 +1191,6 @@ if (args.length === 1 && sub === "clear") {
               </label>
             </>
           ) : null}
-          {/* D74: always-available CLI-models popover so the user can discover and set
-              model pins even before the leader/worker dropdown is set to a CLI provider. */}
-          <div className="cliModelsGroup" ref={cliModelsPopoverRef}>
-            <button
-              type="button"
-              className="cliModelsTrigger"
-              aria-expanded={cliModelsOpen}
-              aria-haspopup="dialog"
-              onClick={() => setCliModelsOpen((current) => !current)}
-            >
-              CLI models
-              {effectiveConfig?.claudeCliModel || effectiveConfig?.codexCliModel || effectiveConfig?.codexCliReasoningEffort ? " *" : ""}
-            </button>
-            {cliModelsOpen ? (
-              <div className="cliModelsPopover" role="dialog" aria-label="CLI model pins">
-                <div className="cliModelsPopoverTitle">CLI model pins</div>
-                <label>
-                  Claude CLI model
-                  <select
-                    value={effectiveConfig?.claudeCliModel ?? ""}
-                    onChange={(event) => void updateCliModelPin("claude-cli", event.target.value || "clear")}
-                  >
-                    <option value="">CLI default</option>
-                    {claudeCliModelOptions.map((model) => (
-                      <option key={model} value={model}>
-                        {model}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-                <label>
-                  Codex CLI model
-                  <input
-                    className="cliPinInput"
-                    value={codexCliModelDraft}
-                    placeholder="CLI default"
-                    onChange={(event) => setCodexCliModelDraft(event.target.value)}
-                    onBlur={() => void updateCliModelPin("codex-cli", codexCliModelDraft.trim())}
-                    onKeyDown={(event) => commitTextInputOnEnter(event)}
-                  />
-                </label>
-                <label>
-                  Codex effort
-                  <select
-                    value={effectiveConfig?.codexCliReasoningEffort ?? ""}
-                    onChange={(event) => void updateCliModelPin("codex-effort", event.target.value)}
-                  >
-                    <option value="">CLI default</option>
-                    {codexEffortOptions.map((effort) => (
-                      <option key={effort} value={effort}>
-                        {effort}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-                <div className="cliModelsPopoverHint">
-                  Pins apply when the leader or worker is set to a CLI provider. Current leader: {effectiveConfig?.leader ?? "(unset)"}; current worker: {effectiveConfig?.worker ?? "(unset)"}.
-                </div>
-              </div>
-            ) : null}
-          </div>
           <label>
             Permissions
             <select value={effectiveConfig?.permissionMode ?? "ask"} onChange={(event) => void updatePermissionMode(event.target.value as PermissionMode)}>
