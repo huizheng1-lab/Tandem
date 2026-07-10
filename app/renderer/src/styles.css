@@ -352,6 +352,83 @@ select {
   max-width: 240px;
 }
 
+/* D74: CLI-models popover. The trigger button lives in the status bar and the popover
+   is absolutely positioned below it. Available regardless of which leader/worker is
+   selected, so users can discover and set the model pin before switching to a CLI
+   provider. */
+.cliModelsGroup {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  min-width: 0;
+}
+
+.cliModelsTrigger {
+  border: 1px solid #353d49;
+  border-radius: 6px;
+  background: #101114;
+  color: #f3f2ee;
+  padding: 7px 10px;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  min-width: 0;
+}
+
+.cliModelsTrigger:hover {
+  border-color: #4f5b73;
+}
+
+.cliModelsPopover {
+  position: absolute;
+  top: calc(100% + 4px);
+  right: 0;
+  z-index: 50;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  width: 320px;
+  max-width: calc(100vw - 32px);
+  padding: 12px;
+  border: 1px solid #353d49;
+  border-radius: 8px;
+  background: #15171c;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
+  color: #c6ccd5;
+}
+
+.cliModelsPopoverTitle {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: #8f98a6;
+}
+
+.cliModelsPopover label {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 12px;
+  color: #9da6b5;
+}
+
+.cliModelsPopover select,
+.cliModelsPopover input {
+  width: 100%;
+  border: 1px solid #353d49;
+  border-radius: 6px;
+  color: #f3f2ee;
+  background: #101114;
+  padding: 7px 8px;
+}
+
+.cliModelsPopoverHint {
+  font-size: 11px;
+  color: #6f7888;
+  line-height: 1.4;
+}
+
 .statusBar span {
   min-width: 0;
   overflow-wrap: anywhere;
