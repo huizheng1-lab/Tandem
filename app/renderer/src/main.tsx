@@ -14,6 +14,7 @@ import type {
   SessionAutoApproveMode,
   SessionMemoryNote,
   SessionMetadata,
+  SessionResumeResponse,
   SessionStartResponse,
   ToolActivityEvent
 } from "../../shared/ipc.js";
@@ -21,6 +22,7 @@ import { CodexCliReasoningEffortSchema, type PermissionMode, type TandemConfig }
 import { parseLoop } from "../../../src/commands/loop.js";
 import { cliModelPatch, modelCommandUsage, modelDisplayName } from "../../../src/providers/cli-models.js";
 import { ErrorBoundary } from "./ErrorBoundary.js";
+import { MODEL_STALL_WARNING_SECONDS, needsProjectPickForSession, sessionFromResume } from "./session-state.js";
 import "./styles.css";
 
 type Role = "user" | "leader" | "worker" | "system";
@@ -231,7 +233,7 @@ function App(): React.ReactElement {
   }
 
   const [session, setSession] = useState<SessionStartResponse>();
-  const needsProjectPick = !session || Boolean(session.defaultProject);
+  const needsProjectPick = needsProjectPickForSession(session);
   const [config, setConfig] = useState<TandemConfig>();
   const [appState, setAppState] = useState<DesktopAppStateResponse>();
   const [models, setModels] = useState<ModelListItem[]>([]);
@@ -456,7 +458,7 @@ function App(): React.ReactElement {
   };
 
   const replaySession = async (id: string) => {
-    let resumed;
+    let resumed: SessionResumeResponse;
     try {
       resumed = await tandem.resumeSession({ id });
     } catch (error) {
@@ -464,7 +466,12 @@ function App(): React.ReactElement {
       await refreshSidebar();
       return;
     }
-    setSession((current) => (current ? { ...current, sessionId: id, defaultProject: false } : current));
+    const resumedSession = sessionFromResume(resumed);
+    setSession(resumedSession);
+    setConfig(resumed.config);
+    setAppState({ projectDir: resumed.projectDir, lastProjectDir: resumed.projectDir, config: resumed.config, projectSummary: resumed.projectSummary });
+    setShowThinking(resumed.config.showThinking);
+    showThinkingRef.current = resumed.config.showThinking;
     const replayed: TranscriptEntry[] = [];
     for (const stored of resumed.events) {
       const payload = stored.payload as { prompt?: string; role?: "leader" | "worker"; delta?: string; summary?: string; takeover?: boolean } | MachineEvent;
@@ -1034,7 +1041,7 @@ if (args.length === 1 && sub === "clear") {
     : activityPulse
       ? `${activityPulse.kind === "thinking" ? "thinking" : "writing"}... (${secondsSince(activityPulse.startedAt, activityTick)}s)`
       : `waiting for model... (${noActivitySeconds}s)`;
-  const stripText = noActivitySeconds > 60 ? `no activity for ${noActivitySeconds}s - the model call may be stalled (Stop to abort)` : activityText;
+  const stripText = noActivitySeconds > MODEL_STALL_WARNING_SECONDS ? `no activity for ${noActivitySeconds}s - the model call may be stalled (Stop to abort)` : activityText;
 
   return (
     <main
@@ -1314,7 +1321,7 @@ if (args.length === 1 && sub === "clear") {
           <div ref={transcriptEnd} />
         </section>
         {running ? (
-          <section className={`activityStrip ${stripRole}${noActivitySeconds > 60 ? " stalled" : ""}`}>
+          <section className={`activityStrip ${stripRole}${noActivitySeconds > MODEL_STALL_WARNING_SECONDS ? " stalled" : ""}`}>
             <span className="activityDot" />
             <strong>{stripRole.toUpperCase()}</strong>
             <span>{stripText}</span>

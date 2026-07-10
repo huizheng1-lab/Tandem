@@ -322,6 +322,30 @@ describe("TandemService", () => {
     expect(initialStates).toEqual([checkpoint, undefined]);
   });
 
+  it("resumes a session from its real project when no project is active", async () => {
+    const cwd = await tempDir();
+    const home = await tempDir();
+    await mkdir(path.join(cwd, ".tandem"), { recursive: true });
+    await writeFile(path.join(cwd, ".tandem", "config.json"), JSON.stringify({ permissionMode: "yolo" }), "utf8");
+    const store = await SessionStore.create(cwd, home);
+    await store.append("session:start", { projectDir: cwd });
+    await store.append("user", { prompt: "resume me" });
+
+    const { window } = fakeWindow();
+    const service = new TandemService(window as never, { registerIpcResponses: false, homeDir: home, baseEnv: {} });
+
+    const resumed = await service.resumeSession(store.id);
+
+    expect(resumed).toMatchObject({
+      id: store.id,
+      projectDir: cwd,
+      defaultProject: false,
+      config: { permissionMode: "yolo" }
+    });
+    await expect(service.getAppState()).resolves.toMatchObject({ projectDir: cwd, lastProjectDir: cwd });
+    expect((await service.listSessions()).map((session) => session.id)).toContain(store.id);
+  });
+
   it("uses GUI wording when resuming a session from another folder", async () => {
     const cwd = await tempDir();
     const home = await tempDir();

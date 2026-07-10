@@ -34,6 +34,20 @@ export function sessionIndexPath(cwd = process.cwd(), homeDir?: string): string 
   return path.join(sessionDir(cwd, homeDir), "index.json");
 }
 
+export async function findSessionProjectDir(id: string, homeDir?: string): Promise<string | undefined> {
+  const root = path.join(tandemStateDir(homeDir), "sessions");
+  if (!existsSync(root)) return undefined;
+  for (const entry of await readdir(root, { withFileTypes: true })) {
+    if (!entry.isDirectory()) continue;
+    const filePath = path.join(root, entry.name, `${id}.jsonl`);
+    if (!existsSync(filePath)) continue;
+    const events = await readSessionEvents(filePath);
+    const started = events.find((event) => event.type === "session:start")?.payload as { projectDir?: unknown } | undefined;
+    return typeof started?.projectDir === "string" ? started.projectDir : undefined;
+  }
+  return undefined;
+}
+
 export function truncateTitle(prompt: string): string {
   const normalized = prompt.replace(/\s+/g, " ").trim();
   if (normalized.length <= 48) return normalized || "Untitled session";

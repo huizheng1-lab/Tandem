@@ -3,7 +3,7 @@ import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { archiveSession, deleteSession, listSessions, renameSession, SessionStore, sessionDir, sessionIndexPath, truncateTitle } from "../src/session/store.js";
+import { archiveSession, deleteSession, findSessionProjectDir, listSessions, renameSession, SessionStore, sessionDir, sessionIndexPath, truncateTitle } from "../src/session/store.js";
 
 async function tempDir(name: string): Promise<string> {
   const dir = path.join(tmpdir(), `tandem-${name}-${Date.now()}-${Math.random().toString(16).slice(2)}`);
@@ -91,6 +91,14 @@ describe("SessionStore", () => {
 
     const content = await readFile(sessionIndexPath(cwd, home), "utf8");
     expect(() => JSON.parse(content)).not.toThrow();
+  });
+
+  it("finds a session's project directory from its structured start event", async () => {
+    const { cwd, home } = await tempProject();
+    const store = await SessionStore.create(cwd, home);
+    await store.append("session:start", { projectDir: cwd });
+
+    await expect(findSessionProjectDir(store.id, home)).resolves.toBe(cwd);
   });
 
   it("prunes old empty sessions but keeps sessions with user messages", async () => {

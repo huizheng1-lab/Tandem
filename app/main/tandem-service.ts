@@ -24,7 +24,7 @@ import { rebuildLeaderThread } from "../../src/session/leader-thread.js";
 import { addNote, formatSessionNotes, removeNote, replaySessionMemory } from "../../src/session/memory.js";
 import type { MemoryAuthor, SessionMemoryNote } from "../../src/session/memory.js";
 import { appendProjectMemoryNote, formatProjectInstructions, readProjectInstructions } from "../../src/session/project-memory.js";
-import { archiveSession, deleteSession, listSessions, renameSession, SessionStore } from "../../src/session/store.js";
+import { archiveSession, deleteSession, findSessionProjectDir, listSessions, renameSession, SessionStore } from "../../src/session/store.js";
 import type { SessionMetadata } from "../../src/session/store.js";
 import { safeDefaultProjectDir } from "../../src/tools/protection.js";
 import type { PermissionBridge, PermissionRequest } from "../../src/tools/permissions.js";
@@ -299,20 +299,42 @@ export class TandemService {
   }
 
   async resumeSession(id: string): Promise<SessionResumeResponse> {
+    const projectDir = this.deps.openSession ? this.projectDir : (await findSessionProjectDir(id, this.homeDir)) ?? this.projectDir;
     let store: SessionLike;
     try {
-      store = await (this.deps.openSession ?? ((sessionId, cwd) => SessionStore.open(sessionId, cwd, this.homeDir)))(id, this.projectDir);
+      store = await (this.deps.openSession ?? ((sessionId, cwd) => SessionStore.open(sessionId, cwd, this.homeDir)))(id, projectDir);
     } catch (error) {
       if (/No session .*Run \/sessions to list sessions/.test(String(error))) {
         throw new Error("This session belongs to a different project folder - pick that folder to open it.");
       }
       throw error;
     }
+    this.projectDir = projectDir;
+    this.lastProjectDir = projectDir;
+    await writeDesktopAppState(this.homeDir, { lastProjectDir: projectDir });
+    this.env = this.loadProjectEnv(projectDir);
+    const loaded = loadConfigDetails({ cwd: projectDir, homeDir: this.homeDir, env: this.env });
+    this.config = loaded.config;
+    this.projectConfigOverrides = loaded.projectOverrides;
+    await this.refreshCronTasks();
     const events = await store.read();
     this.session = store;
     const checkpoint = this.findLastCheckpoint(events.map((event) => event.payload));
     this.lastCheckpoint = checkpoint?.phase === "DONE" ? undefined : checkpoint;
-    return { id, events, checkpoint: this.lastCheckpoint };
+    const projectInstructions = await readProjectInstructions(projectDir);
+    return {
+      id,
+      projectDir,
+      config: this.config,
+      defaultProject: false,
+      projectSummary: await projectSummary(projectDir),
+      projectConfigOverrides: this.projectConfigOverrides,
+      projectInstructions: projectInstructions
+        ? { fileName: projectInstructions.fileName, chars: projectInstructions.chars, truncated: projectInstructions.truncated }
+        : undefined,
+      events,
+      checkpoint: this.lastCheckpoint
+    };
   }
 
   async renameSession(id: string, title: string): Promise<SessionMetadata[]> {

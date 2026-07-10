@@ -69,7 +69,7 @@ export interface SessionStartResponse {
   config: TandemConfig;
   defaultProject: boolean;
   projectSummary: string;
-  projectConfigOverrides?: string[];
+  projectConfigOverrides?: Array<keyof TandemConfig>;
   projectInstructions?: { fileName: string; chars: number; truncated: boolean };
 }
 
@@ -161,6 +161,12 @@ export interface SessionResumeRequest {
 
 export interface SessionResumeResponse {
   id: string;
+  projectDir: string;
+  config: TandemConfig;
+  defaultProject: boolean;
+  projectSummary: string;
+  projectConfigOverrides?: Array<keyof TandemConfig>;
+  projectInstructions?: { fileName: string; chars: number; truncated: boolean };
   events: SessionEvent[];
   checkpoint?: OrchestrationCheckpoint;
 }
