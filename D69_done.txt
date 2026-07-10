@@ -1,6 +1,6 @@
 D69 complete
 
-Commit: included in the D69-1 commit that adds this marker.
+Commit: 7e22549 (D69-1: add CLI model pins).
 
 Implementation summary:
 - Added optional CLI model pin config fields: claudeCliModel and codexCliModel.
