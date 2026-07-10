@@ -4,6 +4,20 @@ import path from "node:path";
 import { createTwoFilesPatch } from "diff";
 import { execa } from "execa";
 import fg from "fast-glob";
+import { sanitizePromptText } from "../tools/sanitize.js";
+
+function binaryPlaceholder(size: number): string {
+  return `[binary file, ${size} bytes]`;
+}
+
+function bufferContainsNull(buffer: Buffer): boolean {
+  return buffer.includes(0);
+}
+
+function bufferToPromptText(buffer: Buffer): string {
+  if (bufferContainsNull(buffer)) return binaryPlaceholder(buffer.byteLength);
+  return sanitizePromptText(buffer.toString("utf8"));
+}
 
 async function isGitRepo(cwd: string): Promise<boolean> {
   const result = await execa("git", ["rev-parse", "--is-inside-work-tree"], { cwd, reject: false });
@@ -23,14 +37,14 @@ async function gitDiff(cwd: string): Promise<string> {
         const fullPath = path.join(cwd, file);
         if (!existsSync(fullPath)) return "";
         try {
-          const content = await readFile(fullPath, "utf8");
+          const content = bufferToPromptText(await readFile(fullPath));
           return `\n--- untracked ${file}\n${content.slice(0, 4000)}`;
         } catch {
           return `\n--- untracked ${file}\n(binary or unreadable)`;
         }
       })
     );
-  return [diff.stdout, ...untrackedBlocks].filter(Boolean).join("\n");
+  return sanitizePromptText([diff.stdout, ...untrackedBlocks].filter(Boolean).join("\n"));
 }
 
 export async function workingTreeDiff(cwd: string): Promise<string> {
@@ -88,7 +102,7 @@ export class DiffTracker {
         )
       );
     }
-    return patches.join("\n") || "(no file changes detected)";
+    return sanitizePromptText(patches.join("\n") || "(no file changes detected)");
   }
 
   private async takeSnapshot(): Promise<Map<string, SnapshotValue>> {
@@ -127,7 +141,7 @@ export class DiffTracker {
       if (info.size > this.maxFileBytes) {
         return `[snapshot omitted: ${info.size} bytes exceeds ${this.maxFileBytes} byte limit]`;
       }
-      return await readFile(fullPath, "utf8");
+      return bufferToPromptText(await readFile(fullPath));
     } catch {
       return null;
     }

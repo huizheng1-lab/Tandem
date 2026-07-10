@@ -45,6 +45,20 @@ describe("non-git diff tracker", () => {
     expect(diff).toContain("+export const todo = [];");
   });
 
+  it("uses a binary placeholder for touched binary files outside git repos", async () => {
+    const cwd = await tempDir();
+    const tracker = createDiffTracker(cwd);
+    await tracker.beforeBuild();
+
+    await writeFile(path.join(cwd, "audio.wav"), Buffer.from([82, 73, 70, 70, 0, 1, 2, 3]));
+    tracker.recordTouchedPath("audio.wav");
+
+    const diff = await tracker.diff();
+    expect(diff).toContain("audio.wav");
+    expect(diff).toContain("[binary file, 8 bytes]");
+    expect(diff).not.toContain("\0");
+  });
+
   it("captures files created in gitignored subdirectories inside git repos", async () => {
     const cwd = await tempDir();
     await execa("git", ["init"], { cwd });
@@ -58,5 +72,19 @@ describe("non-git diff tracker", () => {
     const diff = await tracker.diff();
     expect(diff).toContain("demo-todo/todo.mjs");
     expect(diff).toContain("+export const todos = [];");
+  });
+
+  it("uses a binary placeholder for untracked binary files inside git repos", async () => {
+    const cwd = await tempDir();
+    await execa("git", ["init"], { cwd });
+
+    await writeFile(path.join(cwd, "voice.wav"), Buffer.from([82, 73, 70, 70, 0, 10, 20, 30]));
+
+    const tracker = createDiffTracker(cwd);
+    const diff = await tracker.diff();
+
+    expect(diff).toContain("--- untracked voice.wav");
+    expect(diff).toContain("[binary file, 8 bytes]");
+    expect(diff).not.toContain("\0");
   });
 });
