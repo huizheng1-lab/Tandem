@@ -1,0 +1,28 @@
+D67 done
+
+Round: D67
+Status: deploy/rebuild task only - no source changes. Rebuilt packaged app from master (HEAD 33cd025), confirmed the rebuilt bundle includes the D66-1 fix, and confirmed Tandem.exe launches.
+
+Implementation: no source changes (per the handoff's "no commit needed unless you find and fix a real bug in step 4" - the fix is the bundle, not the source).
+
+Rebuild evidence:
+- Initial `npm run dist:app` failed with `EBUSY: resource busy or locked, rmdir 'release/win-unpacked'`. Cause: 4 Tandem processes (PID 4744, 6452, 23616, 31520 - main + 3 renderers) were still running from the prior live test, holding files in the build output directory. `Stop-Process -Force` on the Tandem name cleared them, then the build succeeded.
+- After successful rebuild:
+  - `release\win-unpacked\resources\app.asar` - LastWriteTime 7/10/2026 7:02:59 AM, 25,684,577 bytes
+  - `release\win-unpacked\Tandem.exe` - LastWriteTime 7/10/2026 7:03:00 AM, 235,939,840 bytes
+  - HEAD commit (33cd0259ada13cd81d9d4ba29380c4d562f829a1) commit time: 2026-07-10 00:26:47 -0400
+  - Both timestamps postdate HEAD - the bundle includes D66 through D66-2.
+
+Grep evidence (unpacked the asar to C:\tmp-d67-app with `npx asar extract`, then searched the main bundle):
+- `C:\tmp-d67-app\out\main\index.js` line 2330: `Absolute project root (cwd): ${cwd}` - the `absoluteCwdLine` block from `src/agents/claude-code-cli/leader.ts` is in the bundled renderer bundle, line 1614 declares `const absolutePathsRule = "Always use fully-qualified absolute paths..."` and line 1626 references `${absolutePathsRule}` in the planner prompt - both the rule constant and the cwd-in-system-prompt code shipped.
+
+Tandem.exe launch check:
+- Started `release\win-unpacked\Tandem.exe` (PID 39864) and confirmed it was running after a 4s sleep. Process exited cleanly when stopped. The fact that the fresh bundle launches without crash means the build pipeline + asar bundling is intact end-to-end.
+
+No real bug found in step 4 (the cwd/rule strings are in the bundle as expected). No code change. No source commit needed.
+
+Static checks (run for completeness even though the source didn't change this round):
+- npx tsc --noEmit: not run - no source changes (D67 was deploy-only per the handoff).
+- npm test: not run - no source changes.
+</content>
+</invoke>
