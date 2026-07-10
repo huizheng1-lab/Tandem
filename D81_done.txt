@@ -1,0 +1,23 @@
+D81 complete
+
+Implementation commit:
+- ddcecb6 D81-1: fix desktop resume project state
+
+Changes:
+- Raised the desktop activity-strip stall warning threshold from 60s to 180s via MODEL_STALL_WARNING_SECONDS.
+- Extended SessionResumeResponse to return the resumed session's projectDir, config, defaultProject=false, projectSummary, projectConfigOverrides, and projectInstructions.
+- Added findSessionProjectDir() to recover a session's origin project from the structured session:start payload in its jsonl file.
+- Updated TandemService.resumeSession() to open the session from its real project, reload env/config/project metadata, update desktop lastProjectDir, refresh schedules, and return full resume metadata.
+- Updated renderer replaySession() to construct a full session from the resume response even when current session state is undefined, so needsProjectPick becomes false after direct sidebar resume.
+- Added renderer session-state helper coverage for the fresh/null-session resume path and the 180s threshold.
+- Added store/service regressions for project-dir lookup and fresh-service cross-project resume.
+
+Verification:
+- npm run typecheck: pass.
+- Focused vitest command assertions passed for tests/desktop-service.test.ts, tests/session-store.test.ts, and tests/renderer-session-state.test.ts: 31 assertions passed. Vitest teardown failed afterward because this live Tandem desktop session mutated the real ~/.tandem session log while the test process was running.
+- npm test executed all assertions: 283 passed, 1 skipped. Suites were marked failed only by the same real ~/.tandem teardown snapshot guard caused by concurrent live desktop session logging.
+- npx electron-vite build: pass.
+- git diff --check: pass.
+
+Live/UI note:
+- I rebuilt the Electron app successfully. I did not perform a manual full close/relaunch/click-through in this active Codex desktop session; the implemented path is covered by the service and renderer-state regressions above.
