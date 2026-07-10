@@ -1,0 +1,25 @@
+D78 complete
+
+Implementation commit:
+- aaaff61 D78-1: pin Anthropic provider base URL
+
+Changes:
+- Pinned src/providers/client.ts Anthropic client construction to baseURL=https://api.anthropic.com/v1 so @ai-sdk/anthropic cannot inherit a stray ANTHROPIC_BASE_URL missing /v1.
+- Added tests/provider-client.test.ts regression coverage that mocks createAnthropic and asserts makeModel passes the explicit canonical baseURL.
+
+Provider audit:
+- @ai-sdk/anthropic has an ANTHROPIC_BASE_URL fallback and was the confirmed live failure.
+- @ai-sdk/openai also has an OPENAI_BASE_URL fallback in the installed bundle, but this shell had OPENAI_BASE_URL unset and OPENAI_API_KEY unset, so no confirmed live OpenAI failure was patched in D78.
+- @ai-sdk/google did not show an analogous BASE_URL environment fallback in the searched installed bundle.
+- openai-compatible already uses Tandem's explicit custom-model entry.baseURL.
+
+Live verification:
+- Loaded the real ANTHROPIC_API_KEY from configured .env files without printing it.
+- Forced process.env.ANTHROPIC_BASE_URL=https://api.anthropic.com during the verification script.
+- Called makeModel("anthropic/claude-sonnet-5", defaultConfig, process.env) through Tandem production code and then ai.generateText with a tiny prompt.
+- Result succeeded with text "D78_OK"; model=claude-sonnet-5; usage totalTokens=32, inputTokens=25, outputTokens=7.
+
+Acceptance checks:
+- npm run typecheck: pass
+- npm test: pass, 28 passed and 1 skipped test files; 275 passed and 1 skipped tests
+- git diff --check: pass
