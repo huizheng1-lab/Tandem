@@ -1,0 +1,39 @@
+D77 completed
+
+Summary:
+- Investigated whether Tandem can safely reduce `codex/cli` leader token cost with an explicit caching lever or session reuse.
+- No Tandem code changes were made.
+- Conclusion: do not implement Codex CLI session reuse for Tandem. The resumed run showed more cached-input tokens, but total input tokens more than doubled because resume replays prior session context, and dropping `--ephemeral` writes durable session files under `~/.codex/sessions`.
+
+Evidence:
+- Codex CLI path used: `C:\Users\huizh\AppData\Local\OpenAI\Codex\bin\ea1c60319a1dcb19\codex.exe`
+- Codex CLI version: `codex-cli 0.142.5`
+- Production-style prompt: used Tandem's `leaderPlannerPrompt`, `hostPlatformPrompt`, project instructions block, classification instructions, standing-goals block, request block, and `planOrAnswerJsonSchema`.
+- Prompt length: 4972 chars.
+- Temp project: `C:\Users\huizh\AppData\Local\Temp\tandem-d77-codex-jAO9G6\project`
+
+Live A/B numbers:
+- Current Tandem-style `codex exec --ephemeral`: input_tokens=14037, cached_input_tokens=1920, output_tokens=176, reasoning_output_tokens=151.
+- Non-ephemeral cold `codex exec`: input_tokens=14534, cached_input_tokens=2432, output_tokens=23, reasoning_output_tokens=0.
+- `codex exec resume --last` after the non-ephemeral call: input_tokens=30116, cached_input_tokens=16640, output_tokens=46, reasoning_output_tokens=0.
+
+Interpretation:
+- Resume increased cached-input tokens from 2432 to 16640, but also increased total input from 14534 to 30116.
+- Billed/non-cached input was roughly 12102 tokens for the non-ephemeral cold run and 13476 tokens for the resumed run, so this test did not show a meaningful leader-cost win.
+- The resumed call used the same thread id as the persisted run, confirming it resumed durable session state instead of only applying a cache key.
+
+Contamination-risk finding:
+- Dropping `--ephemeral` created a durable session file under `C:\Users\huizh\.codex\sessions\2026\07\10\rollout-2026-07-10T14-21-46-019f4d43-a4b7-7f90-9759-7c222bd3157e.jsonl`.
+- A later `codex exec resume --last` can pick the newest durable session. If Tandem crashed or failed to clean up, an unrelated later run could resume stale context.
+- The D77-created session file was removed after the investigation.
+
+Config override probe:
+- `codex exec --strict-config -c model_prompt_cache_key="d77"` failed with: `unknown configuration field model_prompt_cache_key in -c/--config override`.
+- No confirmed cache-related `-c` override was found or shipped.
+
+Verification:
+- No code changes, so no implementation tests were required by the handoff.
+- `git status` was checked before marker creation; only untracked handoff/helper files were present.
+
+Commit:
+- Marker-only commit expected: `D77-1: record Codex CLI cache investigation`.
