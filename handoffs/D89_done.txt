@@ -1,0 +1,27 @@
+D89 done
+
+Implementation commit: 27be296 (D89-1: bound rendered transcript messages)
+
+Summary:
+- Added a bounded MessageText renderer for desktop transcript bubbles.
+- Oversized transcript entries now render a 12,000-character preview with a "Show more" affordance instead of inserting multi-megabyte text nodes into the DOM.
+- Expanded display is still bounded at 80,000 characters so "Show more" cannot recreate the same Chromium layout cliff.
+- Added a second-layer renderer state cap at 200,000 characters for live and replayed message entries, with an explicit truncation note.
+- Added regression coverage proving oversized text renders as a bounded preview and state text is capped.
+
+Verification:
+- npm run typecheck: pass
+- npm test: pass (298 passed, 1 skipped)
+- git diff --check: pass
+- npx electron-vite build: pass
+
+Live verification:
+- Launched the built Electron app with CDP remote debugging and opened project C:\Users\huizh\tmp_test_data\tandem_hyperframe_video.
+- Clicked the real historical session a5629880-4bba-43e6-bb32-8f87129dbb26 ("check video quality and fix if any problem is...") through the desktop session list.
+- Session switch completed in 1003 ms.
+- document.body.innerText length after resume was 56,363 characters, with "Show more" / truncation affordances present.
+- A CDP Runtime.evaluate ping immediately after the switch returned in 1 ms, confirming the renderer JS thread remained responsive.
+- Sampled Electron process data before/after showed memory growth during resume but no runaway hang; the renderer remained controllable and was cleanly stopped afterward.
+
+User workaround still valid:
+- If the old session history is not needed, deleting session a5629880-4bba-43e6-bb32-8f87129dbb26 will remove the historical bad data. The D89 fix means viewing it should no longer freeze the UI.
