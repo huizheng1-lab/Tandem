@@ -515,6 +515,26 @@ select {
   line-height: 1.5;
 }
 
+.messageOverflow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 10px;
+  padding-top: 8px;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+  color: #9ca6b5;
+  font-size: 12px;
+}
+
+.messageOverflow button {
+  flex: 0 0 auto;
+  border: 1px solid #3a4657;
+  background: #161a21;
+  color: #dce5f0;
+  border-radius: 6px;
+  padding: 3px 8px;
+}
+
 .system {
   color: #c7ccd4;
 }

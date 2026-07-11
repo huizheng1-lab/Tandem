@@ -23,6 +23,7 @@ import { parseLoop } from "../../../src/commands/loop.js";
 import { cliModelPatch, modelCommandUsage, modelDisplayName } from "../../../src/providers/cli-models.js";
 import { ErrorBoundary } from "./ErrorBoundary.js";
 import { MODEL_STALL_WARNING_SECONDS, needsProjectPickForSession, sessionFromResume } from "./session-state.js";
+import { boundedMessageTextForState, MessageText } from "./TranscriptText.js";
 import "./styles.css";
 
 type Role = "user" | "leader" | "worker" | "system";
@@ -313,7 +314,7 @@ function App(): React.ReactElement {
   };
 
   const appendMessage = (role: Role, text: string) => {
-    setBoundedEntries((current) => [...current, { id: nextId.current++, kind: "message", role, text }]);
+    setBoundedEntries((current) => [...current, { id: nextId.current++, kind: "message", role, text: boundedMessageTextForState(text) }]);
   };
 
   const addAttachmentsFromFiles = async (files: FileList | File[]) => {
@@ -371,10 +372,10 @@ function App(): React.ReactElement {
     setBoundedEntries((current) => {
       const last = current.at(-1);
       if (last?.kind === "message" && last.role === role && !last.thinking) {
-        return [...current.slice(0, -1), { ...last, text: `${last.text}${delta}` }];
+        return [...current.slice(0, -1), { ...last, text: boundedMessageTextForState(`${last.text}${delta}`) }];
       }
       if (!delta.trim()) return current;
-      return [...current, { id: nextId.current++, kind: "message", role, text: delta }];
+      return [...current, { id: nextId.current++, kind: "message", role, text: boundedMessageTextForState(delta) }];
     });
   };
 
@@ -412,9 +413,9 @@ function App(): React.ReactElement {
     setEntries((current) => {
       const last = current.at(-1);
       if (last?.kind === "message" && last.role === role && last.thinking) {
-        return [...current.slice(0, -1), { ...last, text: `${last.text}${delta}` }];
+        return [...current.slice(0, -1), { ...last, text: boundedMessageTextForState(`${last.text}${delta}`) }];
       }
-      return [...current, { id: nextId.current++, kind: "message", role, text: delta, thinking: true }];
+      return [...current, { id: nextId.current++, kind: "message", role, text: boundedMessageTextForState(delta), thinking: true }];
     });
   };
 
@@ -508,29 +509,29 @@ function App(): React.ReactElement {
     const replayed: TranscriptEntry[] = [];
     for (const stored of resumed.events) {
       const payload = stored.payload as { prompt?: string; role?: "leader" | "worker"; delta?: string; summary?: string; takeover?: boolean } | MachineEvent;
-      if (stored.type === "user" && "prompt" in payload) replayed.push({ id: nextId.current++, kind: "message", role: "user", text: payload.prompt ?? "" });
+      if (stored.type === "user" && "prompt" in payload) replayed.push({ id: nextId.current++, kind: "message", role: "user", text: boundedMessageTextForState(payload.prompt ?? "") });
       if (stored.type === "text" && "role" in payload && "delta" in payload) {
         const last = replayed.at(-1);
-        if (last?.kind === "message" && last.role === payload.role) last.text += payload.delta ?? "";
-        else replayed.push({ id: nextId.current++, kind: "message", role: payload.role ?? "system", text: payload.delta ?? "" });
+        if (last?.kind === "message" && last.role === payload.role) last.text = boundedMessageTextForState(`${last.text}${payload.delta ?? ""}`);
+        else replayed.push({ id: nextId.current++, kind: "message", role: payload.role ?? "system", text: boundedMessageTextForState(payload.delta ?? "") });
       }
       if (stored.type === "thinking" && showThinking && "role" in payload && "delta" in payload) {
         const last = replayed.at(-1);
-        if (last?.kind === "message" && last.role === payload.role && last.thinking) last.text += payload.delta ?? "";
-        else replayed.push({ id: nextId.current++, kind: "message", role: payload.role ?? "system", text: payload.delta ?? "", thinking: true });
+        if (last?.kind === "message" && last.role === payload.role && last.thinking) last.text = boundedMessageTextForState(`${last.text}${payload.delta ?? ""}`);
+        else replayed.push({ id: nextId.current++, kind: "message", role: payload.role ?? "system", text: boundedMessageTextForState(payload.delta ?? ""), thinking: true });
       }
       if (stored.type === "machine") {
         const event = payload as MachineEvent;
         if (event.type === "artifact") replayed.push({ id: nextId.current++, kind: "artifact", name: event.name, value: event.value, open: false });
-        if (event.type === "transition") replayed.push({ id: nextId.current++, kind: "message", role: "system", text: event.message });
-        if (event.type === "error") replayed.push({ id: nextId.current++, kind: "message", role: "system", text: event.message });
+        if (event.type === "transition") replayed.push({ id: nextId.current++, kind: "message", role: "system", text: boundedMessageTextForState(event.message) });
+        if (event.type === "error") replayed.push({ id: nextId.current++, kind: "message", role: "system", text: boundedMessageTextForState(event.message) });
         if (event.type === "checkpoint") {
           setPhase(event.checkpoint.phase);
           setRound(event.checkpoint.round);
         }
       }
       if (stored.type === "done" && "summary" in payload) {
-        replayed.push({ id: nextId.current++, kind: "message", role: "system", text: `${payload.summary}${payload.takeover ? " (takeover)" : ""}` });
+        replayed.push({ id: nextId.current++, kind: "message", role: "system", text: boundedMessageTextForState(`${payload.summary}${payload.takeover ? " (takeover)" : ""}`) });
       }
     }
     replayed.push({ id: nextId.current++, kind: "message", role: "system", text: `Resumed session ${id}. The next prompt will continue from its latest checkpoint.` });
@@ -1343,7 +1344,7 @@ if (args.length === 1 && sub === "clear") {
                 className={`bubble ${entry.role}${entry.thinking ? " thinking" : ""}${(entry.role === "leader" || entry.role === "worker") && thinkingRoles.has(entry.role) ? " thinkingActive" : ""}`}
               >
                 <div className="roleBadge">{roleLabel(entry.role)}</div>
-                <div className="messageText">{entry.text}</div>
+                <MessageText text={entry.text} />
                 <button
                   type="button"
                   className={`copyButton${copiedId === entry.id ? " copied" : ""}`}
