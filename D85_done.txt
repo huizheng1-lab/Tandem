@@ -1,0 +1,20 @@
+D85 done
+
+Implementation commit: ea049dc (D85-1: debounce session index appends)
+
+Summary:
+- Debounced SessionStore append-derived index updates so rapid live orchestration events coalesce into bounded index writes instead of enqueueing one index mutation per event.
+- Kept transcript .jsonl writes per-append and durability-critical.
+- Added pending action state in the desktop sidebar and delete modal for Rename, Archive, Unarchive, and Delete actions.
+- Pending rows are disabled and show Renaming..., Archiving..., Unarchiving..., or Deleting... while the IPC call is in flight.
+
+Verification:
+- npx vitest run tests/session-store.test.ts: passed (10 tests).
+- Added sibling-delete regression with 400 rapid appends on another session; delete completed under the debounce-scale threshold and the deleted session was not resurrected.
+- npm run typecheck: passed.
+- npm test: passed (289 passed, 1 skipped).
+- git diff --check: passed.
+- npm run dist:app: passed and rebuilt release artifacts.
+
+Live UI note:
+- I did not launch and manually click through the packaged Electron app from this run; the UI change was verified by TypeScript and the packaged app build.
