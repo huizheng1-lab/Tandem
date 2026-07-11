@@ -31,6 +31,7 @@ const api: TandemDesktopApi = {
   listModels: () => ipcRenderer.invoke(ipcChannels.modelsList),
   listSessions: () => ipcRenderer.invoke(ipcChannels.sessionsList),
   resumeSession: (request) => ipcRenderer.invoke(ipcChannels.sessionResume, request),
+  compactSession: () => ipcRenderer.invoke(ipcChannels.sessionCompact),
   renameSession: (request) => ipcRenderer.invoke(ipcChannels.sessionRename, request),
   archiveSession: (request) => ipcRenderer.invoke(ipcChannels.sessionArchive, request),
   deleteSession: (request) => ipcRenderer.invoke(ipcChannels.sessionDelete, request),

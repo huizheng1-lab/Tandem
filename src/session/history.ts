@@ -43,6 +43,7 @@ export function buildConversationHistory(events: SessionEvent[], turnLimit = TUR
   const turns: HistoryTurn[] = [];
   let current: HistoryTurn | undefined;
   let leaderAnswer = "";
+  let compactionSummary = "";
 
   const finishCurrent = () => {
     if (!current) return;
@@ -53,6 +54,15 @@ export function buildConversationHistory(events: SessionEvent[], turnLimit = TUR
   };
 
   for (const event of events) {
+    if (event.type === "memory:compaction") {
+      finishCurrent();
+      const summary = payloadText(event.payload, "summary");
+      if (summary) {
+        compactionSummary = summary;
+        turns.splice(0, turns.length);
+      }
+      continue;
+    }
     if (event.type === "user") {
       finishCurrent();
       const prompt = payloadText(event.payload, "prompt");
@@ -80,11 +90,12 @@ export function buildConversationHistory(events: SessionEvent[], turnLimit = TUR
   let truncated = selected.length < turns.length;
   while (selected.length > 0) {
     const body = selected.map((turn, index) => formatTurn(turn, turns.length - selected.length + index + 1)).join("\n\n");
-    const text = truncated ? `(earlier turns omitted)\n\n${body}` : body;
+    const prefix = compactionSummary ? `Conversation summary so far:\n${compactionSummary}` : truncated ? "(earlier turns omitted)" : "";
+    const text = [prefix, body].filter(Boolean).join("\n\n");
     if (text.length <= charBudget) return { text, priorTurns: turns.length, truncated };
     selected = selected.slice(1);
     truncated = true;
   }
 
-  return { text: truncated ? "(earlier turns omitted)" : "", priorTurns: turns.length, truncated };
+  return { text: compactionSummary ? `Conversation summary so far:\n${compactionSummary}` : truncated ? "(earlier turns omitted)" : "", priorTurns: turns.length, truncated };
 }

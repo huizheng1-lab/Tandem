@@ -14,6 +14,7 @@ import { parseLoop } from "../commands/loop.js";
 import { addSchedule, listSchedules, markScheduleRun, missedSchedule, removeSchedule, Schedule } from "../commands/schedule.js";
 import { addGoal, appendGoalNote, formatStandingGoals, listGoals } from "../session/goals.js";
 import { buildConversationHistory } from "../session/history.js";
+import { compactSessionHistory, isCliBackedLeader } from "../session/compaction.js";
 import { rebuildLeaderThread } from "../session/leader-thread.js";
 import { appendProjectMemoryNote, formatProjectInstructions, readProjectInstructions } from "../session/project-memory.js";
 import { SessionStore, listSessions } from "../session/store.js";
@@ -195,6 +196,24 @@ export function App({ config: initialConfig, env, cwd, initialError }: { config:
     return new Promise((resolve) => setPendingPlan({ plan: nextPlan, resolve }));
   };
 
+  const compactCurrentSession = async (force: boolean) => {
+    const events = (await storeRef.current?.read()) ?? [];
+    const event = await compactSessionHistory({
+      events,
+      config,
+      cwd,
+      env,
+      ledger,
+      force,
+      abortSignal: abortRef.current?.signal
+    });
+    if (event) {
+      await storeRef.current?.append("memory:compaction", event);
+      addMessage("SYSTEM", `compacted ${event.compactedTurns} earlier turns.`);
+    }
+    return event;
+  };
+
   const handleEvent = (event: MachineEvent) => {
     void storeRef.current?.append(event.type, event);
     if (event.type === "transition") {
@@ -225,6 +244,7 @@ export function App({ config: initialConfig, env, cwd, initialError }: { config:
     setPlan(undefined);
     setVerdict(undefined);
     try {
+      if (isCliBackedLeader(config)) await compactCurrentSession(false);
       const sessionEvents = (await storeRef.current?.read()) ?? [];
       const history = buildConversationHistory(sessionEvents);
       addMessage("SYSTEM", `context: ${history.priorTurns} prior turn${history.priorTurns === 1 ? "" : "s"}`);
@@ -409,6 +429,11 @@ export function App({ config: initialConfig, env, cwd, initialError }: { config:
       if (value.trim() === "/model") {
         setModelPicker({ stage: "role", role: "leader", index: 0 });
         addMessage("SYSTEM", "Choose model role with arrows, then Enter.");
+        return;
+      }
+      if (value.trim() === "/compact") {
+        const event = await compactCurrentSession(true);
+        if (!event) addMessage("SYSTEM", "No conversation history to compact yet.");
         return;
       }
       const loopResult = await handleLoop(value);

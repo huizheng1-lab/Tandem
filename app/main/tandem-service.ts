@@ -20,6 +20,7 @@ import { copyAttachment, formatAttachmentBlock, writeAttachmentData } from "../.
 import type { AttachmentRef } from "../../src/session/attachments.js";
 import { addGoal, clearGoals, completeGoal, formatStandingGoals, listGoals } from "../../src/session/goals.js";
 import { buildConversationHistory } from "../../src/session/history.js";
+import { compactSessionHistory, isCliBackedLeader, type LeaderCompactionEvent } from "../../src/session/compaction.js";
 import { rebuildLeaderThread } from "../../src/session/leader-thread.js";
 import { addNote, formatSessionNotes, removeNote, replaySessionMemory } from "../../src/session/memory.js";
 import type { MemoryAuthor, SessionMemoryNote } from "../../src/session/memory.js";
@@ -179,17 +180,20 @@ export class TandemService {
     if (!this.session) await this.startSession({ projectDir: this.projectDir });
     const session = this.session as SessionLike;
     this.controller = new AbortController();
-    const sessionEvents = await session.read();
-    const history = buildConversationHistory(sessionEvents);
-    await this.emitMachine({ type: "notice", message: `context: ${history.priorTurns} prior turn${history.priorTurns === 1 ? "" : "s"}` });
-    if (history.truncated) await this.emitMachine({ type: "notice", message: "including last 10 turns of context" });
-    const attachmentBlock = formatAttachmentBlock(attachments);
-    const promptWithAttachments = attachmentBlock ? `${prompt}\n\n${attachmentBlock}` : prompt;
-    await session.append("user", { prompt: promptWithAttachments, attachments });
-    const initialState = this.lastCheckpoint?.phase === "DONE" ? undefined : this.lastCheckpoint;
-    this.lastCheckpoint = undefined;
-
     try {
+      let sessionEvents = await session.read();
+      if (isCliBackedLeader(this.config)) {
+        const compacted = await this.compactCurrentSession(sessionEvents, false);
+        if (compacted) sessionEvents = await session.read();
+      }
+      const history = buildConversationHistory(sessionEvents);
+      await this.emitMachine({ type: "notice", message: `context: ${history.priorTurns} prior turn${history.priorTurns === 1 ? "" : "s"}` });
+      if (history.truncated) await this.emitMachine({ type: "notice", message: "including last 10 turns of context" });
+      const attachmentBlock = formatAttachmentBlock(attachments);
+      const promptWithAttachments = attachmentBlock ? `${prompt}\n\n${attachmentBlock}` : prompt;
+      await session.append("user", { prompt: promptWithAttachments, attachments });
+      const initialState = this.lastCheckpoint?.phase === "DONE" ? undefined : this.lastCheckpoint;
+      this.lastCheckpoint = undefined;
       const diffTracker = createDiffTracker(this.projectDir);
       const permissionBridge: PermissionBridge = {
         approve: (request) => this.requestPermission(request)
@@ -246,6 +250,11 @@ export class TandemService {
 
   abort(): void {
     this.controller?.abort();
+  }
+
+  async compactSession(): Promise<LeaderCompactionEvent | undefined> {
+    if (!this.session) await this.startSession({ projectDir: this.projectDir });
+    return this.compactCurrentSession(await (this.session as SessionLike).read(), true);
   }
 
   getConfig(): TandemConfig {
@@ -472,7 +481,21 @@ export class TandemService {
     return result.added ? `Remembered: ${result.note.text}` : `Already remembered: ${result.note.text}`;
   }
 
-  private async recordLeaderCompaction(event: { summary: string; compactedTurns: number }): Promise<void> {
+  private async compactCurrentSession(events: Awaited<ReturnType<SessionLike["read"]>>, force: boolean): Promise<LeaderCompactionEvent | undefined> {
+    const event = await compactSessionHistory({
+      events,
+      config: this.config,
+      cwd: this.projectDir,
+      env: this.env,
+      ledger: this.ledger,
+      force,
+      abortSignal: this.controller?.signal
+    });
+    if (event) await this.recordLeaderCompaction(event);
+    return event;
+  }
+
+  private async recordLeaderCompaction(event: LeaderCompactionEvent): Promise<void> {
     await this.session?.append("memory:compaction", event);
     await this.emitMachine({ type: "notice", message: `compacted ${event.compactedTurns} earlier turns.` });
   }

@@ -119,6 +119,7 @@ function composerHelpText(): string {
     "/rounds <n>",
     "/status",
     "/cost",
+    "/compact",
     "/goal <text>            record AND start work on it now",
     "/goal add <text>        record only (does not run)",
     "/goal list              list standing goals",
@@ -826,6 +827,11 @@ function App(): React.ReactElement {
       }
       if (command === "/cost") {
         appendMessage("system", costText());
+        return;
+      }
+      if (command === "/compact") {
+        const result = await tandem.compactSession();
+        if (!result) appendMessage("system", "No conversation history to compact yet.");
         return;
       }
       if (command === "/goal") {

@@ -34,6 +34,7 @@ export const ipcChannels = {
   modelsList: "models:list",
   sessionsList: "sessions:list",
   sessionResume: "session:resume",
+  sessionCompact: "session:compact",
   sessionRename: "session:rename",
   sessionArchive: "session:archive",
   sessionDelete: "session:delete",
@@ -191,6 +192,11 @@ export interface SessionDeleteResponse {
   activeSession?: SessionStartResponse;
 }
 
+export interface SessionCompactResponse {
+  summary: string;
+  compactedTurns: number;
+}
+
 export interface GoalAddRequest {
   text: string;
 }
@@ -233,6 +239,7 @@ export interface TandemDesktopApi {
   listModels(): Promise<ModelListItem[]>;
   listSessions(): Promise<SessionMetadata[]>;
   resumeSession(request: SessionResumeRequest): Promise<SessionResumeResponse>;
+  compactSession(): Promise<SessionCompactResponse | undefined>;
   renameSession(request: SessionRenameRequest): Promise<SessionMetadata[]>;
   archiveSession(request: SessionArchiveRequest): Promise<SessionMetadata[]>;
   deleteSession(request: SessionDeleteRequest): Promise<SessionDeleteResponse>;

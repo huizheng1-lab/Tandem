@@ -62,4 +62,19 @@ describe("buildConversationHistory", () => {
 
     expect(history.text).toContain("Outcome: Only CSS changed.");
   });
+
+  it("prefers persisted compaction summaries over omitted older turns", () => {
+    const history = buildConversationHistory([
+      ...turn("old prompt", "old outcome"),
+      event("memory:compaction", { summary: "User created colors.txt and needs a follow-up.", compactedTurns: 1 }),
+      ...turn("new prompt", "new outcome")
+    ]);
+
+    expect(history.truncated).toBe(false);
+    expect(history.text).toMatch(/^Conversation summary so far:/);
+    expect(history.text).toContain("User created colors.txt");
+    expect(history.text).toContain("new prompt");
+    expect(history.text).not.toContain("old prompt");
+    expect(history.text).not.toContain("(earlier turns omitted)");
+  });
 });

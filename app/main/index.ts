@@ -77,6 +77,7 @@ ipcMain.handle(ipcChannels.configSet, (_event, patch) => service?.setConfig(patc
 ipcMain.handle(ipcChannels.modelsList, () => service?.listModels());
 ipcMain.handle(ipcChannels.sessionsList, () => service?.listSessions());
 ipcMain.handle(ipcChannels.sessionResume, (_event, request: SessionResumeRequest) => service?.resumeSession(request.id));
+ipcMain.handle(ipcChannels.sessionCompact, () => service?.compactSession());
 ipcMain.handle(ipcChannels.sessionRename, (_event, request: SessionRenameRequest) => service?.renameSession(request.id, request.title));
 ipcMain.handle(ipcChannels.sessionArchive, (_event, request: SessionArchiveRequest) => service?.archiveSession(request.id, request.archived));
 ipcMain.handle(ipcChannels.sessionDelete, (_event, request: SessionDeleteRequest) => service?.deleteSession(request.id));

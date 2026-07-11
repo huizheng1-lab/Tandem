@@ -14,6 +14,7 @@ export const helpText = `Commands:
 /rounds <n>                   set max review rounds
 /status                       show phase, round, models, session
 /cost                         show token and dollar totals
+/compact                      summarize prior conversation context now
 /takeover                     request leader takeover
 /goal <text>                  record AND start work on the text now
 /goal add <text>              add a standing goal (does not run)
