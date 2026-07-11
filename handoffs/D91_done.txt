@@ -1,0 +1,19 @@
+Round: D91
+Status: complete
+Implementation commit: ffca122
+
+Summary:
+- Added append-boundary session event bounding in src/session/store.ts.
+- Oversized session events now keep a bounded JSONL preview with __tandemTruncation metadata.
+- Original oversized payloads are written to per-session sidecar artifact JSON files when possible.
+- Normal event payloads remain unwrapped for backwards-compatible readers.
+- Added session-store tests for normal events, oversized events, sidecar artifacts, and readRecent after truncation.
+
+Verification:
+- npx vitest run tests/session-store.test.ts: 15 passed
+- npm run typecheck: passed
+- npm test: 31 passed, 1 skipped; 304 tests passed, 1 skipped
+- git diff --check: passed
+
+Notes:
+- npm test emitted existing Node DEP0190 child-process shell warnings; no D91 failures.
