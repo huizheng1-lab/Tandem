@@ -1,0 +1,17 @@
+D84 done
+
+Implementation commit: 51decf0 (D84-1: move Codex CLI prompts to stdin)
+
+Summary:
+- Fixed Codex CLI exec prompt transport so buildCodexExecArgv() appends "-" instead of the prompt text.
+- Updated runCodexExec() to open stdin, write options.prompt, and end stdin after spawning Codex.
+- Verified the existing Codex non-zero-exit formatting path accumulates stdout/stderr as strings and remains safe.
+- Confirmed --output-schema already uses temp schema files, so schema transport was not part of this argv-length bug.
+
+Verification:
+- Incident-shaped codexLeaderReview reproduction using the real D83/D84 checkpoint report plus a 12,000-character diff produced a 33,917-character stdin prompt, argvContainsPrompt=false, lastArg="-", and a valid ReviewVerdict.
+- Real codex.exe live run was not possible in this shell: codex --version failed with "Access is denied".
+- npx vitest run tests/codex-cli.test.ts: passed (15 tests).
+- npm run typecheck: passed.
+- npm test: passed (288 passed, 1 skipped).
+- git diff --check: passed.
