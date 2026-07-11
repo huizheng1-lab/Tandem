@@ -79,6 +79,44 @@ describe("artifacts", () => {
     ).toThrow(/omitted verification commands: node test\.mjs/);
   });
 
+  it("includes reported verification command strings when a report omits a command", async () => {
+    const exactPlan: BuildPlan = {
+      ...plan,
+      verification: ["node test.mjs"]
+    };
+    expect(() =>
+      validateCompletionReport(exactPlan, {
+        status: "complete",
+        summary: "done",
+        taskResults: [{ id: "T1", status: "done" }],
+        filesChanged: ["src/other.js"],
+        verificationResults: [{ command: "npm test", passed: true, output: "adapted from node test.mjs" }],
+        deviationsFromPlan: []
+      })
+    ).toThrow(/Reported verification commands:\n1\. npm test \[passed=true\]/);
+  });
+
+  it("matches long verification commands across quote-escaping differences", async () => {
+    const paths = Array.from({ length: 14 }, (_, index) => `C:\\work\\renders\\inspection\\frame-${String(index + 1).padStart(2, "0")}.png`);
+    const planCommand = `powershell -NoProfile -Command "$files = @(${paths.map((file) => `'${file}'`).join(",")}); foreach ($f in $files) { if (!(Test-Path -LiteralPath $f)) { throw \\\"missing evidence frame $f\\\" }; $len = (Get-Item -LiteralPath $f).Length; if ($len -lt 1000) { throw \\\"evidence frame too small $f $len\\\" } }; Write-Host 'Evidence frames present and non-empty.'"`;
+    const reportCommand = planCommand.replace(/\\"/g, "\"");
+    const longPlan: BuildPlan = {
+      ...plan,
+      verification: [planCommand]
+    };
+
+    const report = validateCompletionReport(longPlan, {
+      status: "complete",
+      summary: "done",
+      taskResults: [{ id: "T1", status: "done" }],
+      filesChanged: ["src/other.js"],
+      verificationResults: [{ command: reportCommand, passed: true, output: "Evidence frames present and non-empty." }],
+      deviationsFromPlan: []
+    });
+
+    expect(report.verificationResults[0]?.command).toBe(reportCommand);
+  });
+
   describe("D54 schema + partition + validation", () => {
     it("partitionPlan: tasks without `stream` all land in the default stream", async () => {
       const p: BuildPlan = {

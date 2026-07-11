@@ -11,7 +11,8 @@ import {
   rootCauseDisciplineRule,
   scopeExpansionReviewRule,
   securityAndScopeRule,
-  streamPartitioningRule
+  streamPartitioningRule,
+  verificationScriptRule
 } from "../src/agents/leader.js";
 import { workerPrompt } from "../src/agents/worker.js";
 
@@ -160,5 +161,10 @@ describe("leader prompt exports (D60 + D61 wiring)", () => {
       expect(prompt).toContain(finiteVerificationRule);
     }
     expect(leaderPlannerPrompt).toContain(streamPartitioningRule);
+  });
+  it("D90: planner steers complex verification into script files", () => {
+    expect(verificationScriptRule).toMatch(/long verification one-liners/i);
+    expect(verificationScriptRule).toMatch(/verification script file/i);
+    expect(leaderPlannerPrompt).toContain(verificationScriptRule);
   });
 });

@@ -327,8 +327,40 @@ function matchResult(planEntry: string, results: CompletionReport["verificationR
   const entry = normalizeCommand(planEntry);
   return results.find((result) => {
     const command = normalizeCommand(result.command);
-    return command.length > 0 && command === entry;
+    return command.length > 0 && (command === entry || looselyEquivalentCommand(command, entry));
   });
+}
+
+function looseCommand(value: string): string {
+  return normalizeCommand(value)
+    .replace(/[“”]/g, "\"")
+    .replace(/[‘’]/g, "'")
+    .replace(/\\(["'])/g, "$1")
+    .replace(/(["'])/g, "")
+    .replace(/\s*;\s*/g, ";")
+    .replace(/\s*,\s*/g, ",")
+    .toLowerCase();
+}
+
+function commandTokens(value: string): Set<string> {
+  return new Set(
+    looseCommand(value)
+      .split(/[^a-z0-9_.:\\/-]+/i)
+      .filter((token) => token.length >= 4)
+  );
+}
+
+function looselyEquivalentCommand(command: string, entry: string): boolean {
+  if (command.length < 200 && entry.length < 200) return false;
+  const left = looseCommand(command);
+  const right = looseCommand(entry);
+  if (!left || !right) return false;
+  if (left === right) return true;
+  const leftTokens = commandTokens(command);
+  const rightTokens = commandTokens(entry);
+  if (leftTokens.size === 0 || rightTokens.size === 0) return false;
+  const overlap = [...rightTokens].filter((token) => leftTokens.has(token)).length;
+  return overlap / rightTokens.size >= 0.9 && overlap / leftTokens.size >= 0.9;
 }
 
 // Extracts basenames of files referenced by a verification command string. Handles the most
@@ -385,7 +417,9 @@ export function enforceVerification(
   // per-stream worker reports. Single-stream plans and the merged-after-merge check still pass
   // the full plan.verification (the default).
   const missing = expectedCommands.filter((entry) => !matchResult(entry, report.verificationResults));
-  if (missing.length > 0) throw new Error(`Completion report omitted verification commands: ${missing.join(", ")}`);
+  if (missing.length > 0) {
+    throw new Error(`Completion report omitted verification commands: ${missing.join(", ")}${verificationReportDiagnostic(report.verificationResults)}`);
+  }
   const failed = expectedCommands.filter((entry) => matchResult(entry, report.verificationResults)?.passed !== true);
   if (failed.length > 0 && report.status === "complete") {
     throw new Error(`Completion report marked complete with failing verification: ${failed.join(", ")}`);
@@ -400,6 +434,16 @@ export function enforceVerification(
         "Add an entry to deviationsFromPlan for each edited script before resubmitting."
     );
   }
+}
+
+function truncateDiagnostic(value: string, max = 500): string {
+  const normalized = value.replace(/\s+/g, " ").trim();
+  return normalized.length <= max ? normalized : `${normalized.slice(0, max)}... (${normalized.length} chars)`;
+}
+
+function verificationReportDiagnostic(results: CompletionReport["verificationResults"]): string {
+  if (results.length === 0) return "\nReported verification commands: none";
+  return `\nReported verification commands:\n${results.map((result, index) => `${index + 1}. ${truncateDiagnostic(result.command)} [passed=${result.passed}]`).join("\n")}`;
 }
 
 export function validateCompletionReport(
