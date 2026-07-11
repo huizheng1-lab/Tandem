@@ -1,0 +1,22 @@
+D86 done
+
+Implementation commit: 6fa3d55 (D86-1: bound desktop transcript memory)
+
+Summary:
+- Added SessionStore.readRecent(limit), which reads a bounded tail window from a JSONL session file instead of loading/parsing the entire file.
+- Desktop resume now requests only the most recent 2500 raw session events and returns eventsTruncated=true when older history was omitted.
+- Renderer transcript state is capped to the most recent 600 TranscriptEntry items during resume and live runs.
+- Renderer shows a "Recent transcript window" notice when older transcript entries are omitted from memory.
+- The visible transcript list is memoized so prompt typing no longer re-filters a large transcript list on every keystroke.
+
+Verification:
+- npx vitest run tests/session-store.test.ts tests/desktop-service.test.ts: passed (31 tests).
+- npm run typecheck: passed.
+- npm test: passed (290 passed, 1 skipped).
+- git diff --check: passed.
+- npm run build: passed.
+- npx electron-vite build: passed.
+
+Blocked live/package verification:
+- npm run dist:app reached the electron-builder packaging step but failed with EBUSY while removing release/win-unpacked, indicating the packaged output directory was locked by another process. I did not close the user's running app from this round.
+- Because packaging/live launch was blocked, I did not collect a fresh Task Manager before/after resident-memory number or manual typing-lag observation in the packaged UI.
