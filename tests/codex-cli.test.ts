@@ -30,12 +30,15 @@ const args = process.argv.slice(2);
 if (args.includes("--version")) { console.log("codex-cli 0.142.5"); process.exit(0); }
 const output = args[args.indexOf("--output-last-message") + 1];
 const schema = args[args.indexOf("--output-schema") + 1] || "";
-const prompt = args.join(" ");
 const counterFile = __filename + ".count";
 let count = 0;
 try { count = Number(fs.readFileSync(counterFile, "utf8")) || 0; } catch {}
 count += 1;
 fs.writeFileSync(counterFile, String(count));
+let prompt = "";
+process.stdin.setEncoding("utf8");
+process.stdin.on("data", (chunk) => { prompt += chunk; });
+process.stdin.on("end", () => {
 console.log(JSON.stringify({ type: "thread.started", thread_id: "test" }));
 console.log(JSON.stringify({ type: "turn.started" }));
 console.log(JSON.stringify({ type: "item.started", item: { id: "item_0", type: "command_execution", command: "node -v", aggregated_output: "", exit_code: null, status: "in_progress" } }));
@@ -56,6 +59,7 @@ if (schema.includes("completion-report")) {
 }
 fs.writeFileSync(output, JSON.stringify(value));
 console.log(JSON.stringify(value));
+});
 `,
     "utf8"
   );
@@ -164,8 +168,23 @@ describe("codex cli execution", () => {
       "gpt-5-mini",
       "-c",
       "model_reasoning_effort=medium",
-      "do work"
+      "-"
     ]);
+  });
+
+  it("D84: keeps large prompts off argv and uses stdin marker mode", () => {
+    const prompt = "review ".repeat(2000);
+    const argv = buildCodexExecArgv({
+      cwd: "C:/project",
+      sandbox: "read-only",
+      schemaPath: "schema.json",
+      outputPath: "out.json",
+      prompt
+    });
+
+    expect(prompt.length).toBeGreaterThan(10000);
+    expect(argv).not.toContain(prompt);
+    expect(argv.at(-1)).toBe("-");
   });
 
   it("parses JSONL events into tool events and usage without streaming schema JSON text", () => {

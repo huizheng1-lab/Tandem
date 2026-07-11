@@ -60,7 +60,7 @@ export function buildCodexExecArgv(input: {
   ];
   if (input.modelName) args.push("-m", input.modelName);
   if (input.modelReasoningEffort) args.push("-c", `model_reasoning_effort=${input.modelReasoningEffort}`);
-  args.push(input.prompt);
+  args.push("-");
   return args;
 }
 
@@ -148,10 +148,12 @@ export async function runCodexExec(options: CodexExecOptions & { readOnly?: bool
     const child = spawn(codexPath, args, {
       cwd: options.cwd,
       env: options.env,
-      stdio: ["ignore", "pipe", "pipe"],
+      stdio: ["pipe", "pipe", "pipe"],
       windowsHide: true,
       shell: process.platform === "win32" && /\.(?:cmd|bat)$/i.test(codexPath)
     });
+    child.stdin.on("error", () => undefined);
+    child.stdin.end(options.prompt);
     const active = new Map<string, number>();
     const diagnostics: CodexJsonDiagnostics = { errors: [] };
     let stdoutBuffer = "";
