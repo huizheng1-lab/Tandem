@@ -1,0 +1,16 @@
+D83 done
+
+Implementation commit: c484ef7 (D83-1: fix Claude review prompt transport)
+
+Summary:
+- Reproduced the incident-shaped Claude review path with the real session checkpoint report from line 63835.
+- Fixed the Claude Code CLI wrapper so the review prompt is sent via stdin instead of argv, avoiding Windows command-line length failures for large review prompts.
+- Fixed non-zero Claude CLI error formatting so missing stdout/stderr no longer causes "Cannot read properties of undefined (reading 'trim')" and masks the real failure.
+- Added stack capture to machine error events for retry/review/build/takeover error paths.
+
+Verification:
+- Incident-shaped reproduction with the original 17,781-character review prompt returned a valid ReviewVerdict using the real prompt-building and runClaudeExec path.
+- npx vitest run tests/claude-code-cli.test.ts tests/orchestrator.test.ts: passed (41 tests).
+- npm run typecheck: passed.
+- npm test: passed (287 passed, 1 skipped).
+- git diff --check: passed.
