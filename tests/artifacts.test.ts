@@ -318,6 +318,39 @@ describe("artifacts", () => {
       ).toThrow(/Verification script edited without disclosure.*verify-video\.js/);
     });
 
+    it("accepts a planned deliverable script that is also used by verification", async () => {
+      const p: BuildPlan = {
+        ...planWithScript(["node compute_stats.js"]),
+        tasks: [{ id: "T1", description: "Create the stats script", files: ["compute_stats.js", "stats.md"] }]
+      };
+      const report = validateCompletionReport(p, {
+        status: "complete",
+        summary: "ok",
+        taskResults: [{ id: "T1", status: "done" }],
+        filesChanged: ["compute_stats.js", "stats.md"],
+        verificationResults: [{ command: "node compute_stats.js", passed: true, output: "ok" }],
+        deviationsFromPlan: []
+      });
+      expect(report.status).toBe("complete");
+    });
+
+    it("still rejects an edited verification script omitted from task files", async () => {
+      const p: BuildPlan = {
+        ...planWithScript(["node verify-video.js"]),
+        tasks: [{ id: "T1", description: "Create output", files: ["out.mp4"] }]
+      };
+      expect(() =>
+        validateCompletionReport(p, {
+          status: "complete",
+          summary: "ok",
+          taskResults: [{ id: "T1", status: "done" }],
+          filesChanged: ["verify-video.js", "out.mp4"],
+          verificationResults: [{ command: "node verify-video.js", passed: true, output: "ok" }],
+          deviationsFromPlan: []
+        })
+      ).toThrow(/Verification script edited without disclosure.*verify-video\.js/);
+    });
+
     it("accepts a report that touches a referenced verification script when deviationsFromPlan mentions it", async () => {
       const p = planWithScript(["node verify-video.js"]);
       const report = validateCompletionReport(p, {

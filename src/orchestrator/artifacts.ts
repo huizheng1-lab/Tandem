@@ -393,6 +393,12 @@ function extractReferencedScriptBasenames(commands: string[]): Set<string> {
 function detectVerificationScriptTampering(plan: BuildPlan, report: CompletionReport): string[] {
   const referenced = extractReferencedScriptBasenames(plan.verification);
   if (referenced.size === 0) return [];
+  const expectedBasenames = new Set(
+    plan.tasks
+      .flatMap((task) => task.files ?? [])
+      .map((file) => (file.split(/[\\/]/).pop() ?? file).toLowerCase())
+      .filter((name) => name.length > 0)
+  );
   const changedBasenames = new Set(
     report.filesChanged
       .map((file) => (file.split(/[\\/]/).pop() ?? file).toLowerCase())
@@ -400,6 +406,7 @@ function detectVerificationScriptTampering(plan: BuildPlan, report: CompletionRe
   );
   const missing: string[] = [];
   for (const ref of referenced) {
+    if (expectedBasenames.has(ref)) continue;
     if (changedBasenames.has(ref)) {
       const mentioned = report.deviationsFromPlan.some((entry) => entry.toLowerCase().includes(ref));
       if (!mentioned) missing.push(ref);
