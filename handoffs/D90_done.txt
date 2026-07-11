@@ -1,0 +1,23 @@
+D90 done
+
+Implementation commit: 82d6daa (D90-1: make verification matching resilient)
+
+Summary:
+- Added permanent diagnostics to omitted-verification errors: rejected reports now include the actual reported verification command strings in the thrown error message.
+- Made verification-command matching resilient for long, fragile commands by adding loose equivalence that tolerates quote characters, escaped quotes, curly quotes, and minor punctuation spacing differences.
+- Kept short unrelated command substitutions rejected; the existing "node test.mjs" vs "npm test" case still fails.
+- Added planner guidance steering complex verification steps into small script files with short verification commands instead of huge inline one-liners.
+- Added regression tests for reported-command diagnostics and long PowerShell-style quote-escaping differences.
+
+Diagnosis note:
+- The historical session log for d2df843a-2c19-47e6-8443-6e5229117a3b contains the BuildPlan and validation error messages, but rejected CompletionReport / TakeoverReport payloads were not persisted before D90. That means the exact rejected verificationResults from the incident cannot be recovered after the fact. D90 makes future occurrences diagnosable.
+
+Historical replay:
+- Parsed the real BuildPlan from C:\Users\huizh\.tandem\sessions\48cc7d6d326e\d2df843a-2c19-47e6-8443-6e5229117a3b.jsonl.
+- Replayed validation with all 5 verification entries and a realistic report whose 1658-character PowerShell command differed by quote escaping only.
+- validateCompletionReport passed with verificationCount=5 and longCommandLength=1658.
+
+Verification:
+- npm run typecheck: pass
+- npm test: pass (301 passed, 1 skipped)
+- git diff --check: pass
