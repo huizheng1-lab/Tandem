@@ -81,7 +81,6 @@ export function buildClaudeExecArgv(input: {
 }): string[] {
   const args = [
     "-p",
-    input.prompt,
     "--output-format",
     "json",
     "--json-schema",
@@ -98,6 +97,15 @@ export function buildClaudeExecArgv(input: {
     args.push("--max-budget-usd", String(input.maxBudgetUsd));
   }
   return args;
+}
+
+function trimOutput(value: unknown): string {
+  return typeof value === "string" ? value.trim() : "";
+}
+
+export function formatClaudeExitError(exitCode: number | null | undefined, stderr: unknown, denials: string, stdout: unknown): string {
+  const detail = [trimOutput(stderr), denials, trimOutput(stdout)].filter(Boolean).join("\n");
+  return `Claude Code CLI exited with code ${exitCode}: ${detail}`;
 }
 
 function formatPermissionDenials(denials: unknown[] | undefined): string {
@@ -184,7 +192,7 @@ export async function runClaudeExec(options: ClaudeExecOptions): Promise<unknown
   const result = await execa(claudePath, args, {
     cwd: options.cwd,
     env: options.env,
-    stdin: "ignore",
+    input: options.prompt,
     windowsHide: true,
     reject: false,
     cancelSignal: options.abortSignal
@@ -202,7 +210,7 @@ export async function runClaudeExec(options: ClaudeExecOptions): Promise<unknown
     let denials = "";
     let rateLimitReset = "";
     try {
-      const env = JSON.parse(result.stdout) as ClaudeEnvelope;
+      const env = JSON.parse(trimOutput(result.stdout)) as ClaudeEnvelope;
       denials = formatPermissionDenials(env.permission_denials);
       rateLimitReset = detectRateLimit(env);
     } catch {
@@ -219,7 +227,7 @@ export async function runClaudeExec(options: ClaudeExecOptions): Promise<unknown
         rateLimitReset
       );
     }
-    throw new Error(`Claude Code CLI exited with code ${result.exitCode}: ${[result.stderr.trim(), denials, result.stdout.trim()].filter(Boolean).join("\n")}`);
+    throw new Error(formatClaudeExitError(result.exitCode, result.stderr, denials, result.stdout));
   }
   return parseClaudeEnvelope(result.stdout, options);
 }

@@ -29,7 +29,7 @@ export type MachineEvent =
   | { type: "artifact"; name: string; value: unknown }
   | { type: "checkpoint"; checkpoint: OrchestrationCheckpoint }
   | { type: "notice"; message: string }
-  | { type: "error"; message: string };
+  | { type: "error"; message: string; stack?: string };
 
 export type PlanResult = { kind: "answer"; answer: string } | { kind: "plan"; plan: BuildPlan };
 
@@ -78,6 +78,11 @@ function isNullByteArgumentError(error: unknown): boolean {
   );
 }
 
+function errorEvent(message: string, error?: unknown): MachineEvent {
+  const stack = error instanceof Error && error.stack ? error.stack : undefined;
+  return stack ? { type: "error", message, stack } : { type: "error", message };
+}
+
 async function retryArtifact<T>(name: string, emit: (event: MachineEvent) => void, producer: () => Promise<unknown>, parse: (value: unknown) => T): Promise<T> {
   let lastError: unknown;
   for (let attempt = 1; attempt <= 3; attempt += 1) {
@@ -91,7 +96,7 @@ async function retryArtifact<T>(name: string, emit: (event: MachineEvent) => voi
       // is guaranteed to fail identically. Same AbortError fast-fail pattern.
       if (error instanceof Error && (error.name === "AbortError" || error.name === "RateLimitError" || isNullByteArgumentError(error))) throw error;
       lastError = error;
-      emit({ type: "error", message: `${name} failed on attempt ${attempt}: ${String(error)}` });
+      emit(errorEvent(`${name} failed on attempt ${attempt}: ${String(error)}`, error));
     }
   }
   throw lastError instanceof Error ? lastError : new Error(String(lastError));
@@ -364,7 +369,7 @@ export async function runOrchestration(options: RunOptions): Promise<RunResult> 
       } catch (error) {
         if (error instanceof Error && error.name === "AbortError") throw error;
         lastError = error;
-        emit({ type: "error", message: `TakeoverReport failed on attempt ${attempt}: ${String(error)}` });
+        emit(errorEvent(`TakeoverReport failed on attempt ${attempt}: ${String(error)}`, error));
       }
     }
     if (!lastTakeover) throw lastError instanceof Error ? lastError : new Error(String(lastError));
@@ -452,7 +457,7 @@ export async function runOrchestration(options: RunOptions): Promise<RunResult> 
             transition("DONE", message, currentRound);
             return { phase: "DONE", summary: message, plan, reports, verdicts, takeover: false };
           }
-          emit({ type: "error", message: `worker could not produce a valid CompletionReport: ${String(error)}` });
+          emit(errorEvent(`worker could not produce a valid CompletionReport: ${String(error)}`, error));
           return runTakeover("worker artifact failure; leader takeover");
         }
       }
@@ -480,7 +485,7 @@ export async function runOrchestration(options: RunOptions): Promise<RunResult> 
         return { phase: "DONE", summary: message, plan, reports, verdicts, takeover: false };
       }
       const summary = `Build completed, but automated review could not be finalized after retries. Last worker report: ${report.summary}`;
-      emit({ type: "error", message: `leader review could not produce a valid ReviewVerdict: ${String(error)}` });
+      emit(errorEvent(`leader review could not produce a valid ReviewVerdict: ${String(error)}`, error));
       transition("DONE", "leader review failed; build report preserved", currentRound);
       return { phase: "DONE", summary, plan, reports, verdicts, takeover: false };
     }

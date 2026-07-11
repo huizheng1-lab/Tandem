@@ -123,6 +123,7 @@ describe("orchestration", () => {
   it("D64-1: all 3 plan() attempts failing ends the session cleanly (no takeover path is reachable yet)", async () => {
     // When retryArtifact exhausts its 3 attempts it throws. The orchestrator catches that
     // and ends with a clean DONE + a diagnosable summary rather than crashing the session.
+    const errorEvents: { message: string; stack?: string }[] = [];
     const result = await runOrchestration({
       request: "build",
       config: { maxReviewRounds: 3, maxParallelWorkers: 1 },
@@ -130,12 +131,17 @@ describe("orchestration", () => {
         plan: async () => {
           throw new Error("always fails");
         }
-      })
+      }),
+      emit: (event) => {
+        if (event.type === "error") errorEvents.push({ message: event.message, stack: event.stack });
+      }
     });
     expect(result.phase).toBe("DONE");
     expect(result.takeover).toBe(false);
     expect(result.summary).toMatch(/Leader planning could not produce a valid result after retries/);
     expect(result.summary).toContain("always fails");
+    expect(errorEvents).toHaveLength(3);
+    expect(errorEvents.every((event) => event.stack?.includes("always fails"))).toBe(true);
   });
 
   it("routes worker blocked to takeover", async () => {

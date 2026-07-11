@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { createLiveAgents } from "../src/agents/live.js";
-import { buildClaudeExecArgv, claudePermissionFor, parseClaudeEnvelope, RateLimitError, runClaudeExec } from "../src/agents/claude-code-cli/exec.js";
+import { buildClaudeExecArgv, claudePermissionFor, formatClaudeExitError, parseClaudeEnvelope, RateLimitError, runClaudeExec } from "../src/agents/claude-code-cli/exec.js";
 import { buildClaudeLeaderPlanPrompts, buildClaudeLeaderReviewPrompts, buildClaudeLeaderTakeoverPrompts, claudeLeaderReview, claudeLeaderTakeover } from "../src/agents/claude-code-cli/leader.js";
 import { clearClaudeCliPathCache, locateClaudeCli } from "../src/agents/claude-code-cli/locate.js";
 import { buildClaudeWorkerPrompts } from "../src/agents/claude-code-cli/worker.js";
@@ -39,7 +39,10 @@ async function fakeClaudeScript(mode: "auto" | "completion" | "answer" = "auto")
     `
 const args = process.argv.slice(2);
 if (args.includes("--version")) { console.log("2.1.144 (Claude Code)"); process.exit(0); }
-const prompt = args[args.indexOf("-p") + 1] || "";
+let prompt = "";
+process.stdin.setEncoding("utf8");
+process.stdin.on("data", (chunk) => { prompt += chunk; });
+process.stdin.on("end", () => {
 const schema = args[args.indexOf("--json-schema") + 1] || "";
 const mode = ${JSON.stringify(mode)};
 let structured_output;
@@ -57,6 +60,7 @@ if (mode === "completion" || schema.includes("taskResults")) {
   structured_output = { report: { status: "complete", summary: "takeover", taskResults: [{ id: "T1", status: "done", notes: null }], filesChanged: [], verificationResults: [{ command: "npm test", passed: true, output: "ok" }], deviationsFromPlan: [] }, userSummary: "takeover" };
 }
 console.log(JSON.stringify({ type: "result", subtype: "success", is_error: false, result, structured_output, usage: { input_tokens: 18, cache_creation_input_tokens: 7, cache_read_input_tokens: 5, output_tokens: 3 }, total_cost_usd: 0.25, permission_denials: [] }));
+});
 `
   );
 }
@@ -131,7 +135,6 @@ describe("claude code cli execution", () => {
       })
     ).toEqual([
       "-p",
-      "answer",
       "--output-format",
       "json",
       "--json-schema",
@@ -146,6 +149,18 @@ describe("claude code cli execution", () => {
       "--model",
       "haiku"
     ]);
+  });
+
+  it("D83: keeps the prompt off argv so large reviews travel through stdin", () => {
+    const prompt = "x".repeat(50000);
+    const argv = buildClaudeExecArgv({
+      prompt,
+      systemPrompt: "system rules",
+      schema: buildPlanJsonSchema,
+      permissionMode: "plan"
+    });
+    expect(argv).toContain("-p");
+    expect(argv).not.toContain(prompt);
   });
 
   it("D68-2: appends --max-budget-usd when maxBudgetUsd is set (omits when not)", () => {
@@ -334,6 +349,12 @@ describe("claude code cli mixed roles", () => {
     expect(takeoverPrompts.prompt).not.toContain("Takeover task: take over the implementation now");
   });
 
+  it("D83: formats non-zero exits without assuming stdout or stderr are strings", () => {
+    expect(() => formatClaudeExitError(1, undefined, "", undefined)).not.toThrow();
+    expect(formatClaudeExitError(1, undefined, "", undefined)).toBe("Claude Code CLI exited with code 1: ");
+    expect(formatClaudeExitError(1, " err \n", "denied", " out ")).toContain("err\ndenied\nout");
+  });
+
   it("supports Gemini leader plus Claude Code CLI worker", async () => {
     const cwd = await tempDir("project");
     const claudeCliPath = await fakeClaudeScript("completion");
@@ -383,22 +404,25 @@ describe("claude code cli mixed roles", () => {
     const shimSource = `
 const args = process.argv.slice(2);
 if (args.includes("--version")) { console.log("2.1.144 (Claude Code)"); process.exit(0); }
-const promptIdx = args.indexOf("-p");
 const sysPromptIdx = args.indexOf("--system-prompt");
-const rawPrompt = promptIdx >= 0 ? args[promptIdx + 1] : "";
 const rawSystemPrompt = sysPromptIdx >= 0 ? args[sysPromptIdx + 1] : "";
 const mode = process.env.TANDEM_FAKE_CLAUDE_MODE || "answer";
-const structured_output =
-  mode === "completion"
-    ? { status: "complete", summary: "done", taskResults: [{ id: "T1", status: "done" }], filesChanged: [], verificationResults: [{ command: "npm test", passed: true, output: "ok" }], deviationsFromPlan: [] }
-    : mode === "verdict"
-    ? { verdict: "approve", scores: { correctness: 5, planAdherence: 5, codeQuality: 5 }, feedback: [], userSummary: "approved" }
-    : mode === "takeover"
-    ? { report: { status: "complete", summary: "done", taskResults: [{ id: "T1", status: "done" }], filesChanged: [], verificationResults: [{ command: "npm test", passed: true, output: "ok" }], deviationsFromPlan: [] }, userSummary: "done" }
-    : { kind: "question", answer: "81", plan: null };
 const fs = require("fs");
-fs.writeFileSync(process.env.TANDEM_TEST_CAPTURE, JSON.stringify({ rawPrompt, rawSystemPrompt, args }, null, 2));
-console.log(JSON.stringify({ type: "result", subtype: "success", is_error: false, result: "ok", structured_output, usage: { input_tokens: 1, output_tokens: 1 }, total_cost_usd: 0.0001, permission_denials: [] }));
+let rawPrompt = "";
+process.stdin.setEncoding("utf8");
+process.stdin.on("data", (chunk) => { rawPrompt += chunk; });
+process.stdin.on("end", () => {
+  const structured_output =
+    mode === "completion"
+      ? { status: "complete", summary: "done", taskResults: [{ id: "T1", status: "done" }], filesChanged: [], verificationResults: [{ command: "npm test", passed: true, output: "ok" }], deviationsFromPlan: [] }
+      : mode === "verdict"
+      ? { verdict: "approve", scores: { correctness: 5, planAdherence: 5, codeQuality: 5 }, feedback: [], userSummary: "approved" }
+      : mode === "takeover"
+      ? { report: { status: "complete", summary: "done", taskResults: [{ id: "T1", status: "done" }], filesChanged: [], verificationResults: [{ command: "npm test", passed: true, output: "ok" }], deviationsFromPlan: [] }, userSummary: "done" }
+      : { kind: "question", answer: "81", plan: null };
+  fs.writeFileSync(process.env.TANDEM_TEST_CAPTURE, JSON.stringify({ rawPrompt, rawSystemPrompt, args }, null, 2));
+  console.log(JSON.stringify({ type: "result", subtype: "success", is_error: false, result: "ok", structured_output, usage: { input_tokens: 1, output_tokens: 1 }, total_cost_usd: 0.0001, permission_denials: [] }));
+});
 `;
     const shimDir = await tempDir("project-shim");
     const shimJsPath = path.join(shimDir, "claude.js");
@@ -425,7 +449,7 @@ console.log(JSON.stringify({ type: "result", subtype: "success", is_error: false
       const result = await execa(process.execPath, [shimJsPath, ...argv], {
         cwd: options.cwd,
         env: options.env,
-        stdin: "ignore",
+        input: options.prompt,
         reject: false,
         windowsHide: true
       });
