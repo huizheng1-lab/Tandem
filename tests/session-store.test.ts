@@ -230,7 +230,7 @@ describe("SessionStore", () => {
     expect(events[0]?.payload).toEqual({ role: "leader", delta: "small event" });
   });
 
-  it("bounds oversized JSONL events and stores the original payload as a sidecar artifact", async () => {
+  it("bounds oversized JSONL events without creating sidecar artifacts", async () => {
     const { cwd, home } = await tempProject();
     const store = await SessionStore.create(cwd, home);
     const hugeDelta = `start-${"x".repeat(SESSION_EVENT_JSON_MAX_BYTES * 3)}-tail`;
@@ -241,19 +241,16 @@ describe("SessionStore", () => {
     expect(Buffer.byteLength(lines[0] ?? "", "utf8")).toBeLessThan(SESSION_EVENT_JSON_MAX_BYTES);
 
     const events = await store.read();
-    const payload = events[0]?.payload as { role?: string; delta?: string; __tandemTruncation?: { truncated?: boolean; originalBytes?: number; storedBytes?: number; artifactPath?: string } };
+    const payload = events[0]?.payload as { role?: string; delta?: string; __tandemTruncation?: { truncated?: boolean; originalBytes?: number; storedBytes?: number } };
     expect(payload.role).toBe("leader");
     expect(payload.delta).toContain("start-");
     expect(payload.delta).toContain("Tandem truncated");
+    expect(payload.delta).toContain("storage time");
     expect(payload.delta).not.toContain("-tail");
     expect(payload.__tandemTruncation).toMatchObject({ truncated: true });
     expect(payload.__tandemTruncation?.originalBytes).toBeGreaterThan(SESSION_EVENT_JSON_MAX_BYTES);
     expect(payload.__tandemTruncation?.storedBytes).toBeLessThan(SESSION_EVENT_JSON_MAX_BYTES);
-
-    const artifactPath = payload.__tandemTruncation?.artifactPath;
-    expect(artifactPath).toBeTruthy();
-    const artifact = JSON.parse(await readFile(path.join(path.dirname(store.filePath), artifactPath ?? ""), "utf8")) as { payload: { delta: string } };
-    expect(artifact.payload.delta).toBe(hugeDelta);
+    expect(existsSync(path.join(path.dirname(store.filePath), `${store.id}.artifacts`))).toBe(false);
   });
 
   it("reads recent events cleanly after an oversized event", async () => {
@@ -270,5 +267,50 @@ describe("SessionStore", () => {
     expect(recent.events).toHaveLength(2);
     expect(recent.events[0]?.payload).toMatchObject({ role: "leader" });
     expect(recent.events.at(-1)?.payload).toMatchObject({ delta: "after" });
+  });
+
+  it("does not truncate checkpoint machine events because resume needs lossless state", async () => {
+    const { cwd, home } = await tempProject();
+    const store = await SessionStore.create(cwd, home);
+    const checkpoint = {
+      phase: "REVIEW",
+      round: 3,
+      plan: {
+        title: "Large checkpoint",
+        objective: "Keep every byte for resume.",
+        constraints: [],
+        tasks: Array.from({ length: 25 }, (_, index) => ({
+          id: `T${index}`,
+          description: `Task ${index} ${"x".repeat(4096)}`
+        })),
+        acceptanceCriteria: ["Resume state survives."],
+        verification: ["npm test"]
+      },
+      reports: Array.from({ length: 12 }, (_, index) => ({
+        status: "complete",
+        summary: `report ${index} ${"y".repeat(24 * 1024)}`,
+        taskResults: [{ id: `T${index}`, status: "done" }],
+        filesChanged: [`file-${index}.txt`],
+        verificationResults: [{ command: "npm test", passed: true, output: "ok" }],
+        deviationsFromPlan: []
+      })),
+      feedback: []
+    };
+    const machineEvent = { type: "checkpoint", checkpoint };
+
+    await store.append("machine", machineEvent);
+
+    const line = (await readFile(store.filePath, "utf8")).trim();
+    expect(Buffer.byteLength(line, "utf8")).toBeGreaterThan(SESSION_EVENT_JSON_MAX_BYTES);
+    const events = await store.read();
+    expect(events[0]?.payload).toEqual(machineEvent);
+
+    const recent = await store.readRecent(1);
+    expect(recent.events[0]?.payload).toEqual(machineEvent);
+    const extracted = (recent.events.map((event) => event.payload).find((payload): payload is typeof machineEvent => {
+      return typeof payload === "object" && payload !== null && (payload as { type?: unknown }).type === "checkpoint";
+    }) as typeof machineEvent | undefined)?.checkpoint;
+    expect(extracted).toEqual(checkpoint);
+    expect(existsSync(path.join(path.dirname(store.filePath), `${store.id}.artifacts`))).toBe(false);
   });
 });

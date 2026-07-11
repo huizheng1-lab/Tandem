@@ -42,7 +42,6 @@ interface SessionEventTruncation {
   truncated: true;
   originalBytes: number;
   storedBytes: number;
-  artifactPath?: string;
   note: string;
 }
 
@@ -73,7 +72,7 @@ function truncateString(value: string, maxChars: number): { value: string; trunc
   if (value.length <= maxChars) return { value, truncated: false };
   const hidden = value.length - maxChars;
   return {
-    value: `${value.slice(0, maxChars)}\n\n[Tandem truncated ${hidden.toLocaleString()} additional characters from this session event. Full payload may be available in the event artifact.]`,
+    value: `${value.slice(0, maxChars)}\n\n[Tandem truncated ${hidden.toLocaleString()} additional characters from this session event at storage time to keep the session log bounded.]`,
     truncated: true
   };
 }
@@ -128,32 +127,20 @@ function eventWithTruncationMetadata(event: SessionEvent, payload: unknown, meta
   return next;
 }
 
-function artifactRelativePath(sessionId: string): string {
-  return `${sessionId}.artifacts/${randomUUID()}.json`;
+function isCheckpointMachineEvent(event: SessionEvent): boolean {
+  return event.type === "machine" && isRecord(event.payload) && event.payload.type === "checkpoint";
 }
 
-async function writePayloadArtifact(filePath: string, relativePath: string, event: SessionEvent): Promise<string | undefined> {
-  try {
-    const target = path.join(path.dirname(filePath), relativePath);
-    await mkdir(path.dirname(target), { recursive: true });
-    await writeFile(target, `${JSON.stringify(event, null, 2)}\n`, "utf8");
-    return relativePath;
-  } catch {
-    return undefined;
-  }
-}
-
-async function boundedSessionEvent(filePath: string, sessionId: string, event: SessionEvent): Promise<SessionEvent> {
+function boundedSessionEvent(event: SessionEvent): SessionEvent {
+  if (isCheckpointMachineEvent(event)) return event;
   const originalBytes = jsonBytes(event);
   if (originalBytes <= SESSION_EVENT_JSON_MAX_BYTES) return event;
 
-  const artifactPath = await writePayloadArtifact(filePath, artifactRelativePath(sessionId), event);
   const preview = previewValue(event.payload, SESSION_EVENT_PREVIEW_STRING_CHARS, SESSION_EVENT_COLLECTION_PREVIEW_ITEMS).value;
   const metadata: Omit<SessionEventTruncation, "storedBytes"> = {
     truncated: true,
     originalBytes,
-    artifactPath,
-    note: "Session event payload exceeded Tandem's JSONL size limit and was stored as a bounded preview."
+    note: "Session event payload exceeded Tandem's JSONL size limit and was truncated at storage time to keep the session log bounded."
   };
   let bounded = eventWithTruncationMetadata(event, preview, metadata);
   let storedBytes = jsonBytes(bounded);
@@ -453,7 +440,7 @@ export class SessionStore {
 
   async append(type: string, payload: unknown): Promise<void> {
     const event: SessionEvent = { type, at: new Date().toISOString(), payload };
-    const storedEvent = await boundedSessionEvent(this.filePath, this.id, event);
+    const storedEvent = boundedSessionEvent(event);
     await new Promise<void>((resolve, reject) => {
       const stream = createWriteStream(this.filePath, { flags: "a" });
       stream.once("error", reject);
