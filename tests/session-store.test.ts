@@ -3,7 +3,19 @@ import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { archiveSession, deleteSession, findSessionProjectDir, listSessions, renameSession, readSessionStartEvent, SessionStore, sessionDir, sessionIndexPath, truncateTitle } from "../src/session/store.js";
+import {
+  archiveSession,
+  deleteSession,
+  findSessionProjectDir,
+  listSessions,
+  renameSession,
+  readSessionStartEvent,
+  SESSION_EVENT_JSON_MAX_BYTES,
+  SessionStore,
+  sessionDir,
+  sessionIndexPath,
+  truncateTitle
+} from "../src/session/store.js";
 
 async function tempDir(name: string): Promise<string> {
   const dir = path.join(tmpdir(), `tandem-${name}-${Date.now()}-${Math.random().toString(16).slice(2)}`);
@@ -206,5 +218,57 @@ describe("SessionStore", () => {
     expect(recent.events).toHaveLength(25);
     expect(recent.events[0]?.payload).toMatchObject({ delta: "event-95" });
     expect(recent.events.at(-1)?.payload).toMatchObject({ delta: "event-119" });
+  });
+
+  it("leaves normal event payloads unwrapped", async () => {
+    const { cwd, home } = await tempProject();
+    const store = await SessionStore.create(cwd, home);
+
+    await store.append("text", { role: "leader", delta: "small event" });
+
+    const events = await store.read();
+    expect(events[0]?.payload).toEqual({ role: "leader", delta: "small event" });
+  });
+
+  it("bounds oversized JSONL events and stores the original payload as a sidecar artifact", async () => {
+    const { cwd, home } = await tempProject();
+    const store = await SessionStore.create(cwd, home);
+    const hugeDelta = `start-${"x".repeat(SESSION_EVENT_JSON_MAX_BYTES * 3)}-tail`;
+
+    await store.append("text", { role: "leader", delta: hugeDelta });
+
+    const lines = (await readFile(store.filePath, "utf8")).trim().split(/\r?\n/);
+    expect(Buffer.byteLength(lines[0] ?? "", "utf8")).toBeLessThan(SESSION_EVENT_JSON_MAX_BYTES);
+
+    const events = await store.read();
+    const payload = events[0]?.payload as { role?: string; delta?: string; __tandemTruncation?: { truncated?: boolean; originalBytes?: number; storedBytes?: number; artifactPath?: string } };
+    expect(payload.role).toBe("leader");
+    expect(payload.delta).toContain("start-");
+    expect(payload.delta).toContain("Tandem truncated");
+    expect(payload.delta).not.toContain("-tail");
+    expect(payload.__tandemTruncation).toMatchObject({ truncated: true });
+    expect(payload.__tandemTruncation?.originalBytes).toBeGreaterThan(SESSION_EVENT_JSON_MAX_BYTES);
+    expect(payload.__tandemTruncation?.storedBytes).toBeLessThan(SESSION_EVENT_JSON_MAX_BYTES);
+
+    const artifactPath = payload.__tandemTruncation?.artifactPath;
+    expect(artifactPath).toBeTruthy();
+    const artifact = JSON.parse(await readFile(path.join(path.dirname(store.filePath), artifactPath ?? ""), "utf8")) as { payload: { delta: string } };
+    expect(artifact.payload.delta).toBe(hugeDelta);
+  });
+
+  it("reads recent events cleanly after an oversized event", async () => {
+    const { cwd, home } = await tempProject();
+    const store = await SessionStore.create(cwd, home);
+
+    await store.append("text", { role: "leader", delta: "before" });
+    await store.append("text", { role: "leader", delta: "x".repeat(SESSION_EVENT_JSON_MAX_BYTES * 2) });
+    await store.append("text", { role: "leader", delta: "after" });
+
+    const recent = await store.readRecent(2);
+
+    expect(recent.truncated).toBe(true);
+    expect(recent.events).toHaveLength(2);
+    expect(recent.events[0]?.payload).toMatchObject({ role: "leader" });
+    expect(recent.events.at(-1)?.payload).toMatchObject({ delta: "after" });
   });
 });

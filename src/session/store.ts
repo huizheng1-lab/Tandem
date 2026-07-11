@@ -24,6 +24,11 @@ const EMPTY_SESSION_PRUNE_MS = 60 * 60 * 1000;
 const APPEND_INDEX_DEBOUNCE_MS = 250;
 const READ_TAIL_CHUNK_BYTES = 128 * 1024;
 const READ_HEAD_CHUNK_BYTES = 64 * 1024;
+export const SESSION_EVENT_JSON_MAX_BYTES = 256 * 1024;
+export const SESSION_EVENT_PREVIEW_STRING_CHARS = 64 * 1024;
+const SESSION_EVENT_FALLBACK_STRING_CHARS = 8 * 1024;
+const SESSION_EVENT_COLLECTION_PREVIEW_ITEMS = 50;
+const SESSION_EVENT_FALLBACK_COLLECTION_ITEMS = 8;
 
 interface PendingAppendIndexUpdate {
   cwd: string;
@@ -31,6 +36,14 @@ interface PendingAppendIndexUpdate {
   id: string;
   lastActiveAt: string;
   title?: string;
+}
+
+interface SessionEventTruncation {
+  truncated: true;
+  originalBytes: number;
+  storedBytes: number;
+  artifactPath?: string;
+  note: string;
 }
 
 const pendingAppendIndexUpdates = new Map<string, PendingAppendIndexUpdate>();
@@ -46,6 +59,120 @@ export function sessionDir(cwd = process.cwd(), homeDir?: string): string {
 
 export function sessionIndexPath(cwd = process.cwd(), homeDir?: string): string {
   return path.join(sessionDir(cwd, homeDir), "index.json");
+}
+
+function jsonText(value: unknown): string {
+  return JSON.stringify(value);
+}
+
+function jsonBytes(value: unknown): number {
+  return Buffer.byteLength(jsonText(value), "utf8");
+}
+
+function truncateString(value: string, maxChars: number): { value: string; truncated: boolean } {
+  if (value.length <= maxChars) return { value, truncated: false };
+  const hidden = value.length - maxChars;
+  return {
+    value: `${value.slice(0, maxChars)}\n\n[Tandem truncated ${hidden.toLocaleString()} additional characters from this session event. Full payload may be available in the event artifact.]`,
+    truncated: true
+  };
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function previewValue(value: unknown, stringLimit: number, collectionLimit: number): { value: unknown; truncated: boolean } {
+  if (typeof value === "string") return truncateString(value, stringLimit);
+  if (Array.isArray(value)) {
+    let truncated = value.length > collectionLimit;
+    const items = value.slice(0, collectionLimit).map((item) => {
+      const preview = previewValue(item, stringLimit, collectionLimit);
+      truncated ||= preview.truncated;
+      return preview.value;
+    });
+    if (value.length > collectionLimit) {
+      items.push({ __tandemTruncatedItems: value.length - collectionLimit });
+    }
+    return { value: items, truncated };
+  }
+  if (isRecord(value)) {
+    const entries = Object.entries(value);
+    let truncated = entries.length > collectionLimit;
+    const next: Record<string, unknown> = {};
+    for (const [key, item] of entries.slice(0, collectionLimit)) {
+      const preview = previewValue(item, stringLimit, collectionLimit);
+      truncated ||= preview.truncated;
+      next[key] = preview.value;
+    }
+    if (entries.length > collectionLimit) next.__tandemTruncatedKeys = entries.length - collectionLimit;
+    return { value: next, truncated };
+  }
+  return { value, truncated: false };
+}
+
+function withTruncationMetadata(payload: unknown, metadata: SessionEventTruncation): unknown {
+  if (isRecord(payload)) return { ...payload, __tandemTruncation: metadata };
+  return { __tandemTruncation: metadata, preview: payload };
+}
+
+function eventWithTruncationMetadata(event: SessionEvent, payload: unknown, metadata: Omit<SessionEventTruncation, "storedBytes">): SessionEvent {
+  let storedBytes = 0;
+  let next: SessionEvent = event;
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    next = { ...event, payload: withTruncationMetadata(payload, { ...metadata, storedBytes }) };
+    const bytes = jsonBytes(next);
+    if (bytes === storedBytes) return next;
+    storedBytes = bytes;
+  }
+  return next;
+}
+
+function artifactRelativePath(sessionId: string): string {
+  return `${sessionId}.artifacts/${randomUUID()}.json`;
+}
+
+async function writePayloadArtifact(filePath: string, relativePath: string, event: SessionEvent): Promise<string | undefined> {
+  try {
+    const target = path.join(path.dirname(filePath), relativePath);
+    await mkdir(path.dirname(target), { recursive: true });
+    await writeFile(target, `${JSON.stringify(event, null, 2)}\n`, "utf8");
+    return relativePath;
+  } catch {
+    return undefined;
+  }
+}
+
+async function boundedSessionEvent(filePath: string, sessionId: string, event: SessionEvent): Promise<SessionEvent> {
+  const originalBytes = jsonBytes(event);
+  if (originalBytes <= SESSION_EVENT_JSON_MAX_BYTES) return event;
+
+  const artifactPath = await writePayloadArtifact(filePath, artifactRelativePath(sessionId), event);
+  const preview = previewValue(event.payload, SESSION_EVENT_PREVIEW_STRING_CHARS, SESSION_EVENT_COLLECTION_PREVIEW_ITEMS).value;
+  const metadata: Omit<SessionEventTruncation, "storedBytes"> = {
+    truncated: true,
+    originalBytes,
+    artifactPath,
+    note: "Session event payload exceeded Tandem's JSONL size limit and was stored as a bounded preview."
+  };
+  let bounded = eventWithTruncationMetadata(event, preview, metadata);
+  let storedBytes = jsonBytes(bounded);
+
+  if (storedBytes > SESSION_EVENT_JSON_MAX_BYTES) {
+    const fallback = previewValue(event.payload, SESSION_EVENT_FALLBACK_STRING_CHARS, SESSION_EVENT_FALLBACK_COLLECTION_ITEMS).value;
+    bounded = eventWithTruncationMetadata(event, fallback, metadata);
+    storedBytes = jsonBytes(bounded);
+  }
+
+  if (storedBytes > SESSION_EVENT_JSON_MAX_BYTES) {
+    const summary = {
+      payloadType: Array.isArray(event.payload) ? "array" : typeof event.payload,
+      keys: isRecord(event.payload) ? Object.keys(event.payload).slice(0, SESSION_EVENT_FALLBACK_COLLECTION_ITEMS) : undefined
+    };
+    bounded = eventWithTruncationMetadata(event, summary, metadata);
+  }
+
+  return bounded;
 }
 
 export async function findSessionProjectDir(id: string, homeDir?: string): Promise<string | undefined> {
@@ -326,17 +453,18 @@ export class SessionStore {
 
   async append(type: string, payload: unknown): Promise<void> {
     const event: SessionEvent = { type, at: new Date().toISOString(), payload };
+    const storedEvent = await boundedSessionEvent(this.filePath, this.id, event);
     await new Promise<void>((resolve, reject) => {
       const stream = createWriteStream(this.filePath, { flags: "a" });
       stream.once("error", reject);
-      stream.end(`${JSON.stringify(event)}\n`, resolve);
+      stream.end(`${JSON.stringify(storedEvent)}\n`, resolve);
     });
     const prompt = type === "user" ? (payload as { prompt?: unknown } | undefined)?.prompt : undefined;
     scheduleAppendIndexUpdate({
       cwd: this.cwd,
       homeDir: this.homeDir,
       id: this.id,
-      lastActiveAt: event.at,
+      lastActiveAt: storedEvent.at,
       title: typeof prompt === "string" ? truncateTitle(prompt) : undefined
     });
   }
