@@ -177,4 +177,19 @@ describe("SessionStore", () => {
     expect(elapsedMs).toBeLessThan(250);
     expect((await listSessions(cwd, home)).map((session) => session.id)).toEqual([active.id]);
   });
+
+  it("reads a bounded recent event window for large desktop resumes", async () => {
+    const { cwd, home } = await tempProject();
+    const store = await SessionStore.create(cwd, home);
+    for (let index = 0; index < 120; index += 1) {
+      await store.append("text", { role: "leader", delta: `event-${index}` });
+    }
+
+    const recent = await store.readRecent(25);
+
+    expect(recent.truncated).toBe(true);
+    expect(recent.events).toHaveLength(25);
+    expect(recent.events[0]?.payload).toMatchObject({ delta: "event-95" });
+    expect(recent.events.at(-1)?.payload).toMatchObject({ delta: "event-119" });
+  });
 });

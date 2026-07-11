@@ -168,6 +168,7 @@ export interface SessionResumeResponse {
   projectConfigOverrides?: Array<keyof TandemConfig>;
   projectInstructions?: { fileName: string; chars: number; truncated: boolean };
   events: SessionEvent[];
+  eventsTruncated?: boolean;
   checkpoint?: OrchestrationCheckpoint;
 }
 

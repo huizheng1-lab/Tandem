@@ -50,7 +50,8 @@ import {
 
 type PendingResolver = (approved: boolean) => void;
 type DesktopWindow = Pick<BrowserWindow, "webContents">;
-type SessionLike = Pick<SessionStore, "id" | "append" | "read">;
+type SessionLike = Pick<SessionStore, "id" | "append" | "read"> & Partial<Pick<SessionStore, "readRecent">>;
+const DESKTOP_RESUME_EVENT_LIMIT = 2500;
 
 interface DesktopAppState {
   lastProjectDir?: string;
@@ -317,7 +318,8 @@ export class TandemService {
     this.config = loaded.config;
     this.projectConfigOverrides = loaded.projectOverrides;
     await this.refreshCronTasks();
-    const events = await store.read();
+    const recent = store.readRecent ? await store.readRecent(DESKTOP_RESUME_EVENT_LIMIT) : { events: await store.read(), truncated: false };
+    const events = recent.events;
     this.session = store;
     const checkpoint = this.findLastCheckpoint(events.map((event) => event.payload));
     this.lastCheckpoint = checkpoint?.phase === "DONE" ? undefined : checkpoint;
@@ -333,6 +335,7 @@ export class TandemService {
         ? { fileName: projectInstructions.fileName, chars: projectInstructions.chars, truncated: projectInstructions.truncated }
         : undefined,
       events,
+      eventsTruncated: recent.truncated || undefined,
       checkpoint: this.lastCheckpoint
     };
   }

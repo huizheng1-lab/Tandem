@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
 import { createWriteStream, existsSync } from "node:fs";
-import { mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import { mkdir, open, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { tandemStateDir } from "../paths.js";
 
@@ -22,6 +22,7 @@ type SessionIndex = Record<string, Omit<SessionMetadata, "id">>;
 let indexQueue: Promise<void> = Promise.resolve();
 const EMPTY_SESSION_PRUNE_MS = 60 * 60 * 1000;
 const APPEND_INDEX_DEBOUNCE_MS = 250;
+const READ_TAIL_CHUNK_BYTES = 128 * 1024;
 
 interface PendingAppendIndexUpdate {
   cwd: string;
@@ -99,6 +100,40 @@ async function readSessionEvents(filePath: string): Promise<SessionEvent[]> {
     .split(/\r?\n/)
     .filter(Boolean)
     .map((line) => JSON.parse(line) as SessionEvent);
+}
+
+async function readRecentSessionEvents(filePath: string, limit: number): Promise<{ events: SessionEvent[]; truncated: boolean }> {
+  if (!existsSync(filePath)) return { events: [], truncated: false };
+  if (limit <= 0) return { events: [], truncated: true };
+  const handle = await open(filePath, "r");
+  try {
+    const { size } = await handle.stat();
+    let position = size;
+    let newlineCount = 0;
+    const chunks: Buffer[] = [];
+    while (position > 0 && newlineCount <= limit) {
+      const length = Math.min(READ_TAIL_CHUNK_BYTES, position);
+      position -= length;
+      const buffer = Buffer.alloc(length);
+      await handle.read(buffer, 0, length, position);
+      chunks.unshift(buffer);
+      for (let index = 0; index < buffer.length; index += 1) {
+        if (buffer[index] === 10) newlineCount += 1;
+      }
+    }
+    const lines = Buffer.concat(chunks)
+      .toString("utf8")
+      .trim()
+      .split(/\r?\n/)
+      .filter(Boolean);
+    const truncated = position > 0 || lines.length > limit;
+    return {
+      events: lines.slice(-limit).map((line) => JSON.parse(line) as SessionEvent),
+      truncated
+    };
+  } finally {
+    await handle.close();
+  }
 }
 
 async function sessionFileIds(cwd: string, homeDir: string | undefined): Promise<Set<string>> {
@@ -282,6 +317,10 @@ export class SessionStore {
 
   async read(): Promise<SessionEvent[]> {
     return readSessionEvents(this.filePath);
+  }
+
+  async readRecent(limit: number): Promise<{ events: SessionEvent[]; truncated: boolean }> {
+    return readRecentSessionEvents(this.filePath, limit);
   }
 }
 

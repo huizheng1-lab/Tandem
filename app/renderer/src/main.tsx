@@ -27,6 +27,7 @@ import "./styles.css";
 
 type Role = "user" | "leader" | "worker" | "system";
 type PendingSessionActionKind = "rename" | "archive" | "unarchive" | "delete";
+const MAX_TRANSCRIPT_ENTRIES = 600;
 const codexEffortOptions = CodexCliReasoningEffortSchema.options;
 const claudeCliModelOptions = ["haiku", "sonnet", "opus"] as const;
 const cliDefaultOption = "default";
@@ -239,6 +240,7 @@ function App(): React.ReactElement {
   const [appState, setAppState] = useState<DesktopAppStateResponse>();
   const [models, setModels] = useState<ModelListItem[]>([]);
   const [entries, setEntries] = useState<TranscriptEntry[]>([{ id: 1, kind: "message", role: "system", text: "Choose a project folder to start Tandem." }]);
+  const [transcriptTruncated, setTranscriptTruncated] = useState(false);
   const [prompt, setPrompt] = useState("");
   const [attachments, setAttachments] = useState<AttachmentRef[]>([]);
   const [running, setRunning] = useState(false);
@@ -293,8 +295,23 @@ function App(): React.ReactElement {
     ? `Leader: ${cost.leader.inputTokens}/${cost.leader.outputTokens} tokens, $${cost.leader.dollars.toFixed(4)}${effectiveConfig?.leader === "codex/cli" ? " (billed via your Codex CLI account, not by token price)" : ""}${effectiveConfig?.leader === "claude-code/cli" ? " (reported directly by Claude Code CLI)" : ""}\nWorker: ${cost.worker.inputTokens}/${cost.worker.outputTokens} tokens, $${cost.worker.dollars.toFixed(4)}${effectiveConfig?.worker === "codex/cli" ? " (billed via your Codex CLI account, not by token price)" : ""}${effectiveConfig?.worker === "claude-code/cli" ? " (reported directly by Claude Code CLI)" : ""}`
     : "No usage yet";
 
+  const limitEntries = (items: TranscriptEntry[]): TranscriptEntry[] => items.slice(Math.max(0, items.length - MAX_TRANSCRIPT_ENTRIES));
+
+  const setBoundedEntries = (updater: (current: TranscriptEntry[]) => TranscriptEntry[]) => {
+    setEntries((current) => {
+      const next = updater(current);
+      if (next.length > MAX_TRANSCRIPT_ENTRIES) queueMicrotask(() => setTranscriptTruncated(true));
+      return limitEntries(next);
+    });
+  };
+
+  const replaceTranscript = (items: TranscriptEntry[], truncated: boolean) => {
+    setTranscriptTruncated(truncated || items.length > MAX_TRANSCRIPT_ENTRIES);
+    setEntries(limitEntries(items));
+  };
+
   const appendMessage = (role: Role, text: string) => {
-    setEntries((current) => [...current, { id: nextId.current++, kind: "message", role, text }]);
+    setBoundedEntries((current) => [...current, { id: nextId.current++, kind: "message", role, text }]);
   };
 
   const addAttachmentsFromFiles = async (files: FileList | File[]) => {
@@ -343,13 +360,13 @@ function App(): React.ReactElement {
   };
 
   const appendToolActivity = (event: ToolActivityEvent) => {
-    setEntries((current) => [...current, { id: nextId.current++, kind: "tool", event }]);
+    setBoundedEntries((current) => [...current, { id: nextId.current++, kind: "tool", event }]);
     setRunActivityCount((count) => count + 1);
   };
 
   const appendStream = (role: "leader" | "worker", delta: string) => {
     if (delta) markActivity(role, "writing");
-    setEntries((current) => {
+    setBoundedEntries((current) => {
       const last = current.at(-1);
       if (last?.kind === "message" && last.role === role && !last.thinking) {
         return [...current.slice(0, -1), { ...last, text: `${last.text}${delta}` }];
@@ -360,7 +377,7 @@ function App(): React.ReactElement {
   };
 
   const trimTrailingAgentBubble = () => {
-    setEntries((current) => {
+    setBoundedEntries((current) => {
       const last = current.at(-1);
       if (last?.kind !== "message" || (last.role !== "leader" && last.role !== "worker") || last.thinking) return current;
       const text = last.text.trimEnd();
@@ -405,7 +422,7 @@ function App(): React.ReactElement {
       setPhase(event.phase);
       appendMessage("system", event.message);
     } else if (event.type === "artifact") {
-      setEntries((current) => [...current, { id: nextId.current++, kind: "artifact", name: event.name, value: event.value, open: false }]);
+      setBoundedEntries((current) => [...current, { id: nextId.current++, kind: "artifact", name: event.name, value: event.value, open: false }]);
     } else if (event.type === "checkpoint") {
       setPhase(event.checkpoint.phase);
       setRound(event.checkpoint.round);
@@ -435,8 +452,8 @@ function App(): React.ReactElement {
     setShowThinking(started.config.showThinking);
     showThinkingRef.current = started.config.showThinking;
     const startEntry = { id: nextId.current++, kind: "message" as const, role: "system" as const, text: sessionStartedText(started) };
-    if (resetTranscript) setEntries([startEntry]);
-    else setEntries((current) => [...current, startEntry]);
+    if (resetTranscript) replaceTranscript([startEntry], false);
+    else setBoundedEntries((current) => [...current, startEntry]);
     setPhase("IDLE");
     setRound(0);
     setCost(undefined);
@@ -503,7 +520,7 @@ function App(): React.ReactElement {
       }
     }
     replayed.push({ id: nextId.current++, kind: "message", role: "system", text: `Resumed session ${id}. The next prompt will continue from its latest checkpoint.` });
-    setEntries(replayed.length > 1 ? replayed : [{ id: nextId.current++, kind: "message", role: "system", text: `Session ${id} has no transcript events.` }]);
+    replaceTranscript(replayed.length > 1 ? replayed : [{ id: nextId.current++, kind: "message", role: "system", text: `Session ${id} has no transcript events.` }], Boolean(resumed.eventsTruncated));
     await refreshSidebar();
   };
 
@@ -1045,7 +1062,7 @@ if (args.length === 1 && sub === "clear") {
   const activeSessions = sessions.filter((item) => !item.archived);
   const archivedSessions = sessions.filter((item) => item.archived);
   const sessionScopeLabel = contextProjectDir ? displayPath(contextProjectDir) : "current folder";
-  const visibleEntries = showActivity ? entries : entries.filter((entry) => entry.kind !== "tool");
+  const visibleEntries = useMemo(() => (showActivity ? entries : entries.filter((entry) => entry.kind !== "tool")), [entries, showActivity]);
   const fallbackRole: "leader" | "worker" = phase === "BUILDING" ? "worker" : "leader";
   const noActivitySeconds = secondsSince(lastActivityAt, activityTick);
   const stripRole = activeTool?.role ?? activityPulse?.role ?? fallbackRole;
@@ -1290,6 +1307,12 @@ if (args.length === 1 && sub === "clear") {
             <button type="button" className="activityToggle" onClick={() => setShowActivity((value) => !value)}>
               {showActivity ? "hide" : "show"} activity ({runActivityCount})
             </button>
+          ) : null}
+          {transcriptTruncated ? (
+            <aside className="noticeBanner">
+              <strong>Recent transcript window</strong>
+              <span>Older transcript history remains saved on disk; the desktop UI keeps only recent entries in memory.</span>
+            </aside>
           ) : null}
           {visibleEntries.map((entry) =>
             entry.kind === "message" ? (
