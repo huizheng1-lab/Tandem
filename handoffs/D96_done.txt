@@ -1,0 +1,22 @@
+D96 done
+
+Source commit:
+25b281c D96-1: exempt planned verification deliverables
+
+What changed:
+- detectVerificationScriptTampering now builds a case-insensitive basename set from plan.tasks[].files.
+- A verification-referenced changed script is exempt from the tampering warning when that script was explicitly declared as a planned task file.
+- Verification-referenced scripts not listed in any task files are still flagged unless deviationsFromPlan mentions them.
+- Missing task.files remains graceful: omitted files contribute nothing to the expected-file set.
+
+Regression coverage:
+- Added a test for the real self-verifying deliverable shape: compute_stats.js is listed in task files, is changed, and is also run by plan.verification; validation now accepts it without requiring a deviationsFromPlan entry.
+- Added a test confirming the original D56-2 protection remains: verify-video.js changed but not listed in task files still throws "Verification script edited without disclosure".
+
+Verification:
+- npx vitest run tests/artifacts.test.ts: passed, 42 tests.
+- npm run typecheck: passed.
+- npm test: passed, 313 tests, 1 skipped.
+- git diff --check: passed; only existing CRLF conversion warnings were reported.
+- npm run build: passed.
+- Live all-MiniMax orchestration with triage:auto and a self-verifying compute_stats.js task reached clean DONE with no "Verification script edited without disclosure" errors. The run produced stats.md and leader review approved the result.
