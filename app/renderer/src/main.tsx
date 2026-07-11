@@ -18,12 +18,13 @@ import type {
   SessionStartResponse,
   ToolActivityEvent
 } from "../../shared/ipc.js";
-import { CodexCliReasoningEffortSchema, type PermissionMode, type TandemConfig } from "../../../src/config/schema.js";
+import { CodexCliReasoningEffortSchema, type DesktopTheme, type PermissionMode, type TandemConfig } from "../../../src/config/schema.js";
 import { parseLoop } from "../../../src/commands/loop.js";
 import { cliModelPatch, modelCommandUsage, modelDisplayName } from "../../../src/providers/cli-models.js";
 import { ErrorBoundary } from "./ErrorBoundary.js";
 import { MODEL_STALL_WARNING_SECONDS, needsProjectPickForSession, sessionFromResume } from "./session-state.js";
 import { boundedMessageTextForState, MessageText } from "./TranscriptText.js";
+import { applyDesktopTheme, THEME_REFRESH_INTERVAL_MS } from "./theme.js";
 import "./styles.css";
 
 type Role = "user" | "leader" | "worker" | "system";
@@ -287,6 +288,7 @@ function App(): React.ReactElement {
   const sessionSwitchRef = useRef<{ id: string; token: number }>();
 
   const effectiveConfig = session?.config ?? config;
+  const desktopTheme = effectiveConfig?.desktopTheme ?? "auto";
   const roleModelOptions = useMemo(() => modelSelectOptions(models, effectiveConfig), [models, effectiveConfig]);
   const contextProjectDir = session?.projectDir ?? appState?.lastProjectDir ?? appState?.projectDir;
   const totalCost = useMemo(() => {
@@ -559,6 +561,17 @@ function App(): React.ReactElement {
   }, [showThinking]);
 
   useEffect(() => {
+    const refreshTheme = () => applyDesktopTheme(desktopTheme);
+    refreshTheme();
+    const timer = window.setInterval(refreshTheme, THEME_REFRESH_INTERVAL_MS);
+    window.addEventListener("focus", refreshTheme);
+    return () => {
+      window.clearInterval(timer);
+      window.removeEventListener("focus", refreshTheme);
+    };
+  }, [desktopTheme]);
+
+  useEffect(() => {
     const removers = [
       tandem.onTextEvent((event) => (event.thinking ? appendThinking(event.role, event.delta) : appendStream(event.role, event.delta))),
       tandem.onToolEvent(handleToolEvent),
@@ -725,6 +738,13 @@ function App(): React.ReactElement {
     } finally {
       setPendingSessionAction((current) => (current?.id === renamingSession && current.kind === "rename" ? undefined : current));
     }
+  };
+
+  const updateDesktopTheme = async (desktopTheme: DesktopTheme) => {
+    applyDesktopTheme(desktopTheme);
+    const nextConfig = await tandem.setConfig({ desktopTheme });
+    setConfig(nextConfig);
+    setSession((current) => (current ? { ...current, config: nextConfig } : current));
   };
 
   const archiveSession = async (id: string, archived: boolean) => {
@@ -1286,6 +1306,14 @@ if (args.length === 1 && sub === "clear") {
           <label className="checkRow">
             <input type="checkbox" checked={showThinking} onChange={(event) => void updateShowThinking(event.target.checked)} />
             Show thinking
+          </label>
+          <label>
+            Theme
+            <select value={desktopTheme} onChange={(event) => void updateDesktopTheme(event.target.value as DesktopTheme)}>
+              <option value="auto">Auto</option>
+              <option value="light">Light</option>
+              <option value="dark">Dark</option>
+            </select>
           </label>
           <span className="phaseChip">{phase}</span>
           {sessionAutoApprove !== "none" ? (

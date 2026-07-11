@@ -9,6 +9,9 @@ export type TriageMode = z.infer<typeof TriageModeSchema>;
 export const CodexCliReasoningEffortSchema = z.enum(["minimal", "low", "medium", "high"]);
 export type CodexCliReasoningEffort = z.infer<typeof CodexCliReasoningEffortSchema>;
 
+export const DesktopThemeSchema = z.enum(["auto", "light", "dark"]);
+export type DesktopTheme = z.infer<typeof DesktopThemeSchema>;
+
 export const ModelProviderSchema = z.enum(["google", "anthropic", "openai", "openai-compatible", "codex-cli", "claude-code-cli"]);
 export type ModelProvider = z.infer<typeof ModelProviderSchema>;
 
@@ -65,6 +68,7 @@ export const ConfigSchema = z.object({
   claudeCliModel: z.string().min(1).optional(),
   codexCliReasoningEffort: CodexCliReasoningEffortSchema.optional(),
   showThinking: z.boolean(),
+  desktopTheme: DesktopThemeSchema,
   maxStepsPerAgentTurn: z.number().int().positive(),
   leaderContextBudgetTokens: z.number().int().positive(),
   // D68-2: per-call safety cap on claude-code-cli internal spending. Real incident (D66's
@@ -94,6 +98,7 @@ export const defaultConfig: TandemConfig = {
   permissionMode: "ask",
   triage: "auto",
   showThinking: false,
+  desktopTheme: "auto",
   maxStepsPerAgentTurn: 60,
   leaderContextBudgetTokens: 60000,
   claudeMaxBudgetUsdPerCall: 2.0,

@@ -32,6 +32,7 @@ describe("config", () => {
     expect(config.permissionMode).toBe("ask");
     expect(config.triage).toBe("auto");
     expect(config.showThinking).toBe(false);
+    expect(config.desktopTheme).toBe("auto");
   });
 
   it("allows triage to be forced back to the old always-plan behavior", async () => {
