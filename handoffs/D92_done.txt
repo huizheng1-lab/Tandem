@@ -1,0 +1,20 @@
+Round: D92
+Status: complete
+Implementation commit: 8e1783a
+
+Summary:
+- Revised D91 session bounding per HANDOFF_D92.
+- Checkpoint-carrying machine events are now exempt from storage-time truncation so resume state round-trips losslessly.
+- Removed sidecar artifact creation and artifactPath metadata from session event bounding.
+- Updated oversized-event tests to assert no per-session .artifacts directory is created.
+- Added a large checkpoint regression test that exceeds SESSION_EVENT_JSON_MAX_BYTES and still deep-equals through read() and readRecent().
+
+Verification:
+- npx vitest run tests/session-store.test.ts: 16 passed
+- git grep -n artifactPath -- src tests: no matches
+- npm run typecheck: passed
+- npm test: 31 passed, 1 skipped; 305 tests passed, 1 skipped
+- git diff --check: passed
+
+Notes:
+- npm test emitted existing Node DEP0190 child-process shell warnings; no D92 failures.
