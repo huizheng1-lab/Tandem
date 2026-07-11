@@ -1,0 +1,20 @@
+D88 done
+
+Implementation commit: ae07cdd (D88-1: speed up desktop session switching)
+
+Summary:
+- Changed desktop resumeSession to try opening the session in the current project first.
+- Kept cross-project discovery only as a fallback when the current project open reports "No session".
+- Added bounded session head reading for findSessionProjectDir so project discovery reads only enough to parse the first JSONL event.
+- Added desktop session-switch pending state and an overlap guard; clicked sessions show "Switching..." and title buttons are disabled while a switch is in flight.
+- Added regressions for skipping cross-project discovery on current-project resume and for head-only session:start lookup with a large invalid tail.
+
+Verification:
+- npm run typecheck: pass
+- npm test: pass (296 passed, 1 skipped)
+- git diff --check: pass
+- npx electron-vite build: pass
+- Synthetic timing: findSessionProjectDir on a 30 MB JSONL session returned the project from the first event in 1 ms.
+
+Notes:
+- I used a synthetic 30 MB session for timing instead of manually switching the packaged app UI against the user's live session file in this round.
