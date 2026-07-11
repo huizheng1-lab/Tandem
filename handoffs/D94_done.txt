@@ -1,0 +1,25 @@
+D94 done
+
+Source commit:
+8b8442e D94-1: recover MiniMax triage from raw prose
+
+What changed:
+- Reproduced the real minimax/minimax-m3 triage failure through Tandem's live model path.
+- Confirmed the AI SDK error shape: AI_NoObjectGeneratedError with .text, .usage, .cause.text, and response.body.choices[].message.content.
+- Updated classifyPlanRequest to recover triage from raw structured-generation error text, including MiniMax's <think>...</think> prefix followed by valid JSON.
+- Reused the existing prose-extraction fallback when direct JSON extraction cannot parse the raw text.
+- Defaulted unrecoverable triage failures to implementation so the leader over-plans instead of failing the whole run.
+- Added regression coverage for the MiniMax-style no-object error and the safe implementation default.
+
+Verification:
+- Live pre-fix repro: minimax/minimax-m3 under triage:auto failed with AI_NoObjectGeneratedError; raw text contained <think>...</think> plus {"kind":"implementation"}.
+- Live post-fix triage check: minimax/minimax-m3 under triage:auto returned kind=implementation and recorded SDK error usage.
+- npx vitest run tests/triage.test.ts: passed, 6 tests.
+- npm run typecheck: passed.
+- npm test: passed, 309 tests, 1 skipped.
+- git diff --check: passed; only existing CRLF conversion warnings were reported.
+- npm run build: passed.
+
+Live orchestration note:
+- A small real all-MiniMax orchestration advanced past classifyPlanRequest and through later plan/build/review events, confirming D94's triage crash was removed.
+- That same run later failed in a separate leader takeover structured-output fallback path: "Leader takeover finished without submit_takeover." This is outside D94's scoped triage fix and should be handled as a separate round if all-MiniMax end-to-end takeover reliability is required.
