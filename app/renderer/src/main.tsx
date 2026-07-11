@@ -26,6 +26,7 @@ import { MODEL_STALL_WARNING_SECONDS, needsProjectPickForSession, sessionFromRes
 import "./styles.css";
 
 type Role = "user" | "leader" | "worker" | "system";
+type PendingSessionActionKind = "rename" | "archive" | "unarchive" | "delete";
 const codexEffortOptions = CodexCliReasoningEffortSchema.options;
 const claudeCliModelOptions = ["haiku", "sonnet", "opus"] as const;
 const cliDefaultOption = "default";
@@ -261,6 +262,7 @@ function App(): React.ReactElement {
   const [renamingSession, setRenamingSession] = useState<string>();
   const [renameTitle, setRenameTitle] = useState("");
   const [deleteTarget, setDeleteTarget] = useState<SessionMetadata>();
+  const [pendingSessionAction, setPendingSessionAction] = useState<{ id: string; kind: PendingSessionActionKind }>();
   const [goals, setGoals] = useState<Goal[]>([]);
   const [memoryNotes, setMemoryNotes] = useState<SessionMemoryNote[]>([]);
   const [showMemory, setShowMemory] = useState(true);
@@ -680,6 +682,7 @@ function App(): React.ReactElement {
 
   const saveRenameSession = async () => {
     if (!renamingSession) return;
+    setPendingSessionAction({ id: renamingSession, kind: "rename" });
     try {
       setSessions(await tandem.renameSession({ id: renamingSession, title: renameTitle }));
       setRenamingSession(undefined);
@@ -687,16 +690,22 @@ function App(): React.ReactElement {
     } catch (error) {
       appendMessage("system", `Rename session failed: ${errorText(error)}`);
       await refreshSidebar();
+    } finally {
+      setPendingSessionAction((current) => (current?.id === renamingSession && current.kind === "rename" ? undefined : current));
     }
   };
 
   const archiveSession = async (id: string, archived: boolean) => {
+    const kind = archived ? "archive" : "unarchive";
+    setPendingSessionAction({ id, kind });
     try {
       setSessions(await tandem.archiveSession({ id, archived }));
       appendMessage("system", archived ? "Session moved to Archived." : "Session restored to active sessions.");
     } catch (error) {
       appendMessage("system", `${archived ? "Archive" : "Unarchive"} session failed: ${errorText(error)}`);
       await refreshSidebar();
+    } finally {
+      setPendingSessionAction((current) => (current?.id === id && current.kind === kind ? undefined : current));
     }
   };
 
@@ -706,14 +715,18 @@ function App(): React.ReactElement {
 
   const confirmDeleteSession = async () => {
     if (!deleteTarget) return;
+    const targetId = deleteTarget.id;
+    setPendingSessionAction({ id: targetId, kind: "delete" });
     try {
-      const response = await tandem.deleteSession({ id: deleteTarget.id });
+      const response = await tandem.deleteSession({ id: targetId });
       setDeleteTarget(undefined);
       setSessions(response.sessions);
       if (response.activeSession) await applyStartedSession(response.activeSession, false);
     } catch (error) {
       appendMessage("system", `Delete session failed: ${errorText(error)}`);
       await refreshSidebar();
+    } finally {
+      setPendingSessionAction((current) => (current?.id === targetId && current.kind === "delete" ? undefined : current));
     }
   };
 
@@ -1070,55 +1083,64 @@ if (args.length === 1 && sub === "clear") {
         <div className="sideSection">
           <div className="sideLabel">Sessions - {sessionScopeLabel}</div>
           <div className="sideList">
-            {activeSessions.map((item) => (
-              <div key={item.id} className="sessionRow">
-                {renamingSession === item.id ? (
-                  <input
-                    className="renameInput"
-                    value={renameTitle}
-                    autoFocus
-                    onFocus={(event) => event.currentTarget.select()}
-                    onChange={(event) => setRenameTitle(event.target.value)}
-                    onKeyDown={(event) => {
-                      if (event.key === "Enter") void saveRenameSession();
-                      if (event.key === "Escape") setRenamingSession(undefined);
-                    }}
-                  />
-                ) : (
-                  <button type="button" className="sessionTitle" onClick={() => void replaySession(item.id)}>
-                    <span>{item.title || item.id.slice(0, 8)}</span>
-                    <small>{relativeTime(item.lastActiveAt)}{item.id === session?.sessionId ? " (current)" : ""}</small>
-                  </button>
-                )}
-                <div className="sessionActions">
+            {activeSessions.map((item) => {
+              const pendingKind = pendingSessionAction?.id === item.id ? pendingSessionAction.kind : undefined;
+              const actionPending = pendingKind !== undefined;
+              return (
+                <div key={item.id} className="sessionRow">
                   {renamingSession === item.id ? (
-                    <button type="button" onClick={() => void saveRenameSession()}>Save</button>
+                    <input
+                      className="renameInput"
+                      value={renameTitle}
+                      autoFocus
+                      disabled={actionPending}
+                      onFocus={(event) => event.currentTarget.select()}
+                      onChange={(event) => setRenameTitle(event.target.value)}
+                      onKeyDown={(event) => {
+                        if (event.key === "Enter" && !actionPending) void saveRenameSession();
+                        if (event.key === "Escape" && !actionPending) setRenamingSession(undefined);
+                      }}
+                    />
                   ) : (
-                    <button type="button" onClick={() => beginRenameSession(item)}>Rename</button>
+                    <button type="button" className="sessionTitle" disabled={actionPending} onClick={() => void replaySession(item.id)}>
+                      <span>{item.title || item.id.slice(0, 8)}</span>
+                      <small>{relativeTime(item.lastActiveAt)}{item.id === session?.sessionId ? " (current)" : ""}</small>
+                    </button>
                   )}
-                  <button type="button" onClick={() => void archiveSession(item.id, true)}>Archive</button>
-                  <button type="button" className="dangerAction" onClick={() => requestDeleteSession(item)}>Delete</button>
+                  <div className="sessionActions">
+                    {renamingSession === item.id ? (
+                      <button type="button" disabled={actionPending} onClick={() => void saveRenameSession()}>{pendingKind === "rename" ? "Renaming..." : "Save"}</button>
+                    ) : (
+                      <button type="button" disabled={actionPending} onClick={() => beginRenameSession(item)}>Rename</button>
+                    )}
+                    <button type="button" disabled={actionPending} onClick={() => void archiveSession(item.id, true)}>{pendingKind === "archive" ? "Archiving..." : "Archive"}</button>
+                    <button type="button" className="dangerAction" disabled={actionPending} onClick={() => requestDeleteSession(item)}>{pendingKind === "delete" ? "Deleting..." : "Delete"}</button>
+                  </div>
                 </div>
-              </div>
-            ))}
+              );
+            })}
           </div>
           <button type="button" className="linkButton" onClick={() => setShowArchived((value) => !value)}>
             {showArchived ? "Hide" : "Show"} Archived ({archivedSessions.length})
           </button>
           {showArchived ? (
             <div className="sideList">
-              {archivedSessions.map((item) => (
-                <div key={item.id} className="sessionRow archived">
-                  <button type="button" className="sessionTitle" onClick={() => void replaySession(item.id)}>
-                    <span>{item.title || item.id.slice(0, 8)}</span>
-                    <small>{relativeTime(item.lastActiveAt)}{item.id === session?.sessionId ? " (current)" : ""}</small>
-                  </button>
-                  <div className="sessionActions">
-                    <button type="button" onClick={() => void archiveSession(item.id, false)}>Unarchive</button>
-                    <button type="button" className="dangerAction" onClick={() => requestDeleteSession(item)}>Delete</button>
+              {archivedSessions.map((item) => {
+                const pendingKind = pendingSessionAction?.id === item.id ? pendingSessionAction.kind : undefined;
+                const actionPending = pendingKind !== undefined;
+                return (
+                  <div key={item.id} className="sessionRow archived">
+                    <button type="button" className="sessionTitle" disabled={actionPending} onClick={() => void replaySession(item.id)}>
+                      <span>{item.title || item.id.slice(0, 8)}</span>
+                      <small>{relativeTime(item.lastActiveAt)}{item.id === session?.sessionId ? " (current)" : ""}</small>
+                    </button>
+                    <div className="sessionActions">
+                      <button type="button" disabled={actionPending} onClick={() => void archiveSession(item.id, false)}>{pendingKind === "unarchive" ? "Unarchiving..." : "Unarchive"}</button>
+                      <button type="button" className="dangerAction" disabled={actionPending} onClick={() => requestDeleteSession(item)}>{pendingKind === "delete" ? "Deleting..." : "Delete"}</button>
+                    </div>
                   </div>
-                </div>
-              ))}
+                );
+              })}
             </div>
           ) : null}
         </div>
@@ -1421,11 +1443,11 @@ if (args.length === 1 && sub === "clear") {
               Delete session "{deleteTarget.title || deleteTarget.id.slice(0, 8)}"? This permanently removes its transcript. The project files are not affected.
             </p>
             <div className="modalActions">
-              <button type="button" className="secondary" onClick={() => setDeleteTarget(undefined)}>
+              <button type="button" className="secondary" disabled={pendingSessionAction?.id === deleteTarget.id} onClick={() => setDeleteTarget(undefined)}>
                 Cancel
               </button>
-              <button type="button" className="dangerButton" onClick={() => void confirmDeleteSession()}>
-                Yes, delete
+              <button type="button" className="dangerButton" disabled={pendingSessionAction?.id === deleteTarget.id} onClick={() => void confirmDeleteSession()}>
+                {pendingSessionAction?.id === deleteTarget.id && pendingSessionAction.kind === "delete" ? "Deleting..." : "Yes, delete"}
               </button>
             </div>
           </section>

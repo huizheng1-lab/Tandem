@@ -21,6 +21,18 @@ export interface SessionMetadata {
 type SessionIndex = Record<string, Omit<SessionMetadata, "id">>;
 let indexQueue: Promise<void> = Promise.resolve();
 const EMPTY_SESSION_PRUNE_MS = 60 * 60 * 1000;
+const APPEND_INDEX_DEBOUNCE_MS = 250;
+
+interface PendingAppendIndexUpdate {
+  cwd: string;
+  homeDir: string | undefined;
+  id: string;
+  lastActiveAt: string;
+  title?: string;
+}
+
+const pendingAppendIndexUpdates = new Map<string, PendingAppendIndexUpdate>();
+let appendIndexFlushTimer: ReturnType<typeof setTimeout> | undefined;
 
 export function projectHash(cwd = process.cwd()): string {
   return createHash("sha1").update(path.resolve(cwd)).digest("hex").slice(0, 12);
@@ -147,6 +159,65 @@ async function updateSessionIndex(cwd: string, homeDir: string | undefined, id: 
   });
 }
 
+function appendIndexKey(cwd: string, homeDir: string | undefined, id: string): string {
+  return `${sessionIndexPath(cwd, homeDir)}\0${id}`;
+}
+
+function sameProject(left: PendingAppendIndexUpdate, cwd: string, homeDir: string | undefined): boolean {
+  return sessionIndexPath(left.cwd, left.homeDir) === sessionIndexPath(cwd, homeDir);
+}
+
+function scheduleAppendIndexUpdate(update: PendingAppendIndexUpdate): void {
+  const key = appendIndexKey(update.cwd, update.homeDir, update.id);
+  const current = pendingAppendIndexUpdates.get(key);
+  pendingAppendIndexUpdates.set(key, {
+    ...update,
+    title: current?.title ?? update.title
+  });
+  if (!appendIndexFlushTimer) {
+    appendIndexFlushTimer = setTimeout(() => {
+      appendIndexFlushTimer = undefined;
+      void flushPendingAppendIndexUpdates();
+    }, APPEND_INDEX_DEBOUNCE_MS);
+  }
+}
+
+function discardPendingAppendIndexUpdate(cwd: string, homeDir: string | undefined, id: string): void {
+  pendingAppendIndexUpdates.delete(appendIndexKey(cwd, homeDir, id));
+}
+
+async function flushPendingAppendIndexUpdates(cwd?: string, homeDir?: string): Promise<void> {
+  const updates = [...pendingAppendIndexUpdates.entries()].filter(([, update]) => (cwd === undefined ? true : sameProject(update, cwd, homeDir)));
+  if (updates.length === 0) return;
+  for (const [key] of updates) pendingAppendIndexUpdates.delete(key);
+  if (pendingAppendIndexUpdates.size === 0 && appendIndexFlushTimer) {
+    clearTimeout(appendIndexFlushTimer);
+    appendIndexFlushTimer = undefined;
+  }
+  const byProject = new Map<string, PendingAppendIndexUpdate[]>();
+  for (const [, update] of updates) {
+    const key = sessionIndexPath(update.cwd, update.homeDir);
+    byProject.set(key, [...(byProject.get(key) ?? []), update]);
+  }
+  for (const group of byProject.values()) {
+    const first = group[0];
+    if (!first) continue;
+    await enqueueIndexMutation(async () => {
+      const files = await sessionFileIds(first.cwd, first.homeDir);
+      const index = await reconcileSessionIndex(first.cwd, first.homeDir, await readIndex(first.cwd, first.homeDir));
+      for (const update of group) {
+        if (!files.has(update.id)) continue;
+        const now = new Date().toISOString();
+        index[update.id] ??= { title: update.id.slice(0, 8), archived: false, createdAt: now, lastActiveAt: now };
+        const entry = index[update.id];
+        entry.lastActiveAt = update.lastActiveAt;
+        if (update.title && (!entry.title || entry.title === update.id.slice(0, 8))) entry.title = update.title;
+      }
+      await writeIndex(first.cwd, first.homeDir, index);
+    });
+  }
+}
+
 function noSessionError(id: string, cwd: string): Error {
   return new Error(`No session ${id} in ${cwd}.`);
 }
@@ -199,12 +270,13 @@ export class SessionStore {
       stream.once("error", reject);
       stream.end(`${JSON.stringify(event)}\n`, resolve);
     });
-    await updateSessionIndex(this.cwd, this.homeDir, this.id, (entry) => {
-      entry.lastActiveAt = event.at;
-      if (type === "user" && (!entry.title || entry.title === this.id.slice(0, 8))) {
-        const prompt = (payload as { prompt?: unknown } | undefined)?.prompt;
-        if (typeof prompt === "string") entry.title = truncateTitle(prompt);
-      }
+    const prompt = type === "user" ? (payload as { prompt?: unknown } | undefined)?.prompt : undefined;
+    scheduleAppendIndexUpdate({
+      cwd: this.cwd,
+      homeDir: this.homeDir,
+      id: this.id,
+      lastActiveAt: event.at,
+      title: typeof prompt === "string" ? truncateTitle(prompt) : undefined
     });
   }
 
@@ -216,6 +288,7 @@ export class SessionStore {
 export async function listSessions(cwd = process.cwd(), homeDir?: string): Promise<SessionMetadata[]> {
   const dir = sessionDir(cwd, homeDir);
   if (!existsSync(dir)) return [];
+  await flushPendingAppendIndexUpdates(cwd, homeDir);
   return enqueueIndexMutation(async () => {
     const index = await pruneOldEmptySessions(cwd, homeDir, await reconcileSessionIndex(cwd, homeDir, await readIndex(cwd, homeDir)));
     await writeIndex(cwd, homeDir, index);
@@ -226,12 +299,14 @@ export async function listSessions(cwd = process.cwd(), homeDir?: string): Promi
 }
 
 export async function renameSession(id: string, title: string, cwd = process.cwd(), homeDir?: string): Promise<void> {
+  await flushPendingAppendIndexUpdates(cwd, homeDir);
   await updateExistingSessionIndex(cwd, homeDir, id, (entry) => {
     entry.title = title.trim() || id.slice(0, 8);
   });
 }
 
 export async function archiveSession(id: string, archived: boolean, cwd = process.cwd(), homeDir?: string): Promise<void> {
+  await flushPendingAppendIndexUpdates(cwd, homeDir);
   await updateExistingSessionIndex(cwd, homeDir, id, (entry) => {
     entry.archived = archived;
   });
@@ -240,6 +315,7 @@ export async function archiveSession(id: string, archived: boolean, cwd = proces
 export async function deleteSession(id: string, cwd = process.cwd(), homeDir?: string): Promise<void> {
   const filePath = path.join(sessionDir(cwd, homeDir), `${id}.jsonl`);
   if (!existsSync(filePath)) throw noSessionError(id, cwd);
+  discardPendingAppendIndexUpdate(cwd, homeDir, id);
   await rm(filePath);
   await enqueueIndexMutation(async () => {
     const index = await reconcileSessionIndex(cwd, homeDir, await readIndex(cwd, homeDir));

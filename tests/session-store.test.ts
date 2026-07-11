@@ -157,4 +157,24 @@ describe("SessionStore", () => {
 
     expect((await listSessions(cwd, home))[0]).toMatchObject({ id: store.id, title: "Concurrent rename" });
   });
+
+  it("keeps sibling deletes bounded while another session appends rapidly", async () => {
+    const { cwd, home } = await tempProject();
+    const active = await SessionStore.create(cwd, home);
+    const target = await SessionStore.create(cwd, home);
+    await active.append("user", { prompt: "active session" });
+    await target.append("user", { prompt: "delete me" });
+
+    const appends = Array.from({ length: 400 }, (_, index) =>
+      active.append("text", { role: "leader", delta: `${index}:${"x".repeat(1024)}` })
+    );
+    const started = Date.now();
+
+    await deleteSession(target.id, cwd, home);
+
+    const elapsedMs = Date.now() - started;
+    await Promise.all(appends);
+    expect(elapsedMs).toBeLessThan(250);
+    expect((await listSessions(cwd, home)).map((session) => session.id)).toEqual([active.id]);
+  });
 });
