@@ -1,0 +1,19 @@
+D87 done
+
+Implementation commit: 3d392b7 (D87-1: add CLI session compaction)
+
+Summary:
+- Added shared session compaction support for CLI-backed leaders and manual compaction.
+- CLI leaders now auto-compact oversized session history before planning, using the configured leader engine and persisting memory:compaction.
+- Added /compact in the desktop composer and TUI, plus help text.
+- Updated session history replay to prefer persisted compaction summaries instead of lossy omitted-turn markers.
+- Added regression coverage for compaction detection/event payloads and history replay after memory:compaction.
+
+Verification:
+- npm run typecheck: pass
+- npm test: pass (294 passed, 1 skipped)
+- git diff --check: pass
+- npx electron-vite build: pass
+
+Notes:
+- Live manual click-through was not run in the packaged app during this round; the Electron build completed and IPC/renderer/TUI paths typechecked.
