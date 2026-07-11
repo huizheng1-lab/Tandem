@@ -1,0 +1,18 @@
+D93 complete
+
+Implementation commit: a866f34 D93-1: add automatic desktop day and night themes
+
+Verification:
+- npm run typecheck: passed
+- npm test: passed (307 passed, 1 skipped)
+- focused theme/config tests: passed (15 passed)
+- git diff --check: passed (line-ending warnings only)
+- npm run dist:app: passed; CLI, Electron renderer, installer, and portable app rebuilt
+- packaged dark theme inspected: dark surfaces, controls, warning panel, system bubble, sidebar, and composer were readable
+- packaged light theme inspected: light surfaces, controls, warning panel, system bubble, sidebar, and composer were readable
+- packaged light role samples inspected: user green, leader blue, worker amber, and system neutral bubbles remained distinct with readable text
+
+Behavior:
+- Auto uses local time from 06:00 through 18:59 for light mode and dark mode otherwise.
+- Theme is re-evaluated every five minutes and when the window receives focus.
+- Auto, Light, and Dark overrides persist through the existing Tandem config channel.
