@@ -104,6 +104,7 @@ export interface TandemServiceDeps {
   runOrchestration?: typeof runOrchestration;
   createSession?: (cwd: string) => Promise<SessionLike>;
   openSession?: (id: string, cwd: string) => Promise<SessionLike>;
+  findSessionProjectDir?: typeof findSessionProjectDir;
   registerIpcResponses?: boolean;
   homeDir?: string;
   baseEnv?: NodeJS.ProcessEnv;
@@ -309,10 +310,19 @@ export class TandemService {
   }
 
   async resumeSession(id: string): Promise<SessionResumeResponse> {
-    const projectDir = this.deps.openSession ? this.projectDir : (await findSessionProjectDir(id, this.homeDir)) ?? this.projectDir;
     let store: SessionLike;
+    let projectDir = this.projectDir;
+    const openSession = this.deps.openSession ?? ((sessionId, cwd) => SessionStore.open(sessionId, cwd, this.homeDir));
     try {
-      store = await (this.deps.openSession ?? ((sessionId, cwd) => SessionStore.open(sessionId, cwd, this.homeDir)))(id, projectDir);
+      try {
+        store = await openSession(id, projectDir);
+      } catch (error) {
+        if (!/No session .*Run \/sessions to list sessions/.test(String(error))) throw error;
+        const foundProjectDir = await (this.deps.findSessionProjectDir ?? findSessionProjectDir)(id, this.homeDir);
+        if (!foundProjectDir) throw error;
+        projectDir = foundProjectDir;
+        store = await openSession(id, projectDir);
+      }
     } catch (error) {
       if (/No session .*Run \/sessions to list sessions/.test(String(error))) {
         throw new Error("This session belongs to a different project folder - pick that folder to open it.");

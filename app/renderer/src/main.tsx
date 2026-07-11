@@ -26,7 +26,7 @@ import { MODEL_STALL_WARNING_SECONDS, needsProjectPickForSession, sessionFromRes
 import "./styles.css";
 
 type Role = "user" | "leader" | "worker" | "system";
-type PendingSessionActionKind = "rename" | "archive" | "unarchive" | "delete";
+type PendingSessionActionKind = "rename" | "archive" | "unarchive" | "delete" | "switch";
 const MAX_TRANSCRIPT_ENTRIES = 600;
 const codexEffortOptions = CodexCliReasoningEffortSchema.options;
 const claudeCliModelOptions = ["haiku", "sonnet", "opus"] as const;
@@ -283,6 +283,7 @@ function App(): React.ReactElement {
   const thinkingTimers = useRef<Partial<Record<"leader" | "worker", ReturnType<typeof setTimeout>>>>({});
   const loopTimerRef = useRef<ReturnType<typeof setInterval>>();
   const loopRunningRef = useRef(false);
+  const sessionSwitchRef = useRef<{ id: string; token: number }>();
 
   const effectiveConfig = session?.config ?? config;
   const roleModelOptions = useMemo(() => modelSelectOptions(models, effectiveConfig), [models, effectiveConfig]);
@@ -478,14 +479,26 @@ function App(): React.ReactElement {
   };
 
   const replaySession = async (id: string) => {
+    if (sessionSwitchRef.current) return;
+    const token = Date.now();
+    sessionSwitchRef.current = { id, token };
+    setPendingSessionAction({ id, kind: "switch" });
     let resumed: SessionResumeResponse;
     try {
       resumed = await tandem.resumeSession({ id });
     } catch (error) {
-      appendMessage("system", `Resume session failed: ${errorText(error)}`);
-      await refreshSidebar();
+      if (sessionSwitchRef.current?.token === token) {
+        appendMessage("system", `Resume session failed: ${errorText(error)}`);
+        await refreshSidebar();
+      }
       return;
+    } finally {
+      if (sessionSwitchRef.current?.token === token) {
+        sessionSwitchRef.current = undefined;
+        setPendingSessionAction((current) => (current?.id === id && current.kind === "switch" ? undefined : current));
+      }
     }
+    if (sessionSwitchRef.current && sessionSwitchRef.current.token !== token) return;
     const resumedSession = sessionFromResume(resumed);
     setSession(resumedSession);
     setConfig(resumed.config);
@@ -1068,6 +1081,7 @@ if (args.length === 1 && sub === "clear") {
   const activeSessions = sessions.filter((item) => !item.archived);
   const archivedSessions = sessions.filter((item) => item.archived);
   const sessionScopeLabel = contextProjectDir ? displayPath(contextProjectDir) : "current folder";
+  const switchingSessionId = pendingSessionAction?.kind === "switch" ? pendingSessionAction.id : undefined;
   const visibleEntries = useMemo(() => (showActivity ? entries : entries.filter((entry) => entry.kind !== "tool")), [entries, showActivity]);
   const fallbackRole: "leader" | "worker" = phase === "BUILDING" ? "worker" : "leader";
   const noActivitySeconds = secondsSince(lastActivityAt, activityTick);
@@ -1109,6 +1123,7 @@ if (args.length === 1 && sub === "clear") {
             {activeSessions.map((item) => {
               const pendingKind = pendingSessionAction?.id === item.id ? pendingSessionAction.kind : undefined;
               const actionPending = pendingKind !== undefined;
+              const switchPending = switchingSessionId !== undefined;
               return (
                 <div key={item.id} className="sessionRow">
                   {renamingSession === item.id ? (
@@ -1125,9 +1140,9 @@ if (args.length === 1 && sub === "clear") {
                       }}
                     />
                   ) : (
-                    <button type="button" className="sessionTitle" disabled={actionPending} onClick={() => void replaySession(item.id)}>
+                    <button type="button" className="sessionTitle" disabled={actionPending || switchPending} onClick={() => void replaySession(item.id)}>
                       <span>{item.title || item.id.slice(0, 8)}</span>
-                      <small>{relativeTime(item.lastActiveAt)}{item.id === session?.sessionId ? " (current)" : ""}</small>
+                      <small>{pendingKind === "switch" ? "Switching..." : `${relativeTime(item.lastActiveAt)}${item.id === session?.sessionId ? " (current)" : ""}`}</small>
                     </button>
                   )}
                   <div className="sessionActions">
@@ -1151,11 +1166,12 @@ if (args.length === 1 && sub === "clear") {
               {archivedSessions.map((item) => {
                 const pendingKind = pendingSessionAction?.id === item.id ? pendingSessionAction.kind : undefined;
                 const actionPending = pendingKind !== undefined;
+                const switchPending = switchingSessionId !== undefined;
                 return (
                   <div key={item.id} className="sessionRow archived">
-                    <button type="button" className="sessionTitle" disabled={actionPending} onClick={() => void replaySession(item.id)}>
+                    <button type="button" className="sessionTitle" disabled={actionPending || switchPending} onClick={() => void replaySession(item.id)}>
                       <span>{item.title || item.id.slice(0, 8)}</span>
-                      <small>{relativeTime(item.lastActiveAt)}{item.id === session?.sessionId ? " (current)" : ""}</small>
+                      <small>{pendingKind === "switch" ? "Switching..." : `${relativeTime(item.lastActiveAt)}${item.id === session?.sessionId ? " (current)" : ""}`}</small>
                     </button>
                     <div className="sessionActions">
                       <button type="button" disabled={actionPending} onClick={() => void archiveSession(item.id, false)}>{pendingKind === "unarchive" ? "Unarchiving..." : "Unarchive"}</button>

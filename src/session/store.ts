@@ -23,6 +23,7 @@ let indexQueue: Promise<void> = Promise.resolve();
 const EMPTY_SESSION_PRUNE_MS = 60 * 60 * 1000;
 const APPEND_INDEX_DEBOUNCE_MS = 250;
 const READ_TAIL_CHUNK_BYTES = 128 * 1024;
+const READ_HEAD_CHUNK_BYTES = 64 * 1024;
 
 interface PendingAppendIndexUpdate {
   cwd: string;
@@ -54,8 +55,7 @@ export async function findSessionProjectDir(id: string, homeDir?: string): Promi
     if (!entry.isDirectory()) continue;
     const filePath = path.join(root, entry.name, `${id}.jsonl`);
     if (!existsSync(filePath)) continue;
-    const events = await readSessionEvents(filePath);
-    const started = events.find((event) => event.type === "session:start")?.payload as { projectDir?: unknown } | undefined;
+    const started = (await readSessionStartEvent(filePath))?.payload as { projectDir?: unknown } | undefined;
     return typeof started?.projectDir === "string" ? started.projectDir : undefined;
   }
   return undefined;
@@ -100,6 +100,32 @@ async function readSessionEvents(filePath: string): Promise<SessionEvent[]> {
     .split(/\r?\n/)
     .filter(Boolean)
     .map((line) => JSON.parse(line) as SessionEvent);
+}
+
+export async function readSessionStartEvent(filePath: string): Promise<SessionEvent | undefined> {
+  if (!existsSync(filePath)) return undefined;
+  const handle = await open(filePath, "r");
+  try {
+    let position = 0;
+    let pending = "";
+    while (true) {
+      const buffer = Buffer.alloc(READ_HEAD_CHUNK_BYTES);
+      const { bytesRead } = await handle.read(buffer, 0, buffer.length, position);
+      if (bytesRead === 0) return undefined;
+      position += bytesRead;
+      pending += buffer.subarray(0, bytesRead).toString("utf8");
+      const lines = pending.split(/\r?\n/);
+      pending = lines.pop() ?? "";
+      for (const line of lines) {
+        if (!line.trim()) continue;
+        const event = JSON.parse(line) as SessionEvent;
+        if (event.type === "session:start") return event;
+        return undefined;
+      }
+    }
+  } finally {
+    await handle.close();
+  }
 }
 
 async function readRecentSessionEvents(filePath: string, limit: number): Promise<{ events: SessionEvent[]; truncated: boolean }> {

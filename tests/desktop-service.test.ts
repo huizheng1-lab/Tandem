@@ -346,6 +346,37 @@ describe("TandemService", () => {
     expect((await service.listSessions()).map((session) => session.id)).toContain(store.id);
   });
 
+  it("opens current-project sessions without cross-project discovery", async () => {
+    const cwd = await tempDir();
+    const home = await tempDir();
+    let findCalls = 0;
+    const { window } = fakeWindow();
+    const service = new TandemService(window as never, {
+      registerIpcResponses: false,
+      homeDir: home,
+      createSession: async () => ({
+        id: "active-session",
+        append: async () => undefined,
+        read: async () => []
+      }),
+      openSession: async (_id, openCwd) => ({
+        id: "session-1",
+        append: async () => undefined,
+        read: async () => [{ type: "session:start", at: new Date().toISOString(), payload: { projectDir: openCwd } }]
+      }),
+      findSessionProjectDir: async () => {
+        findCalls += 1;
+        throw new Error("expensive finder should not run");
+      }
+    });
+
+    await service.startSession({ projectDir: cwd });
+    const resumed = await service.resumeSession("session-1");
+
+    expect(resumed.projectDir).toBe(cwd);
+    expect(findCalls).toBe(0);
+  });
+
   it("uses GUI wording when resuming a session from another folder", async () => {
     const cwd = await tempDir();
     const home = await tempDir();
