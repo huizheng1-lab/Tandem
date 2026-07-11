@@ -56,6 +56,7 @@ function mergeTools(...sets: ToolSet[]): ToolSet {
 }
 
 export const WORKER_CONTEXT_CHAR_BUDGET = 16000;
+export const TAKEOVER_MIN_STEPS = 90;
 const FEEDBACK_FIELD_CHAR_LIMIT = 700;
 const REPORT_FIELD_CHAR_LIMIT = 700;
 
@@ -819,7 +820,7 @@ Standing goals are context only; do not redirect unrelated requests toward them.
         systemProviderOptions: leaderSystemProviderOptions(leader.entry),
         messages: leaderThread,
         tools: mergeTools(makeToolSet({ ...toolContext, media: leader.entry.media }, "takeover"), submitTools),
-        maxSteps: options.config.maxStepsPerAgentTurn,
+        maxSteps: Math.max(options.config.maxStepsPerAgentTurn, TAKEOVER_MIN_STEPS),
         stopToolName: "submit_takeover",
         abortSignal: options.abortSignal,
         onText: options.onLeaderText,

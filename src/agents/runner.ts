@@ -222,9 +222,21 @@ export class ThinkingStreamFilter {
         this.suppressFollowingWhitespace = false;
       }
 
-      const openIndex = this.buffer.toLowerCase().indexOf("<think>");
+      const lowerBuffer = this.buffer.toLowerCase();
+      const strayCloseIndex = lowerBuffer.indexOf("</think>");
+      const openIndex = lowerBuffer.indexOf("<think>");
+      if (strayCloseIndex !== -1 && (openIndex === -1 || strayCloseIndex < openIndex)) {
+        const ready = this.buffer.slice(0, strayCloseIndex);
+        if (ready && (!/^\s+$/.test(ready) || this.hasVisibleNonWhitespace)) {
+          text += this.emitText(ready);
+        }
+        this.buffer = this.buffer.slice(strayCloseIndex + "</think>".length);
+        this.suppressFollowingWhitespace = true;
+        continue;
+      }
+
       if (openIndex === -1) {
-        const keep = suffixPrefixLength(this.buffer, "<think>");
+        const keep = Math.max(suffixPrefixLength(this.buffer, "<think>"), suffixPrefixLength(this.buffer, "</think>"));
         const ready = keep > 0 ? this.buffer.slice(0, -keep) : this.buffer;
         if (ready) {
           text += this.emitText(ready);

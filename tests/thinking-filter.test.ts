@@ -51,4 +51,12 @@ describe("ThinkingStreamFilter", () => {
   it("emits no visible text for a turn that is only thinking plus whitespace", () => {
     expect(runFilter(["<think>a</think>\n\n", "\n<think>b</think>\n\n"])).toEqual({ text: "", thinking: "ab" });
   });
+
+  it("suppresses a stray closing tag emitted after provider reasoning deltas", () => {
+    expect(runFilter(["</think>"])).toEqual({ text: "", thinking: "" });
+  });
+
+  it("suppresses a split stray closing tag without leaking partial text", () => {
+    expect(runFilter(["</thi", "nk>\n\nvisible"])).toEqual({ text: "visible", thinking: "" });
+  });
 });
