@@ -196,6 +196,13 @@ export type TriageObjectGenerator = (options: {
   prompt: string;
 }) => Promise<{ object: z.infer<typeof TriageSchema>; usage?: unknown }>;
 
+type StructuredGenerationError = Error & {
+  text?: unknown;
+  usage?: unknown;
+  cause?: unknown;
+  response?: unknown;
+};
+
 function oneLineContext(text: string | undefined, max = 320): string {
   const normalized = text?.replace(/\s+/g, " ").trim() ?? "";
   if (!normalized) return "none";
@@ -237,14 +244,40 @@ export async function classifyPlanRequest(options: {
         abortSignal: input.abortSignal,
         prompt: input.prompt
       }));
-  const { object, usage } = await generator({
-    model: options.resolution.model,
-    schema: TriageSchema,
-    abortSignal: options.abortSignal,
-    prompt: buildTriagePrompt({ request: options.request, history: options.history, leaderThread: options.leaderThread })
-  });
-  recordFallbackUsage("leader", options.ledger, options.resolution.entry, usage);
-  return object.kind;
+  try {
+    const { object, usage } = await generator({
+      model: options.resolution.model,
+      schema: TriageSchema,
+      abortSignal: options.abortSignal,
+      prompt: buildTriagePrompt({ request: options.request, history: options.history, leaderThread: options.leaderThread })
+    });
+    recordFallbackUsage("leader", options.ledger, options.resolution.entry, usage);
+    return object.kind;
+  } catch (error) {
+    const generationError = error as StructuredGenerationError;
+    recordFallbackUsage("leader", options.ledger, options.resolution.entry, generationError.usage);
+    const text = textFromStructuredGenerationError(error);
+    const parsed = parseTriageFromText(text);
+    if (parsed) return parsed;
+    if (text.trim()) {
+      try {
+        const extracted = await extractFromProse({
+          resolution: options.resolution,
+          ledger: options.ledger,
+          role: "leader",
+          schema: TriageSchema,
+          artifactName: "Triage",
+          text,
+          abortSignal: options.abortSignal,
+          originalError: generationError
+        });
+        return extracted.kind;
+      } catch {
+        return "implementation";
+      }
+    }
+    return "implementation";
+  }
 }
 
 export function leaderToolsForTriage(input: { kind: TriageKind; toolContext: ToolContext; media?: ModelEntry["media"]; submitTools?: ToolSet }): ToolSet {
@@ -299,6 +332,34 @@ function extractJsonText(text: string): string {
   const lastBrace = text.lastIndexOf("}");
   if (firstBrace >= 0 && lastBrace > firstBrace) return text.slice(firstBrace, lastBrace + 1);
   return text.trim();
+}
+
+function textFromStructuredGenerationError(error: unknown): string {
+  const candidates: unknown[] = [];
+  const record = error && typeof error === "object" ? (error as Record<string, unknown>) : undefined;
+  candidates.push(record?.text);
+
+  const cause = record?.cause && typeof record.cause === "object" ? (record.cause as Record<string, unknown>) : undefined;
+  candidates.push(cause?.text);
+
+  const response = record?.response && typeof record.response === "object" ? (record.response as Record<string, unknown>) : undefined;
+  const body = response?.body && typeof response.body === "object" ? (response.body as Record<string, unknown>) : undefined;
+  const choices = Array.isArray(body?.choices) ? body.choices : [];
+  for (const choice of choices) {
+    const choiceRecord = choice && typeof choice === "object" ? (choice as Record<string, unknown>) : undefined;
+    const message = choiceRecord?.message && typeof choiceRecord.message === "object" ? (choiceRecord.message as Record<string, unknown>) : undefined;
+    candidates.push(message?.content);
+  }
+
+  return candidates.find((candidate): candidate is string => typeof candidate === "string" && candidate.trim().length > 0)?.trim() ?? "";
+}
+
+function parseTriageFromText(text: string): TriageKind | undefined {
+  try {
+    return TriageSchema.parse(JSON.parse(extractJsonText(text))).kind;
+  } catch {
+    return undefined;
+  }
 }
 
 // Some models (observed: Gemini 2.5 Pro) reliably do the work but fail to call their submit_*

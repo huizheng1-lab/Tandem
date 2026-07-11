@@ -64,6 +64,44 @@ describe("leader triage", () => {
     ).resolves.toBe("question");
   });
 
+  it("recovers triage from raw prose when structured object parsing fails", async () => {
+    const ledger = new CostLedger();
+    const error = Object.assign(new Error("No object generated: could not parse the response."), {
+      name: "AI_NoObjectGeneratedError",
+      text: '<think>This requires creating a file.</think>\n\n{"kind":"implementation"}',
+      usage: { inputTokens: 30, outputTokens: 7 }
+    });
+
+    const kind = await classifyPlanRequest({
+      request: "Create stats.md",
+      resolution: { model: {} as LanguageModel, entry: modelEntry },
+      ledger,
+      generator: async () => {
+        throw error;
+      }
+    });
+
+    expect(kind).toBe("implementation");
+    expect(ledger.totals().leader.inputTokens).toBe(30);
+    expect(ledger.totals().leader.outputTokens).toBe(7);
+  });
+
+  it("defaults failed unparseable triage to implementation", async () => {
+    await expect(
+      classifyPlanRequest({
+        request: "Maybe edit a file",
+        resolution: { model: {} as LanguageModel, entry: modelEntry },
+        ledger: new CostLedger(),
+        generator: async () => {
+          throw Object.assign(new Error("No object generated: could not parse the response."), {
+            name: "AI_NoObjectGeneratedError",
+            text: "I cannot provide a structured answer."
+          });
+        }
+      })
+    ).resolves.toBe("implementation");
+  });
+
   it("keeps submit_build_plan and remember out of the question branch", () => {
     const toolContext: ToolContext = { cwd: process.cwd(), permissionMode: "ask", rememberNote: async () => "remembered" };
     const submitTools = { submit_build_plan: { marker: true } as never } as ToolSet;
