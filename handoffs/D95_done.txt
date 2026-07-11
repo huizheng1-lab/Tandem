@@ -1,0 +1,25 @@
+D95 done
+
+Source commit:
+2a1db09 D95-1: harden MiniMax takeover and thinking filtering
+
+D95-1 findings:
+- Reproduced the MiniMax leader takeover failure with a realistic direct takeover shape: multiple tasks, multiple previous blocked reports, feedback, yolo permissions, and maxStepsPerAgentTurn constrained to 3.
+- The failing run produced the same error class as D94's live note: "Leader takeover finished without submit_takeover. Fallback extraction also failed..."
+- Captured visible text showed MiniMax started emitting text-form tool-call markup and ran out before producing a real submit_takeover tool call.
+- Fix: API-backed leader takeover now uses a takeover-only minimum of 90 steps via TAKEOVER_MIN_STEPS, while ordinary build/review calls still use maxStepsPerAgentTurn.
+- Re-verification: the same constrained MiniMax takeover probe no longer crashed and returned a valid TakeoverReport. It reported status=blocked because the temporary probe lived inside Tandem's own protected installation tree, so write tools were refused, but the D95 failure mode was removed.
+
+D95-2 findings:
+- Confirmed real visible </think> leaks in recent session logs, including leader and worker text events.
+- Root cause: providers can route reasoning body through reasoning-delta while leaving a closing </think> tag in text-delta; the filter then sees a stray close tag while not in a visible-text think block.
+- Fix: ThinkingStreamFilter now suppresses stray </think> tags, including split partial close tags across chunks, without breaking normal <think>...</think> filtering.
+- Regression tests added for bare and split stray close-tag cases.
+
+Verification:
+- npx vitest run tests/thinking-filter.test.ts: passed, 11 tests.
+- npm run typecheck: passed.
+- npm test: passed, 311 tests, 1 skipped.
+- git diff --check: passed; only existing CRLF conversion warnings were reported.
+- npm run build: passed.
+- Live MiniMax takeover probe after the fix: returned a valid TakeoverReport and no visible </think> leaks.
