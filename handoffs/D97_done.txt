@@ -1,0 +1,25 @@
+D97 done.
+
+Implementation commit:
+- db9fcd6 D97-1: run verification in orchestrator
+
+Summary:
+- Added an orchestrator-owned verification runner and wired it into desktop and TUI callers.
+- Replaced worker/model verification claims with authoritative runner output before review/takeover review paths when the runner executes.
+- Preserved strict model-reported verification fallback when authoritative verification is skipped or unavailable.
+- Kept D56/D96 verification-script tampering checks active even when authoritative verification runs.
+- Added retry-with-feedback plumbing for plan, build, review, and takeover attempts across live, Codex CLI, and Claude Code CLI adapters.
+
+Verification:
+- npm run typecheck: passed.
+- npx vitest run tests/orchestrator.test.ts: passed (24 tests).
+- npm test: passed with isolated USERPROFILE/HOME; normal run was blocked by active desktop session writes to real ~/.tandem during the test guard snapshot.
+- git diff --check: passed.
+- npm run build: passed.
+- npx electron-vite build: passed.
+- npm run dist:app: blocked at electron-builder cleanup because release/win-unpacked was locked by running Tandem.exe processes.
+- D97 smoke pass path: real `node -e "console.log('d97 smoke ok')"` command replaced the model claim and emitted `verification: 1/1 passed`.
+- D97 smoke fail path: real failing verification reached review after one build attempt; reviewer saw `passed=false`.
+
+Live packaged-app note:
+- Full packaged-app MiniMax/MiniMax live verification was not run because the existing packaged app was running from release/win-unpacked, locking the package output directory. The production Electron build completed before that packaging lock.
