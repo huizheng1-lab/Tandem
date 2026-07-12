@@ -99,7 +99,7 @@ export const defaultConfig: TandemConfig = {
   triage: "auto",
   showThinking: false,
   desktopTheme: "auto",
-  maxStepsPerAgentTurn: 60,
+  maxStepsPerAgentTurn: 150,
   leaderContextBudgetTokens: 60000,
   claudeMaxBudgetUsdPerCall: 2.0,
   maxParallelWorkers: 2,

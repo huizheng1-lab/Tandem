@@ -201,6 +201,10 @@ describe("config", () => {
     expect(entry.provider).toBe("openai-compatible");
   });
 
+  it("D102: defaults to a larger live-agent step budget for real multi-file work", () => {
+    expect(defaultConfig.maxStepsPerAgentTurn).toBe(150);
+  });
+
   it("allows custom models to override media capabilities", () => {
     const entry = resolveModel("compatible/vision", [
       {
