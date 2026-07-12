@@ -159,6 +159,7 @@ export class TandemService {
     this.config = loaded.config;
     this.projectConfigOverrides = loaded.projectOverrides;
     this.ledger = new CostLedger();
+    this.lastPersistedCostKey = undefined;
     this.lastCheckpoint = undefined;
     this.sessionAutoApprove = "none";
     this.session = await (this.deps.createSession ?? ((cwd) => SessionStore.create(cwd, this.homeDir)))(this.projectDir);
@@ -345,6 +346,7 @@ export class TandemService {
     const loaded = loadConfigDetails({ cwd: projectDir, homeDir: this.homeDir, env: this.env });
     this.config = loaded.config;
     this.projectConfigOverrides = loaded.projectOverrides;
+    this.lastPersistedCostKey = undefined;
     await this.refreshCronTasks();
     const recent = store.readRecent ? await store.readRecent(DESKTOP_RESUME_EVENT_LIMIT) : { events: await store.read(), truncated: false };
     const events = recent.events;

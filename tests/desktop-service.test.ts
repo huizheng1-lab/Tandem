@@ -220,6 +220,41 @@ describe("TandemService", () => {
     expect(appended.filter((event) => event.type === "cost")).toHaveLength(1);
   });
 
+  it("D98: scopes persisted cost deduplication to each session", async () => {
+    const cwd = await tempDir();
+    const { window } = fakeWindow();
+    const appendedBySession = new Map<string, Array<{ type: string; payload: unknown }>>();
+    let sessionNumber = 0;
+    const service = new TandemService(window as never, {
+      registerIpcResponses: false,
+      createSession: async () => {
+        const id = `session-${++sessionNumber}`;
+        const appended: Array<{ type: string; payload: unknown }> = [];
+        appendedBySession.set(id, appended);
+        return {
+          id,
+          append: async (type, payload) => {
+            appended.push({ type, payload });
+          },
+          read: async () => []
+        };
+      },
+      createAgents: async () => fakeAgents(),
+      runOrchestration: async (options: RunOptions): Promise<RunResult> => {
+        options.emit?.({ type: "notice", message: "zero-cost event" });
+        return { phase: "DONE", summary: "finished", reports: [], verdicts: [], takeover: false };
+      }
+    });
+
+    await service.startSession({ projectDir: cwd });
+    await service.run("first");
+    await service.startSession({ projectDir: cwd });
+    await service.run("second");
+
+    expect(appendedBySession.get("session-1")?.filter((event) => event.type === "cost")).toHaveLength(1);
+    expect(appendedBySession.get("session-2")?.filter((event) => event.type === "cost")).toHaveLength(1);
+  });
+
   it("D98: model list includes cost hints for renderer price fallback decisions", async () => {
     const cwd = await tempDir();
     const home = await tempDir();

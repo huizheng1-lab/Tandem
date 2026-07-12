@@ -1,5 +1,5 @@
 import { hasToolCall, stepCountIs, streamText } from "ai";
-import type { LanguageModel, LanguageModelUsage, ToolSet } from "ai";
+import type { LanguageModel, LanguageModelUsage, ModelMessage, ToolSet } from "ai";
 import type { ProviderOptions } from "@ai-sdk/provider-utils";
 import { CostLedger, CostRole } from "../session/cost.js";
 import { ModelEntry } from "../providers/registry.js";
@@ -34,6 +34,15 @@ export interface PromptSizeEstimate {
   chars: number;
   approxTokens: number;
 }
+
+interface AgentTextResult {
+  text: string;
+  usage?: LanguageModelUsage;
+  responseMessages: ModelMessage[];
+  stepsUsed: number;
+}
+
+const ARTIFACT_NUDGE_MAX_STEPS = 3;
 
 export function toolCallThinkingDelta(toolName: string): string {
   return `[tool call: ${toolName || "tool"}]\n`;
@@ -274,7 +283,7 @@ export class ThinkingStreamFilter {
   }
 }
 
-export async function runAgentText(options: AgentRunOptions): Promise<{ text: string; usage?: LanguageModelUsage }> {
+export async function runAgentText(options: AgentRunOptions): Promise<AgentTextResult> {
   let lastError: unknown;
   for (let attempt = 0; attempt < 3; attempt += 1) {
     try {
@@ -341,7 +350,14 @@ export async function runAgentText(options: AgentRunOptions): Promise<{ text: st
       if (streamError) throw streamError;
       finishedUsage ??= await result.totalUsage;
       recordUsage(finishedUsage);
-      return { text, usage: finishedUsage };
+      const response = result.response ? await result.response : undefined;
+      const steps = result.steps ? await result.steps : undefined;
+      return {
+        text,
+        usage: finishedUsage,
+        responseMessages: (response?.messages ?? []) as ModelMessage[],
+        stepsUsed: steps?.length ?? 0
+      };
     } catch (error) {
       lastError = enrichAgentError(error, options);
       if (!isRetryable(error) || attempt === 2 || options.abortSignal?.aborted) break;
@@ -356,15 +372,22 @@ export async function runAgentArtifact<T>(options: AgentRunOptions & { artifactN
   const artifact = options.getArtifact();
   if (artifact !== undefined || !options.stopToolName) return { ...result, artifact };
 
+  const remainingSteps = Math.max(0, options.maxSteps - result.stepsUsed);
+  if (remainingSteps === 0) return { ...result, artifact };
+
   // The model finished its work but ended the turn in prose instead of calling its submit tool.
-  // Continue the conversation once with the tool call forced.
+  // Continue the complete generated conversation once with the tool call forced.
+  const generatedMessages = result.responseMessages.length > 0
+    ? result.responseMessages
+    : [{ role: "assistant" as const, content: result.text || "(no text)" }];
   const nudged = await runAgentText({
     ...options,
     messages: [
       ...options.messages,
-      { role: "assistant", content: result.text || "(no text)" },
+      ...generatedMessages,
       { role: "user", content: `You did not call ${options.stopToolName}. Call ${options.stopToolName} now with your final ${options.artifactName}. Do not write prose.` }
-    ],
+    ] as RunnerMessage[],
+    maxSteps: Math.min(remainingSteps, ARTIFACT_NUDGE_MAX_STEPS),
     toolChoice: { type: "tool", toolName: options.stopToolName }
   });
   return { ...nudged, text: `${result.text}${nudged.text}`, artifact: options.getArtifact() };
