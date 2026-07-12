@@ -191,6 +191,46 @@ describe("TandemService", () => {
     expect(sent.some((event) => event.channel === ipcChannels.doneEvent)).toBe(true);
   });
 
+  it("D98: persists only changed cost snapshots during repeated service events", async () => {
+    const cwd = await tempDir();
+    const { window, sent } = fakeWindow();
+    const appended: Array<{ type: string; payload: unknown }> = [];
+    const service = new TandemService(window as never, {
+      registerIpcResponses: false,
+      createSession: async () => ({
+        id: "session-1",
+        append: async (type, payload) => {
+          appended.push({ type, payload });
+        },
+        read: async () => []
+      }),
+      createAgents: async () => fakeAgents(),
+      runOrchestration: async (options: RunOptions): Promise<RunResult> => {
+        options.emit?.({ type: "notice", message: "one" });
+        options.emit?.({ type: "notice", message: "two" });
+        options.emit?.({ type: "notice", message: "three" });
+        return { phase: "DONE", summary: "finished", reports: [], verdicts: [], takeover: false };
+      }
+    });
+
+    await service.startSession({ projectDir: cwd });
+    await service.run("build");
+
+    expect(sent.filter((event) => event.channel === ipcChannels.costEvent).length).toBeGreaterThanOrEqual(3);
+    expect(appended.filter((event) => event.type === "cost")).toHaveLength(1);
+  });
+
+  it("D98: model list includes cost hints for renderer price fallback decisions", async () => {
+    const cwd = await tempDir();
+    const home = await tempDir();
+    await mkdir(path.join(home, ".tandem"), { recursive: true });
+    await writeFile(path.join(home, ".tandem", ".env"), "MINIMAX_API_KEY=minimax-test\n", "utf8");
+    const { window } = fakeWindow();
+    const service = new TandemService(window as never, { registerIpcResponses: false, homeDir: home, baseEnv: {} });
+    await service.startSession({ projectDir: cwd });
+    expect(service.listModels().find((model) => model.id === "minimax/minimax-m3")?.costHints).toEqual({ inputPerMillion: 0.3, outputPerMillion: 1.2 });
+  });
+
   it("passes project instructions to agents and writes remember notes to TANDEM.md", async () => {
     const cwd = await tempDir();
     await writeFile(path.join(cwd, "TANDEM.md"), "# Project\nUse Vitest.\n", "utf8");

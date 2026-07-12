@@ -145,6 +145,7 @@ export interface ModelListItem {
   envKey?: string;
   available: boolean;
   media?: { images?: boolean; pdf?: boolean };
+  costHints?: { inputPerMillion: number; outputPerMillion: number };
 }
 
 export interface AttachmentAddFilesRequest {

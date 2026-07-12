@@ -23,6 +23,7 @@ export interface AgentRunOptions {
   maxSteps: number;
   onText?: (text: string) => void;
   onThinking?: (text: string) => void;
+  onToolCallThinking?: (toolName: string) => void;
   onUsage?: (usage: LanguageModelUsage) => void;
   abortSignal?: AbortSignal;
   stopToolName?: string;
@@ -32,6 +33,10 @@ export interface AgentRunOptions {
 export interface PromptSizeEstimate {
   chars: number;
   approxTokens: number;
+}
+
+export function toolCallThinkingDelta(toolName: string): string {
+  return `[tool call: ${toolName || "tool"}]\n`;
 }
 
 function isRetryable(error: unknown): boolean {
@@ -327,6 +332,9 @@ export async function runAgentText(options: AgentRunOptions): Promise<{ text: st
         } else if (part.type === "reasoning-delta") {
           const reasoning = "text" in part ? part.text : (part as { delta?: string }).delta;
           if (reasoning) options.onThinking?.(reasoning);
+        } else if (part.type === "tool-call") {
+          const toolName = "toolName" in part && typeof part.toolName === "string" ? part.toolName : "tool";
+          options.onToolCallThinking?.(toolName);
         }
       }
       text += filter.end().text;

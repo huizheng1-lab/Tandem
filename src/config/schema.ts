@@ -114,7 +114,11 @@ export const defaultConfig: TandemConfig = {
       id: "minimax/minimax-m3",
       baseURL: "https://api.minimax.io/v1",
       apiKeyEnv: "MINIMAX_API_KEY",
-      modelName: "MiniMax-M3"
+      modelName: "MiniMax-M3",
+      // MiniMax's published standard M3 tier is $0.30/M input and $1.20/M output up to
+      // 512k input tokens; long-context and priority tiers cost more, which this simple
+      // hint structure cannot yet express.
+      costHints: { inputPerMillion: 0.3, outputPerMillion: 1.2 }
     }
   ]
 };

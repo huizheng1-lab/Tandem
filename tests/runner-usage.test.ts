@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { enrichAgentError, estimatePromptSize, usageTokens } from "../src/agents/runner.js";
+import { enrichAgentError, estimatePromptSize, toolCallThinkingDelta, usageTokens } from "../src/agents/runner.js";
 
 describe("usageTokens", () => {
   it("reads raw OpenAI-compatible usage when AI SDK fields are NaN", () => {
@@ -43,5 +43,10 @@ describe("usageTokens", () => {
 
   it("estimates prompt size from system and messages", () => {
     expect(estimatePromptSize("abcd", [{ role: "user", content: "12345678" }])).toEqual({ chars: 16, approxTokens: 4 });
+  });
+
+  it("D98: formats tool-call thinking deltas for tool-only leader streams", () => {
+    expect(toolCallThinkingDelta("read_file")).toBe("[tool call: read_file]\n");
+    expect(toolCallThinkingDelta("")).toBe("[tool call: tool]\n");
   });
 });

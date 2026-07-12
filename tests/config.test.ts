@@ -190,6 +190,11 @@ describe("config", () => {
     expect(() => resolveModel("google/gemini-3.5-pro", [])).toThrow(/Unknown model/);
   });
 
+  it("D98: default MiniMax M3 custom model includes standard-tier cost hints", () => {
+    const entry = resolveModel("minimax/minimax-m3", defaultConfig.customModels);
+    expect(entry.costHints).toEqual({ inputPerMillion: 0.3, outputPerMillion: 1.2 });
+  });
+
   it("allows custom models to override media capabilities", () => {
     const entry = resolveModel("compatible/vision", [
       {

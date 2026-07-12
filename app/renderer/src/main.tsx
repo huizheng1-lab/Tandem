@@ -22,6 +22,8 @@ import { CodexCliReasoningEffortSchema, type DesktopTheme, type PermissionMode, 
 import { parseLoop } from "../../../src/commands/loop.js";
 import { cliModelPatch, modelCommandUsage, modelDisplayName } from "../../../src/providers/cli-models.js";
 import { ErrorBoundary } from "./ErrorBoundary.js";
+import { activityStripState } from "./activity-strip.js";
+import { formatTotalCost } from "./cost-display.js";
 import { MODEL_STALL_WARNING_SECONDS, needsProjectPickForSession, sessionFromResume } from "./session-state.js";
 import { boundedMessageTextForState, MessageText } from "./TranscriptText.js";
 import { applyDesktopTheme, THEME_REFRESH_INTERVAL_MS } from "./theme.js";
@@ -292,9 +294,8 @@ function App(): React.ReactElement {
   const roleModelOptions = useMemo(() => modelSelectOptions(models, effectiveConfig), [models, effectiveConfig]);
   const contextProjectDir = session?.projectDir ?? appState?.lastProjectDir ?? appState?.projectDir;
   const totalCost = useMemo(() => {
-    if (!cost) return "$0.0000";
-    return `$${(cost.leader.dollars + cost.worker.dollars).toFixed(4)}`;
-  }, [cost]);
+    return formatTotalCost(cost, effectiveConfig, models);
+  }, [cost, effectiveConfig, models]);
 
   const costTitle = cost
     ? `Leader: ${cost.leader.inputTokens}/${cost.leader.outputTokens} tokens, $${cost.leader.dollars.toFixed(4)}${effectiveConfig?.leader === "codex/cli" ? " (billed via your Codex CLI account, not by token price)" : ""}${effectiveConfig?.leader === "claude-code/cli" ? " (reported directly by Claude Code CLI)" : ""}\nWorker: ${cost.worker.inputTokens}/${cost.worker.outputTokens} tokens, $${cost.worker.dollars.toFixed(4)}${effectiveConfig?.worker === "codex/cli" ? " (billed via your Codex CLI account, not by token price)" : ""}${effectiveConfig?.worker === "claude-code/cli" ? " (reported directly by Claude Code CLI)" : ""}`
@@ -544,6 +545,7 @@ function App(): React.ReactElement {
   const handleToolEvent = (event: ToolActivityEvent) => {
     const now = Date.now();
     setLastActivityAt(now);
+    setActivityPulse((current) => (current && current.role !== event.role ? undefined : current));
     if (event.phase === "start") {
       setActiveTool({ ...event, startedAt: now });
     } else {
@@ -582,6 +584,8 @@ function App(): React.ReactElement {
         setRunning(false);
         setPhase(event.error ? "IDLE" : "DONE");
         setMissingKey(event.missingKey);
+        setActivityPulse(undefined);
+        setActiveTool(undefined);
         trimTrailingAgentBubble();
         appendMessage("system", `${event.summary}${event.takeover ? " (takeover)" : ""}`);
       }),
@@ -1106,13 +1110,9 @@ if (args.length === 1 && sub === "clear") {
   const visibleEntries = useMemo(() => (showActivity ? entries : entries.filter((entry) => entry.kind !== "tool")), [entries, showActivity]);
   const fallbackRole: "leader" | "worker" = phase === "BUILDING" ? "worker" : "leader";
   const noActivitySeconds = secondsSince(lastActivityAt, activityTick);
-  const stripRole = activeTool?.role ?? activityPulse?.role ?? fallbackRole;
-  const activityText = activeTool
-    ? `running: ${activeTool.target} (${secondsSince(activeTool.startedAt, activityTick)}s)`
-    : activityPulse
-      ? `${activityPulse.kind === "thinking" ? "thinking" : "writing"}... (${secondsSince(activityPulse.startedAt, activityTick)}s)`
-      : `waiting for model... (${noActivitySeconds}s)`;
-  const stripText = noActivitySeconds > MODEL_STALL_WARNING_SECONDS ? `no activity for ${noActivitySeconds}s - the model call may be stalled (Stop to abort)` : activityText;
+  const strip = activityStripState({ activeTool, activityPulse, fallbackRole, noActivitySeconds, activityTick, secondsSince });
+  const stripRole = strip.role;
+  const stripText = strip.text;
 
   return (
     <main
@@ -1417,7 +1417,7 @@ if (args.length === 1 && sub === "clear") {
           <div ref={transcriptEnd} />
         </section>
         {running ? (
-          <section className={`activityStrip ${stripRole}${noActivitySeconds > MODEL_STALL_WARNING_SECONDS ? " stalled" : ""}`}>
+          <section className={`activityStrip ${stripRole}${strip.stalled ? " stalled" : ""}`}>
             <span className="activityDot" />
             <strong>{stripRole.toUpperCase()}</strong>
             <span>{stripText}</span>

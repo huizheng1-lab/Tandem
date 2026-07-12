@@ -15,7 +15,7 @@ import { BuildPlan, BuildPlanSchema, CompletionReport, CompletionReportSchema, R
 import { Goal } from "../session/goals.js";
 import { buildUserContentWithAttachments } from "../session/attachments.js";
 import type { ContentPart } from "../session/attachments.js";
-import { estimatePromptSize, runAgentArtifact, runAgentText } from "./runner.js";
+import { estimatePromptSize, runAgentArtifact, runAgentText, toolCallThinkingDelta } from "./runner.js";
 import type { RunnerMessage } from "./runner.js";
 import { leaderPlannerPrompt, leaderReviewerPrompt, leaderTakeoverPrompt } from "./leader.js";
 import { workerPrompt } from "./worker.js";
@@ -191,6 +191,11 @@ export function buildLeaderRequestMessage(input: { request: string; goals: strin
 function retryFeedbackLine(previousAttemptError: string | undefined): string {
   const text = previousAttemptError?.trim();
   return text ? `\n\nYour previous submission was rejected: ${text}. Fix that specific problem and resubmit.` : "";
+}
+
+function leaderToolCallThinking(options: LiveAgentOptions): ((toolName: string) => void) | undefined {
+  if (!options.onLeaderThinking) return undefined;
+  return (toolName) => options.onLeaderThinking?.(toolCallThinkingDelta(toolName));
 }
 
 const TriageSchema = z.object({ kind: z.enum(["question", "implementation"]) });
@@ -542,7 +547,8 @@ Standing goals are context only; do not redirect unrelated requests toward them.
           maxSteps: options.config.maxStepsPerAgentTurn,
           abortSignal: options.abortSignal,
           onText: options.onLeaderText,
-          onThinking: options.onLeaderThinking
+          onThinking: options.onLeaderThinking,
+          onToolCallThinking: leaderToolCallThinking(options)
         });
         const answer = result.text.trim();
         leaderThread.push({ role: "assistant", content: answer });
@@ -584,6 +590,7 @@ Standing goals are context only; do not redirect unrelated requests toward them.
           abortSignal: options.abortSignal,
           onText: options.onLeaderText,
           onThinking: options.onLeaderThinking,
+          onToolCallThinking: leaderToolCallThinking(options),
           artifactName: "BuildPlan",
           getArtifact: () => submittedPlan
         });
@@ -743,6 +750,7 @@ Standing goals are context only; do not redirect unrelated requests toward them.
         abortSignal: options.abortSignal,
         onText: options.onLeaderText,
         onThinking: options.onLeaderThinking,
+        onToolCallThinking: leaderToolCallThinking(options),
         artifactName: "ReviewVerdict",
         getArtifact: () => verdict
       });
@@ -831,6 +839,7 @@ Standing goals are context only; do not redirect unrelated requests toward them.
         abortSignal: options.abortSignal,
         onText: options.onLeaderText,
         onThinking: options.onLeaderThinking,
+        onToolCallThinking: leaderToolCallThinking(options),
         artifactName: "TakeoverReport",
         getArtifact: () => submitted
       });
@@ -905,6 +914,7 @@ export async function suggestGoalProgressNotes(options: Pick<LiveAgentOptions, "
     abortSignal: options.abortSignal,
     onText: options.onLeaderText,
     onThinking: options.onLeaderThinking,
+    onToolCallThinking: leaderToolCallThinking(options),
     artifactName: "GoalProgressNotes",
     getArtifact: () => submitted
   });

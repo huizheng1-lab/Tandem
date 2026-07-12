@@ -126,6 +126,7 @@ export class TandemService {
   private readonly pendingPlans = new Map<string, PendingResolver>();
   private readonly cronTasks = new Map<string, ScheduledTask>();
   private sessionAutoApprove: SessionAutoApproveMode = "none";
+  private lastPersistedCostKey?: string;
 
   constructor(
     private readonly window: DesktopWindow,
@@ -299,7 +300,8 @@ export class TandemService {
           : model.provider === "claude-code-cli"
             ? Boolean(locateClaudeCli({ env: this.env, overridePath: this.config.claudeCliPath }))
             : Boolean(model.envKey && this.env[model.envKey]),
-      media: model.media
+      media: model.media,
+      costHints: model.costHints
       };
     });
   }
@@ -454,17 +456,19 @@ export class TandemService {
   private async emitText(role: "leader" | "worker", delta: string, thinking = false): Promise<void> {
     const event = { role, delta, thinking };
     this.window.webContents.send(ipcChannels.textEvent, event);
-    this.window.webContents.send(ipcChannels.costEvent, this.costTotals());
+    const totals = this.costTotals();
+    this.window.webContents.send(ipcChannels.costEvent, totals);
     await this.session?.append(thinking ? "thinking" : "text", event);
-    await this.session?.append("cost", this.costTotals());
+    await this.persistCostSnapshot(totals);
   }
 
   private async emitMachine(event: MachineEvent): Promise<void> {
     if (event.type === "checkpoint") this.lastCheckpoint = event.checkpoint;
     this.window.webContents.send(ipcChannels.machineEvent, event);
-    this.window.webContents.send(ipcChannels.costEvent, this.costTotals());
+    const totals = this.costTotals();
+    this.window.webContents.send(ipcChannels.costEvent, totals);
     await this.session?.append("machine", event);
-    await this.session?.append("cost", this.costTotals());
+    await this.persistCostSnapshot(totals);
   }
 
   private async emitTool(event: ToolActivityEvent): Promise<void> {
@@ -533,6 +537,13 @@ export class TandemService {
 
   private costTotals(): CostTotals {
     return this.ledger.totals();
+  }
+
+  private async persistCostSnapshot(totals: CostTotals): Promise<void> {
+    const key = JSON.stringify(totals);
+    if (key === this.lastPersistedCostKey) return;
+    this.lastPersistedCostKey = key;
+    await this.session?.append("cost", totals);
   }
 
   private requestPermission(request: PermissionRequest): Promise<boolean> {
