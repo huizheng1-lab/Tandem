@@ -1,0 +1,36 @@
+D98 done.
+
+Implementation commit:
+- 98c6255 D98-1: improve run observability
+
+Root-cause summary:
+- The analyzed session log had 5,931 events: 2,407 worker thinking events, 236 worker text events, and zero leader text/thinking events, despite 182 leader tool events.
+- The desktop service was correctly wiring leader text/thinking callbacks. The missing visibility came from tool-heavy MiniMax leader turns that streamed tool-call parts and tool events but no text/reasoning deltas; Tandem only persisted `text`/`thinking` when those deltas existed.
+- The runner now exposes streamed tool-call parts as lightweight leader thinking deltas for AI-SDK leader paths, so tool-only leader turns are visible in the activity strip/session log.
+
+Implemented:
+- D98-1: Added leader tool-call thinking deltas through `runAgentText`/`createLiveAgents`.
+- D98-2: Activity strip clears on DONE, clears stale pulse on cross-role tool events, and relabels stale pulses as `no output for Ns`.
+- D98-3: Added MiniMax-M3 cost hints at the published standard tier ($0.30/M input, $1.20/M output) and renderer fallback for unknown-price nonzero-token usage.
+- D98-4: Desktop service still sends every cost update to the UI, but persists only changed cost snapshots.
+- D98-5: Added regression coverage for the existing same-conversation nudge before failing a missing `submit_completion_report` artifact.
+
+Verification:
+- npm run typecheck: passed.
+- Focused D98 tests: passed (`renderer-activity-strip`, `renderer-cost-display`, `desktop-service`, `config`, `runner-usage`, `runner-artifact`).
+- npm test with isolated USERPROFILE/HOME: passed, 35 files + 1 skipped, 330 tests + 1 skipped.
+- git diff --check: passed.
+- npm run build: passed.
+- npm run dist:app: passed; packaged app built successfully after no Tandem.exe process was holding release/win-unpacked.
+
+Synthetic measurements:
+- Cost persistence burst test emits at least 3 UI cost IPC updates but persists 1 unchanged `cost` snapshot, reducing identical consecutive persisted cost events from 3 to 1 in that scenario.
+
+Live MiniMax verification:
+- First direct all-MiniMax smoke used `.d98-live-smoke` under the Tandem install tree and correctly produced leader deltas, but the task itself was blocked by Tandem's own-installation protection.
+- Safe direct all-MiniMax smoke in `%TEMP%\tandem-d98-live-smoke-safe` completed cleanly: phase DONE, takeover false, `verification: 1/1 passed`, `hello.txt` contained `D98 safe smoke`.
+- Safe smoke leader visibility: 193 leader thinking events, 2 leader text events, 5 leader tool-call thinking events.
+- Safe smoke cost totals were nonzero with M3 hints: leader $0.0061887, worker $0.0054825.
+
+Live packaged-app note:
+- The app was rebuilt and packaged successfully. A manual renderer click-through was not performed in this heartbeat; direct live orchestration verified the AI-SDK MiniMax leader/worker path and D97 authoritative verification path.
