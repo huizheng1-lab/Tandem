@@ -367,7 +367,7 @@ export async function runAgentText(options: AgentRunOptions): Promise<AgentTextR
   throw lastError instanceof Error ? lastError : new Error(String(lastError));
 }
 
-export async function runAgentArtifact<T>(options: AgentRunOptions & { artifactName: string; getArtifact: () => T | undefined }): Promise<{ artifact?: T; text: string; usage?: LanguageModelUsage }> {
+export async function runAgentArtifact<T>(options: AgentRunOptions & { artifactName: string; getArtifact: () => T | undefined }): Promise<{ artifact?: T; text: string; usage?: LanguageModelUsage; stepsUsed: number }> {
   const result = await runAgentText(options);
   const artifact = options.getArtifact();
   if (artifact !== undefined || !options.stopToolName) return { ...result, artifact };
@@ -390,5 +390,5 @@ export async function runAgentArtifact<T>(options: AgentRunOptions & { artifactN
     maxSteps: Math.min(remainingSteps, ARTIFACT_NUDGE_MAX_STEPS),
     toolChoice: { type: "tool", toolName: options.stopToolName }
   });
-  return { ...nudged, text: `${result.text}${nudged.text}`, artifact: options.getArtifact() };
+  return { ...nudged, stepsUsed: result.stepsUsed + nudged.stepsUsed, text: `${result.text}${nudged.text}`, artifact: options.getArtifact() };
 }

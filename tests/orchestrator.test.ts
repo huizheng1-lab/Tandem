@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { AgentFns, OrchestrationCheckpoint, runOrchestration } from "../src/orchestrator/machine.js";
+import { AgentFns, OrchestrationCheckpoint, runOrchestration, WorkerStepExhaustionError } from "../src/orchestrator/machine.js";
 import { BuildPlan, CompletionReport, ReviewVerdict } from "../src/orchestrator/artifacts.js";
 import { createVerificationRunner } from "../src/orchestrator/verification.js";
 import type { PermissionRequest } from "../src/tools/permissions.js";
@@ -206,6 +206,52 @@ describe("orchestration", () => {
     });
     expect(builds).toBe(2);
     expect(result.takeover).toBe(false);
+  });
+
+  it("D103: retries step-exhausted worker builds with an increased budget", async () => {
+    const multipliers: (number | undefined)[] = [];
+    const notices: string[] = [];
+    let builds = 0;
+    const result = await runOrchestration({
+      request: "build",
+      config: { maxReviewRounds: 3, maxParallelWorkers: 1 },
+      agents: agents({
+        build: async (input) => {
+          builds += 1;
+          multipliers.push(input.stepBudgetMultiplier);
+          if (builds === 1) throw new WorkerStepExhaustionError(150, 150);
+          return report();
+        }
+      }),
+      emit: (event) => {
+        if (event.type === "notice") notices.push(event.message);
+      }
+    });
+
+    expect(result.takeover).toBe(false);
+    expect(multipliers).toEqual([1, 2]);
+    expect(notices.some((message) => message.includes("stream __default__ ran out of steps on attempt 1"))).toBe(true);
+    expect(notices.some((message) => message.includes("increased budget (2x)"))).toBe(true);
+  });
+
+  it("D103: ordinary worker failures retry without budget escalation", async () => {
+    const multipliers: (number | undefined)[] = [];
+    let builds = 0;
+    const result = await runOrchestration({
+      request: "build",
+      config: { maxReviewRounds: 3, maxParallelWorkers: 1 },
+      agents: agents({
+        build: async (input) => {
+          builds += 1;
+          multipliers.push(input.stepBudgetMultiplier);
+          if (builds === 1) throw new Error("transient model hiccup");
+          return report();
+        }
+      })
+    });
+
+    expect(result.takeover).toBe(false);
+    expect(multipliers).toEqual([1, 1]);
   });
 
   it("D97: attaches authoritative verification results before review", async () => {

@@ -10,7 +10,7 @@ import { PermissionBridge } from "../tools/permissions.js";
 import { makeToolSet } from "../tools/index.js";
 import type { ToolActivityEvent, ToolContext } from "../tools/fs.js";
 import { CostLedger, CostRole } from "../session/cost.js";
-import { AgentFns, PlanResult } from "../orchestrator/machine.js";
+import { AgentFns, PlanResult, WorkerStepExhaustionError } from "../orchestrator/machine.js";
 import { BuildPlan, BuildPlanSchema, CompletionReport, CompletionReportSchema, ReviewFeedback, ReviewVerdictSchema, validateBuildPlan } from "../orchestrator/artifacts.js";
 import { Goal } from "../session/goals.js";
 import { leaderContextBudgetChars } from "../session/compaction.js";
@@ -617,7 +617,7 @@ Standing goals are context only; do not redirect unrelated requests toward them.
       throw lastError instanceof Error ? lastError : new Error(String(lastError));
     },
 
-    build: async ({ plan, streamId, tasks, verification, round, feedback, previousReport, previousAttemptError }) => {
+    build: async ({ plan, streamId, tasks, verification, round, feedback, previousReport, previousAttemptError, stepBudgetMultiplier }) => {
       if (worker.entry.provider === "codex-cli") {
         return runCodexWorkerBuild(
           {
@@ -653,6 +653,7 @@ Standing goals are context only; do not redirect unrelated requests toward them.
         );
       }
       let report: z.infer<typeof CompletionReportSchema> | undefined;
+      const maxSteps = Math.round(options.config.maxStepsPerAgentTurn * (stepBudgetMultiplier ?? 1));
       const submitTools = {
         submit_completion_report: tool({
           description: "Submit the worker completion report and end building.",
@@ -677,7 +678,7 @@ Standing goals are context only; do not redirect unrelated requests toward them.
           }
         ],
         tools: mergeTools(makeToolSet({ ...toolContext, media: worker.entry.media }, "worker"), submitTools),
-        maxSteps: options.config.maxStepsPerAgentTurn,
+        maxSteps,
         stopToolName: "submit_completion_report",
         abortSignal: options.abortSignal,
         onText: options.onWorkerText,
@@ -685,7 +686,10 @@ Standing goals are context only; do not redirect unrelated requests toward them.
         artifactName: "CompletionReport",
         getArtifact: () => report
       });
-      if (!result.artifact) throw new Error("Worker finished without submit_completion_report. Retry with an explicit report.");
+      if (!result.artifact) {
+        if (result.stepsUsed >= maxSteps) throw new WorkerStepExhaustionError(result.stepsUsed, maxSteps);
+        throw new Error("Worker finished without submit_completion_report. Retry with an explicit report.");
+      }
       return result.artifact;
     },
 

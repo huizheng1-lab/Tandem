@@ -48,6 +48,7 @@ export interface BuildStreamInput {
   feedback: ReviewVerdict["feedback"];
   previousReport?: CompletionReport;
   previousAttemptError?: string;
+  stepBudgetMultiplier?: number;
 }
 
 export interface AgentFns {
@@ -91,6 +92,18 @@ function previousAttemptMessage(error: unknown, max = 500): string {
   return normalized.length <= max ? normalized : `${normalized.slice(0, max)}...`;
 }
 
+export class WorkerStepExhaustionError extends Error {
+  readonly stepsUsed: number;
+  readonly maxSteps: number;
+
+  constructor(stepsUsed: number, maxSteps: number) {
+    super(`Worker step budget exhausted (${stepsUsed}/${maxSteps}) before submit_completion_report.`);
+    this.name = "WorkerStepExhaustionError";
+    this.stepsUsed = stepsUsed;
+    this.maxSteps = maxSteps;
+  }
+}
+
 function takeoverAuthoritativeVerificationWarning(report: CompletionReport): string | undefined {
   if (report.status !== "complete") return undefined;
   const failed = report.verificationResults.filter((result) => !result.passed);
@@ -99,11 +112,11 @@ function takeoverAuthoritativeVerificationWarning(report: CompletionReport): str
   return `takeover claimed complete, but authoritative verification failed ${failed.length}/${report.verificationResults.length} command(s): ${commands}`;
 }
 
-async function retryArtifact<T>(name: string, emit: (event: MachineEvent) => void, producer: (previousError?: unknown) => Promise<unknown>, parse: (value: unknown) => T): Promise<T> {
+async function retryArtifact<T>(name: string, emit: (event: MachineEvent) => void, producer: (previousError?: unknown, attempt?: number) => Promise<unknown>, parse: (value: unknown) => T): Promise<T> {
   let lastError: unknown;
   for (let attempt = 1; attempt <= 3; attempt += 1) {
     try {
-      const value = await producer(lastError);
+      const value = await producer(lastError, attempt);
       const parsed = sanitizePromptValue(parse(value));
       emit({ type: "artifact", name, value: parsed });
       return parsed;
@@ -190,8 +203,16 @@ async function runOneStreamBuild(
   return retryArtifact(
     "CompletionReport",
     emit,
-    (previousError) =>
-      agents.build({
+    (previousError, attempt = 1) => {
+      const stepExhaustion = previousError instanceof WorkerStepExhaustionError ? previousError : undefined;
+      const stepBudgetMultiplier = stepExhaustion ? Math.min(attempt, 3) : 1;
+      if (stepExhaustion && stepBudgetMultiplier > 1) {
+        emit({
+          type: "notice",
+          message: `stream ${stream.id} ran out of steps on attempt ${attempt - 1} (used ${stepExhaustion.stepsUsed}/${stepExhaustion.maxSteps}); retrying with an increased budget (${stepBudgetMultiplier}x)`
+        });
+      }
+      return agents.build({
         plan,
         streamId: stream.id,
         tasks: stream.tasks,
@@ -199,8 +220,10 @@ async function runOneStreamBuild(
         round: currentRound,
         feedback,
         previousReport,
-        previousAttemptError: previousError === undefined ? undefined : previousAttemptMessage(previousError)
-      }),
+        previousAttemptError: previousError === undefined ? undefined : previousAttemptMessage(previousError),
+        stepBudgetMultiplier
+      });
+    },
     (value) =>
       validateCompletionReport(plan, value, stream.verification, {
         enforceCommandEcho: !authoritativeVerification,
