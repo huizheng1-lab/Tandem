@@ -70,4 +70,20 @@ describe("session compaction", () => {
 
     expect(result).toEqual({ summary: "Earlier prompts were summarized.", compactedTurns: 18 });
   });
+
+  it("sanitizes provider control tokens before persisting compaction summaries", async () => {
+    const config = { ...defaultConfig, leader: "codex/cli", leaderContextBudgetTokens: 12 };
+    const events = Array.from({ length: 18 }, (_, index) => turn(`prompt ${index + 1} ${"x".repeat(300)}`, `summary ${index + 1} ${"y".repeat(300)}`)).flat();
+
+    const result = await compactSessionHistory({
+      events,
+      config,
+      cwd: process.cwd(),
+      env: {},
+      ledger: new CostLedger(),
+      summarizer: () => "Useful summary.\n]<]minimax[>[<tool_call>{\"name\":\"Bash\",\"arguments\":{}}</tool_call>\nStill useful."
+    });
+
+    expect(result?.summary).toBe("Useful summary.\nStill useful.");
+  });
 });

@@ -24,6 +24,15 @@ export function stripEmbeddedHistoryDigest(content: string): string {
   return content.replace(/^Compact session-log history:\n[\s\S]*?\n\n(?=Request:)/, "");
 }
 
+function isTerminalFailureSummary(summary: string): boolean {
+  return /could not produce a valid result after retries|run aborted|Missing\s+[A-Z0-9_]+\s+for model/i.test(summary);
+}
+
+function isFailedDonePayload(payload: unknown, summary: string): boolean {
+  const record = payload as Record<string, unknown> | undefined;
+  return record?.error === true || isTerminalFailureSummary(summary);
+}
+
 export function rebuildLeaderThread(events: SessionEvent[]): RunnerMessage[] {
   const messages: RunnerMessage[] = [];
 
@@ -64,7 +73,7 @@ export function rebuildLeaderThread(events: SessionEvent[]): RunnerMessage[] {
 
     if (event.type === "done") {
       const summary = textField(event.payload, "summary");
-      if (summary) messages.push({ role: "assistant", content: summary });
+      if (summary && !isFailedDonePayload(event.payload, summary)) messages.push({ role: "assistant", content: summary });
     }
   }
 

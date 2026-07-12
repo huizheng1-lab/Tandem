@@ -37,6 +37,19 @@ describe("rebuildLeaderThread", () => {
     ]);
   });
 
+  it("does not replay failed done summaries as assistant content", () => {
+    const thread = rebuildLeaderThread([
+      event("user", { prompt: "retry" }),
+      event("done", { summary: "Leader planning could not produce a valid result after retries: Error: Codex CLI run aborted.", error: true }),
+      event("user", { prompt: "what happened?" })
+    ]);
+
+    expect(thread).toEqual([
+      { role: "user", content: "Request:\nretry" },
+      { role: "user", content: "Request:\nwhat happened?" }
+    ]);
+  });
+
   it("strips embedded compact history digests from rebuilt user turns", () => {
     const thread = rebuildLeaderThread([
       event("user", {

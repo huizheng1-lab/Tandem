@@ -24,7 +24,7 @@ import { cliModelPatch, modelCommandUsage, modelDisplayName } from "../../../src
 import { ErrorBoundary } from "./ErrorBoundary.js";
 import { activityStripState } from "./activity-strip.js";
 import { formatTotalCost } from "./cost-display.js";
-import { MODEL_STALL_WARNING_SECONDS, needsProjectPickForSession, sessionFromResume } from "./session-state.js";
+import { MODEL_STALL_WARNING_SECONDS, effectiveRendererConfig, needsProjectPickForSession, sessionFromResume } from "./session-state.js";
 import { boundedMessageTextForState, MessageText } from "./TranscriptText.js";
 import { applyDesktopTheme, THEME_REFRESH_INTERVAL_MS } from "./theme.js";
 import "./styles.css";
@@ -289,7 +289,7 @@ function App(): React.ReactElement {
   const loopRunningRef = useRef(false);
   const sessionSwitchRef = useRef<{ id: string; token: number }>();
 
-  const effectiveConfig = session?.config ?? config;
+  const effectiveConfig = effectiveRendererConfig(session, config);
   const desktopTheme = effectiveConfig?.desktopTheme ?? "auto";
   const roleModelOptions = useMemo(() => modelSelectOptions(models, effectiveConfig), [models, effectiveConfig]);
   const contextProjectDir = session?.projectDir ?? appState?.lastProjectDir ?? appState?.projectDir;

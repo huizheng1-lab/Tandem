@@ -9,6 +9,7 @@ import { buildCodexExecArgv } from "../src/agents/codex-cli/exec.js";
 import { buildClaudeExecArgv } from "../src/agents/claude-code-cli/exec.js";
 import { defaultConfig } from "../src/config/schema.js";
 import { sessionDir } from "../src/session/store.js";
+import { withConfiguredCliModel } from "../src/providers/cli-models.js";
 
 async function tempDir(name: string): Promise<string> {
   const dir = path.join(tmpdir(), `tandem-${name}-${Date.now()}-${Math.random().toString(16).slice(2)}`);
@@ -193,6 +194,11 @@ describe("config", () => {
   it("D98: default MiniMax M3 custom model includes standard-tier cost hints", () => {
     const entry = resolveModel("minimax/minimax-m3", defaultConfig.customModels);
     expect(entry.costHints).toEqual({ inputPerMillion: 0.3, outputPerMillion: 1.2 });
+  });
+
+  it("D100: MiniMax M3 cannot resolve to a CLI-backed provider", () => {
+    const entry = withConfiguredCliModel(resolveModel("minimax/minimax-m3", defaultConfig.customModels), defaultConfig);
+    expect(entry.provider).toBe("openai-compatible");
   });
 
   it("allows custom models to override media capabilities", () => {

@@ -8,6 +8,7 @@ import { runClaudeExec } from "../agents/claude-code-cli/exec.js";
 import { makeModel } from "../providers/client.js";
 import { resolveModel } from "../providers/registry.js";
 import { withConfiguredCliModel } from "../providers/cli-models.js";
+import { sanitizeModelOutputText } from "../tools/sanitize.js";
 import type { CostLedger } from "./cost.js";
 import type { SessionEvent } from "./store.js";
 import { buildConversationHistory } from "./history.js";
@@ -85,7 +86,7 @@ export async function compactSessionHistory(options: {
   const summary = options.summarizer
     ? await options.summarizer(source)
     : await summarizeWithConfiguredLeader(options, source.text);
-  const trimmed = summary.trim();
+  const trimmed = sanitizeModelOutputText(summary);
   if (!trimmed) throw new Error("Compaction summarizer returned an empty summary.");
   return { summary: trimmed, compactedTurns: source.priorTurns };
 }
