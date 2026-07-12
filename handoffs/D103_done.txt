@@ -1,0 +1,21 @@
+D103 done
+
+Commits:
+- 1713bf8 D103-1: escalate worker step budget on exhaustion
+- D103-2 marker: this commit
+
+Verification:
+- npx vitest run tests/orchestrator.test.ts
+- npm run typecheck
+- npm test
+- git diff --check
+
+Summary:
+- Added WorkerStepExhaustionError carrying stepsUsed and maxSteps.
+- SDK live worker builds now compute maxSteps from maxStepsPerAgentTurn times an optional stepBudgetMultiplier and throw the distinct exhaustion error only when no completion report was produced after consuming the full step budget.
+- Orchestrator stream-build retries now escalate only after WorkerStepExhaustionError: attempt 2 uses 2x, attempt 3 uses 3x, with notice events describing the exhausted attempt and new multiplier.
+- Non-step worker failures keep the normal 1x retry budget.
+- Added regressions for step-exhaustion retry escalation and non-exhaustion retry non-escalation.
+
+Notes:
+- Codex CLI and Claude Code CLI worker paths were left untouched because they do not use the SDK maxSteps budget.
