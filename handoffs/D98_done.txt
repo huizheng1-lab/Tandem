@@ -34,3 +34,19 @@ Live MiniMax verification:
 
 Live packaged-app note:
 - The app was rebuilt and packaged successfully. A manual renderer click-through was not performed in this heartbeat; direct live orchestration verified the AI-SDK MiniMax leader/worker path and D97 authoritative verification path.
+
+Corrective implementation commit:
+- 7789a10 D98-3: complete nudge and cost dedupe fixes
+
+Corrective implementation:
+- The forced submit-tool nudge now carries forward the AI SDK's complete generated assistant/tool transcript, including tool calls and tool results, instead of reconstructing the continuation from visible prose alone.
+- The nudge uses only the first turn's remaining step budget and is capped at three forced-submit steps; no nudge is attempted after the original budget is exhausted.
+- Persisted cost deduplication state now resets when starting or resuming a session, preventing one session's final totals from suppressing another session's first cost snapshot.
+
+Corrective verification:
+- npm run typecheck: passed.
+- Focused runner-artifact and desktop-service tests: passed, 26 tests.
+- npm test with isolated USERPROFILE/HOME: passed, 35 files + 1 skipped, 332 tests + 1 skipped.
+- git diff --check: passed.
+- npm run build: passed.
+- npx electron-vite build: passed.
