@@ -23,7 +23,7 @@ export const leaderOwnsVisualJudgmentRule = "Producing evidence and judging it a
 // default) instead of the project cwd the harness passes. Mitigation: spell out the rule and
 // also state the absolute cwd explicitly in the system prompt so the model has a concrete
 // prefix to apply.
-export const absolutePathsRule = "Always use fully-qualified absolute paths for every file read or write - never a bare relative reference like \"scripts/foo.js\" or \".tandem/goals.json\". The project's absolute root is given explicitly in the system prompt under \"Absolute project root\"; prefix every file path with it exactly, every time, even for files you've already referenced earlier in the same turn.";
+export const absolutePathsRule = "Use fully-qualified absolute paths for every file read/write; never a bare relative reference like \"scripts/foo.js\" or \".tandem/goals.json\". The root is given under \"Absolute project root\"; prefix paths with it. For shell commands, quote that argument when an absolute path may contain spaces (for example, `node \"C:\\Users\\me\\Age of Empire test build\\verify.mjs\"`); never emit a bare absolute path with spaces.";
 
 // D60-2: root-cause discipline. Failing checks are ground truth for intent, not obstacles to
 // satisfy. Loosening a check to make it pass is worse than reporting the failure.

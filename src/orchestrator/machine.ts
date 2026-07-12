@@ -91,6 +91,14 @@ function previousAttemptMessage(error: unknown, max = 500): string {
   return normalized.length <= max ? normalized : `${normalized.slice(0, max)}...`;
 }
 
+function takeoverAuthoritativeVerificationWarning(report: CompletionReport): string | undefined {
+  if (report.status !== "complete") return undefined;
+  const failed = report.verificationResults.filter((result) => !result.passed);
+  if (failed.length === 0) return undefined;
+  const commands = failed.map((result) => result.command).join("; ");
+  return `takeover claimed complete, but authoritative verification failed ${failed.length}/${report.verificationResults.length} command(s): ${commands}`;
+}
+
 async function retryArtifact<T>(name: string, emit: (event: MachineEvent) => void, producer: (previousError?: unknown) => Promise<unknown>, parse: (value: unknown) => T): Promise<T> {
   let lastError: unknown;
   for (let attempt = 1; attempt <= 3; attempt += 1) {
@@ -406,10 +414,13 @@ export async function runOrchestration(options: RunOptions): Promise<RunResult> 
           enforceCommandEcho: !authoritative.ran,
           enforceCompleteVerification: !authoritative.ran
         });
+        const verificationWarning = authoritative.ran ? takeoverAuthoritativeVerificationWarning(report) : undefined;
+        if (verificationWarning) emit({ type: "notice", message: verificationWarning });
         reports.push(report);
         emit({ type: "artifact", name: "TakeoverReport", value: report });
-        transition("DONE", "takeover done", round);
-        return { phase: "DONE", summary: takeover.userSummary, plan, reports, verdicts, takeover: true };
+        transition("DONE", verificationWarning ? "takeover done with verification warning" : "takeover done", round);
+        const summary = verificationWarning ? `${takeover.userSummary}\n\nWarning: ${verificationWarning}` : takeover.userSummary;
+        return { phase: "DONE", summary, plan, reports, verdicts, takeover: true };
       } catch (error) {
         if (error instanceof Error && error.name === "AbortError") throw error;
         lastError = error;

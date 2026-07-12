@@ -52,6 +52,10 @@ function jsonBlock(value: unknown): string {
   return JSON.stringify(value, null, 2);
 }
 
+function absoluteCwdLine(cwd: string): string {
+  return `Absolute project root (cwd): ${cwd}\nEvery file read or write MUST be prefixed with this path exactly. If this path appears in a shell command and contains spaces, quote the entire path argument.`;
+}
+
 function mergeTools(...sets: ToolSet[]): ToolSet {
   return Object.assign({}, ...sets);
 }
@@ -524,6 +528,7 @@ When the user explicitly asks for a direct answer, it is ALWAYS (a). A BuildPlan
         const system = `${leaderPlannerPrompt}
 ${hostPrompt}
 ${await projectInstructions()}
+${absoluteCwdLine(options.cwd)}
 ${memoryInstruction}
 Honor Project instructions. Use read-only tools when useful. Answer directly and concisely.
 You cannot create or modify files, run shell commands, submit a BuildPlan, or write memory notes in this branch.
@@ -569,7 +574,7 @@ Standing goals are context only; do not redirect unrelated requests toward them.
             }
           })
         };
-        const system = `${leaderPlannerPrompt}\n${hostPrompt}\n${await projectInstructions()}\n${memoryInstruction}\n${triage}${workerMediaWarning(attachments, worker.entry)}\nTreat the new request in the context of this continuing session conversation; pronouns, references like "that file", and follow-ups may refer to earlier turns.\nUsers may reference standing goals by number (for example, "goal 1"); resolve those references against the Standing goals list before asking for clarification.\nStanding goals are context only; do not redirect unrelated requests toward them.\nThe "verification" field must contain exact runnable shell commands only (e.g. "node test.mjs"), one command per entry - never prose or manual instructions. Put manual checks in acceptanceCriteria instead. Verification commands MUST be runnable verbatim on the host platform.`;
+        const system = `${leaderPlannerPrompt}\n${hostPrompt}\n${await projectInstructions()}\n${absoluteCwdLine(options.cwd)}\n${memoryInstruction}\n${triage}${workerMediaWarning(attachments, worker.entry)}\nTreat the new request in the context of this continuing session conversation; pronouns, references like "that file", and follow-ups may refer to earlier turns.\nUsers may reference standing goals by number (for example, "goal 1"); resolve those references against the Standing goals list before asking for clarification.\nStanding goals are context only; do not redirect unrelated requests toward them.\nThe "verification" field must contain exact runnable shell commands only (e.g. "node test.mjs"), one command per entry - never prose or manual instructions. Put manual checks in acceptanceCriteria instead. Verification commands MUST be runnable verbatim on the host platform. Quote absolute path arguments that contain spaces.`;
         await compactLeaderThread(system);
         const userText = validationFeedback ? buildLeaderRequestMessage({ request, goals, history, includeHistoryDigest, validationFeedback }) : baseUserText;
         leaderThread.push({
@@ -730,7 +735,7 @@ Standing goals are context only; do not redirect unrelated requests toward them.
           }
         })
       };
-      const system = `${leaderReviewerPrompt}\n${hostPrompt}\n${await projectInstructions()}\n${memoryInstruction}\nYou may rerun only the plan verification commands. Prose verdicts are discarded; the turn is only complete after submit_review has been called.`;
+      const system = `${leaderReviewerPrompt}\n${hostPrompt}\n${await projectInstructions()}\n${absoluteCwdLine(options.cwd)}\n${memoryInstruction}\nYou may rerun only the plan verification commands. Prose verdicts are discarded; the turn is only complete after submit_review has been called.`;
       await compactLeaderThread(system);
       leaderThread.push({
         role: "user",
@@ -819,7 +824,7 @@ Standing goals are context only; do not redirect unrelated requests toward them.
           }
         })
       };
-      const system = `${leaderTakeoverPrompt}\n${hostPrompt}\n${await projectInstructions()}\n${memoryInstruction}\nRun every verification command, then call submit_takeover. In verificationResults[].command, repeat the BuildPlan verification command string verbatim. If you adapt a command for the host platform, still use the plan's original command as command and describe the adapted command plus real output in output.`;
+      const system = `${leaderTakeoverPrompt}\n${hostPrompt}\n${await projectInstructions()}\n${absoluteCwdLine(options.cwd)}\n${memoryInstruction}\nRun every verification command, then call submit_takeover. In verificationResults[].command, repeat the BuildPlan verification command string verbatim. If you adapt a command for the host platform, still use the plan's original command as command and describe the adapted command plus real output in output. Quote absolute path arguments that contain spaces.`;
       await compactLeaderThread(system);
       leaderThread.push({
         role: "user",

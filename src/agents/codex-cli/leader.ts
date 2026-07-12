@@ -52,6 +52,10 @@ function retryFeedbackLine(previousAttemptError: string | undefined): string {
   return text ? `\n\nYour previous submission was rejected: ${text}. Fix that specific problem and resubmit.` : "";
 }
 
+function absoluteCwdLine(cwd: string): string {
+  return `\n\nAbsolute project root (cwd): ${cwd}\nPrefix file paths with this root. If it appears in a shell command and contains spaces, quote the entire path argument.`;
+}
+
 async function codexLeaderExec(options: CodexLeaderOptions, input: { schema: "plan-or-answer" | "review-verdict" | "takeover"; prompt: string; readOnly?: boolean }): Promise<unknown> {
   assertSafeProjectDir(options.cwd);
   if (!input.readOnly && options.config.permissionMode === "ask") {
@@ -87,7 +91,7 @@ export async function codexLeaderPlan(
   // intentionally not applied for Codex-backed leaders.
   const prompt = `${leaderPlannerPrompt}
 ${hostPlatformPrompt(process.platform, options.env)}
-${await projectInstructions(options)}
+${await projectInstructions(options)}${absoluteCwdLine(options.cwd)}
 
 FIRST, classify the request:
 (a) QUESTION/INSPECTION - answering, explaining, reading/summarizing files, images, PDFs, or status queries. Do the inspection yourself with read-only tools and ANSWER DIRECTLY.
@@ -114,7 +118,7 @@ ${input.request}${attachmentBlock}${retryFeedbackLine(input.previousAttemptError
 export async function codexLeaderReview(options: CodexLeaderOptions, input: { plan: BuildPlan; report: CompletionReport; round: number; diff: string; previousAttemptError?: string }) {
   const prompt = `${leaderReviewerPrompt}
 ${hostPlatformPrompt(process.platform, options.env)}
-${await projectInstructions(options)}
+${await projectInstructions(options)}${absoluteCwdLine(options.cwd)}
 You may rerun only the plan verification commands if needed. Return only the ReviewVerdict JSON.
 
 Review round ${input.round}.
@@ -132,7 +136,7 @@ ${input.diff || "(empty diff)"}${retryFeedbackLine(input.previousAttemptError)}`
 export async function codexLeaderTakeover(options: CodexLeaderOptions, input: { plan: BuildPlan; reports: CompletionReport[]; feedback: ReviewFeedback[]; previousAttemptError?: string }) {
   const prompt = `${leaderTakeoverPrompt}
 ${hostPlatformPrompt(process.platform, options.env)}
-${await projectInstructions(options)}
+${await projectInstructions(options)}${absoluteCwdLine(options.cwd)}
 Run every verification command, then return takeover JSON with a CompletionReport and userSummary.
 
 BuildPlan:

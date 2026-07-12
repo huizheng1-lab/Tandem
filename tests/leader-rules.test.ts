@@ -66,6 +66,11 @@ describe("shared leader rules (D60 + D61)", () => {
     it("explicitly forbids bare relative references", () => {
       expect(absolutePathsRule).toMatch(/never a bare relative reference/i);
     });
+    it("D101: tells leaders to quote absolute path arguments with spaces in shell commands", () => {
+      expect(absolutePathsRule).toMatch(/quote that argument/i);
+      expect(absolutePathsRule).toContain('node "C:\\Users\\me\\Age of Empire test build\\verify.mjs"');
+      expect(absolutePathsRule).toMatch(/never emit a bare absolute path with spaces/i);
+    });
   });
 
   describe("rootCauseDisciplineRule (D60-2)", () => {

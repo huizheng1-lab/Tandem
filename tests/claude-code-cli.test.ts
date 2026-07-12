@@ -275,6 +275,8 @@ describe("claude code cli mixed roles", () => {
     );
 
     expect(prompts.systemPrompt).toContain("Project instructions:\n- Use the local style.");
+    expect(prompts.systemPrompt).toContain("Absolute project root (cwd): C:/test");
+    expect(prompts.systemPrompt).toMatch(/quote the entire path argument/i);
     expect(prompts.systemPrompt).toContain("FIRST, classify the request:");
     expect(prompts.systemPrompt).not.toContain("Request: What is 9 times 9?");
     expect(prompts.prompt).toMatch(/^Request: What is 9 times 9\?/);

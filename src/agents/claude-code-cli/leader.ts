@@ -85,7 +85,7 @@ async function claudeLeaderExec(options: ClaudeLeaderOptions, input: { schema: "
 // has something concrete to prefix paths with. Prevents the bare-relative-path bug class
 // (a real Claude-Code-CLI failure mode observed repeatedly in live sessions).
 function absoluteCwdLine(cwd: string): string {
-  return `\n\nAbsolute project root (cwd): ${cwd}\nEvery file read or write MUST be prefixed with this path exactly. Bare relative paths are not allowed - the CLI subprocess will resolve them against the wrong directory.`;
+  return `\n\nAbsolute project root (cwd): ${cwd}\nPrefix file paths with this root. If it appears in a shell command and contains spaces, quote the entire path argument.`;
 }
 
 export async function buildClaudeLeaderPlanPrompts(

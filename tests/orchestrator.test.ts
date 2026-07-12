@@ -284,6 +284,30 @@ describe("orchestration", () => {
     expect(result.takeover).toBe(false);
   });
 
+  it("D101: takeover complete claim with authoritative failure is surfaced", async () => {
+    const notices: string[] = [];
+    const transitions: string[] = [];
+    const result = await runOrchestration({
+      request: "build",
+      config: { maxReviewRounds: 0, maxParallelWorkers: 1 },
+      verificationRunner: async () => [{ command: "npm test", passed: false, output: "real failure" }],
+      agents: agents({
+        takeover: async () => ({ report: report("complete"), userSummary: "takeover complete" })
+      }),
+      emit: (event) => {
+        if (event.type === "notice") notices.push(event.message);
+        if (event.type === "transition") transitions.push(event.message);
+      }
+    });
+
+    expect(result.takeover).toBe(true);
+    expect(result.reports[0]?.verificationResults).toEqual([{ command: "npm test", passed: false, output: "real failure" }]);
+    expect(notices).toContain("verification: 0/1 passed");
+    expect(notices.some((message) => message.includes("takeover claimed complete, but authoritative verification failed"))).toBe(true);
+    expect(transitions).toContain("takeover done with verification warning");
+    expect(result.summary).toMatch(/Warning: takeover claimed complete/);
+  });
+
   it("D97: undisclosed verification script edits still fail with authoritative verification enabled", async () => {
     const tamperPlan: BuildPlan = {
       ...plan,
