@@ -1,0 +1,20 @@
+D101 done
+
+Commits:
+- 1e75856 D101-1: quote verification paths and warn on takeover failures
+- D101-2 marker: this commit
+
+Verification:
+- npx vitest run tests/leader-rules.test.ts tests/orchestrator.test.ts
+- npx vitest run tests/leader-rules.test.ts tests/orchestrator.test.ts tests/claude-code-cli.test.ts
+- npm run typecheck
+- npm test
+- git diff --check
+
+Summary:
+- Added path-argument quoting guidance for absolute paths with spaces to shared leader rules and threaded concrete cwd guidance through SDK/live, Codex CLI, and Claude Code CLI leader prompts.
+- Added a takeover safety-net warning when authoritative verification ran, failed, and a takeover report still claimed status complete. The run now emits a notice, transitions with a warning message, and includes the warning in the returned summary instead of silently presenting a clean takeover success.
+- Added D101 regressions for prompt guidance and takeover authoritative-verification disagreement.
+
+Notes:
+- No live model call was run for the path-quoting case; this marker records static prompt regression coverage plus the full local acceptance suite.
