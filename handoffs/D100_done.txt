@@ -1,0 +1,25 @@
+D100 done
+
+Implementation commit:
+- adaac9e D100-1: align leader display and sanitize replay
+
+Root cause / divergence sequence:
+- The desktop service runs agents from its live in-memory TandemConfig (`this.config`).
+- The renderer status controls were reading `effectiveConfig = session?.config ?? config`, so a session config snapshot could override the live service config already returned by `getAppState`, `setConfig`, or session resume.
+- That made the UI capable of showing a stale leader model while the service used a different live leader for orchestration/CLI compaction. The fix makes the live config state canonical for display (`config ?? session?.config`) while retaining the session snapshot as a fallback before app state is loaded.
+- A sanity regression confirms `minimax/minimax-m3` resolves through `withConfiguredCliModel` to `openai-compatible`, not a CLI-backed provider.
+
+Additional fixes:
+- `rebuildLeaderThread` no longer replays failed terminal `done` summaries as assistant-authored content, preventing future "retry" prompts from causing the leader to parrot old orchestration errors.
+- Compaction summaries now pass through the shared sanitize layer before persistence, stripping MiniMax interleave markers and `<tool_call>` markup from `memory:compaction` summaries.
+
+Not implemented:
+- D100-4 abort root cause was not obvious from the code path while fixing D100-1..D100-3. The original aborts may be legitimate user-initiated stops; this round does not change CLI abort wording.
+- Full live desktop reproduction was not run from this headless automation context. Covered by unit regressions for the confirmed renderer/service display mismatch, failure replay, compaction sanitization, and MiniMax provider resolution.
+
+Verification:
+- npx vitest run tests/config.test.ts tests/renderer-session-state.test.ts tests/leader-thread.test.ts tests/session-compaction.test.ts: passed (28 tests)
+- npm run typecheck: passed
+- npm test: passed (35 files passed, 1 skipped; 338 tests passed, 1 skipped)
+- git diff --check: passed
+
