@@ -1,0 +1,18 @@
+D99 done
+
+Implementation commit:
+- 8e279c2 D99-1: clamp leader compaction budget
+
+Summary:
+- Added MIN_LEADER_CONTEXT_BUDGET_TOKENS=2000 and shared effective budget helpers in src/session/compaction.ts.
+- compactionSource now clamps pathologically low leaderContextBudgetTokens at point of use instead of schema/load validation.
+- createLiveAgents compactLeaderThread now uses the same shared leaderContextBudgetChars helper, so live leader thread compaction gets the same effective floor.
+- Added regression coverage for low-budget clamping, normal-budget pass-through, and ordinary multi-turn history that would have compacted under the old 200-character effective budget.
+- D99-2 notice event was not implemented because there is no simple machine notice hook available inside createLiveAgents without new plumbing; the core bug fix is complete.
+
+Verification:
+- npx vitest run tests/session-compaction.test.ts: passed (5 tests)
+- npm run typecheck: passed
+- npm test: passed (35 files passed, 1 skipped; 334 tests passed, 1 skipped)
+- git diff --check: passed
+
