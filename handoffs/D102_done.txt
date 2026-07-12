@@ -1,0 +1,18 @@
+D102 done
+
+Commits:
+- 274d741 D102-1: raise default agent step budget
+- D102-2 marker: this commit
+
+Verification:
+- npx vitest run tests/config.test.ts
+- npm run typecheck
+- npm test
+- git diff --check
+
+Summary:
+- Raised defaultConfig.maxStepsPerAgentTurn from 60 to 150.
+- Added a regression test confirming the shipped default is 150.
+
+Notes:
+- D102-2 was not attempted. Reserving a pre-cutoff tail for artifact nudges would require nontrivial runner/live-agent step-budget plumbing, while D102-1 is the required fix.
