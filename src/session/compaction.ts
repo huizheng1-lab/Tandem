@@ -26,6 +26,8 @@ export interface CompactionSource {
 export const COMPACTION_SYSTEM_PROMPT =
   "Summarize the prior Tandem leader conversation for continuing future turns. Preserve user requests, files or artifacts named, decisions, unresolved issues, and accepted plans/reviews. Be concise.";
 
+export const MIN_LEADER_CONTEXT_BUDGET_TOKENS = 2000;
+
 const PlanOrAnswerSchema = z.object({
   kind: z.enum(["question", "implementation"]),
   answer: z.string().optional()
@@ -36,12 +38,16 @@ export function isCliBackedLeader(config: TandemConfig): boolean {
   return entry.provider === "codex-cli" || entry.provider === "claude-code-cli";
 }
 
-function budgetChars(config: Pick<TandemConfig, "leaderContextBudgetTokens">): number {
-  return Math.max(1, config.leaderContextBudgetTokens) * 4;
+export function effectiveLeaderContextBudgetTokens(config: Pick<TandemConfig, "leaderContextBudgetTokens">): number {
+  return Math.max(config.leaderContextBudgetTokens, MIN_LEADER_CONTEXT_BUDGET_TOKENS);
+}
+
+export function leaderContextBudgetChars(config: Pick<TandemConfig, "leaderContextBudgetTokens">): number {
+  return effectiveLeaderContextBudgetTokens(config) * 4;
 }
 
 export function compactionSource(events: SessionEvent[], config: Pick<TandemConfig, "leaderContextBudgetTokens">, force = false): CompactionSource | undefined {
-  const detection = buildConversationHistory(events, Number.MAX_SAFE_INTEGER, force ? Number.MAX_SAFE_INTEGER : budgetChars(config));
+  const detection = buildConversationHistory(events, Number.MAX_SAFE_INTEGER, force ? Number.MAX_SAFE_INTEGER : leaderContextBudgetChars(config));
   if (!detection.text.trim()) return undefined;
   if (!force && !detection.truncated) return undefined;
   const source = buildConversationHistory(events, Number.MAX_SAFE_INTEGER, Number.MAX_SAFE_INTEGER);

@@ -13,6 +13,7 @@ import { CostLedger, CostRole } from "../session/cost.js";
 import { AgentFns, PlanResult } from "../orchestrator/machine.js";
 import { BuildPlan, BuildPlanSchema, CompletionReport, CompletionReportSchema, ReviewFeedback, ReviewVerdictSchema, validateBuildPlan } from "../orchestrator/artifacts.js";
 import { Goal } from "../session/goals.js";
+import { leaderContextBudgetChars } from "../session/compaction.js";
 import { buildUserContentWithAttachments } from "../session/attachments.js";
 import type { ContentPart } from "../session/attachments.js";
 import { estimatePromptSize, runAgentArtifact, runAgentText, toolCallThinkingDelta } from "./runner.js";
@@ -444,7 +445,7 @@ export async function createLiveAgents(options: LiveAgentOptions): Promise<Agent
     message.role === "user" && typeof message.content === "string" ? { ...message, content: stripEmbeddedHistoryDigest(message.content) } : message
   );
   const compactLeaderThread = async (system: string): Promise<void> => {
-    const budgetChars = Math.max(1, options.config.leaderContextBudgetTokens) * 4;
+    const budgetChars = leaderContextBudgetChars(options.config);
     if (estimatePromptSize(system, leaderThread).chars <= budgetChars || leaderThread.length <= 12) return;
     const recent = leaderThread.slice(-12);
     const older = leaderThread.slice(0, -12);
