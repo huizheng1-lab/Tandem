@@ -418,18 +418,25 @@ function detectVerificationScriptTampering(plan: BuildPlan, report: CompletionRe
 export function enforceVerification(
   plan: BuildPlan,
   report: CompletionReport,
-  expectedCommands: string[] = plan.verification
+  expectedCommands: string[] = plan.verification,
+  options: { enforceCommandEcho?: boolean; enforceCompleteVerification?: boolean } = {}
 ): void {
+  const enforceCommandEcho = options.enforceCommandEcho ?? true;
+  const enforceCompleteVerification = options.enforceCompleteVerification ?? true;
   // D54: the orchestrator passes a stream-scoped subset of plan.verification when validating
   // per-stream worker reports. Single-stream plans and the merged-after-merge check still pass
   // the full plan.verification (the default).
-  const missing = expectedCommands.filter((entry) => !matchResult(entry, report.verificationResults));
-  if (missing.length > 0) {
-    throw new Error(`Completion report omitted verification commands: ${missing.join(", ")}${verificationReportDiagnostic(report.verificationResults)}`);
+  if (enforceCommandEcho) {
+    const missing = expectedCommands.filter((entry) => !matchResult(entry, report.verificationResults));
+    if (missing.length > 0) {
+      throw new Error(`Completion report omitted verification commands: ${missing.join(", ")}${verificationReportDiagnostic(report.verificationResults)}`);
+    }
   }
-  const failed = expectedCommands.filter((entry) => matchResult(entry, report.verificationResults)?.passed !== true);
-  if (failed.length > 0 && report.status === "complete") {
-    throw new Error(`Completion report marked complete with failing verification: ${failed.join(", ")}`);
+  if (enforceCompleteVerification) {
+    const failed = expectedCommands.filter((entry) => matchResult(entry, report.verificationResults)?.passed !== true);
+    if (failed.length > 0 && report.status === "complete") {
+      throw new Error(`Completion report marked complete with failing verification: ${failed.join(", ")}`);
+    }
   }
   // D56-2: if a worker/takeover edited a script that's referenced by the plan's verification
   // commands, the change MUST be declared in `deviationsFromPlan`. Otherwise the worker
@@ -456,10 +463,11 @@ function verificationReportDiagnostic(results: CompletionReport["verificationRes
 export function validateCompletionReport(
   plan: BuildPlan,
   value: unknown,
-  expectedCommands: string[] = plan.verification
+  expectedCommands: string[] = plan.verification,
+  options?: { enforceCommandEcho?: boolean; enforceCompleteVerification?: boolean }
 ): CompletionReport {
   const report = sanitizePromptValue(CompletionReportSchema.parse(value));
-  enforceVerification(plan, report, expectedCommands);
+  enforceVerification(plan, report, expectedCommands, options);
   return report;
 }
 

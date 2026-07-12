@@ -13,6 +13,7 @@ import {
   validateCompletionReport
 } from "./artifacts.js";
 import { sanitizePromptValue } from "../tools/sanitize.js";
+import { VerificationRunner, VerificationResult } from "./verification.js";
 
 export type MachinePhase = "IDLE" | "PLANNING" | "BUILDING" | "REVIEWING" | "FEEDBACK" | "TAKEOVER" | "DONE";
 export interface OrchestrationCheckpoint {
@@ -46,23 +47,25 @@ export interface BuildStreamInput {
   round: number;
   feedback: ReviewVerdict["feedback"];
   previousReport?: CompletionReport;
+  previousAttemptError?: string;
 }
 
 export interface AgentFns {
-  plan(input: { request: string; goals: string[]; history?: string; attachments?: AttachmentRef[] }): Promise<PlanResult>;
+  plan(input: { request: string; goals: string[]; history?: string; attachments?: AttachmentRef[]; previousAttemptError?: string }): Promise<PlanResult>;
   build(input: BuildStreamInput): Promise<unknown>;
-  review(input: { plan: BuildPlan; report: CompletionReport; round: number; diff: string }): Promise<unknown>;
-  takeover(input: { plan: BuildPlan; reports: CompletionReport[]; feedback: ReviewVerdict["feedback"][] }): Promise<{ report: CompletionReport; userSummary: string }>;
+  review(input: { plan: BuildPlan; report: CompletionReport; round: number; diff: string; previousAttemptError?: string }): Promise<unknown>;
+  takeover(input: { plan: BuildPlan; reports: CompletionReport[]; feedback: ReviewVerdict["feedback"][]; previousAttemptError?: string }): Promise<{ report: CompletionReport; userSummary: string }>;
 }
 
 export interface RunOptions {
   request: string;
-  config: Pick<TandemConfig, "maxReviewRounds" | "maxParallelWorkers">;
+  config: Pick<TandemConfig, "maxReviewRounds" | "maxParallelWorkers"> & Partial<Pick<TandemConfig, "permissionMode">>;
   agents: AgentFns;
   goals?: string[];
   history?: string;
   attachments?: AttachmentRef[];
   diffProvider?: (() => Promise<string>) | { beforeBuild?: () => Promise<void>; diff: () => Promise<string> };
+  verificationRunner?: VerificationRunner;
   confirmPlan?: (plan: BuildPlan) => Promise<boolean>;
   addSessionNote?: (text: string, by: "system") => Promise<void>;
   removeSessionNotesByPrefix?: (prefix: string) => Promise<void>;
@@ -83,11 +86,16 @@ function errorEvent(message: string, error?: unknown): MachineEvent {
   return stack ? { type: "error", message, stack } : { type: "error", message };
 }
 
-async function retryArtifact<T>(name: string, emit: (event: MachineEvent) => void, producer: () => Promise<unknown>, parse: (value: unknown) => T): Promise<T> {
+function previousAttemptMessage(error: unknown, max = 500): string {
+  const normalized = String(error).replace(/\s+/g, " ").trim();
+  return normalized.length <= max ? normalized : `${normalized.slice(0, max)}...`;
+}
+
+async function retryArtifact<T>(name: string, emit: (event: MachineEvent) => void, producer: (previousError?: unknown) => Promise<unknown>, parse: (value: unknown) => T): Promise<T> {
   let lastError: unknown;
   for (let attempt = 1; attempt <= 3; attempt += 1) {
     try {
-      const value = await producer();
+      const value = await producer(lastError);
       const parsed = sanitizePromptValue(parse(value));
       emit({ type: "artifact", name, value: parsed });
       return parsed;
@@ -167,13 +175,14 @@ async function runOneStreamBuild(
   currentRound: number,
   feedback: ReviewVerdict["feedback"],
   previousReport: CompletionReport | undefined,
-  emit: (event: MachineEvent) => void
+  emit: (event: MachineEvent) => void,
+  authoritativeVerification: boolean
 ): Promise<CompletionReport> {
   emit({ type: "transition", phase: "BUILDING", message: `round ${currentRound} worker build [stream ${stream.id}: ${stream.tasks.length} task(s)]` });
   return retryArtifact(
     "CompletionReport",
     emit,
-    () =>
+    (previousError) =>
       agents.build({
         plan,
         streamId: stream.id,
@@ -181,9 +190,14 @@ async function runOneStreamBuild(
         verification: stream.verification,
         round: currentRound,
         feedback,
-        previousReport
+        previousReport,
+        previousAttemptError: previousError === undefined ? undefined : previousAttemptMessage(previousError)
       }),
-    (value) => validateCompletionReport(plan, value, stream.verification)
+    (value) =>
+      validateCompletionReport(plan, value, stream.verification, {
+        enforceCommandEcho: !authoritativeVerification,
+        enforceCompleteVerification: !authoritativeVerification
+      })
   );
 }
 
@@ -200,7 +214,8 @@ async function dispatchStreams(
   currentRound: number,
   feedback: ReviewVerdict["feedback"],
   previousReports: Map<string, CompletionReport>,
-  emit: (event: MachineEvent) => void
+  emit: (event: MachineEvent) => void,
+  authoritativeVerification: boolean
 ): Promise<CompletionReport[]> {
   if (streams.length === 0) return [];
   const poolSize = Math.max(1, cap);
@@ -211,7 +226,7 @@ async function dispatchStreams(
     const index = cursor.next++;
     const stream = streams[index];
     if (!stream) return Promise.resolve();
-    return runOneStreamBuild(agents, stream, plan, currentRound, feedback, previousReports.get(stream.id), emit).then(
+    return runOneStreamBuild(agents, stream, plan, currentRound, feedback, previousReports.get(stream.id), emit, authoritativeVerification).then(
       (report) => {
         results[index] = report;
       }
@@ -303,6 +318,19 @@ export async function runOrchestration(options: RunOptions): Promise<RunResult> 
     emitCheckpoint();
   };
 
+  const attachAuthoritativeVerification = async (report: CompletionReport): Promise<{ report: CompletionReport; ran: boolean }> => {
+    if (!options.verificationRunner) return { report, ran: false };
+    try {
+      const results: VerificationResult[] = await options.verificationRunner(plan?.verification ?? []);
+      const passed = results.filter((result) => result.passed).length;
+      emit({ type: "notice", message: `verification: ${passed}/${results.length} passed` });
+      return { report: { ...report, verificationResults: results }, ran: true };
+    } catch (error) {
+      emit({ type: "notice", message: `authoritative verification skipped: ${String(error)}` });
+      return { report, ran: false };
+    }
+  };
+
   let plan = options.initialState?.plan;
 
   if (!plan) {
@@ -316,7 +344,14 @@ export async function runOrchestration(options: RunOptions): Promise<RunResult> 
       planResult = await retryArtifact<PlanResult>(
         "BuildPlanOrAnswer",
         emit,
-        () => options.agents.plan({ request: options.request, goals: options.goals ?? [], history: options.history, attachments: options.attachments }),
+        (previousError) =>
+          options.agents.plan({
+            request: options.request,
+            goals: options.goals ?? [],
+            history: options.history,
+            attachments: options.attachments,
+            previousAttemptError: previousError === undefined ? undefined : previousAttemptMessage(previousError)
+          }),
         (value) => value as PlanResult
       );
     } catch (error) {
@@ -359,9 +394,18 @@ export async function runOrchestration(options: RunOptions): Promise<RunResult> 
     let lastError: unknown;
     for (let attempt = 1; attempt <= 3; attempt += 1) {
       try {
-        const takeover = await options.agents.takeover({ plan, reports, feedback: allFeedback });
+        const takeover = await options.agents.takeover({ plan, reports, feedback: allFeedback, previousAttemptError: lastError === undefined ? undefined : previousAttemptMessage(lastError) });
         lastTakeover = takeover;
-        const report = validateCompletionReport(plan, takeover.report);
+        const schemaReport = validateCompletionReport(plan, takeover.report, plan.verification, {
+          enforceCommandEcho: !options.verificationRunner,
+          enforceCompleteVerification: !options.verificationRunner
+        });
+        const authoritative = await attachAuthoritativeVerification(schemaReport);
+        const report = authoritative.report;
+        validateCompletionReport(plan, report, plan.verification, {
+          enforceCommandEcho: !authoritative.ran,
+          enforceCompleteVerification: !authoritative.ran
+        });
         reports.push(report);
         emit({ type: "artifact", name: "TakeoverReport", value: report });
         transition("DONE", "takeover done", round);
@@ -433,7 +477,8 @@ export async function runOrchestration(options: RunOptions): Promise<RunResult> 
             currentRound,
             feedback,
             previousReportsByStream,
-            emit
+            emit,
+            Boolean(options.verificationRunner)
           );
           // Build the round's effective stream list (newly-built + carry-forward).
           const roundStreams: { streamId: string; report: CompletionReport }[] = [
@@ -446,6 +491,12 @@ export async function runOrchestration(options: RunOptions): Promise<RunResult> 
           // dropped every carried-forward stream's task results / filesChanged, leaving the
           // leader reviewer with an incomplete picture and the final report missing work.
           report = mergeCompletionReports(roundStreams);
+          const authoritative = await attachAuthoritativeVerification(report);
+          report = authoritative.report;
+          validateCompletionReport(plan, report, plan.verification, {
+            enforceCommandEcho: !authoritative.ran,
+            enforceCompleteVerification: !authoritative.ran
+          });
         } catch (error) {
           // D66-2: rate-limit errors should not trigger a takeover (the failure isn't in the
           // worker's output, it's a transient quota hit). Surface the resetsAt so the user
@@ -472,7 +523,14 @@ export async function runOrchestration(options: RunOptions): Promise<RunResult> 
       verdict = await retryArtifact(
         "ReviewVerdict",
         emit,
-        () => options.agents.review({ plan, report, round: currentRound, diff }),
+        (previousError) =>
+          options.agents.review({
+            plan,
+            report,
+            round: currentRound,
+            diff,
+            previousAttemptError: previousError === undefined ? undefined : previousAttemptMessage(previousError)
+          }),
         (value) => ReviewVerdictSchema.parse(value)
       );
     } catch (error) {

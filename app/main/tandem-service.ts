@@ -12,6 +12,7 @@ import { locateCodexCli } from "../../src/agents/codex-cli/locate.js";
 import { locateClaudeCli } from "../../src/agents/claude-code-cli/locate.js";
 import { createDiffTracker } from "../../src/orchestrator/diff.js";
 import { runOrchestration, type MachineEvent, type OrchestrationCheckpoint } from "../../src/orchestrator/machine.js";
+import { createVerificationRunner } from "../../src/orchestrator/verification.js";
 import { modelRegistry } from "../../src/providers/registry.js";
 import { withConfiguredCliModel } from "../../src/providers/cli-models.js";
 import { tandemStateDir } from "../../src/paths.js";
@@ -228,6 +229,12 @@ export class TandemService {
         history: history.text,
         attachments,
         diffProvider: diffTracker,
+        verificationRunner: createVerificationRunner({
+          cwd: this.projectDir,
+          permissionMode: this.config.permissionMode,
+          permissionBridge,
+          abortSignal: this.controller.signal
+        }),
         initialState,
         confirmPlan: (plan) => this.confirmPlan(plan),
         emit: (event) => void this.emitMachine(event)

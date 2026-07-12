@@ -98,6 +98,7 @@ export function buildWorkerContext(
     streamId?: string;
     tasks?: BuildPlan["tasks"];
     verification?: string[];
+    previousAttemptError?: string;
   },
   budget = WORKER_CONTEXT_CHAR_BUDGET
 ): string {
@@ -115,7 +116,7 @@ export function buildWorkerContext(
   const streamBlock = compact.stream
     ? `\n\nThis worker invocation is responsible for stream "${compact.stream.id}". The full plan is shown for context; focus on the tasks in this stream and run only this stream's verification commands (verbatim).\n\nStream "${compact.stream.id}" tasks:\n${jsonBlock(compact.stream.tasks)}\n\nStream "${compact.stream.id}" verification:\n${jsonBlock(compact.stream.verification)}`
     : "";
-  let content = `BuildPlan:\n${jsonBlock(input.plan)}\n\nRound ${input.round}\n\nReview feedback:\n${jsonBlock(compact.feedback)}\n\nPrevious report summary:\n${jsonBlock(compact.previousReport)}${streamBlock}`;
+  let content = `BuildPlan:\n${jsonBlock(input.plan)}\n\nRound ${input.round}\n\nReview feedback:\n${jsonBlock(compact.feedback)}\n\nPrevious report summary:\n${jsonBlock(compact.previousReport)}${streamBlock}${retryFeedbackLine(input.previousAttemptError)}`;
   if (content.length > budget) {
     const suffix = "\n[context truncated; full prior artifacts remain in the session log]";
     content = `${content.slice(0, Math.max(0, budget - suffix.length))}${suffix}`;
@@ -185,6 +186,11 @@ export function openAiPromptCacheProviderOptions(entry: ModelEntry, cwd: string,
 export function buildLeaderRequestMessage(input: { request: string; goals: string[]; history?: string; includeHistoryDigest: boolean; validationFeedback?: string }): string {
   const history = input.includeHistoryDigest && input.history?.trim() ? `Compact session-log history:\n${input.history.trim()}\n\n` : "";
   return `${history}Request:\n${input.request}\n\nStanding goals (context only - do not redirect unrelated requests toward these):\n${input.goals.length > 0 ? input.goals.join("\n") : "none"}${input.validationFeedback ?? ""}`;
+}
+
+function retryFeedbackLine(previousAttemptError: string | undefined): string {
+  const text = previousAttemptError?.trim();
+  return text ? `\n\nYour previous submission was rejected: ${text}. Fix that specific problem and resubmit.` : "";
 }
 
 const TriageSchema = z.object({ kind: z.enum(["question", "implementation"]) });
@@ -453,7 +459,7 @@ export async function createLiveAgents(options: LiveAgentOptions): Promise<Agent
   };
 
   return {
-    plan: async ({ request, goals, history, attachments = [] }): Promise<PlanResult> => {
+    plan: async ({ request, goals, history, attachments = [], previousAttemptError }): Promise<PlanResult> => {
       if (leader.entry.provider === "codex-cli") {
         return codexLeaderPlan(
           {
@@ -469,7 +475,7 @@ export async function createLiveAgents(options: LiveAgentOptions): Promise<Agent
             onTriage: options.onTriage,
             confirmCodexWrite: options.confirmCodexWrite
           },
-          { request, goals, history, attachments }
+          { request, goals, history, attachments, previousAttemptError }
         );
       }
       if (leader.entry.provider === "claude-code-cli") {
@@ -487,7 +493,7 @@ export async function createLiveAgents(options: LiveAgentOptions): Promise<Agent
             onTriage: options.onTriage,
             confirmCodexWrite: options.confirmCodexWrite
           },
-          { request, goals, history, attachments }
+          { request, goals, history, attachments, previousAttemptError }
         );
       }
       const triageKind =
@@ -507,7 +513,7 @@ export async function createLiveAgents(options: LiveAgentOptions): Promise<Agent
 (b) IMPLEMENTATION - requires creating/modifying files or running state-changing commands. Submit a BuildPlan.
 When the user explicitly asks for a direct answer, it is ALWAYS (a). A BuildPlan exists only when implementation work is required.`;
       const includeHistoryDigest = leaderThread.length === 0;
-      const baseUserText = buildLeaderRequestMessage({ request, goals, history, includeHistoryDigest });
+      const baseUserText = `${buildLeaderRequestMessage({ request, goals, history, includeHistoryDigest })}${retryFeedbackLine(previousAttemptError)}`;
       if (triageKind === "question") {
         const system = `${leaderPlannerPrompt}
 ${hostPrompt}
@@ -598,7 +604,7 @@ Standing goals are context only; do not redirect unrelated requests toward them.
       throw lastError instanceof Error ? lastError : new Error(String(lastError));
     },
 
-    build: async ({ plan, streamId, tasks, verification, round, feedback, previousReport }) => {
+    build: async ({ plan, streamId, tasks, verification, round, feedback, previousReport, previousAttemptError }) => {
       if (worker.entry.provider === "codex-cli") {
         return runCodexWorkerBuild(
           {
@@ -613,7 +619,7 @@ Standing goals are context only; do not redirect unrelated requests toward them.
             projectInstructions: options.projectInstructions,
             confirmCodexWrite: options.confirmCodexWrite
           },
-          { plan, streamId, tasks, verification, round, feedback, previousReport }
+          { plan, streamId, tasks, verification, round, feedback, previousReport, previousAttemptError }
         );
       }
       if (worker.entry.provider === "claude-code-cli") {
@@ -630,7 +636,7 @@ Standing goals are context only; do not redirect unrelated requests toward them.
             projectInstructions: options.projectInstructions,
             confirmCodexWrite: options.confirmCodexWrite
           },
-          { plan, streamId, tasks, verification, round, feedback, previousReport }
+          { plan, streamId, tasks, verification, round, feedback, previousReport, previousAttemptError }
         );
       }
       let report: z.infer<typeof CompletionReportSchema> | undefined;
@@ -654,7 +660,7 @@ Standing goals are context only; do not redirect unrelated requests toward them.
         messages: [
           {
             role: "user",
-            content: buildWorkerContext({ round, plan, feedback, previousReport, streamId, tasks, verification })
+            content: buildWorkerContext({ round, plan, feedback, previousReport, streamId, tasks, verification, previousAttemptError })
           }
         ],
         tools: mergeTools(makeToolSet({ ...toolContext, media: worker.entry.media }, "worker"), submitTools),
@@ -670,7 +676,7 @@ Standing goals are context only; do not redirect unrelated requests toward them.
       return result.artifact;
     },
 
-    review: async ({ plan, report, round, diff }) => {
+    review: async ({ plan, report, round, diff, previousAttemptError }) => {
       if (leader.entry.provider === "codex-cli") {
         return codexLeaderReview(
           {
@@ -685,7 +691,7 @@ Standing goals are context only; do not redirect unrelated requests toward them.
             projectInstructions: options.projectInstructions,
             confirmCodexWrite: options.confirmCodexWrite
           },
-          { plan, report, round, diff }
+          { plan, report, round, diff, previousAttemptError }
         );
       }
       if (leader.entry.provider === "claude-code-cli") {
@@ -702,7 +708,7 @@ Standing goals are context only; do not redirect unrelated requests toward them.
             projectInstructions: options.projectInstructions,
             confirmCodexWrite: options.confirmCodexWrite
           },
-          { plan, report, round, diff }
+          { plan, report, round, diff, previousAttemptError }
         );
       }
       let verdict: z.infer<typeof ReviewVerdictSchema> | undefined;
@@ -720,7 +726,7 @@ Standing goals are context only; do not redirect unrelated requests toward them.
       await compactLeaderThread(system);
       leaderThread.push({
         role: "user",
-        content: `Review round ${round}. Worker output is summarized here; worker tool results and streams are intentionally not part of the leader thread.\nBuildPlan:\n${jsonBlock(plan)}\n\nCompletionReport:\n${jsonBlock(report)}\n\nDiff:\n${diff || "(empty diff)"}`
+        content: `Review round ${round}. Worker output is summarized here; worker tool results and streams are intentionally not part of the leader thread.\nBuildPlan:\n${jsonBlock(plan)}\n\nCompletionReport:\n${jsonBlock(report)}\n\nDiff:\n${diff || "(empty diff)"}${retryFeedbackLine(previousAttemptError)}`
       });
       const result = await runAgentArtifact({
         model: leader.model,
@@ -758,7 +764,7 @@ Standing goals are context only; do not redirect unrelated requests toward them.
       return extracted;
     },
 
-    takeover: async ({ plan, reports, feedback }) => {
+    takeover: async ({ plan, reports, feedback, previousAttemptError }) => {
       if (leader.entry.provider === "codex-cli") {
         return codexLeaderTakeover(
           {
@@ -773,7 +779,7 @@ Standing goals are context only; do not redirect unrelated requests toward them.
             projectInstructions: options.projectInstructions,
             confirmCodexWrite: options.confirmCodexWrite
           },
-          { plan, reports, feedback }
+          { plan, reports, feedback, previousAttemptError }
         );
       }
       if (leader.entry.provider === "claude-code-cli") {
@@ -790,7 +796,7 @@ Standing goals are context only; do not redirect unrelated requests toward them.
             projectInstructions: options.projectInstructions,
             confirmCodexWrite: options.confirmCodexWrite
           },
-          { plan, reports, feedback }
+          { plan, reports, feedback, previousAttemptError }
         );
       }
       let submitted: { report: z.infer<typeof CompletionReportSchema>; userSummary: string } | undefined;
@@ -808,7 +814,7 @@ Standing goals are context only; do not redirect unrelated requests toward them.
       await compactLeaderThread(system);
       leaderThread.push({
         role: "user",
-        content: `Leader takeover requested.\nBuildPlan:\n${jsonBlock(plan)}\n\nPrevious reports:\n${jsonBlock(reports)}\n\nFeedback history:\n${jsonBlock(feedback)}`
+        content: `Leader takeover requested.\nBuildPlan:\n${jsonBlock(plan)}\n\nPrevious reports:\n${jsonBlock(reports)}\n\nFeedback history:\n${jsonBlock(feedback)}${retryFeedbackLine(previousAttemptError)}`
       });
       const result = await runAgentArtifact({
         model: leader.model,

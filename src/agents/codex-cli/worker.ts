@@ -1,6 +1,6 @@
 import type { TandemConfig } from "../../config/schema.js";
 import type { BuildPlan, CompletionReport, ReviewFeedback } from "../../orchestrator/artifacts.js";
-import { validateCompletionReport } from "../../orchestrator/artifacts.js";
+import { CompletionReportSchema } from "../../orchestrator/artifacts.js";
 import type { ModelEntry } from "../../providers/registry.js";
 import { CostLedger } from "../../session/cost.js";
 import type { ToolActivityEvent } from "../../tools/fs.js";
@@ -29,7 +29,7 @@ async function projectInstructions(options: Pick<CodexWorkerOptions, "projectIns
 
 export async function buildCodexWorkerPrompt(
   options: Pick<CodexWorkerOptions, "env" | "projectInstructions">,
-  input: { plan: BuildPlan; streamId: string; tasks: BuildPlan["tasks"]; verification: string[]; round: number; feedback: ReviewFeedback; previousReport?: CompletionReport }
+  input: { plan: BuildPlan; streamId: string; tasks: BuildPlan["tasks"]; verification: string[]; round: number; feedback: ReviewFeedback; previousReport?: CompletionReport; previousAttemptError?: string }
 ): Promise<string> {
   return `${workerPrompt}
 ${hostPlatformPrompt(process.platform, options.env)}
@@ -42,7 +42,7 @@ ${buildWorkerContext(input)}`;
 
 export async function runCodexWorkerBuild(
   options: CodexWorkerOptions,
-  input: { plan: BuildPlan; streamId: string; tasks: BuildPlan["tasks"]; verification: string[]; round: number; feedback: ReviewFeedback; previousReport?: CompletionReport }
+  input: { plan: BuildPlan; streamId: string; tasks: BuildPlan["tasks"]; verification: string[]; round: number; feedback: ReviewFeedback; previousReport?: CompletionReport; previousAttemptError?: string }
 ): Promise<CompletionReport> {
   assertSafeProjectDir(options.cwd);
   if (options.config.permissionMode === "ask") {
@@ -65,5 +65,5 @@ export async function runCodexWorkerBuild(
     onText: options.onWorkerText,
     onToolEvent: options.onToolEvent
   });
-  return validateCompletionReport(input.plan, output);
+  return CompletionReportSchema.parse(output);
 }

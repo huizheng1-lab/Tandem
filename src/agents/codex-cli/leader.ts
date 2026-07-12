@@ -47,6 +47,11 @@ async function projectInstructions(options: Pick<CodexLeaderOptions, "projectIns
   return (await options.projectInstructions?.())?.trim() || "Project instructions:\nnone";
 }
 
+function retryFeedbackLine(previousAttemptError: string | undefined): string {
+  const text = previousAttemptError?.trim();
+  return text ? `\n\nYour previous submission was rejected: ${text}. Fix that specific problem and resubmit.` : "";
+}
+
 async function codexLeaderExec(options: CodexLeaderOptions, input: { schema: "plan-or-answer" | "review-verdict" | "takeover"; prompt: string; readOnly?: boolean }): Promise<unknown> {
   assertSafeProjectDir(options.cwd);
   if (!input.readOnly && options.config.permissionMode === "ask") {
@@ -74,7 +79,7 @@ async function codexLeaderExec(options: CodexLeaderOptions, input: { schema: "pl
 
 export async function codexLeaderPlan(
   options: CodexLeaderOptions,
-  input: { request: string; goals: string[]; history?: string; attachments?: AttachmentRef[] }
+  input: { request: string; goals: string[]; history?: string; attachments?: AttachmentRef[]; previousAttemptError?: string }
 ): Promise<PlanResult> {
   const attachmentBlock = input.attachments && input.attachments.length > 0 ? `\n\n${formatAttachmentBlock(input.attachments)}` : "";
   // Codex CLI has its own session model and does not receive the AI-SDK leaderThread array.
@@ -99,14 +104,14 @@ Standing goals:
 ${input.goals.length > 0 ? input.goals.join("\n") : "none"}
 
 Request:
-${input.request}${attachmentBlock}`;
+${input.request}${attachmentBlock}${retryFeedbackLine(input.previousAttemptError)}`;
   const result = PlanOrAnswerSchema.parse(await codexLeaderExec(options, { schema: "plan-or-answer", prompt, readOnly: true }));
   await options.onTriage?.(result.kind);
   if (result.kind === "question") return { kind: "answer", answer: result.answer ?? "" };
   return { kind: "plan", plan: await validateBuildPlan(result.plan) };
 }
 
-export async function codexLeaderReview(options: CodexLeaderOptions, input: { plan: BuildPlan; report: CompletionReport; round: number; diff: string }) {
+export async function codexLeaderReview(options: CodexLeaderOptions, input: { plan: BuildPlan; report: CompletionReport; round: number; diff: string; previousAttemptError?: string }) {
   const prompt = `${leaderReviewerPrompt}
 ${hostPlatformPrompt(process.platform, options.env)}
 ${await projectInstructions(options)}
@@ -120,11 +125,11 @@ CompletionReport:
 ${jsonBlock(input.report)}
 
 Diff:
-${input.diff || "(empty diff)"}`;
+${input.diff || "(empty diff)"}${retryFeedbackLine(input.previousAttemptError)}`;
   return ReviewVerdictSchema.parse(await codexLeaderExec(options, { schema: "review-verdict", prompt, readOnly: true }));
 }
 
-export async function codexLeaderTakeover(options: CodexLeaderOptions, input: { plan: BuildPlan; reports: CompletionReport[]; feedback: ReviewFeedback[] }) {
+export async function codexLeaderTakeover(options: CodexLeaderOptions, input: { plan: BuildPlan; reports: CompletionReport[]; feedback: ReviewFeedback[]; previousAttemptError?: string }) {
   const prompt = `${leaderTakeoverPrompt}
 ${hostPlatformPrompt(process.platform, options.env)}
 ${await projectInstructions(options)}
@@ -137,7 +142,7 @@ Previous reports:
 ${jsonBlock(input.reports)}
 
 Feedback history:
-${jsonBlock(input.feedback)}`;
+${jsonBlock(input.feedback)}${retryFeedbackLine(input.previousAttemptError)}`;
   const takeover = z.object({ report: CompletionReportSchema, userSummary: z.string() }).parse(await codexLeaderExec(options, { schema: "takeover", prompt }));
   return takeover;
 }

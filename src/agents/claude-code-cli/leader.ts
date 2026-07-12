@@ -51,6 +51,11 @@ function optionalSection(title: string, value: string | undefined): string {
   return text ? `\n\n${title}:\n${text}` : "";
 }
 
+function retryFeedbackLine(previousAttemptError: string | undefined): string {
+  const text = previousAttemptError?.trim();
+  return text ? `\n\nYour previous submission was rejected: ${text}. Fix that specific problem and resubmit.` : "";
+}
+
 async function claudeLeaderExec(options: ClaudeLeaderOptions, input: { schema: "plan-or-answer" | "review-verdict" | "takeover"; prompt: string; systemPrompt: string; readOnly?: boolean }): Promise<unknown> {
   if (!input.readOnly && options.config.permissionMode === "ask") {
     const approved = await options.confirmCodexWrite?.("leader", "Run this leader takeover via Claude Code CLI with write access? Claude Code cannot prompt per-command in headless print mode.");
@@ -85,7 +90,7 @@ function absoluteCwdLine(cwd: string): string {
 
 export async function buildClaudeLeaderPlanPrompts(
   options: Pick<ClaudeLeaderOptions, "env" | "projectInstructions" | "cwd">,
-  input: { request: string; goals: string[]; history?: string; attachments?: AttachmentRef[] }
+  input: { request: string; goals: string[]; history?: string; attachments?: AttachmentRef[]; previousAttemptError?: string }
 ): Promise<{ systemPrompt: string; prompt: string }> {
   const attachmentBlock = input.attachments && input.attachments.length > 0 ? `\n\n${formatAttachmentBlock(input.attachments)}` : "";
   const goals = input.goals.length > 0 ? input.goals.join("\n") : "";
@@ -101,13 +106,13 @@ When the user explicitly asks for a direct answer, it is ALWAYS (a). Mixed reque
 
 Return JSON matching the provided schema. For question, set kind="question" and answer only. For implementation, set kind="implementation" and plan only.
 The plan verification field must contain exact runnable shell commands only, one command per entry.`,
-    prompt: `Request: ${input.request}${attachmentBlock}${optionalSection("Conversation so far", input.history)}${optionalSection("Standing goals", goals)}`
+    prompt: `Request: ${input.request}${attachmentBlock}${optionalSection("Conversation so far", input.history)}${optionalSection("Standing goals", goals)}${retryFeedbackLine(input.previousAttemptError)}`
   };
 }
 
 export async function claudeLeaderPlan(
   options: ClaudeLeaderOptions,
-  input: { request: string; goals: string[]; history?: string; attachments?: AttachmentRef[] }
+  input: { request: string; goals: string[]; history?: string; attachments?: AttachmentRef[]; previousAttemptError?: string }
 ): Promise<PlanResult> {
   const prompts = await buildClaudeLeaderPlanPrompts(options, input);
   const result = PlanOrAnswerSchema.parse(await claudeLeaderExec(options, { schema: "plan-or-answer", prompt: prompts.prompt, systemPrompt: prompts.systemPrompt, readOnly: true }));
@@ -118,7 +123,7 @@ export async function claudeLeaderPlan(
 
 export async function buildClaudeLeaderReviewPrompts(
   options: Pick<ClaudeLeaderOptions, "env" | "projectInstructions" | "cwd">,
-  input: { plan: BuildPlan; report: CompletionReport; round: number; diff: string }
+  input: { plan: BuildPlan; report: CompletionReport; round: number; diff: string; previousAttemptError?: string }
 ): Promise<{ systemPrompt: string; prompt: string }> {
   return {
     systemPrompt: `${leaderReviewerPrompt}
@@ -133,13 +138,13 @@ CompletionReport:
 ${jsonBlock(input.report)}
 
 Diff:
-${input.diff || "(empty diff)"}`
+${input.diff || "(empty diff)"}${retryFeedbackLine(input.previousAttemptError)}`
   };
 }
 
 export async function buildClaudeLeaderTakeoverPrompts(
   options: Pick<ClaudeLeaderOptions, "env" | "projectInstructions" | "cwd">,
-  input: { plan: BuildPlan; reports: CompletionReport[]; feedback: ReviewFeedback[] }
+  input: { plan: BuildPlan; reports: CompletionReport[]; feedback: ReviewFeedback[]; previousAttemptError?: string }
 ): Promise<{ systemPrompt: string; prompt: string }> {
   return {
     systemPrompt: `${leaderTakeoverPrompt}
@@ -153,16 +158,16 @@ Previous reports:
 ${jsonBlock(input.reports)}
 
 Feedback history:
-${jsonBlock(input.feedback)}`
+${jsonBlock(input.feedback)}${retryFeedbackLine(input.previousAttemptError)}`
   };
 }
 
-export async function claudeLeaderReview(options: ClaudeLeaderOptions, input: { plan: BuildPlan; report: CompletionReport; round: number; diff: string }) {
+export async function claudeLeaderReview(options: ClaudeLeaderOptions, input: { plan: BuildPlan; report: CompletionReport; round: number; diff: string; previousAttemptError?: string }) {
   const prompts = await buildClaudeLeaderReviewPrompts(options, input);
   return ReviewVerdictSchema.parse(await claudeLeaderExec(options, { schema: "review-verdict", prompt: prompts.prompt, systemPrompt: prompts.systemPrompt, readOnly: true }));
 }
 
-export async function claudeLeaderTakeover(options: ClaudeLeaderOptions, input: { plan: BuildPlan; reports: CompletionReport[]; feedback: ReviewFeedback[] }) {
+export async function claudeLeaderTakeover(options: ClaudeLeaderOptions, input: { plan: BuildPlan; reports: CompletionReport[]; feedback: ReviewFeedback[]; previousAttemptError?: string }) {
   const prompts = await buildClaudeLeaderTakeoverPrompts(options, input);
   const takeover = z.object({ report: CompletionReportSchema, userSummary: z.string() }).parse(await claudeLeaderExec(options, { schema: "takeover", prompt: prompts.prompt, systemPrompt: prompts.systemPrompt }));
   return takeover;

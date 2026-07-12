@@ -24,6 +24,7 @@ import { locateClaudeCli } from "../agents/claude-code-cli/locate.js";
 import { runOrchestration, MachineEvent, OrchestrationCheckpoint } from "../orchestrator/machine.js";
 import { BuildPlan, CompletionReport, ReviewVerdict } from "../orchestrator/artifacts.js";
 import { createDiffTracker } from "../orchestrator/diff.js";
+import { createVerificationRunner } from "../orchestrator/verification.js";
 import { PermissionBridge, PermissionRequest } from "../tools/permissions.js";
 import type { ToolActivityEvent } from "../tools/fs.js";
 import { Transcript, TranscriptMessage } from "./Transcript.js";
@@ -287,6 +288,12 @@ export function App({ config: initialConfig, env, cwd, initialError }: { config:
         goals: activeGoals,
         history: history.text,
         diffProvider: diffTracker,
+        verificationRunner: createVerificationRunner({
+          cwd,
+          permissionMode: config.permissionMode,
+          permissionBridge,
+          abortSignal: controller.signal
+        }),
         confirmPlan,
         initialState,
         emit: handleEvent

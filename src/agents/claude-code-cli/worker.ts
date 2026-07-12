@@ -1,6 +1,6 @@
 import type { TandemConfig } from "../../config/schema.js";
 import type { BuildPlan, CompletionReport, ReviewFeedback } from "../../orchestrator/artifacts.js";
-import { validateCompletionReport } from "../../orchestrator/artifacts.js";
+import { CompletionReportSchema } from "../../orchestrator/artifacts.js";
 import type { ModelEntry } from "../../providers/registry.js";
 import { CostLedger } from "../../session/cost.js";
 import type { ToolActivityEvent } from "../../tools/fs.js";
@@ -28,7 +28,7 @@ async function projectInstructions(options: Pick<ClaudeWorkerOptions, "projectIn
 
 export async function buildClaudeWorkerPrompts(
   options: Pick<ClaudeWorkerOptions, "env" | "projectInstructions">,
-  input: { plan: BuildPlan; streamId: string; tasks: BuildPlan["tasks"]; verification: string[]; round: number; feedback: ReviewFeedback; previousReport?: CompletionReport }
+  input: { plan: BuildPlan; streamId: string; tasks: BuildPlan["tasks"]; verification: string[]; round: number; feedback: ReviewFeedback; previousReport?: CompletionReport; previousAttemptError?: string }
 ): Promise<{ systemPrompt: string; prompt: string }> {
   return {
     systemPrompt: `${workerPrompt}
@@ -42,7 +42,7 @@ You must run every verification command before submit_completion_report. In veri
 
 export async function runClaudeWorkerBuild(
   options: ClaudeWorkerOptions,
-  input: { plan: BuildPlan; streamId: string; tasks: BuildPlan["tasks"]; verification: string[]; round: number; feedback: ReviewFeedback; previousReport?: CompletionReport }
+  input: { plan: BuildPlan; streamId: string; tasks: BuildPlan["tasks"]; verification: string[]; round: number; feedback: ReviewFeedback; previousReport?: CompletionReport; previousAttemptError?: string }
 ): Promise<CompletionReport> {
   if (options.config.permissionMode === "ask") {
     const approved = await options.confirmCodexWrite?.("worker", "Run this round via Claude Code CLI with write access? Claude Code cannot prompt per-command in headless print mode.");
@@ -66,5 +66,5 @@ export async function runClaudeWorkerBuild(
     onToolEvent: options.onToolEvent,
     maxBudgetUsd: options.config.claudeMaxBudgetUsdPerCall
   });
-  return validateCompletionReport(input.plan, output);
+  return CompletionReportSchema.parse(output);
 }

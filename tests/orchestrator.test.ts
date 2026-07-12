@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { AgentFns, OrchestrationCheckpoint, runOrchestration } from "../src/orchestrator/machine.js";
 import { BuildPlan, CompletionReport, ReviewVerdict } from "../src/orchestrator/artifacts.js";
+import { createVerificationRunner } from "../src/orchestrator/verification.js";
+import type { PermissionRequest } from "../src/tools/permissions.js";
 
 const plan: BuildPlan = {
   title: "Todo CLI",
@@ -204,6 +206,197 @@ describe("orchestration", () => {
     });
     expect(builds).toBe(2);
     expect(result.takeover).toBe(false);
+  });
+
+  it("D97: attaches authoritative verification results before review", async () => {
+    const notices: string[] = [];
+    let reviewedReport: CompletionReport | undefined;
+    const authoritative = [{ command: "npm test", passed: false, output: "real failure" }];
+    const result = await runOrchestration({
+      request: "build",
+      config: { maxReviewRounds: 3, maxParallelWorkers: 1 },
+      verificationRunner: async () => authoritative,
+      agents: agents({
+        build: async () => ({
+          ...report(),
+          verificationResults: [{ command: "wrong command", passed: true, output: "model claim" }]
+        }),
+        review: async ({ report }) => {
+          reviewedReport = report;
+          return verdict("approve");
+        }
+      }),
+      emit: (event) => {
+        if (event.type === "notice") notices.push(event.message);
+      }
+    });
+
+    expect(result.takeover).toBe(false);
+    expect(result.reports[0]?.verificationResults).toEqual(authoritative);
+    expect(reviewedReport?.verificationResults).toEqual(authoritative);
+    expect(notices).toContain("verification: 0/1 passed");
+  });
+
+  it("D97: accepts omitted model verification only when authoritative verification ran", async () => {
+    const badModelReport = { ...report(), verificationResults: [] };
+    const accepted = await runOrchestration({
+      request: "build",
+      config: { maxReviewRounds: 3, maxParallelWorkers: 1 },
+      verificationRunner: async () => [{ command: "npm test", passed: true, output: "real ok" }],
+      agents: agents({ build: async () => badModelReport })
+    });
+    expect(accepted.takeover).toBe(false);
+    expect(accepted.reports[0]?.verificationResults).toEqual([{ command: "npm test", passed: true, output: "real ok" }]);
+
+    const fallback = await runOrchestration({
+      request: "build",
+      config: { maxReviewRounds: 3, maxParallelWorkers: 1 },
+      agents: agents({
+        build: async () => badModelReport,
+        takeover: async () => ({ report: report(), userSummary: "takeover repaired report" })
+      })
+    });
+    expect(fallback.takeover).toBe(true);
+  });
+
+  it("D97: complete report with authoritative failure proceeds to review instead of retry-burning", async () => {
+    let builds = 0;
+    let reviews = 0;
+    const result = await runOrchestration({
+      request: "build",
+      config: { maxReviewRounds: 3, maxParallelWorkers: 1 },
+      verificationRunner: async () => [{ command: "npm test", passed: false, output: "assertion failed" }],
+      agents: agents({
+        build: async () => {
+          builds += 1;
+          return report("complete");
+        },
+        review: async ({ report }) => {
+          reviews += 1;
+          expect(report.verificationResults[0]?.passed).toBe(false);
+          return verdict("approve");
+        }
+      })
+    });
+
+    expect(builds).toBe(1);
+    expect(reviews).toBe(1);
+    expect(result.takeover).toBe(false);
+  });
+
+  it("D97: undisclosed verification script edits still fail with authoritative verification enabled", async () => {
+    const tamperPlan: BuildPlan = {
+      ...plan,
+      tasks: [{ id: "T1", description: "Create CLI", files: ["src/index.ts"] }],
+      verification: ["node verify.js"]
+    };
+    const result = await runOrchestration({
+      request: "build",
+      config: { maxReviewRounds: 3, maxParallelWorkers: 1 },
+      verificationRunner: async () => [{ command: "node verify.js", passed: true, output: "real ok" }],
+      agents: agents({
+        plan: async () => ({ kind: "plan", plan: tamperPlan }),
+        build: async () => ({
+          ...report(),
+          taskResults: [{ id: "T1", status: "done" }],
+          filesChanged: ["src/index.ts", "verify.js"],
+          verificationResults: []
+        })
+      })
+    });
+
+    expect(result.takeover).toBe(true);
+    expect(result.summary).toContain("takeover");
+  });
+
+  it("D97: build retries receive previous validation feedback", async () => {
+    let secondAttemptFeedback = "";
+    let builds = 0;
+    const result = await runOrchestration({
+      request: "build",
+      config: { maxReviewRounds: 3, maxParallelWorkers: 1 },
+      agents: agents({
+        build: async ({ previousAttemptError }) => {
+          builds += 1;
+          if (builds === 1) return { nope: true };
+          secondAttemptFeedback = previousAttemptError ?? "";
+          return report();
+        }
+      })
+    });
+
+    expect(result.takeover).toBe(false);
+    expect(secondAttemptFeedback).toContain("invalid_type");
+  });
+
+  it("D97: review retries receive previous validation feedback", async () => {
+    let secondAttemptFeedback = "";
+    let reviews = 0;
+    const result = await runOrchestration({
+      request: "build",
+      config: { maxReviewRounds: 3, maxParallelWorkers: 1 },
+      agents: agents({
+        review: async ({ previousAttemptError }) => {
+          reviews += 1;
+          if (reviews === 1) return { nope: true };
+          secondAttemptFeedback = previousAttemptError ?? "";
+          return verdict("approve");
+        }
+      })
+    });
+
+    expect(result.takeover).toBe(false);
+    expect(secondAttemptFeedback).toContain("invalid_type");
+  });
+
+  it("D97: takeover retries receive previous validation feedback", async () => {
+    let secondAttemptFeedback = "";
+    let takeovers = 0;
+    const result = await runOrchestration({
+      request: "build",
+      config: { maxReviewRounds: 0, maxParallelWorkers: 1 },
+      agents: agents({
+        takeover: async ({ previousAttemptError }) => {
+          takeovers += 1;
+          if (takeovers === 1) return { report: { nope: true } as unknown as CompletionReport, userSummary: "bad" };
+          secondAttemptFeedback = previousAttemptError ?? "";
+          return { report: report(), userSummary: "takeover complete" };
+        }
+      })
+    });
+
+    expect(result.takeover).toBe(true);
+    expect(result.summary).toBe("takeover complete");
+    expect(secondAttemptFeedback).toContain("invalid_type");
+  });
+
+  it("D97: ask-mode verification runner requests one batched approval and denial falls back", async () => {
+    const approvalRequests: PermissionRequest[] = [];
+    const runner = createVerificationRunner({
+      cwd: process.cwd(),
+      permissionMode: "ask",
+      permissionBridge: {
+        approve: async (request) => {
+          approvalRequests.push(request);
+          return false;
+        }
+      }
+    });
+    const notices: string[] = [];
+    const result = await runOrchestration({
+      request: "build",
+      config: { maxReviewRounds: 3, maxParallelWorkers: 1, permissionMode: "ask" },
+      verificationRunner: runner,
+      agents: agents(),
+      emit: (event) => {
+        if (event.type === "notice") notices.push(event.message);
+      }
+    });
+
+    expect(result.takeover).toBe(false);
+    expect(approvalRequests).toHaveLength(1);
+    expect(approvalRequests[0]?.target).toContain("Run the plan's 1 verification command");
+    expect(notices.some((message) => message.includes("authoritative verification skipped"))).toBe(true);
   });
 
   it("sanitizes prompt-unsafe control characters in reports before review", async () => {
