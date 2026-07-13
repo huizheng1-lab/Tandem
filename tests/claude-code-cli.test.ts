@@ -121,7 +121,7 @@ describe("claude code cli discovery", () => {
     expect(locateClaudeCli({ overridePath: "C:/Claude/claude.cmd", exists: (filePath) => filePath === "C:/Claude/claude.cmd" })).toBe("C:/Claude/claude.cmd");
   });
 
-  it("refreshes a cached PATH result when the cached executable disappears", () => {
+  it("D106: refreshes a cached PATH result when another fixed-name candidate is available", () => {
     clearClaudeCliPathCache();
     const oldPath = path.join("C:/bin", process.platform === "win32" ? "node_modules/@anthropic-ai/claude-code/bin/claude.exe" : "claude");
     const newPath = path.join("D:/bin", process.platform === "win32" ? "node_modules/@anthropic-ai/claude-code/bin/claude.exe" : "claude");
