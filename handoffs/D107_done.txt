@@ -1,0 +1,20 @@
+Round: D107
+
+Build commit:
+- c47e2948cbf7b3b6de41ab885764a824d68efd8b
+
+Included prerequisite commits:
+- 85ac71e D105-1: refresh stale CLI path caches
+- 2f4c4df D106-1: rewrite the failing D105 claude cache-invalidation test to a scenario the resolver can actually produce
+
+Summary:
+- Confirmed no Tandem app process was running before rebuilding.
+- Rebuilt the packaged app from the current D106-inclusive commit with `npm run dist:app`.
+- The packaged app build completed without error and produced the Windows unpacked app, NSIS installer, and portable executable under `release/`.
+
+Verification:
+- `npm run dist:app`: passed.
+- `npm run typecheck`: passed.
+- `npm test`: passed, 35 passed | 1 skipped (36) test files; 347 passed | 1 skipped (348) tests.
+- `git diff --check`: passed.
+
