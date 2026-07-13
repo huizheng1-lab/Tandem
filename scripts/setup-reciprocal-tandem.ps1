@@ -44,9 +44,9 @@ function Write-Json([object]$Value, [string]$Path) {
 }
 
 function Initialize-ExecutorState([string]$Role, [string]$TargetWorktree) {
-    $home = Join-Path $RelayRoot "state\executor-$($Role.ToLowerInvariant())"
+    $stateHome = Join-Path $RelayRoot "state\executor-$($Role.ToLowerInvariant())"
     $userData = Join-Path $RelayRoot "user-data\executor-$($Role.ToLowerInvariant())"
-    New-Item -ItemType Directory -Path $home, $userData -Force | Out-Null
+    New-Item -ItemType Directory -Path $stateHome, $userData -Force | Out-Null
 
     $sourceConfig = Join-Path $SourceRepo ".tandem\config.json"
     if (Test-Path -LiteralPath $sourceConfig) {
@@ -56,12 +56,12 @@ function Initialize-ExecutorState([string]$Role, [string]$TargetWorktree) {
         } else {
             $config | Add-Member -NotePropertyName permissionMode -NotePropertyValue "yolo"
         }
-        Write-Json $config (Join-Path $home "config.json")
+        Write-Json $config (Join-Path $stateHome "config.json")
     }
     if ($CopyEnv -and (Test-Path -LiteralPath (Join-Path $SourceRepo ".env"))) {
-        Copy-Item -LiteralPath (Join-Path $SourceRepo ".env") -Destination (Join-Path $home ".env") -Force
+        Copy-Item -LiteralPath (Join-Path $SourceRepo ".env") -Destination (Join-Path $stateHome ".env") -Force
     }
-    Write-Json ([ordered]@{ lastProjectDir = $TargetWorktree }) (Join-Path $home "desktop-state.json")
+    Write-Json ([ordered]@{ lastProjectDir = $TargetWorktree }) (Join-Path $stateHome "desktop-state.json")
 }
 
 function Initialize-Schedule([string]$TargetWorktree, [string]$Role, [string]$Cron) {
