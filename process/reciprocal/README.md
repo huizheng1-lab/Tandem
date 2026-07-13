@@ -1,0 +1,78 @@
+# Two-Copy Reciprocal Tandem
+
+This setup uses two source worktrees, two local branches, two pinned packaged executors, two isolated `TANDEM_HOME` directories, and two isolated Electron user-data directories.
+
+The direction is deliberately crossed:
+
+- executor A runs from immutable runtime A and edits worktree B (`codex/reciprocal-b`);
+- executor B runs from immutable runtime B and edits worktree A (`codex/reciprocal-a`).
+
+Only the executor named by the shared relay state may work. A completed turn gives ownership to the other executor. Each target branch first fast-forwards from its peer, so successful turns form one linear history and divergence stops the relay.
+
+## One-time setup
+
+Run from the admin repository after committing the reciprocal files:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts/setup-reciprocal-tandem.ps1 -CopyEnv
+```
+
+The default root is `C:\Users\huizh\Apps\Tandem Reciprocal`. The script installs dependencies in both worktrees and copies the current packaged D107 runtime twice. The copied executors remain pinned; autonomous changes affect source branches only. Rebuild and promote a runtime manually after reviewing a batch of turns.
+
+The setup script is safe to rerun: it preserves an existing relay token. Use its `-ResetRelay` switch only for deliberate human recovery.
+
+`-CopyEnv` copies the current local `.env` into each isolated `TANDEM_HOME`. Omit it if credentials are already supplied another way. The generated configs use `permissionMode: yolo`, which is required for unattended verification and commits; isolation, protected runtimes, narrow instructions, linear history, and the turn token are the safety controls.
+
+## Start and kickstart
+
+Start both isolated apps:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts/start-reciprocal-tandem.ps1 -Role Both
+```
+
+Each app opens its preselected peer worktree. Confirm the path shown in the UI:
+
+- executor A must show `...\worktrees\copy-b`;
+- executor B must show `...\worktrees\copy-a`.
+
+To begin immediately, send this once in executor A:
+
+```text
+Follow the injected TANDEM.md and execute exactly one reciprocal improvement invocation. Begin with the Claim command.
+```
+
+No manual message is needed in B. On completion, A hands the durable turn token to B. The persisted schedules then poll at minute 07 for A and minute 37 for B each hour. A waiting executor exits before planning. If a quota limit interrupts a turn, the owner and `.tandem/reciprocal-checkpoint.md` remain on disk; that same executor resumes on a later hourly trigger after the rolling five-hour limit clears.
+
+Use `/loop 1h <the same prompt>` only for a supervised temporary retry. Stop it with `/loop stop` before relying on the schedules; loops are not restored after an app restart.
+
+## Observe and recover
+
+Show relay state from either worktree or the admin repository:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts/reciprocal-relay.ps1 -Action Status
+git worktree list
+git log --all --graph --decorate --oneline -20
+```
+
+`phase: paused` means an executor found no safe small task or needs a human decision. Inspect `lastSummary`. A human may restart from A only after cleaning both worktrees and understanding any partial commit:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts/reciprocal-relay.ps1 -Action Reset -Force
+```
+
+Do not reset merely because a model quota is exhausted; `working` is intentionally resumable.
+
+## GitHub backup and promotion
+
+Publish the two branches without moving `master`:
+
+```powershell
+git push -u origin codex/reciprocal-a
+git push -u origin codex/reciprocal-b
+```
+
+Push the branch that completed after reviewed turns, or automate remote backup separately. Do not make remote availability part of the turn token, because a transient network failure should not corrupt local sequencing.
+
+After a reviewed batch, select the branch containing `lastCompletedCommit`, run all checks plus `npm run dist:app`, stop the corresponding pinned executor, replace only its runtime directory with the reviewed build, and restart it. Keep the other executor pinned until the promoted build completes at least one clean turn. This creates a simple canary rollback path.
