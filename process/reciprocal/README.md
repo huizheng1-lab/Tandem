@@ -7,6 +7,8 @@ The direction is deliberately crossed:
 - executor A runs from immutable runtime A and edits worktree B (`codex/reciprocal-b`);
 - executor B runs from immutable runtime B and edits worktree A (`codex/reciprocal-a`).
 
+The launcher also injects protected roots for the admin repository, the executor's own source worktree, both runtimes, and both state stores. Tandem rejects writes to those paths even if a model emits an absolute path; only the selected peer target remains writable.
+
 Only the executor named by the shared relay state may work. A completed turn gives ownership to the other executor. Each target branch first fast-forwards from its peer, so successful turns form one linear history and divergence stops the relay.
 
 ## One-time setup
