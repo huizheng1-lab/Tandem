@@ -11,6 +11,8 @@ The launcher also injects protected roots for the admin repository, the executor
 
 Only the executor named by the shared relay state may work. A completed turn gives ownership to the other executor. Each target branch first fast-forwards from its peer, so successful turns form one linear history and divergence stops the relay.
 
+A completion is initially only a candidate. The opposite executor runs the full baseline checks before accepting it as stable. A failed candidate is reverted in a new commit and verified against the stable tree; uncommitted failed attempts are preserved in a named git stash. The stable, candidate, and rollback commits also have durable refs under `refs/tandem-relay/`.
+
 ## One-time setup
 
 Run from the admin repository after committing the reciprocal files:
@@ -65,6 +67,12 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts/reciprocal-relay.ps1
 ```
 
 Do not reset merely because a model quota is exhausted; `working` is intentionally resumable.
+
+Recovery commands are normally issued by the role instructions:
+
+- `Rollback` plus `CompleteRollback` creates an auditable revert when the other executor's candidate fails validation.
+- `Abandon` stashes an unrecoverable uncommitted attempt and restores the same role to the confirmed stable base.
+- `git show refs/tandem-relay/stable` identifies the last independently verified working commit even if the JSON state file is damaged.
 
 ## GitHub backup and promotion
 

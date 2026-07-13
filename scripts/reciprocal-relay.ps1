@@ -1,6 +1,6 @@
 param(
     [Parameter(Mandatory = $true)]
-    [ValidateSet("Status", "Claim", "Complete", "Pause", "Reset")]
+    [ValidateSet("Status", "Claim", "Accept", "Complete", "Rollback", "CompleteRollback", "Abandon", "Pause", "Reset")]
     [string]$Action,
 
     [ValidateSet("A", "B")]
@@ -24,6 +24,12 @@ function Invoke-Git {
     return $output
 }
 
+function Test-Git {
+    param([Parameter(ValueFromRemainingArguments = $true)][string[]]$Arguments)
+    & git -C $Workspace @Arguments *> $null
+    return $LASTEXITCODE -eq 0
+}
+
 function Get-RoleConfig([string]$SelectedRole) {
     if ($SelectedRole -eq "A") {
         return @{ Target = "codex/reciprocal-b"; Peer = "codex/reciprocal-a"; Next = "B" }
@@ -31,23 +37,29 @@ function Get-RoleConfig([string]$SelectedRole) {
     return @{ Target = "codex/reciprocal-a"; Peer = "codex/reciprocal-b"; Next = "A" }
 }
 
-function New-RelayState {
+function New-RelayState([string]$StableCommit) {
     return [ordered]@{
-        schemaVersion = 1
+        schemaVersion = 2
         turn = 1
         nextRole = "A"
         activeRole = $null
         phase = "idle"
         baseCommit = $null
+        stableCommit = $StableCommit
+        candidateCommit = $null
+        candidateKind = $null
+        rollbackCommit = $null
         startedAt = $null
         updatedAt = (Get-Date).ToUniversalTime().ToString("o")
         lastCompletedCommit = $null
         lastSummary = $null
+        lastRecoveryStash = $null
     }
 }
 
 $root = (@(Invoke-Git rev-parse --show-toplevel))[0].Trim()
 $Workspace = $root
+$currentHead = (@(Invoke-Git rev-parse HEAD))[0].Trim()
 $commonRaw = (@(Invoke-Git rev-parse --git-common-dir))[0].Trim()
 $commonDir = if ([IO.Path]::IsPathRooted($commonRaw)) { $commonRaw } else { [IO.Path]::GetFullPath((Join-Path $Workspace $commonRaw)) }
 $relayDir = Join-Path $commonDir "tandem-relay"
@@ -69,7 +81,32 @@ try {
     $state = if (Test-Path -LiteralPath $statePath) {
         Get-Content -LiteralPath $statePath -Raw | ConvertFrom-Json
     } else {
-        [pscustomobject](New-RelayState)
+        [pscustomobject](New-RelayState $currentHead)
+    }
+
+    if ($state.schemaVersion -ne 2) {
+        if ($state.activeRole -or $state.phase -ne "idle") {
+            throw "Relay state predates rollback support and has active work. Inspect it, then run a human Reset only after recovery."
+        }
+        $state = [pscustomobject](New-RelayState $currentHead)
+    }
+
+    function Update-RelayRefs {
+        if ($state.stableCommit) {
+            Invoke-Git update-ref "refs/tandem-relay/stable" $state.stableCommit | Out-Null
+        }
+        if ($state.candidateCommit) {
+            Invoke-Git update-ref "refs/tandem-relay/candidate" $state.candidateCommit | Out-Null
+        } else {
+            $deleteCandidate = @("update-ref", "-d", "refs/tandem-relay/candidate")
+            Invoke-Git @deleteCandidate | Out-Null
+        }
+        if ($state.rollbackCommit) {
+            Invoke-Git update-ref "refs/tandem-relay/rollback" $state.rollbackCommit | Out-Null
+        } else {
+            $deleteRollback = @("update-ref", "-d", "refs/tandem-relay/rollback")
+            Invoke-Git @deleteRollback | Out-Null
+        }
     }
 
     function Save-State {
@@ -77,6 +114,7 @@ try {
         $tempPath = "$statePath.tmp-$PID"
         $state | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath $tempPath -Encoding utf8
         Move-Item -LiteralPath $tempPath -Destination $statePath -Force
+        Update-RelayRefs
     }
 
     function Write-Result([string]$Outcome) {
@@ -87,15 +125,25 @@ try {
             activeRole = $state.activeRole
             phase = $state.phase
             baseCommit = $state.baseCommit
+            stableCommit = $state.stableCommit
+            candidateCommit = $state.candidateCommit
+            candidateKind = $state.candidateKind
+            rollbackCommit = $state.rollbackCommit
             lastCompletedCommit = $state.lastCompletedCommit
             lastSummary = $state.lastSummary
+            lastRecoveryStash = $state.lastRecoveryStash
             statePath = $statePath
         } | ConvertTo-Json -Depth 5
     }
 
+    function Assert-Clean([string]$Message) {
+        $dirty = @(Invoke-Git status --porcelain --untracked-files=all)
+        if ($dirty.Count -gt 0) { throw "$Message`: $($dirty -join '; ')" }
+    }
+
     if ($Action -eq "Reset") {
         if (-not $Force) { throw "Reset requires -Force and is reserved for human recovery." }
-        $state = [pscustomobject](New-RelayState)
+        $state = [pscustomobject](New-RelayState $currentHead)
         Save-State
         Remove-Item -LiteralPath (Join-Path $Workspace ".tandem\reciprocal-checkpoint.md") -Force -ErrorAction SilentlyContinue
         Write-Result "RESET"
@@ -103,6 +151,7 @@ try {
     }
 
     if ($Action -eq "Status") {
+        Save-State
         Write-Result "STATUS"
         exit 0
     }
@@ -128,18 +177,27 @@ try {
             exit 0
         }
 
-        $dirty = @(Invoke-Git status --porcelain --untracked-files=all)
-        if ($dirty.Count -gt 0) {
-            throw "Cannot claim a new turn with pre-existing worktree changes: $($dirty -join '; ')"
-        }
-
+        Assert-Clean "Cannot claim a new turn with pre-existing worktree changes"
         Invoke-Git merge --ff-only $roleConfig.Peer | Out-Null
+        $head = (@(Invoke-Git rev-parse HEAD))[0].Trim()
         $state.activeRole = $Role
-        $state.phase = "working"
-        $state.baseCommit = (@(Invoke-Git rev-parse HEAD))[0].Trim()
+        $state.baseCommit = $head
         $state.startedAt = (Get-Date).ToUniversalTime().ToString("o")
+        $outcome = "CLAIMED"
+        if ($state.candidateCommit) {
+            if ($head -ne $state.candidateCommit) {
+                throw "Candidate $($state.candidateCommit) is not the synchronized target HEAD $head."
+            }
+            $state.phase = "validating"
+            $outcome = "VALIDATE"
+        } else {
+            if ($head -ne $state.stableCommit) {
+                throw "Target HEAD $head differs from stable commit $($state.stableCommit) without a candidate."
+            }
+            $state.phase = "working"
+        }
         Save-State
-        Write-Result "CLAIMED"
+        Write-Result $outcome
         exit 0
     }
 
@@ -156,20 +214,120 @@ try {
         exit 0
     }
 
-    $dirty = @(Invoke-Git status --porcelain --untracked-files=all)
-    if ($dirty.Count -gt 0) {
-        throw "Complete requires a clean worktree: $($dirty -join '; ')"
+    if ($Action -eq "Accept") {
+        if ($state.phase -ne "validating") { throw "Accept is valid only after a VALIDATE claim." }
+        Assert-Clean "Accept requires a clean worktree"
+        $head = (@(Invoke-Git rev-parse HEAD))[0].Trim()
+        if ($head -ne $state.candidateCommit) { throw "Validated HEAD does not match the candidate commit." }
+        $state.stableCommit = $head
+        $state.candidateCommit = $null
+        $state.candidateKind = $null
+        $state.rollbackCommit = $null
+        $state.phase = "working"
+        $state.baseCommit = $head
+        $state.lastSummary = if ($Summary.Trim()) { $Summary.Trim() } else { "Candidate baseline accepted after verification." }
+        Save-State
+        Write-Result "ACCEPTED"
+        exit 0
     }
+
+    if ($Action -eq "Rollback") {
+        if ($state.phase -ne "validating") { throw "Rollback is valid only after a VALIDATE claim." }
+        if ($state.candidateKind -ne "improvement") { throw "Only an unaccepted improvement candidate can be rolled back automatically." }
+        if (-not $Summary.Trim()) { throw "Rollback requires a failure summary." }
+        Assert-Clean "Rollback requires a clean worktree"
+        $head = (@(Invoke-Git rev-parse HEAD))[0].Trim()
+        if ($head -ne $state.candidateCommit) { throw "Rollback candidate is not HEAD." }
+        $parent = (@(Invoke-Git rev-parse "$head^"))[0].Trim()
+        if ($parent -ne $state.stableCommit) { throw "Candidate is not a direct child of the stable commit; automatic rollback stopped." }
+        try {
+            Invoke-Git revert --no-edit $head | Out-Null
+        } catch {
+            & git -C $Workspace revert --abort *> $null
+            throw
+        }
+        $state.rollbackCommit = (@(Invoke-Git rev-parse HEAD))[0].Trim()
+        $state.phase = "rollback-verification"
+        $state.lastSummary = $Summary.Trim()
+        Save-State
+        Write-Result "ROLLBACK_CREATED"
+        exit 0
+    }
+
+    if ($Action -eq "CompleteRollback") {
+        if ($state.phase -ne "rollback-verification") { throw "CompleteRollback requires a pending rollback verification." }
+        if (-not $Summary.Trim()) { throw "CompleteRollback requires a verification summary." }
+        Assert-Clean "CompleteRollback requires a clean worktree"
+        $head = (@(Invoke-Git rev-parse HEAD))[0].Trim()
+        if ($head -ne $state.rollbackCommit) { throw "Rollback verification HEAD changed unexpectedly." }
+        if (-not (Test-Git diff --quiet $state.stableCommit HEAD --)) {
+            throw "Rollback tree does not match the last stable commit."
+        }
+        $state.turn = [int]$state.turn + 1
+        $state.nextRole = $roleConfig.Next
+        $state.activeRole = $null
+        $state.phase = "idle"
+        $state.baseCommit = $null
+        $state.candidateCommit = $head
+        $state.candidateKind = "rollback"
+        $state.rollbackCommit = $null
+        $state.startedAt = $null
+        $state.lastCompletedCommit = $head
+        $state.lastSummary = $Summary.Trim()
+        Save-State
+        Remove-Item -LiteralPath (Join-Path $Workspace ".tandem\reciprocal-checkpoint.md") -Force -ErrorAction SilentlyContinue
+        Write-Result "ROLLBACK_COMPLETED"
+        exit 0
+    }
+
+    if ($Action -eq "Abandon") {
+        if ($state.phase -ne "working") { throw "Abandon is valid only for an in-progress improvement." }
+        if (-not $Summary.Trim()) { throw "Abandon requires a recovery summary." }
+        $head = (@(Invoke-Git rev-parse HEAD))[0].Trim()
+        if ($head -ne $state.baseCommit) {
+            throw "The turn already contains a commit. Resume and verify it, or ask a human to review it; Abandon only preserves uncommitted work."
+        }
+        $dirty = @(Invoke-Git status --porcelain --untracked-files=all)
+        if ($dirty.Count -gt 0) {
+            $stamp = (Get-Date).ToUniversalTime().ToString("yyyyMMdd-HHmmss")
+            $stashMessage = "tandem-relay abandoned role $Role turn $($state.turn) $stamp"
+            Invoke-Git stash push --include-untracked -m $stashMessage | Out-Null
+            Assert-Clean "Recovery stash did not clean the worktree"
+            $state.lastRecoveryStash = (@(Invoke-Git stash list --format="%gd %s"))[0].Trim()
+        }
+        $state.nextRole = $Role
+        $state.activeRole = $null
+        $state.phase = "idle"
+        $state.baseCommit = $null
+        $state.startedAt = $null
+        $state.lastSummary = $Summary.Trim()
+        Save-State
+        Remove-Item -LiteralPath (Join-Path $Workspace ".tandem\reciprocal-checkpoint.md") -Force -ErrorAction SilentlyContinue
+        Write-Result "ABANDONED"
+        exit 0
+    }
+
+    if ($state.phase -ne "working") { throw "Complete is valid only during the working phase." }
+    if (-not $Summary.Trim()) { throw "Complete requires a verification summary." }
+    Assert-Clean "Complete requires a clean worktree"
     $head = (@(Invoke-Git rev-parse HEAD))[0].Trim()
-    if ($head -eq $state.baseCommit) { throw "Complete requires one new verified commit after the claim." }
-    & git -C $Workspace merge-base --is-ancestor $roleConfig.Peer HEAD 2>$null
-    if ($LASTEXITCODE -ne 0) { throw "Peer branch $($roleConfig.Peer) is not an ancestor of HEAD; history diverged." }
+    if ($state.baseCommit -ne $state.stableCommit) { throw "Working base no longer matches the stable commit." }
+    $commits = @(Invoke-Git rev-list "$($state.baseCommit)..$head")
+    if ($commits.Count -ne 1) { throw "Complete requires exactly one new verified commit; found $($commits.Count)." }
+    $parent = (@(Invoke-Git rev-parse "$head^"))[0].Trim()
+    if ($parent -ne $state.baseCommit) { throw "The improvement commit is not a direct child of the stable base." }
+    if (-not (Test-Git merge-base --is-ancestor $roleConfig.Peer HEAD)) {
+        throw "Peer branch $($roleConfig.Peer) is not an ancestor of HEAD; history diverged."
+    }
 
     $state.turn = [int]$state.turn + 1
     $state.nextRole = $roleConfig.Next
     $state.activeRole = $null
     $state.phase = "idle"
     $state.baseCommit = $null
+    $state.candidateCommit = $head
+    $state.candidateKind = "improvement"
+    $state.rollbackCommit = $null
     $state.startedAt = $null
     $state.lastCompletedCommit = $head
     $state.lastSummary = $Summary.Trim()
