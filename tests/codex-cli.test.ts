@@ -137,6 +137,89 @@ describe("codex cli discovery", () => {
       })
     ).toBe(newPath);
   });
+
+  it("D105: cache invalidates when the cached path no longer exists (background updater removed the versioned folder)", () => {
+    clearCodexCliPathCache();
+    // First call: cache a "stale" codex.exe path under the existing test path.
+    const local = "C:/Users/me/AppData/Local";
+    const stalePath = path.join(local, "OpenAI", "Codex", "bin", "a7c12ebff69fb123", "codex.exe");
+    const freshFolder = path.join(local, "OpenAI", "Codex", "bin", "ada252862d154cdd");
+    const freshPath = path.join(freshFolder, "codex.exe");
+    let deleted = false;
+    const existsFake = (filePath: string) => {
+      if (filePath === path.join(local, "OpenAI", "Codex", "bin")) return true;
+      if (filePath === stalePath) return !deleted;
+      if (filePath === freshPath) return deleted;
+      return false;
+    };
+    const readdirFake = () => (deleted ? ["ada252862d154cdd"] : ["a7c12ebff69fb123"]);
+    const statFake = (filePath: string) => ({ mtimeMs: filePath === freshPath ? 2 : 1 });
+    // Prime the cache with the stale path.
+    const first = locateCodexCli({
+      platform: "win32",
+      env: { LOCALAPPDATA: local },
+      exists: existsFake,
+      readdir: readdirFake,
+      stat: statFake
+    });
+    expect(first).toBe(stalePath);
+    // Simulate the updater: stale file is gone, fresh file exists. The cache key is
+    // unchanged (PATH/LOCALAPPDATA didn't move), so without the existence check the second
+    // call would return the stale path. With D105, it invalidates and re-resolves.
+    deleted = true;
+    const second = locateCodexCli({
+      platform: "win32",
+      env: { LOCALAPPDATA: local },
+      exists: existsFake,
+      readdir: readdirFake,
+      stat: statFake
+    });
+    expect(second).toBe(freshPath);
+  });
+
+  it("D105: cache short-circuits without a rescan when the cached path still exists (perf intent preserved)", () => {
+    clearCodexCliPathCache();
+    // First call resolves and caches a path. Track which directories the readdir / exists
+    // fakes are called for so we can confirm the second call does NOT re-scan.
+    const local = "C:/Users/me/AppData/Local";
+    const cachedPath = path.join(local, "OpenAI", "Codex", "bin", "kept", "codex.exe");
+    let readdirCalls = 0;
+    let statCalls = 0;
+    const existsFake = (filePath: string) => filePath === cachedPath || filePath === path.join(local, "OpenAI", "Codex", "bin");
+    const readdirFake = () => {
+      readdirCalls += 1;
+      return ["kept"];
+    };
+    const statFake = (filePath: string) => {
+      statCalls += 1;
+      return { mtimeMs: 1 };
+    };
+    // Prime the cache.
+    const first = locateCodexCli({
+      platform: "win32",
+      env: { LOCALAPPDATA: local },
+      exists: existsFake,
+      readdir: readdirFake,
+      stat: statFake
+    });
+    expect(first).toBe(cachedPath);
+    const readdirAfterFirst = readdirCalls;
+    const statAfterFirst = statCalls;
+    // Second call: cached path still exists, key unchanged, the existence check passes, so
+    // the function should return immediately without re-running the Windows fallback scan.
+    const second = locateCodexCli({
+      platform: "win32",
+      env: { LOCALAPPDATA: local },
+      exists: existsFake,
+      readdir: readdirFake,
+      stat: statFake
+    });
+    expect(second).toBe(cachedPath);
+    // The whole point of the cache: the existence check is the only filesystem call on the
+    // second invocation, not a full directory rescan. readdir/stat counts must not grow.
+    expect(readdirCalls).toBe(readdirAfterFirst);
+    expect(statCalls).toBe(statAfterFirst);
+  });
 });
 
 describe("codex cli execution", () => {

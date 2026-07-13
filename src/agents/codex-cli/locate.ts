@@ -44,7 +44,12 @@ export function locateCodexCli(options: LocateCodexOptions = {}): string | undef
   const override = options.overridePath || env.CODEX_CLI_PATH;
   const platform = options.platform ?? process.platform;
   const key = JSON.stringify({ override, path: env.PATH ?? env.Path ?? env.path, local: env.LOCALAPPDATA, platform });
-  if (cachedKey === key) return cachedPath;
+  if (cachedKey === key) {
+    const cachedExists = options.exists ?? existsSync;
+    if (cachedPath === undefined || cachedExists(cachedPath)) return cachedPath;
+    cachedKey = undefined;
+    cachedPath = undefined;
+  }
 
   const exists = options.exists ?? existsSync;
   const stat = options.stat ?? statSync;

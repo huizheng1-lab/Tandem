@@ -120,6 +120,46 @@ describe("claude code cli discovery", () => {
     clearClaudeCliPathCache();
     expect(locateClaudeCli({ overridePath: "C:/Claude/claude.cmd", exists: (filePath) => filePath === "C:/Claude/claude.cmd" })).toBe("C:/Claude/claude.cmd");
   });
+
+  it("refreshes a cached PATH result when the cached executable disappears", () => {
+    clearClaudeCliPathCache();
+    const oldPath = path.join("C:/bin", process.platform === "win32" ? "node_modules/@anthropic-ai/claude-code/bin/claude.exe" : "claude");
+    const newPath = path.join("D:/bin", process.platform === "win32" ? "node_modules/@anthropic-ai/claude-code/bin/claude.exe" : "claude");
+    let oldExists = true;
+
+    const locate = () =>
+      locateClaudeCli({
+        env: { PATH: `C:/bin${path.delimiter}D:/bin` },
+        pathSeparator: path.delimiter,
+        exists: (filePath) => filePath === newPath || (oldExists && filePath === oldPath)
+      });
+
+    expect(locate()).toBe(oldPath);
+    oldExists = false;
+    expect(locate()).toBe(newPath);
+  });
+
+  it("keeps using a valid cached PATH result without checking later PATH entries", () => {
+    clearClaudeCliPathCache();
+    const firstPath = path.join("C:/bin", process.platform === "win32" ? "node_modules/@anthropic-ai/claude-code/bin/claude.exe" : "claude");
+    const secondPath = path.join("D:/bin", process.platform === "win32" ? "node_modules/@anthropic-ai/claude-code/bin/claude.exe" : "claude");
+    const seen = new Set<string>();
+
+    const locate = () =>
+      locateClaudeCli({
+        env: { PATH: `C:/bin${path.delimiter}D:/bin` },
+        pathSeparator: path.delimiter,
+        exists: (filePath) => {
+          seen.add(filePath);
+          return filePath === firstPath || filePath === secondPath;
+        }
+      });
+
+    expect(locate()).toBe(firstPath);
+    seen.clear();
+    expect(locate()).toBe(firstPath);
+    expect(seen).toEqual(new Set([firstPath]));
+  });
 });
 
 describe("claude code cli execution", () => {

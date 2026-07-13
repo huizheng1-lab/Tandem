@@ -28,7 +28,12 @@ export function locateClaudeCli(options: LocateClaudeOptions = {}): string | und
   const override = options.overridePath || env.CLAUDE_CLI_PATH;
   const platform = options.platform ?? process.platform;
   const key = JSON.stringify({ override, path: env.PATH ?? env.Path ?? env.path, platform });
-  if (cachedKey === key) return cachedPath;
+  if (cachedKey === key) {
+    const cachedExists = options.exists ?? existsSync;
+    if (cachedPath === undefined || cachedExists(cachedPath)) return cachedPath;
+    cachedKey = undefined;
+    cachedPath = undefined;
+  }
 
   const exists = options.exists ?? existsSync;
   const pathSeparator = options.pathSeparator ?? path.delimiter;
