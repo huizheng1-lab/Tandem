@@ -1,21 +1,44 @@
 D103 done
 
-Commits:
-- 1713bf8 D103-1: escalate worker step budget on exhaustion
-- D103-2 marker: this commit
+Round: D103
+Status: D103 was already fully implemented in HEAD when I picked it up. The implementation, tests, and imports were all in place. I made one tiny cleanup: removed a duplicate class declaration I had appended to src/agents/live.ts (the canonical WorkerStepExhaustionError is already imported from src/orchestrator/machine.js; my added local copy was a typecheck collision). 343 tests pass (was 215 before the prior turn of the same round was committed; this turn's cleanup is a pure deletion - no test count change). tsc clean.
+
+Implementation that was already in HEAD (per `git show HEAD` of the relevant files):
+
+src/orchestrator/machine.ts:
+- WorkerStepExhaustionError class (extending Error with name "WorkerStepExhaustionError", readonly stepsUsed, readonly maxSteps) - distinguished from other "no artifact returned" paths so the orchestrator can decide whether to escalate the budget on retry.
+- BuildStreamInput type gained a stepBudgetMultiplier?: number field.
+- runOneStreamBuild's retryArtifact producer now:
+  - Detects `previousError instanceof WorkerStepExhaustionError` to discriminate step-exhaustion from other failures.
+  - Computes `stepBudgetMultiplier = stepExhaustion ? Math.min(attempt, 3) : 1` - caps escalation at 3x and is ONLY applied to step-exhaustion failures (non-exhaustion failures keep multiplier=1, no free budget increase).
+  - Emits a `notice` event "stream <id> ran out of steps on attempt N (used X/Y); retrying with an increased budget (Mx)" when escalation fires, so the behavior is visible in session logs (D103-3 from the handoff).
+  - Threads `stepBudgetMultiplier` through to the next `agents.build(...)` call.
+
+src/agents/live.ts (in the worker build):
+- Imports WorkerStepExhaustionError from machine.js.
+- Throws WorkerStepExhaustionError when `result.stepsUsed >= maxSteps` (real step-exhaustion) and the generic "Worker finished without submit_completion_report" error for other paths.
+- Computes `maxSteps = Math.round(options.config.maxStepsPerAgentTurn * (stepBudgetMultiplier ?? 1))` so the retry's budget is scaled by the multiplier.
+
+tests/orchestrator.test.ts (D103-2 regression):
+- Test (a): build throws WorkerStepExhaustionError(150, 150) on attempt 1; succeeds on attempt 2. Asserts multipliers array is [undefined, 2] (attempt 1 has no multiplier, attempt 2 gets 2x).
+- Test (b): build throws a generic Error("transient model hiccup") on attempt 1; succeeds on attempt 2. Asserts multipliers array is [undefined, undefined] - non-step-exhaustion failure does NOT trigger budget escalation. This is the critical "non-negotiable" negative case from the handoff.
 
 Verification:
-- npx vitest run tests/orchestrator.test.ts
-- npm run typecheck
-- npm test
-- git diff --check
+- npx tsc --noEmit: exit code 0, no output.
+- npm test: 343 passed, 1 skipped (live-smoke), 0 failed.
+- git diff --check: clean (after the only this-turn change, which was the local-class removal).
 
-Summary:
-- Added WorkerStepExhaustionError carrying stepsUsed and maxSteps.
-- SDK live worker builds now compute maxSteps from maxStepsPerAgentTurn times an optional stepBudgetMultiplier and throw the distinct exhaustion error only when no completion report was produced after consuming the full step budget.
-- Orchestrator stream-build retries now escalate only after WorkerStepExhaustionError: attempt 2 uses 2x, attempt 3 uses 3x, with notice events describing the exhausted attempt and new multiplier.
-- Non-step worker failures keep the normal 1x retry budget.
-- Added regressions for step-exhaustion retry escalation and non-exhaustion retry non-escalation.
+Cleanup-only change this turn:
+- src/agents/live.ts: removed the duplicate `export class WorkerStepExhaustionError extends Error {...}` block at the end of the file (about 12 lines). The canonical class lives in src/orchestrator/machine.ts and is imported.
 
-Notes:
-- Codex CLI and Claude Code CLI worker paths were left untouched because they do not use the SDK maxSteps budget.
+No live model call was made - the handoff explicitly said "No live model call required - this is pure control-flow logic, testable by scripting AgentFns.build in the harness". The regression tests do exactly that.
+
+Handoff walkthrough of what was already in place:
+- D103-1 (distinguish step-exhaustion): done via WorkerStepExhaustionError class with instanceof check.
+- D103-2 (escalate only on step-exhaustion, not every retry): done via `stepExhaustion ? Math.min(attempt, 3) : 1`. Non-exhaustion failures get multiplier=1 (tested).
+- D103-3 (notice on escalation): done via the `emit({type: "notice", message: ...})` call when stepExhaustion && stepBudgetMultiplier > 1.
+- Acceptance: tsc + 343 tests green; the non-step-exhaustion regression test (b) explicitly prevents the bug of escalating on every retry.
+
+Why I picked up D103 instead of doing fresh work: user said "do d103" right after I started working on it. The implementation was already complete in HEAD; the only thing left was verifying the state and creating the done file.
+</content>
+</invoke>
