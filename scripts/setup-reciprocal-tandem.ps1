@@ -15,6 +15,7 @@ $worktreeB = Join-Path $RelayRoot "worktrees\copy-b"
 $runtimeSource = Join-Path $SourceRepo "release\win-unpacked"
 $templateA = Join-Path $SourceRepo "process\reciprocal\TANDEM_EXECUTOR_A.md"
 $templateB = Join-Path $SourceRepo "process\reciprocal\TANDEM_EXECUTOR_B.md"
+$directionTemplate = Join-Path $SourceRepo "process\reciprocal\SHARED_DIRECTION_TEMPLATE.md"
 
 function Invoke-Checked {
     param([string]$FilePath, [string[]]$Arguments, [string]$WorkingDirectory = $SourceRepo)
@@ -76,6 +77,28 @@ function Initialize-Schedule([string]$TargetWorktree, [string]$Role, [string]$Cr
     Write-Json $schedule (Join-Path $TargetWorktree ".tandem\schedules.json")
 }
 
+function Initialize-SharedDirection([string[]]$Worktrees) {
+    $controlDir = Join-Path $RelayRoot "control"
+    $directionPath = Join-Path $controlDir "SHARED_DIRECTION.md"
+    New-Item -ItemType Directory -Path $controlDir -Force | Out-Null
+    if (-not (Test-Path -LiteralPath $directionPath)) {
+        Copy-Item -LiteralPath $directionTemplate -Destination $directionPath
+    }
+    foreach ($worktree in $Worktrees) {
+        $linkPath = Join-Path $worktree ".tandem\shared-control"
+        New-Item -ItemType Directory -Path (Split-Path $linkPath -Parent) -Force | Out-Null
+        if (Test-Path -LiteralPath $linkPath) {
+            $item = Get-Item -LiteralPath $linkPath -Force
+            $targets = @($item.Target)
+            if ($item.LinkType -ne "Junction" -or $targets -notcontains $controlDir) {
+                throw "Shared-control path exists but is not the expected junction: $linkPath"
+            }
+        } else {
+            New-Item -ItemType Junction -Path $linkPath -Target $controlDir | Out-Null
+        }
+    }
+}
+
 New-Item -ItemType Directory -Path $RelayRoot -Force | Out-Null
 Ensure-Worktree $worktreeA $branchA
 Ensure-Worktree $worktreeB $branchB
@@ -90,6 +113,7 @@ if ($exclude -notcontains "/TANDEM.md") { Add-Content -LiteralPath $excludePath 
 # Executor A edits B, so B receives A's local project instructions; vice versa for executor B.
 Copy-Item -LiteralPath $templateA -Destination (Join-Path $worktreeB "TANDEM.md") -Force
 Copy-Item -LiteralPath $templateB -Destination (Join-Path $worktreeA "TANDEM.md") -Force
+Initialize-SharedDirection @($worktreeA, $worktreeB)
 Initialize-ExecutorState "A" $worktreeB
 Initialize-ExecutorState "B" $worktreeA
 Initialize-Schedule $worktreeB "A" "7 * * * *"
@@ -120,5 +144,6 @@ if ($ResetRelay -or -not (Test-Path -LiteralPath $relayStatePath)) {
     relayRoot = $RelayRoot
     executorA = [ordered]@{ runtime = (Join-Path $RelayRoot "runtimes\executor-a\Tandem.exe"); target = $worktreeB; branch = $branchB; cron = "7 * * * *" }
     executorB = [ordered]@{ runtime = (Join-Path $RelayRoot "runtimes\executor-b\Tandem.exe"); target = $worktreeA; branch = $branchA; cron = "37 * * * *" }
+    sharedDirection = (Join-Path $RelayRoot "control\SHARED_DIRECTION.md")
     nextRole = "A"
 } | ConvertTo-Json -Depth 5

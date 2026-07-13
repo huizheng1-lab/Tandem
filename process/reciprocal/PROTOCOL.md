@@ -11,15 +11,18 @@ This protocol runs two pinned Tandem executors against two independent git workt
    - `VALIDATE`: the other executor produced a candidate. Before editing anything, run `npm run typecheck`, `npm test`, and `git diff --check`. If they pass, run your role's `Accept` command. If an improvement candidate fails, run `Rollback`, verify the restored tree with the same checks, and run `CompleteRollback`. If a rollback candidate fails, pause for human inspection instead of reverting the revert.
    - `RESUME`: an earlier attempt by this same executor stopped. Inspect the reported phase and checkpoint. Resume validation, rollback verification, or implementation as appropriate; do not start a different task.
    - `WAIT` or `PAUSED`: stop immediately with a short direct response. Do not create a plan, edit files, run the full test suite, or spend tokens reviewing the repository.
-4. Do not begin an improvement until the relay is in `working` phase. On a new working turn, inspect the current code, recent commits, tests, and any human-maintained backlog. Select exactly one evidence-backed improvement that can be completed in about 90 minutes.
-5. Write `.tandem/reciprocal-checkpoint.md` with the objective, evidence, intended files, current phase, checks already run, and the next concrete action. Update it after each major phase so a fresh model session can resume after a quota reset.
-6. Implement the smallest coherent fix. Add or update focused tests when behavior changes.
-7. Run focused checks plus, at minimum:
+4. Do not begin an improvement until the relay is in `working` phase. Read `.tandem/shared-control/SHARED_DIRECTION.md` with `scripts/reciprocal-direction.ps1 -Action Show`. Select the highest-priority queued human wishlist item before an item whose text begins `[AUTO]`. If no item is queued, use the General Direction to select exactly one evidence-backed improvement that can be completed in about 90 minutes, then add it to the board with `-Action Add -Priority P2 -Text "[AUTO] <objective and evidence>"`.
+5. Run `scripts/reciprocal-direction.ps1 -Action Start -Id <id> -Role <role>` before editing. Humans may append new items while a turn is active; do not switch away from the item already in progress.
+6. Write `.tandem/reciprocal-checkpoint.md` with the objective, wishlist ID if any, evidence, intended files, current phase, checks already run, and the next concrete action. Update it after each major phase so a fresh model session can resume after a quota reset.
+7. Implement the smallest coherent fix. Add or update focused tests when behavior changes.
+8. Run focused checks plus, at minimum:
    - `npm run typecheck`
    - `npm test`
    - `git diff --check`
-8. Review the complete diff, stage only intended files, and commit once with a descriptive message beginning `relay:`. Never stage `.tandem`, `TANDEM.md`, secrets, build output, or unrelated files.
-9. Re-run `git status --short`. It must be clean before completion. Run the exact `Complete` command from `TANDEM.md`, including a concise verification summary.
+9. Review the complete diff, stage only intended files, and commit once with a descriptive message beginning `relay:`. Never stage `.tandem`, `TANDEM.md`, secrets, build output, or unrelated files. Mark a wishlist item `Candidate` with that commit before handing off.
+10. Re-run `git status --short`. It must be clean before completion. Run the exact relay `Complete` command from `TANDEM.md`, including a concise verification summary.
+
+After the opposite executor accepts a candidate, it marks the matching wishlist item `Complete` with the accepted commit. After a verified rollback or abandoned attempt, it `Requeue`s the item with a concise failure note. Use `Block` only when human input is genuinely required. Do not mark work accomplished merely because its implementing executor reported success.
 
 If no high-confidence improvement is available, use the `Pause` command with a reason. Do not manufacture code churn merely to pass the turn.
 

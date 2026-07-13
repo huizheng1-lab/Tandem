@@ -50,6 +50,20 @@ No manual message is needed in B. On completion, A hands the durable turn token 
 
 Use `/loop 1h <the same prompt>` only for a supervised temporary retry. Stop it with `/loop stop` before relying on the schedules; loops are not restored after an app restart.
 
+## Shared human direction
+
+Both executors see the same live file through their ignored `.tandem/shared-control` junction:
+
+`C:\Users\huizh\Apps\Tandem Reciprocal\control\SHARED_DIRECTION.md`
+
+Edit its General Direction and Human Notes directly. Add a feature safely while the process continues with:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts/reciprocal-direction.ps1 -Action Add -Priority P1 -Text "Add Feature A with requirements X, Y, and Z"
+```
+
+Show the shared board with `-Action Show`. Executors prioritize queued human items, record the item in their durable checkpoint, mark it as a candidate after implementation, and mark it done only after the opposite executor independently accepts the commit. Self-selected work is recorded as a lower-priority `[AUTO]` item, so its result remains visible too. New items do not interrupt the item already in progress; they are picked up on a later working turn.
+
 ## Observe and recover
 
 Show relay state from either worktree or the admin repository:
