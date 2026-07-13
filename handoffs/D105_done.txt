@@ -1,0 +1,14 @@
+Round: D105
+Commits:
+- 85ac71ed983aee9da90570b93f251d943ddec4d9 D105-1: refresh stale CLI path caches
+
+Verification:
+- npm test -- tests/codex-cli.test.ts tests/claude-code-cli.test.ts: passed (2 files, 44 tests)
+- npm run typecheck: passed
+- npm test: passed (35 files passed, 1 skipped; 347 tests passed, 1 skipped)
+- git diff --check: passed
+
+Summary:
+- locateCodexCli now validates a cached executable path still exists before returning it, while preserving cached "not found" results and the valid-path fast path.
+- locateClaudeCli received the same self-healing cached-path behavior after confirming it used the same cache-never-invalidates pattern.
+- Added regression coverage for stale cached path refresh and valid cached path short-circuit behavior.
