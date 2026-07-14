@@ -1,0 +1,13 @@
+Round: D108
+Commits:
+- a7ce396 D108-1: retry missing implementation build plans
+
+Verification:
+- npm test -- tests/live-plan-retry.test.ts: passed (3 tests)
+- npm run typecheck: passed
+- npm test: passed (350 passed, 1 skipped)
+- git diff --check: passed
+
+Summary:
+- Fixed SDK/live implementation planning so a missing submit_build_plan result is retried instead of converted into a terminal direct answer.
+- Added regressions for retry success, retry exhaustion, and untouched question triage direct-answer behavior.
