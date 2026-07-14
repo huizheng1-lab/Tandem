@@ -603,7 +603,9 @@ Standing goals are context only; do not redirect unrelated requests toward them.
         if (!result.artifact) {
           const answer = result.text.trim();
           leaderThread.push({ role: "assistant", content: answer });
-          return { kind: "answer", answer };
+          lastError = new Error("Leader implementation planning finished without submit_build_plan.");
+          validationFeedback = `\n\nPrevious planning attempt was rejected before execution:\nYou classified this request as implementation and were required to call submit_build_plan with a real BuildPlan, but you ended without calling it.${answer ? `\nYour prose-only response was:\n${answer}` : ""}\nCall submit_build_plan now with the BuildPlan. Do not just describe the plan in prose.`;
+          continue;
         }
         try {
           const plan = await validateBuildPlan(result.artifact);
