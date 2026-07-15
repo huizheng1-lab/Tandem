@@ -1,0 +1,53 @@
+Round: D110
+
+Base commit (HEAD before changes): 61a555edb004879806f3be8dc2e27e20e6584161
+Changes applied as working-tree edits (no new commit).
+
+Verification:
+- npm run typecheck: passed
+- npm test: passed (356 passed, 1 skipped)
+- git diff --check: only pre-existing CRLF conversion warnings on Windows; no actual whitespace errors
+
+Summary of changes:
+
+Problem 1 — Global list bypasses empty-session pruning (fixed):
+- Modified `listAllSessions(homeDir)` in `src/session/store.ts` to run
+  `reconcileSessionIndex` + `pruneOldEmptySessions` + `writeIndex` for each
+  project-hash directory (when the ownership sidecar is present to identify the
+  real cwd), consistent with how project-scoped `listSessions(cwd, homeDir)` behaves.
+- Stale empty sessions are removed from disk before the global listing is
+  assembled; only sessions with user messages survive.
+- Existing `listSessions(cwd, homeDir)` behavior is unchanged for CLI/TUI.
+
+Problem 2 — Global list shows sessions without recoverable project ownership (fixed):
+- Preferred approach (durable ownership sidecar) implemented.
+- `SessionStore.create(cwd, homeDir)` now writes a `project.json` sidecar file
+  in the project-hash session directory containing `{ projectDir: <resolved cwd> }`.
+  The sidecar is written once (skipped if already present) so existing directories
+  are not overwritten.
+- `findSessionProjectDir(id, homeDir)` falls back to reading the sidecar when
+  no `session:start` event is found in the JSONL log.
+- `listAllSessions(homeDir)` uses the same sidecar for both the pruning cwd
+  resolution and the per-session `projectDir` population.
+- All sessions created via `SessionStore.create()` (desktop and CLI) are now
+  automatically recoverable in the global list even if the caller never appends
+  `session:start`. Desktop rename / archive / delete all work correctly for such
+  sessions because `projectDirForSession` can resolve via the sidecar.
+
+How unresolved legacy sessions are handled:
+- Legacy sessions written before D110 that have neither a `session:start` event
+  nor a `project.json` sidecar will appear in `listAllSessions()` with
+  `projectDir: undefined`. This is unchanged from D109 behaviour.
+- The desktop UI already gracefully handles undefined projectDir in session rows
+  (no projectDir label is shown). Resume/rename/archive/delete will fail with a
+  clear error ("No session <id> found.") rather than silently misbehaving, which
+  satisfies the handoff requirement of not presenting them as normal working sessions.
+- The `projectOwnershipPath` helper is private to the store module so no public
+  API surface was added.
+
+Tests added:
+- `tests/session-store.test.ts`:
+  - "D110: listAllSessions prunes old empty sessions and removes their files"
+  - "D110: sessions created without session:start are recoverable via ownership sidecar"
+- `tests/desktop-service.test.ts`:
+  - "D110: sessions without session:start have projectDir in global list and can be managed via sidecar"

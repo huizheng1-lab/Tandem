@@ -24,7 +24,7 @@ import { cliModelPatch, modelCommandUsage, modelDisplayName } from "../../../src
 import { ErrorBoundary } from "./ErrorBoundary.js";
 import { activityStripState } from "./activity-strip.js";
 import { formatTotalCost } from "./cost-display.js";
-import { MODEL_STALL_WARNING_SECONDS, effectiveRendererConfig, needsProjectPickForSession, sessionFromResume } from "./session-state.js";
+import { MODEL_STALL_WARNING_SECONDS, effectiveRendererConfig, isSessionActionable, needsProjectPickForSession, sessionFromResume } from "./session-state.js";
 import { boundedMessageTextForState, MessageText } from "./TranscriptText.js";
 import { applyDesktopTheme, THEME_REFRESH_INTERVAL_MS } from "./theme.js";
 import "./styles.css";
@@ -1145,6 +1145,7 @@ if (args.length === 1 && sub === "clear") {
               const pendingKind = pendingSessionAction?.id === item.id ? pendingSessionAction.kind : undefined;
               const actionPending = pendingKind !== undefined;
               const switchPending = switchingSessionId !== undefined;
+              const isActionable = isSessionActionable(item);
               return (
                 <div key={item.id} className="sessionRow">
                   {renamingSession === item.id ? (
@@ -1161,19 +1162,23 @@ if (args.length === 1 && sub === "clear") {
                       }}
                     />
                   ) : (
-                    <button type="button" className="sessionTitle" disabled={actionPending || switchPending} onClick={() => void replaySession(item.id)}>
+                    <button type="button" className="sessionTitle" disabled={actionPending || switchPending || !isActionable} onClick={() => void replaySession(item.id)}>
                       <span>{item.title || item.id.slice(0, 8)}</span>
-                      <small>{pendingKind === "switch" ? "Switching..." : `${relativeTime(item.lastActiveAt)}${item.id === session?.sessionId ? " (current)" : ""}`}</small>
+                      <small>
+                        {pendingKind === "switch"
+                          ? "Switching..."
+                          : `${relativeTime(item.lastActiveAt)}${item.id === session?.sessionId ? " (current)" : ""}${item.projectDir ? ` - ${displayPath(item.projectDir)}` : " - unresolved project - cannot resume from global list"}`}
+                      </small>
                     </button>
                   )}
                   <div className="sessionActions">
                     {renamingSession === item.id ? (
-                      <button type="button" disabled={actionPending} onClick={() => void saveRenameSession()}>{pendingKind === "rename" ? "Renaming..." : "Save"}</button>
+                      <button type="button" disabled={actionPending || !isActionable} onClick={() => void saveRenameSession()}>{pendingKind === "rename" ? "Renaming..." : "Save"}</button>
                     ) : (
-                      <button type="button" disabled={actionPending} onClick={() => beginRenameSession(item)}>Rename</button>
+                      <button type="button" disabled={actionPending || !isActionable} onClick={() => beginRenameSession(item)}>Rename</button>
                     )}
-                    <button type="button" disabled={actionPending} onClick={() => void archiveSession(item.id, true)}>{pendingKind === "archive" ? "Archiving..." : "Archive"}</button>
-                    <button type="button" className="dangerAction" disabled={actionPending} onClick={() => requestDeleteSession(item)}>{pendingKind === "delete" ? "Deleting..." : "Delete"}</button>
+                    <button type="button" disabled={actionPending || !isActionable} onClick={() => void archiveSession(item.id, true)}>{pendingKind === "archive" ? "Archiving..." : "Archive"}</button>
+                    <button type="button" className="dangerAction" disabled={actionPending || !isActionable} onClick={() => requestDeleteSession(item)}>{pendingKind === "delete" ? "Deleting..." : "Delete"}</button>
                   </div>
                 </div>
               );
@@ -1188,15 +1193,20 @@ if (args.length === 1 && sub === "clear") {
                 const pendingKind = pendingSessionAction?.id === item.id ? pendingSessionAction.kind : undefined;
                 const actionPending = pendingKind !== undefined;
                 const switchPending = switchingSessionId !== undefined;
+                const isActionable = isSessionActionable(item);
                 return (
                   <div key={item.id} className="sessionRow archived">
-                    <button type="button" className="sessionTitle" disabled={actionPending || switchPending} onClick={() => void replaySession(item.id)}>
+                    <button type="button" className="sessionTitle" disabled={actionPending || switchPending || !isActionable} onClick={() => void replaySession(item.id)}>
                       <span>{item.title || item.id.slice(0, 8)}</span>
-                      <small>{pendingKind === "switch" ? "Switching..." : `${relativeTime(item.lastActiveAt)}${item.id === session?.sessionId ? " (current)" : ""}`}</small>
+                      <small>
+                        {pendingKind === "switch"
+                          ? "Switching..."
+                          : `${relativeTime(item.lastActiveAt)}${item.id === session?.sessionId ? " (current)" : ""}${item.projectDir ? ` - ${displayPath(item.projectDir)}` : " - unresolved project - cannot resume from global list"}`}
+                      </small>
                     </button>
                     <div className="sessionActions">
-                      <button type="button" disabled={actionPending} onClick={() => void archiveSession(item.id, false)}>{pendingKind === "unarchive" ? "Unarchiving..." : "Unarchive"}</button>
-                      <button type="button" className="dangerAction" disabled={actionPending} onClick={() => requestDeleteSession(item)}>{pendingKind === "delete" ? "Deleting..." : "Delete"}</button>
+                      <button type="button" disabled={actionPending || !isActionable} onClick={() => void archiveSession(item.id, false)}>{pendingKind === "unarchive" ? "Unarchiving..." : "Unarchive"}</button>
+                      <button type="button" className="dangerAction" disabled={actionPending || !isActionable} onClick={() => requestDeleteSession(item)}>{pendingKind === "delete" ? "Deleting..." : "Delete"}</button>
                     </div>
                   </div>
                 );

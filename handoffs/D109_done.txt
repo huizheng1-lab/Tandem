@@ -1,0 +1,16 @@
+Round: D109
+
+Verification:
+- npm run typecheck: passed
+- npm test: passed (353 passed, 1 skipped)
+- git diff --check: passed
+
+Summary:
+- Added global session listing via listAllSessions in src/session/store.ts, scanning all project-hash directories under ~/.tandem/sessions and attaching projectDir from each session:start event.
+- Kept project-scoped listSessions(cwd, homeDir) unchanged for CLI/TUI /sessions compatibility.
+- Desktop TandemService.listSessions now returns global sessions; rename, archive, and delete resolve the owning project folder with findSessionProjectDir before mutating.
+- Sidebar label changed from "Sessions - {folder}" to "Sessions"; each row shows the owning project path via displayPath().
+- Added store and desktop-service regressions for cross-project listing and rename/archive/delete on sessions from another project folder.
+
+Manual check (not run in this session):
+- Launch Tandem desktop, open any project folder, confirm Three Kingdoms sessions appear, click one, confirm project switch and resume.

@@ -1,0 +1,24 @@
+Round: D111
+
+Base commit (HEAD before changes): 61a555edb004879806f3be8dc2e27e20e6584161
+Changes applied as working-tree edits (no new commit).
+
+Verification Summary:
+- npm run typecheck: passed
+- npm test: passed (360 passed, 1 skipped)
+- git diff --check: passed (only pre-existing CRLF warnings)
+
+Unresolved Legacy Sessions Handling:
+- In `src/session/store.ts`, `listAllSessions(homeDir)` now derives the project cwd using the priority:
+  1. `project.json` sidecar, if present and valid.
+  2. Any `.jsonl` session in that hash directory with a valid first `session:start` event containing `projectDir`.
+  3. If neither exists, the directory/session is treated as unresolved.
+- If a project cwd is found (either via sidecar or `session:start`), the reconcile/prune/write flow is run before collecting the global rows.
+- If the project cwd is resolved from a `session:start` event and the `project.json` sidecar is missing, the sidecar is written opportunistically to self-heal.
+- In `app/renderer/src/main.tsx`, a pure helper `isSessionActionable(item)` is introduced. Unresolved legacy sessions (which lack `projectDir`) are visibly rendered in both active and archived lists with the explicit label " - unresolved project - cannot resume from global list" on their subtitle.
+- All actions (resume/replay, rename, archive/unarchive, delete) are disabled for these unresolved rows, while remaining fully active for normal rows with a valid `projectDir`.
+
+Focused Tests Added:
+- `tests/session-store.test.ts`: "D111: listAllSessions prunes old empty sessions for pre-D110 directories (no project.json but with session:start) and writes sidecar"
+- `tests/desktop-service.test.ts`: "D111: legacy unresolved sessions (no project.json, no session:start) return undefined projectDir"
+- `tests/renderer-session-state.test.ts`: "D111: determines if a session is actionable based on projectDir presence"

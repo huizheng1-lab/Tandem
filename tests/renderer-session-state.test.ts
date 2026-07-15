@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { defaultConfig } from "../src/config/schema.js";
-import { MODEL_STALL_WARNING_SECONDS, effectiveRendererConfig, needsProjectPickForSession, sessionFromResume } from "../app/renderer/src/session-state.js";
+import { MODEL_STALL_WARNING_SECONDS, effectiveRendererConfig, isSessionActionable, needsProjectPickForSession, sessionFromResume } from "../app/renderer/src/session-state.js";
 import type { SessionResumeResponse } from "../app/shared/ipc.js";
 
 describe("renderer session resume state", () => {
@@ -44,5 +44,11 @@ describe("renderer session resume state", () => {
 
     expect(effectiveRendererConfig(session, liveConfig)?.leader).toBe("codex/cli");
     expect(effectiveRendererConfig(session, undefined)?.leader).toBe("minimax/minimax-m3");
+  });
+
+  it("D111: determines if a session is actionable based on projectDir presence", () => {
+    expect(isSessionActionable({ projectDir: "C:\\project" })).toBe(true);
+    expect(isSessionActionable({ projectDir: "" })).toBe(false);
+    expect(isSessionActionable({ projectDir: undefined })).toBe(false);
   });
 });

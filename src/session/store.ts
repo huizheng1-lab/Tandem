@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
 import { createWriteStream, existsSync } from "node:fs";
-import { mkdir, open, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import { mkdir, open, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { tandemStateDir } from "../paths.js";
 
@@ -16,9 +16,11 @@ export interface SessionMetadata {
   archived: boolean;
   createdAt: string;
   lastActiveAt: string;
+  projectDir?: string;
 }
 
-type SessionIndex = Record<string, Omit<SessionMetadata, "id">>;
+type SessionIndexEntry = Omit<SessionMetadata, "id" | "projectDir">;
+type SessionIndex = Record<string, SessionIndexEntry>;
 let indexQueue: Promise<void> = Promise.resolve();
 const EMPTY_SESSION_PRUNE_MS = 60 * 60 * 1000;
 const APPEND_INDEX_DEBOUNCE_MS = 250;
@@ -58,6 +60,10 @@ export function sessionDir(cwd = process.cwd(), homeDir?: string): string {
 
 export function sessionIndexPath(cwd = process.cwd(), homeDir?: string): string {
   return path.join(sessionDir(cwd, homeDir), "index.json");
+}
+
+function projectOwnershipPath(homeDir: string | undefined, projectHashDir: string): string {
+  return path.join(tandemStateDir(homeDir), "sessions", projectHashDir, "project.json");
 }
 
 function jsonText(value: unknown): string {
@@ -162,6 +168,15 @@ function boundedSessionEvent(event: SessionEvent): SessionEvent {
   return bounded;
 }
 
+async function readProjectOwnershipSidecar(ownershipPath: string): Promise<string | undefined> {
+  try {
+    const parsed = JSON.parse(await readFile(ownershipPath, "utf8")) as { projectDir?: unknown };
+    return typeof parsed.projectDir === "string" ? parsed.projectDir : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 export async function findSessionProjectDir(id: string, homeDir?: string): Promise<string | undefined> {
   const root = path.join(tandemStateDir(homeDir), "sessions");
   if (!existsSync(root)) return undefined;
@@ -170,7 +185,9 @@ export async function findSessionProjectDir(id: string, homeDir?: string): Promi
     const filePath = path.join(root, entry.name, `${id}.jsonl`);
     if (!existsSync(filePath)) continue;
     const started = (await readSessionStartEvent(filePath))?.payload as { projectDir?: unknown } | undefined;
-    return typeof started?.projectDir === "string" ? started.projectDir : undefined;
+    if (typeof started?.projectDir === "string") return started.projectDir;
+    // Fall back to the durable sidecar written by SessionStore.create().
+    return readProjectOwnershipSidecar(projectOwnershipPath(homeDir, entry.name));
   }
   return undefined;
 }
@@ -282,7 +299,7 @@ async function sessionFileIds(cwd: string, homeDir: string | undefined): Promise
   return new Set((await readdir(dir)).filter((file) => file.endsWith(".jsonl")).map((file) => file.replace(/\.jsonl$/, "")));
 }
 
-async function synthesizeSessionEntry(cwd: string, homeDir: string | undefined, id: string): Promise<Omit<SessionMetadata, "id">> {
+async function synthesizeSessionEntry(cwd: string, homeDir: string | undefined, id: string): Promise<SessionIndexEntry> {
   const events = await readSessionEvents(path.join(sessionDir(cwd, homeDir), `${id}.jsonl`));
   const first = events[0]?.at ?? new Date(0).toISOString();
   const last = events.at(-1)?.at ?? first;
@@ -323,7 +340,7 @@ async function pruneOldEmptySessions(cwd: string, homeDir: string | undefined, i
   return next;
 }
 
-async function updateSessionIndex(cwd: string, homeDir: string | undefined, id: string, updater: (entry: Omit<SessionMetadata, "id">) => void): Promise<void> {
+async function updateSessionIndex(cwd: string, homeDir: string | undefined, id: string, updater: (entry: SessionIndexEntry) => void): Promise<void> {
   await enqueueIndexMutation(async () => {
     const index = await reconcileSessionIndex(cwd, homeDir, await readIndex(cwd, homeDir));
     const now = new Date().toISOString();
@@ -397,7 +414,7 @@ function noSessionError(id: string, cwd: string): Error {
   return new Error(`No session ${id} in ${cwd}.`);
 }
 
-async function updateExistingSessionIndex(cwd: string, homeDir: string | undefined, id: string, updater: (entry: Omit<SessionMetadata, "id">) => void): Promise<void> {
+async function updateExistingSessionIndex(cwd: string, homeDir: string | undefined, id: string, updater: (entry: SessionIndexEntry) => void): Promise<void> {
   await enqueueIndexMutation(async () => {
     const index = await reconcileSessionIndex(cwd, homeDir, await readIndex(cwd, homeDir));
     const entry = index[id];
@@ -420,6 +437,12 @@ export class SessionStore {
     const id = randomUUID();
     const dir = sessionDir(cwd, homeDir);
     await mkdir(dir, { recursive: true });
+    // Write a durable ownership sidecar so listAllSessions and findSessionProjectDir
+    // can resolve projectDir even for sessions that never append a session:start event.
+    const ownershipPath = path.join(dir, "project.json");
+    if (!existsSync(ownershipPath)) {
+      await writeFile(ownershipPath, `${JSON.stringify({ projectDir: path.resolve(cwd) })}\n`, "utf8");
+    }
     const filePath = path.join(dir, `${id}.jsonl`);
     await writeFile(filePath, "", { flag: "wx" });
     const now = new Date().toISOString();
@@ -476,6 +499,89 @@ export async function listSessions(cwd = process.cwd(), homeDir?: string): Promi
       .map(([id, entry]) => ({ id, ...entry }))
       .sort((left, right) => right.lastActiveAt.localeCompare(left.lastActiveAt));
   });
+}
+
+async function sessionProjectDirFromHashDir(hashDir: string, ownershipSidecarPath: string, filePath: string): Promise<string | undefined> {
+  void hashDir;
+  const started = (await readSessionStartEvent(filePath))?.payload as { projectDir?: unknown } | undefined;
+  if (typeof started?.projectDir === "string") return started.projectDir;
+  // Fall back to the durable sidecar written by SessionStore.create().
+  return readProjectOwnershipSidecar(ownershipSidecarPath);
+}
+
+async function synthesizeGlobalSessionEntry(id: string, filePath: string): Promise<SessionIndexEntry> {
+  const fileStat = await stat(filePath);
+  const timestamp = fileStat.mtime.toISOString();
+  return {
+    title: id.slice(0, 8),
+    archived: false,
+    createdAt: timestamp,
+    lastActiveAt: timestamp
+  };
+}
+
+export async function listAllSessions(homeDir?: string): Promise<SessionMetadata[]> {
+  const root = path.join(tandemStateDir(homeDir), "sessions");
+  if (!existsSync(root)) return [];
+  await flushPendingAppendIndexUpdates();
+  const sessions: SessionMetadata[] = [];
+  for (const entry of await readdir(root, { withFileTypes: true })) {
+    if (!entry.isDirectory()) continue;
+    const dir = path.join(root, entry.name);
+    const ownershipSidecar = path.join(dir, "project.json");
+
+    // Reconcile and prune this project-hash directory before collecting sessions,
+    // consistent with how project-scoped listSessions() behaves.
+    // Derive the project cwd using priority:
+    // 1. project.json sidecar, if present and valid.
+    // 2. Any .jsonl session with a valid first session:start event containing projectDir.
+    let derivedProjectDir = await readProjectOwnershipSidecar(ownershipSidecar);
+    if (derivedProjectDir === undefined) {
+      for (const file of await readdir(dir)) {
+        if (!file.endsWith(".jsonl")) continue;
+        const filePath = path.join(dir, file);
+        const started = (await readSessionStartEvent(filePath))?.payload as { projectDir?: unknown } | undefined;
+        if (typeof started?.projectDir === "string") {
+          derivedProjectDir = started.projectDir;
+          // Opportunistically write project.json sidecar to self-heal
+          try {
+            await writeFile(ownershipSidecar, `${JSON.stringify({ projectDir: started.projectDir })}\n`, "utf8");
+          } catch {
+            // Ignore write errors to be safe
+          }
+          break;
+        }
+      }
+    }
+
+    if (derivedProjectDir !== undefined) {
+      // Use the derived cwd so sessionDir() and sessionIndexPath() resolve to this hash dir.
+      await enqueueIndexMutation(async () => {
+        const rawIndex = await readIndex(derivedProjectDir, homeDir);
+        const reconciled = await reconcileSessionIndex(derivedProjectDir, homeDir, rawIndex);
+        const pruned = await pruneOldEmptySessions(derivedProjectDir, homeDir, reconciled);
+        await writeIndex(derivedProjectDir, homeDir, pruned);
+      });
+    }
+
+    let index: SessionIndex = {};
+    try {
+      index = JSON.parse(await readFile(path.join(dir, "index.json"), "utf8")) as SessionIndex;
+    } catch {
+      index = {};
+    }
+    for (const file of await readdir(dir)) {
+      if (!file.endsWith(".jsonl")) continue;
+      const id = file.replace(/\.jsonl$/, "");
+      const filePath = path.join(dir, file);
+      // Skip sessions pruned above (file may have been removed).
+      if (!existsSync(filePath)) continue;
+      const projectDir = await sessionProjectDirFromHashDir(entry.name, ownershipSidecar, filePath);
+      const indexed = index[id] ?? (await synthesizeGlobalSessionEntry(id, filePath));
+      sessions.push({ id, ...indexed, projectDir });
+    }
+  }
+  return sessions.sort((left, right) => right.lastActiveAt.localeCompare(left.lastActiveAt));
 }
 
 export async function renameSession(id: string, title: string, cwd = process.cwd(), homeDir?: string): Promise<void> {

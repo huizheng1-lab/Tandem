@@ -74,6 +74,7 @@ describe("TandemService", () => {
     await writeFile(path.join(home, ".tandem", ".env"), "GEMINI_API_KEY=gemini-test\nMINIMAX_API_KEY=minimax-test\n", "utf8");
     await writeFile(path.join(home, ".tandem", "desktop-state.json"), `${JSON.stringify({ lastProjectDir: cwd })}\n`, "utf8");
     const store = await SessionStore.create(cwd, home);
+    await store.append("session:start", { projectDir: cwd });
     await store.append("user", { prompt: "last project session" });
 
     const { window } = fakeWindow();
@@ -419,6 +420,110 @@ describe("TandemService", () => {
     });
     await expect(service.getAppState()).resolves.toMatchObject({ projectDir: cwd, lastProjectDir: cwd });
     expect((await service.listSessions()).map((session) => session.id)).toContain(store.id);
+  });
+
+  it("lists sessions from all projects, not only the current project folder", async () => {
+    const cwdA = await tempDir();
+    const cwdB = await tempDir();
+    const home = await tempDir();
+    const storeA = await SessionStore.create(cwdA, home);
+    await storeA.append("session:start", { projectDir: cwdA });
+    const storeB = await SessionStore.create(cwdB, home);
+    await storeB.append("session:start", { projectDir: cwdB });
+    await storeB.append("user", { prompt: "other project session" });
+
+    const { window } = fakeWindow();
+    const service = new TandemService(window as never, { registerIpcResponses: false, homeDir: home, baseEnv: {} });
+    await service.startSession({ projectDir: cwdA });
+
+    const sessions = await service.listSessions();
+    expect(sessions.map((session) => session.id)).toEqual(expect.arrayContaining([storeA.id, storeB.id]));
+    expect(sessions.find((session) => session.id === storeB.id)).toMatchObject({ projectDir: cwdB, title: "other project session" });
+  });
+
+  it("renames, archives, and deletes sessions from other project folders", async () => {
+    const cwdA = await tempDir();
+    const cwdB = await tempDir();
+    const home = await tempDir();
+    const storeB = await SessionStore.create(cwdB, home);
+    await storeB.append("session:start", { projectDir: cwdB });
+    await storeB.append("user", { prompt: "other project" });
+
+    const { window } = fakeWindow();
+    const service = new TandemService(window as never, { registerIpcResponses: false, homeDir: home, baseEnv: {} });
+    await service.startSession({ projectDir: cwdA });
+
+    const renamed = await service.renameSession(storeB.id, "Renamed remotely");
+    expect(renamed.find((session) => session.id === storeB.id)?.title).toBe("Renamed remotely");
+
+    const archived = await service.archiveSession(storeB.id, true);
+    expect(archived.find((session) => session.id === storeB.id)?.archived).toBe(true);
+
+    const unarchived = await service.archiveSession(storeB.id, false);
+    expect(unarchived.find((session) => session.id === storeB.id)?.archived).toBe(false);
+
+    const deleted = await service.deleteSession(storeB.id);
+    expect(deleted.sessions.some((session) => session.id === storeB.id)).toBe(false);
+  });
+
+  it("D110: sessions without session:start have projectDir in global list and can be managed via sidecar", async () => {
+    const cwdA = await tempDir();
+    const cwdB = await tempDir();
+    const home = await tempDir();
+    // Create storeB without appending session:start (relies on sidecar written by SessionStore.create).
+    const storeB = await SessionStore.create(cwdB, home);
+    await storeB.append("user", { prompt: "no start event here" });
+
+    const { window } = fakeWindow();
+    const service = new TandemService(window as never, { registerIpcResponses: false, homeDir: home, baseEnv: {} });
+    await service.startSession({ projectDir: cwdA });
+
+    const sessions = await service.listSessions();
+    const found = sessions.find((s) => s.id === storeB.id);
+    // Session should be listed with a resolved projectDir, not undefined.
+    expect(found).toBeTruthy();
+    expect(found?.projectDir).toBeTruthy();
+
+    // rename/archive/delete should work because projectDir is resolved from sidecar.
+    const renamed = await service.renameSession(storeB.id, "Sidecar rename");
+    expect(renamed.find((s) => s.id === storeB.id)?.title).toBe("Sidecar rename");
+
+    const archived = await service.archiveSession(storeB.id, true);
+    expect(archived.find((s) => s.id === storeB.id)?.archived).toBe(true);
+
+    const deletedResult = await service.deleteSession(storeB.id);
+    expect(deletedResult.sessions.some((s) => s.id === storeB.id)).toBe(false);
+  });
+
+  it("D111: legacy unresolved sessions (no project.json, no session:start) return undefined projectDir", async () => {
+    const cwdA = await tempDir();
+    const cwdB = await tempDir();
+    const home = await tempDir();
+    // Establish a dir manually without project.json
+    const { sessionDir: getSessionDir, sessionIndexPath: getSessionIndexPath } = await import("../src/session/store.js");
+    const dir = getSessionDir(cwdB, home);
+    await mkdir(dir, { recursive: true });
+
+    const unresolvedId = "legacy-unresolved";
+    // Write a session file without session:start
+    await writeFile(path.join(dir, `${unresolvedId}.jsonl`), `${JSON.stringify({ type: "user", at: new Date().toISOString(), payload: { prompt: "help" } })}\n`, "utf8");
+    // Write index.json
+    await writeFile(
+      getSessionIndexPath(cwdB, home),
+      JSON.stringify({
+        [unresolvedId]: { title: "Unresolved Title", archived: false, createdAt: new Date().toISOString(), lastActiveAt: new Date().toISOString() }
+      }) + "\n",
+      "utf8"
+    );
+
+    const { window } = fakeWindow();
+    const service = new TandemService(window as never, { registerIpcResponses: false, homeDir: home, baseEnv: {} });
+    await service.startSession({ projectDir: cwdA });
+
+    const sessions = await service.listSessions();
+    const found = sessions.find((s) => s.id === unresolvedId);
+    expect(found).toBeTruthy();
+    expect(found?.projectDir).toBeUndefined(); // Verified unresolved!
   });
 
   it("opens current-project sessions without cross-project discovery", async () => {

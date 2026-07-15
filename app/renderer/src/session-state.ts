@@ -1,4 +1,4 @@
-import type { SessionResumeResponse, SessionStartResponse } from "../../shared/ipc.js";
+import type { SessionMetadata, SessionResumeResponse, SessionStartResponse } from "../../shared/ipc.js";
 import type { TandemConfig } from "../../../src/config/schema.js";
 
 export const MODEL_STALL_WARNING_SECONDS = 180;
@@ -21,4 +21,8 @@ export function needsProjectPickForSession(session: SessionStartResponse | undef
 
 export function effectiveRendererConfig(session: Pick<SessionStartResponse, "config"> | undefined, config: TandemConfig | undefined): TandemConfig | undefined {
   return config ?? session?.config;
+}
+
+export function isSessionActionable(item: Pick<SessionMetadata, "projectDir">): boolean {
+  return Boolean(item.projectDir);
 }

@@ -26,7 +26,7 @@ import { rebuildLeaderThread } from "../../src/session/leader-thread.js";
 import { addNote, formatSessionNotes, removeNote, replaySessionMemory } from "../../src/session/memory.js";
 import type { MemoryAuthor, SessionMemoryNote } from "../../src/session/memory.js";
 import { appendProjectMemoryNote, formatProjectInstructions, readProjectInstructions } from "../../src/session/project-memory.js";
-import { archiveSession, deleteSession, findSessionProjectDir, listSessions, renameSession, SessionStore } from "../../src/session/store.js";
+import { archiveSession, deleteSession, findSessionProjectDir, listAllSessions, renameSession, sessionDir, SessionStore } from "../../src/session/store.js";
 import type { SessionMetadata } from "../../src/session/store.js";
 import { safeDefaultProjectDir } from "../../src/tools/protection.js";
 import type { PermissionBridge, PermissionRequest } from "../../src/tools/permissions.js";
@@ -316,7 +316,14 @@ export class TandemService {
   }
 
   listSessions(): Promise<SessionMetadata[]> {
-    return listSessions(this.projectDir, this.homeDir);
+    return listAllSessions(this.homeDir);
+  }
+
+  private async projectDirForSession(id: string): Promise<string> {
+    const found = await (this.deps.findSessionProjectDir ?? findSessionProjectDir)(id, this.homeDir);
+    if (found) return found;
+    if (existsSync(path.join(sessionDir(this.projectDir, this.homeDir), `${id}.jsonl`))) return this.projectDir;
+    throw new Error(`No session ${id} found.`);
   }
 
   async resumeSession(id: string): Promise<SessionResumeResponse> {
@@ -371,12 +378,12 @@ export class TandemService {
   }
 
   async renameSession(id: string, title: string): Promise<SessionMetadata[]> {
-    await renameSession(id, title, this.projectDir, this.homeDir);
+    await renameSession(id, title, await this.projectDirForSession(id), this.homeDir);
     return this.listSessions();
   }
 
   async archiveSession(id: string, archived: boolean): Promise<SessionMetadata[]> {
-    await archiveSession(id, archived, this.projectDir, this.homeDir);
+    await archiveSession(id, archived, await this.projectDirForSession(id), this.homeDir);
     return this.listSessions();
   }
 
@@ -386,7 +393,7 @@ export class TandemService {
       this.session = undefined;
       this.lastCheckpoint = undefined;
     }
-    await deleteSession(id, this.projectDir, this.homeDir);
+    await deleteSession(id, await this.projectDirForSession(id), this.homeDir);
     if (!wasActive) return { sessions: await this.listSessions() };
     const activeSession = await this.startSession({ projectDir: this.projectDir });
     return { sessions: await this.listSessions(), activeSession };

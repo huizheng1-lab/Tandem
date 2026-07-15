@@ -7,6 +7,7 @@ import {
   archiveSession,
   deleteSession,
   findSessionProjectDir,
+  listAllSessions,
   listSessions,
   renameSession,
   readSessionStartEvent,
@@ -103,6 +104,131 @@ describe("SessionStore", () => {
 
     const content = await readFile(sessionIndexPath(cwd, home), "utf8");
     expect(() => JSON.parse(content)).not.toThrow();
+  });
+
+  it("lists sessions from all project folders globally", async () => {
+    const home = await tempDir("session-home");
+    const cwdA = await tempDir("session-cwd-a");
+    const cwdB = await tempDir("session-cwd-b");
+    const storeA = await SessionStore.create(cwdA, home);
+    await storeA.append("session:start", { projectDir: cwdA });
+    await storeA.append("user", { prompt: "project A session" });
+    const storeB = await SessionStore.create(cwdB, home);
+    await storeB.append("session:start", { projectDir: cwdB });
+    await storeB.append("user", { prompt: "project B session" });
+
+    const global = await listAllSessions(home);
+    expect(global.map((session) => session.id).sort()).toEqual([storeA.id, storeB.id].sort());
+    expect(global.find((session) => session.id === storeA.id)).toMatchObject({ projectDir: cwdA, title: "project A session" });
+    expect(global.find((session) => session.id === storeB.id)).toMatchObject({ projectDir: cwdB, title: "project B session" });
+
+    expect(await listSessions(cwdA, home)).toHaveLength(1);
+    expect(await listSessions(cwdB, home)).toHaveLength(1);
+  });
+
+  it("D110: listAllSessions prunes old empty sessions and removes their files", async () => {
+    const home = await tempDir("session-home");
+    const cwd = await tempDir("session-cwd");
+    // Use SessionStore.create() to establish the dir and sidecar correctly.
+    const bootstrapStore = await SessionStore.create(cwd, home);
+    await bootstrapStore.append("user", { prompt: "bootstrap" });
+    const dir = sessionDir(cwd, home);
+    const old = new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString();
+    const emptyId = "empty-global-old";
+    const userId = "user-global-old";
+    await writeFile(path.join(dir, `${emptyId}.jsonl`), `${JSON.stringify({ type: "session:start", at: old, payload: { projectDir: cwd } })}\n`, "utf8");
+    await writeFile(path.join(dir, `${userId}.jsonl`), `${JSON.stringify({ type: "user", at: old, payload: { prompt: "keep me globally" } })}\n`, "utf8");
+    // Seed the index with old entries so pruning can act on them.
+    const existingIndex = JSON.parse(await readFile(sessionIndexPath(cwd, home), "utf8")) as Record<string, unknown>;
+    await writeFile(
+      sessionIndexPath(cwd, home),
+      `${JSON.stringify({
+        ...existingIndex,
+        [emptyId]: { title: emptyId, archived: false, createdAt: old, lastActiveAt: old },
+        [userId]: { title: userId, archived: false, createdAt: old, lastActiveAt: old }
+      })}\n`,
+      "utf8"
+    );
+
+    const global = await listAllSessions(home);
+
+    expect(global.map((s) => s.id)).not.toContain(emptyId);
+    expect(global.map((s) => s.id)).toContain(userId);
+    expect(existsSync(path.join(dir, `${emptyId}.jsonl`))).toBe(false);
+    expect(existsSync(path.join(dir, `${userId}.jsonl`))).toBe(true);
+  });
+
+  it("D110: sessions created without session:start are recoverable via ownership sidecar", async () => {
+    const home = await tempDir("session-home");
+    const cwdA = await tempDir("session-cwd-a");
+    const cwdB = await tempDir("session-cwd-b");
+
+    // Create sessions without appending session:start.
+    const storeA = await SessionStore.create(cwdA, home);
+    await storeA.append("user", { prompt: "no start event A" });
+    const storeB = await SessionStore.create(cwdB, home);
+    await storeB.append("user", { prompt: "no start event B" });
+
+    const global = await listAllSessions(home);
+    const sessionA = global.find((s) => s.id === storeA.id);
+    const sessionB = global.find((s) => s.id === storeB.id);
+
+    // Both sessions should have a resolved projectDir even without session:start.
+    expect(sessionA?.projectDir).toBeTruthy();
+    expect(sessionB?.projectDir).toBeTruthy();
+
+    // findSessionProjectDir should also return correct values.
+    await expect(findSessionProjectDir(storeA.id, home)).resolves.toBeTruthy();
+    await expect(findSessionProjectDir(storeB.id, home)).resolves.toBeTruthy();
+  });
+
+  it("D111: listAllSessions prunes old empty sessions for pre-D110 directories (no project.json but with session:start) and writes sidecar", async () => {
+    const home = await tempDir("session-home");
+    const cwd = await tempDir("session-cwd");
+    // Manually create a sessions hash directory and files, mimicking pre-D110 legacy state (no project.json)
+    const dir = sessionDir(cwd, home);
+    await mkdir(dir, { recursive: true });
+
+    const old = new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString();
+    const emptyId = "legacy-empty-old";
+    const userId = "legacy-user-old";
+
+    // Write session log with session:start containing projectDir
+    await writeFile(path.join(dir, `${emptyId}.jsonl`), `${JSON.stringify({ type: "session:start", at: old, payload: { projectDir: cwd } })}\n`, "utf8");
+    await writeFile(
+      path.join(dir, `${userId}.jsonl`),
+      `${JSON.stringify({ type: "session:start", at: old, payload: { projectDir: cwd } })}\n` +
+      `${JSON.stringify({ type: "user", at: old, payload: { prompt: "surviving legacy session prompt" } })}\n`,
+      "utf8"
+    );
+
+    // Write index.json
+    await writeFile(
+      sessionIndexPath(cwd, home),
+      `${JSON.stringify({
+        [emptyId]: { title: emptyId, archived: false, createdAt: old, lastActiveAt: old },
+        [userId]: { title: userId, archived: false, createdAt: old, lastActiveAt: old }
+      })}\n`,
+      "utf8"
+    );
+
+    // Call listAllSessions
+    const global = await listAllSessions(home);
+
+    // 1. The old empty session is removed, the session with a user message survives.
+    expect(global.map((s) => s.id)).not.toContain(emptyId);
+    const survivor = global.find((s) => s.id === userId);
+    expect(survivor).toBeTruthy();
+    // 2. The returned surviving session has projectDir.
+    expect(survivor?.projectDir).toBe(cwd);
+    expect(existsSync(path.join(dir, `${emptyId}.jsonl`))).toBe(false);
+    expect(existsSync(path.join(dir, `${userId}.jsonl`))).toBe(true);
+
+    // 3. Sidecar project.json should have been written opportunistically to self-heal
+    const ownershipSidecar = path.join(dir, "project.json");
+    expect(existsSync(ownershipSidecar)).toBe(true);
+    const sidecarContent = JSON.parse(await readFile(ownershipSidecar, "utf8")) as { projectDir?: string };
+    expect(sidecarContent.projectDir).toBe(cwd);
   });
 
   it("finds a session's project directory from its structured start event", async () => {
