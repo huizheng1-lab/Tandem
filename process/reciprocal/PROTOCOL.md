@@ -56,4 +56,6 @@ The schedules are intentionally staggered by 30 minutes. Tandem skips a schedule
 
 After a reviewed reciprocal batch, pause the relay, merge the stable ref into `master` through the normal human-supervised flow, then fast-forward both reciprocal branches to the new `master` before resuming. A merge commit on `master` is allowed; the fast-forward-only rule governs the relay branches.
 
+The reciprocal dashboard is the normal human-supervised integration surface. Its **Update main branch** gate requires a comment, refuses an active turn or dangling candidate, verifies the exact stable commit, pushes `master` together with a sequential annotated `main-update-NNN` tag without force, reconciles both reciprocal branches and the stable state, and audits the result. Branch-only **Backup to GitHub** is separate from integration and from the relay token; it must never push `master` or retry a rejected push with force.
+
 Never run D-round `master` work and relay turns concurrently on overlapping files. If a D-round lands on `master` mid-batch, finish the active reciprocal batch first, pause, then reconcile before starting the next relay turn.

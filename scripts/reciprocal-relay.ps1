@@ -1,12 +1,14 @@
 param(
     [Parameter(Mandatory = $true)]
-    [ValidateSet("Status", "Claim", "Accept", "Complete", "Rollback", "CompleteRollback", "Abandon", "Pause", "Resume", "Reset")]
+    [ValidateSet("Status", "Claim", "Accept", "Complete", "Rollback", "CompleteRollback", "Abandon", "Pause", "Resume", "ReconcileMain", "Reset")]
     [string]$Action,
 
     [ValidateSet("A", "B")]
     [string]$Role,
 
     [string]$Summary,
+
+    [string]$NewStableCommit,
 
     [string]$Workspace = (Get-Location).Path,
 
@@ -179,6 +181,33 @@ try {
         $state.lastSummary = $Summary.Trim()
         Save-State
         Write-Result "RESUMED"
+        exit 0
+    }
+
+    if ($Action -eq "ReconcileMain") {
+        if ($state.phase -ne "paused" -or $state.activeRole) {
+            throw "ReconcileMain requires a paused relay with no active owner."
+        }
+        if ($state.candidateCommit -or $state.rollbackCommit) {
+            throw "ReconcileMain refuses while a candidate or rollback is pending."
+        }
+        if (-not $NewStableCommit.Trim()) { throw "ReconcileMain requires -NewStableCommit." }
+        $resolved = (@(Invoke-Git rev-parse "$NewStableCommit^{commit}"))[0].Trim()
+        foreach ($branchName in @("codex/reciprocal-a", "codex/reciprocal-b")) {
+            $branchHead = (@(Invoke-Git rev-parse $branchName))[0].Trim()
+            if ($branchHead -ne $resolved) {
+                throw "$branchName is at $branchHead instead of reconciled commit $resolved."
+            }
+        }
+        $state.stableCommit = $resolved
+        $state.baseCommit = $null
+        $state.candidateCommit = $null
+        $state.candidateKind = $null
+        $state.rollbackCommit = $null
+        $state.lastCompletedCommit = $resolved
+        $state.lastSummary = if ($Summary.Trim()) { $Summary.Trim() } else { "Reconciled reciprocal branches with master." }
+        Save-State
+        Write-Result "RECONCILED_MAIN"
         exit 0
     }
 

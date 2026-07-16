@@ -90,14 +90,16 @@ Recovery commands are normally issued by the role instructions:
 
 ## GitHub backup and promotion
 
-Publish the two branches without moving `master`:
+Use **Backup to GitHub** in the reciprocal dashboard after an approved runtime promotion or at any other human-selected checkpoint. It pushes only `codex/reciprocal-a`, `codex/reciprocal-b`, and, when the remote accepts it, `refs/tandem-relay/stable`. The backup operation never pushes `master`, never force-pushes, and never changes the relay token or state. A non-fast-forward rejection is reported and audited for human resolution.
+
+The equivalent manual branch-only backup is:
 
 ```powershell
 git push -u origin codex/reciprocal-a
 git push -u origin codex/reciprocal-b
 ```
 
-Push the branch that completed after reviewed turns, or automate remote backup separately. Do not make remote availability part of the turn token, because a transient network failure should not corrupt local sequencing.
+Do not make remote availability part of the turn token, because a transient network failure should not corrupt local sequencing.
 
 After a reviewed batch, select the branch containing `lastCompletedCommit`, run all checks plus `npm run dist:app`, stop the corresponding pinned executor, replace only its runtime directory with the reviewed build, and restart it. Keep the other executor pinned until the promoted build completes at least one clean turn. This creates a simple canary rollback path.
 
@@ -105,6 +107,8 @@ After a reviewed batch, select the branch containing `lastCompletedCommit`, run 
 
 `master` remains the trunk. Before starting or resuming a relay session, compare each reciprocal branch with `master`. If `codex/reciprocal-a` and `codex/reciprocal-b` are strict ancestors of `master`, fast-forward both branches to `master` and update `refs/tandem-relay/stable` to that same commit. If either branch has commits that `master` lacks, stop for human reconciliation instead of merging inside the relay.
 
-After a reviewed reciprocal batch, pause the relay, merge the stable ref into `master` through the normal human-supervised flow, then fast-forward both reciprocal branches to the new `master` before resuming. A merge commit on `master` is fine; the fast-forward-only rule applies to the relay branches.
+After a reviewed reciprocal batch, use **Update main branch** in the dashboard and provide a human review comment. The gate refuses active turns and unvalidated candidates, pauses an idle relay, verifies the exact stable commit with `npm run typecheck` and `npm test`, merges stable into `master`, creates and pushes a sequential annotated `main-update-NNN` tag with the relay turn and completed wishlist IDs, fast-forwards both reciprocal branches, updates the stable ref/state, and resumes only if the flow paused the relay. A merge commit on `master` is fine; the fast-forward-only rule applies to the relay branches.
+
+The dashboard presents the latest `main-update-NNN` identity, pending stable commit count, and the matching identities for candidate and promoted runtime builds. Remote pushes are atomic where master and its tag must move together, and no update path uses force.
 
 Do not run D-round `master` work and reciprocal relay turns concurrently on overlapping files. If a D-round lands on `master` mid-batch, finish the active reciprocal batch, pause, reconcile against `master`, and then resume the relay.
