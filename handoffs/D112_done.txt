@@ -1,0 +1,27 @@
+Round: D112
+
+Commits:
+- 8e84bb4 D112-1: commit global desktop sessions work
+- b922be6 D112-2: finish global sessions sidebar verification fix
+
+Verification:
+- npm run typecheck: passed
+- npm test: passed (359 passed, 1 skipped)
+- git diff --check: passed; only Windows CRLF conversion warnings were printed
+
+Manual desktop check observations:
+1. Launched Tandem desktop with npm run dev:app.
+2. Sidebar global sessions list showed sessions from multiple project folders while the current project was C:\Users\huizh\tmp_test_data\dialy briefing. Observed entries included:
+   - Search the web to gather latest market news... - dialy briefing
+   - allow different cities in the kingdom to have... - three kingdoms
+   - three kingdoms game - three kingdoms
+   - improve this game further, especially the... - dogfight-game
+   - Compute the sum and mean of the values in... - d97-live-a
+3. The sidebar header was corrected to plain "SESSIONS" rather than "SESSIONS - <current folder>" after the D112-2 fix.
+4. Clicked the "three kingdoms game" session. Tandem switched the project path to C:\Users\huizh\tmp_test_data\three kingdoms, resumed session 6ef2c9cb-ebe1-4128-beba-4a4d910bf3d8, and marked the row as current.
+5. Old empty sessions did not appear as obvious blank/untitled clutter in the visible global list. The automated session-store tests also cover old empty-session pruning.
+6. Unresolved legacy sessions were visible with the label "unresolved project - cannot resume from global list". Observed unresolved rows included f24b23e7 and 61626b8e.
+
+Zero-token handoff watcher:
+- Enabled and started the Windows scheduled task TandemHandoffTriggerWatch.
+- Observed state after start: Running.
