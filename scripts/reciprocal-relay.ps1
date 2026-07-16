@@ -99,19 +99,43 @@ try {
     }
 
     function Update-RelayRefs {
-        if ($state.stableCommit) {
-            Invoke-Git update-ref "refs/tandem-relay/stable" $state.stableCommit | Out-Null
+        function Get-RelayRef([string]$RefName) {
+            $oldErrorAction = $ErrorActionPreference
+            try {
+                $ErrorActionPreference = "Continue"
+                & git -C $Workspace rev-parse --verify $RefName *> $null
+                $exists = $LASTEXITCODE -eq 0
+            } finally {
+                $ErrorActionPreference = $oldErrorAction
+            }
+            if (-not $exists) { return $null }
+            return (@(Invoke-Git rev-parse --verify $RefName))[0].Trim()
         }
+
+        if ($state.stableCommit) {
+            $stableRef = "refs/tandem-relay/stable"
+            if ((Get-RelayRef $stableRef) -ne $state.stableCommit) {
+                Invoke-Git update-ref $stableRef $state.stableCommit | Out-Null
+            }
+        }
+        $candidateRef = "refs/tandem-relay/candidate"
+        $currentCandidate = Get-RelayRef $candidateRef
         if ($state.candidateCommit) {
-            Invoke-Git update-ref "refs/tandem-relay/candidate" $state.candidateCommit | Out-Null
-        } else {
-            $deleteCandidate = @("update-ref", "-d", "refs/tandem-relay/candidate")
+            if ($currentCandidate -ne $state.candidateCommit) {
+                Invoke-Git update-ref $candidateRef $state.candidateCommit | Out-Null
+            }
+        } elseif ($currentCandidate) {
+            $deleteCandidate = @("update-ref", "-d", $candidateRef)
             Invoke-Git @deleteCandidate | Out-Null
         }
+        $rollbackRef = "refs/tandem-relay/rollback"
+        $currentRollback = Get-RelayRef $rollbackRef
         if ($state.rollbackCommit) {
-            Invoke-Git update-ref "refs/tandem-relay/rollback" $state.rollbackCommit | Out-Null
-        } else {
-            $deleteRollback = @("update-ref", "-d", "refs/tandem-relay/rollback")
+            if ($currentRollback -ne $state.rollbackCommit) {
+                Invoke-Git update-ref $rollbackRef $state.rollbackCommit | Out-Null
+            }
+        } elseif ($currentRollback) {
+            $deleteRollback = @("update-ref", "-d", $rollbackRef)
             Invoke-Git @deleteRollback | Out-Null
         }
     }
