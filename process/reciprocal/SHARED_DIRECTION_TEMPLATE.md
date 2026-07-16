@@ -6,6 +6,8 @@ This file is the human-owned direction and shared progress board for both recipr
 
 Improve Tandem's reliability, usefulness, autonomy, cost discipline, and recovery behavior while preserving user control and backward compatibility. Prefer measurable user-facing improvements over internal churn.
 
+AutonomyDefault: plan-gated
+
 ## Human Guardrails
 
 - Human wishlist items take priority over self-selected improvements.
@@ -14,6 +16,7 @@ Improve Tandem's reliability, usefulness, autonomy, cost discipline, and recover
 - Keep each turn small enough to implement, verify, and review independently.
 - Do not weaken tests, safety controls, rollback behavior, or audit history to make progress appear faster.
 - Large features should be split into stable increments. Feature-flagged and scaffolding-only increments are acceptable when they keep the suite green and follow an approved epic plan.
+- `AutonomyDefault` controls only epic plan approval. Runtime promotion, master integration, authentication, credentials, pairing, remote-control work, and all protocol safety boundaries remain human-gated.
 
 ## Wishlist And Progress
 

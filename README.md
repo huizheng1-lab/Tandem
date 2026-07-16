@@ -90,6 +90,8 @@ Bare `/model` opens a minimal picker in the TUI: choose leader or worker, then c
 
 Schedules run only while Tandem is open.
 
+For the isolated reciprocal self-improvement setup, large wishlist items can use epics. `-Autonomy full` authorizes automatic plan approval only after independent validation; `AutonomyDefault: autonomous` applies the same policy to epics without an explicit mode. Plans remain committed and visible, while runtime promotion, master integration, security-surface work, and all reciprocal safety boundaries remain human-gated. See `process/reciprocal/README.md`.
+
 ## Desktop App
 
 Tandem also ships as an Electron desktop app with a chat pane, artifact cards, model dropdowns, project picker, sessions, goals, and schedules.

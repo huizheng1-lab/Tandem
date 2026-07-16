@@ -41,6 +41,11 @@ async function direction(file: string, ...args: string[]) {
   ]);
 }
 
+async function acceptedCommit(): Promise<string> {
+  try { return (await execa("git", ["rev-parse", "refs/tandem-relay/stable"])).stdout.trim(); }
+  catch { return (await execa("git", ["rev-parse", "HEAD"])).stdout.trim(); }
+}
+
 describeWindows("reciprocal direction wishlist removal", () => {
   it("removes a queued item while preserving its original line and reason", async () => {
     const file = await boardFile();
@@ -130,5 +135,55 @@ describeWindows("reciprocal direction epics", () => {
 
     const recovered = await readFile(file, "utf8");
     expect(recovered).toContain(`PLAN_APPROVED epic=true revision=1 completed=1 steps=2 next=2/2 plan=${plan}`);
+  });
+
+  it("auto-approves an independently accepted fully autonomous plan and audits it", async () => {
+    const file = await boardFile();
+    const stable = await acceptedCommit();
+    const added = JSON.parse((await direction(file, "-Action", "Add", "-Epic", "-Autonomy", "full", "-Text", "Large autonomous feature")).stdout);
+    const plan = `process/reciprocal/epics/${added.id}-plan.md`;
+    await direction(file, "-Action", "Start", "-Id", added.id, "-Role", "A");
+    await direction(file, "-Action", "Candidate", "-Id", added.id, "-Commit", stable, "-Steps", "2", "-Plan", plan);
+    await direction(file, "-Action", "AutoApprovePlan", "-Id", added.id, "-Commit", stable);
+    await direction(file, "-Action", "Start", "-Id", added.id, "-Role", "B");
+
+    const board = await readFile(file, "utf8");
+    expect(board).toContain("IN_PROGRESS epic=true autonomy=full phase=STEP");
+    expect(board).toContain(`step=1/2 plan=${plan} role=B`);
+    const audit = await readFile(path.join(path.dirname(file), "CONTROL_PANEL_AUDIT.jsonl"), "utf8");
+    expect(audit).toContain('"action":"wishlist.planAutoApprove"');
+    expect(audit).toContain('"reason":"plan auto-approved (item autonomy: full)"');
+  });
+
+  it("uses the board autonomy default and keeps security-surface epics gated", async () => {
+    const file = await boardFile();
+    const stable = await acceptedCommit();
+    const initial = await readFile(file, "utf8");
+    await writeFile(file, initial.replace("## Human Guardrails", "AutonomyDefault: autonomous\n\n## Human Guardrails"), "utf8");
+    const ordinary = JSON.parse((await direction(file, "-Action", "Add", "-Epic", "-Text", "Large reporting feature")).stdout);
+    const ordinaryPlan = `process/reciprocal/epics/${ordinary.id}-plan.md`;
+    await direction(file, "-Action", "Start", "-Id", ordinary.id, "-Role", "A");
+    await direction(file, "-Action", "Candidate", "-Id", ordinary.id, "-Commit", stable, "-Steps", "2", "-Plan", ordinaryPlan);
+    await direction(file, "-Action", "AutoApprovePlan", "-Id", ordinary.id, "-Commit", stable);
+
+    const sensitive = JSON.parse((await direction(file, "-Action", "Add", "-Epic", "-Text", "Add remote control authentication")).stdout);
+    const board = await readFile(file, "utf8");
+    expect(board).toContain(`${sensitive.id} | P1 | Add remote control authentication | QUEUED epic=true autonomy=plan-gated safety=security-surface`);
+    await expect(direction(file, "-Action", "Add", "-Epic", "-Autonomy", "full", "-Text", "Change credentials"))
+      .rejects.toThrow(/Security-surface epics must remain plan-gated/);
+  });
+
+  it("treats requeue with a note as retroactive rejection of an autonomous plan", async () => {
+    const file = await boardFile();
+    const stable = await acceptedCommit();
+    const added = JSON.parse((await direction(file, "-Action", "Add", "-Epic", "-Autonomy", "full", "-Text", "Revisable autonomous feature")).stdout);
+    const plan = `process/reciprocal/epics/${added.id}-plan.md`;
+    await direction(file, "-Action", "Start", "-Id", added.id, "-Role", "A");
+    await direction(file, "-Action", "Candidate", "-Id", added.id, "-Commit", stable, "-Steps", "2", "-Plan", plan);
+    await direction(file, "-Action", "AutoApprovePlan", "-Id", added.id, "-Commit", stable);
+    await direction(file, "-Action", "Start", "-Id", added.id, "-Role", "B");
+    await direction(file, "-Action", "Requeue", "-Id", added.id, "-Note", "change the second step");
+
+    expect(await readFile(file, "utf8")).toContain(`QUEUED epic=true autonomy=full phase=PLAN revision=2 completed=0 plan=${plan} note=change the second step`);
   });
 });
