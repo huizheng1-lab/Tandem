@@ -47,6 +47,7 @@ function New-RelayState([string]$StableCommit) {
         activeRole = $null
         phase = "idle"
         pausedFromPhase = $null
+        pauseAfterTurn = $false
         baseCommit = $null
         stableCommit = $StableCommit
         candidateCommit = $null
@@ -93,6 +94,9 @@ try {
         }
         $state = [pscustomobject](New-RelayState $currentHead)
     }
+    if (-not $state.PSObject.Properties["pauseAfterTurn"]) {
+        $state | Add-Member -NotePropertyName pauseAfterTurn -NotePropertyValue $false
+    }
 
     function Update-RelayRefs {
         if ($state.stableCommit) {
@@ -129,6 +133,7 @@ try {
             activeRole = $state.activeRole
             phase = $state.phase
             pausedFromPhase = $state.pausedFromPhase
+            pauseAfterTurn = [bool]$state.pauseAfterTurn
             baseCommit = $state.baseCommit
             stableCommit = $state.stableCommit
             candidateCommit = $state.candidateCommit
@@ -144,6 +149,17 @@ try {
     function Assert-Clean([string]$Message) {
         $dirty = @(Invoke-Git status --porcelain --untracked-files=all)
         if ($dirty.Count -gt 0) { throw "$Message`: $($dirty -join '; ')" }
+    }
+
+    function Set-IdleOrPauseAfterTurn {
+        if ($state.pauseAfterTurn) {
+            $state.phase = "paused"
+            $state.pausedFromPhase = "idle"
+            $state.pauseAfterTurn = $false
+        } else {
+            $state.phase = "idle"
+            $state.pausedFromPhase = $null
+        }
     }
 
     if ($Action -eq "Reset") {
@@ -164,6 +180,13 @@ try {
     if ($Action -eq "Pause") {
         if (-not $Summary.Trim()) { throw "Pause requires a human-readable -Summary." }
         if ($state.phase -eq "paused") { throw "Relay is already paused." }
+        if ($state.activeRole -and $state.phase -in @("working", "validating", "rollback-verification")) {
+            $state.pauseAfterTurn = $true
+            $state.lastSummary = $Summary.Trim()
+            Save-State
+            Write-Result "PAUSE_REQUESTED"
+            exit 0
+        }
         $state.pausedFromPhase = $state.phase
         $state.phase = "paused"
         $state.lastSummary = $Summary.Trim()
@@ -174,6 +197,13 @@ try {
 
     if ($Action -eq "Resume") {
         if (-not $Summary.Trim()) { throw "Resume requires a human-readable -Summary." }
+        if ($state.pauseAfterTurn) {
+            $state.pauseAfterTurn = $false
+            $state.lastSummary = $Summary.Trim()
+            Save-State
+            Write-Result "PAUSE_CANCELLED"
+            exit 0
+        }
         if ($state.phase -ne "paused") { throw "Resume is valid only when the relay phase is paused. Current phase: $($state.phase)." }
         $restorePhase = if ($state.pausedFromPhase) { [string]$state.pausedFromPhase } else { "idle" }
         if ($restorePhase -eq "paused") { throw "Cannot resume from malformed pausedFromPhase=paused." }
@@ -226,6 +256,14 @@ try {
         }
         if ($state.activeRole) {
             Write-Result $(if ($state.activeRole -eq $Role) { "RESUME" } else { "WAIT" })
+            exit 0
+        }
+        if ($state.pauseAfterTurn) {
+            $state.phase = "paused"
+            $state.pausedFromPhase = "idle"
+            $state.pauseAfterTurn = $false
+            Save-State
+            Write-Result "PAUSED"
             exit 0
         }
         if ($state.nextRole -ne $Role) {
@@ -313,7 +351,7 @@ try {
         $state.turn = [int]$state.turn + 1
         $state.nextRole = $roleConfig.Next
         $state.activeRole = $null
-        $state.phase = "idle"
+        Set-IdleOrPauseAfterTurn
         $state.baseCommit = $null
         $state.candidateCommit = $head
         $state.candidateKind = "rollback"
@@ -344,7 +382,7 @@ try {
         }
         $state.nextRole = $Role
         $state.activeRole = $null
-        $state.phase = "idle"
+        Set-IdleOrPauseAfterTurn
         $state.baseCommit = $null
         $state.startedAt = $null
         $state.lastSummary = $Summary.Trim()
@@ -370,7 +408,7 @@ try {
     $state.turn = [int]$state.turn + 1
     $state.nextRole = $roleConfig.Next
     $state.activeRole = $null
-    $state.phase = "idle"
+    Set-IdleOrPauseAfterTurn
     $state.baseCommit = $null
     $state.candidateCommit = $head
     $state.candidateKind = "improvement"
