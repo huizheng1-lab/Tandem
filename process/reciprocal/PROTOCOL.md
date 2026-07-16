@@ -11,7 +11,7 @@ This protocol runs two pinned Tandem executors against two independent git workt
    - `VALIDATE`: the other executor produced a candidate. Before editing anything, run `npm run typecheck`, `npm test`, and `git diff --check`. If the candidate touches `src/agents/`, `src/orchestrator/`, `src/session/compaction`, prompt files, or `src/providers/`, also run one cheap real-model smoke using minimax-m3 credentials from this executor's isolated `.env` (for example `scripts/live-minimax-m3.ts` or an equivalent `createLiveAgents().plan()` call on a trivial request). Require a schema-valid planning result, not merely exit code 0. This costs only fractions of a cent and catches live-dead code that static checks have missed. If all checks pass, run your role's `Accept` command. If an improvement candidate fails, run `Rollback`, verify the restored tree with the same checks, and run `CompleteRollback`. If a rollback candidate fails, pause for human inspection instead of reverting the revert.
    - `RESUME`: an earlier attempt by this same executor stopped. Inspect the reported phase and checkpoint. Resume validation, rollback verification, or implementation as appropriate; do not start a different task.
    - `WAIT` or `PAUSED`: stop immediately with a short direct response. Do not create a plan, edit files, run the full test suite, or spend tokens reviewing the repository.
-4. Do not begin an improvement until the relay is in `working` phase. Read `.tandem/shared-control/SHARED_DIRECTION.md` with `scripts/reciprocal-direction.ps1 -Action Show`. Select the highest-priority queued human wishlist item. Until a human explicitly removes this restriction after a few reviewed batches, do not self-select `[AUTO]` improvements; if no human wishlist item is `QUEUED`, use `Pause` with reason `no queued human item`.
+4. Do not begin an improvement until the relay is in `working` phase. Read `.tandem/shared-control/SHARED_DIRECTION.md` with `scripts/reciprocal-direction.ps1 -Action Show`. Select the highest-priority claimable human wishlist item: a normal `QUEUED` item, an epic `QUEUED` for its plan-only turn, or an approved epic with a recorded next step and no current owner. An epic plan candidate is not claimable until it is `PLAN_APPROVED`. Until a human explicitly removes this restriction after a few reviewed batches, do not self-select `[AUTO]` improvements; if no human item is claimable, use `Pause` with reason `no queued human item`.
 5. Run `scripts/reciprocal-direction.ps1 -Action Start -Id <id> -Role <role>` before editing. Humans may append new items while a turn is active; do not switch away from the item already in progress.
 6. Write `.tandem/reciprocal-checkpoint.md` with the objective, wishlist ID if any, evidence, intended files, current phase, checks already run, and the next concrete action. Update it after each major phase so a fresh model session can resume after a quota reset.
 7. Implement the smallest coherent fix. Add or update focused tests when behavior changes.
@@ -19,12 +19,24 @@ This protocol runs two pinned Tandem executors against two independent git workt
    - `npm run typecheck`
    - `npm test`
    - `git diff --check`
-9. Review the complete diff, stage only intended files, and commit once with a descriptive message beginning `relay:`. Never stage `.tandem`, `TANDEM.md`, secrets, build output, or unrelated files. Mark a wishlist item `Candidate` with that commit before handing off.
+9. Review the complete diff, stage only intended files, and commit once with a descriptive message beginning `relay:`. Never stage `.tandem`, `TANDEM.md`, secrets, build output, or unrelated files. Mark a wishlist item `Candidate` with that commit before handing off. Epic plan files are tracked under `process/reciprocal/epics/`, not the ignored `.tandem/` directory.
 10. Re-run `git status --short`. It must be clean before completion. Run the exact relay `Complete` command from `TANDEM.md`, including a concise verification summary.
 
 After the opposite executor accepts a candidate, it marks the matching wishlist item `Complete` with the accepted commit. After a verified rollback or abandoned attempt, it `Requeue`s the item with a concise failure note. Use `Block` only when human input is genuinely required. Do not mark work accomplished merely because its implementing executor reported success.
 
 If no high-confidence improvement is available, use the `Pause` command with a reason. Do not manufacture code churn merely to pass the turn.
+
+## Epics
+
+An epic spans multiple ordinary one-commit relay turns. Add one with `reciprocal-direction.ps1 -Action Add -Epic`. The turn-size norm remains per commit; an epic is not permission to bundle a large change.
+
+1. The first `Start` on a queued epic is plan-only. Make no production-code changes. Create `process/reciprocal/epics/<ID>-plan.md` with ordered Markdown checkbox steps, acceptance evidence for each step, and an explicit statement that every intermediate commit leaves required checks green. Commit only the plan and mark it with `Candidate -Steps <n> -Plan process/reciprocal/epics/<ID>-plan.md`.
+2. The opposite executor validates that plan candidate through the normal relay. Implementation remains blocked until a human uses the dashboard plan gate. Approval changes the board status to `PLAN_APPROVED`; rejection returns it to plan work with a note.
+3. `Start` on an approved epic assigns exactly the recorded next step. Implement only that step and check its plan checkbox in the same commit. Mark the commit with ordinary `Candidate`; do not skip, reorder, or combine steps.
+4. After peer validation of a non-final step, record `AcceptStep -Commit <stable>` so the board returns to `IN_PROGRESS` with `step k/n` and the next step. The final accepted step uses `Complete` and moves the epic from `CANDIDATE` to `DONE`.
+5. If a step is wrong-sized or remaining steps need restructuring, change only the plan in that turn and use `Candidate -PlanRevision -Steps <new-total> -Plan <path>`. All remaining implementation is blocked until that revision is peer-validated and human-approved again.
+
+Feature-flagged or scaffolding-only steps are valid stable increments. Epics do not replace human-designed D-round handoffs when security-sensitive work cannot be decomposed safely, including authentication and pairing cores.
 
 If an in-progress approach becomes unrecoverable before it is committed, use the role's `Abandon` command. It stashes tracked and untracked work with a recovery label, restores the stable branch state, and lets the same role retry later. Never abandon merely because a model quota is exhausted; quota interruptions should resume from the checkpoint.
 
@@ -39,7 +51,7 @@ Human pause is reversible. `Pause` records the current relay phase in `pausedFro
 - Do not delete broad file sets, disable tests, weaken assertions, suppress errors, or trade correctness for a passing suite.
 - Do not run destructive git or filesystem commands.
 - Treat pre-existing changes as a recovery signal. Resume only when the relay says `RESUME`; otherwise stop and ask the human to inspect.
-- Keep one turn narrow: normally no more than six production files and roughly 400 net new lines. Pause and propose a human-reviewed handoff if the work is larger, architectural, security-sensitive, or ambiguous.
+- Keep one turn narrow: normally no more than six production files and roughly 400 net new lines. This norm applies to every epic plan or step commit as well as non-epic work. Pause and propose a human-reviewed handoff if the work cannot be decomposed into stable steps or is architectural, security-sensitive, or ambiguous.
 - Local commits are the source of truth. A failed remote push does not justify rewriting or repeating a completed commit.
 
 ## Quota and restart behavior

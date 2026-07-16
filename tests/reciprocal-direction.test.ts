@@ -73,3 +73,45 @@ describeWindows("reciprocal direction wishlist removal", () => {
     expect(await readFile(file, "utf8")).toContain(`${added.id} | P1 | Owned request | IN_PROGRESS role=A`);
   });
 });
+
+describeWindows("reciprocal direction epics", () => {
+  it("gates step turns on plan approval and advances one accepted step at a time", async () => {
+    const file = await boardFile();
+    const added = JSON.parse((await direction(file, "-Action", "Add", "-Epic", "-Text", "Large stable feature")).stdout);
+    const plan = `process/reciprocal/epics/${added.id}-plan.md`;
+
+    await direction(file, "-Action", "Start", "-Id", added.id, "-Role", "A");
+    await direction(file, "-Action", "Candidate", "-Id", added.id, "-Commit", "plan123", "-Steps", "2", "-Plan", plan);
+    await expect(direction(file, "-Action", "Start", "-Id", added.id, "-Role", "B"))
+      .rejects.toThrow(/plan must be approved by a human/);
+
+    await direction(file, "-Action", "ApprovePlan", "-Id", added.id, "-Note", "bounded and stable");
+    await direction(file, "-Action", "Start", "-Id", added.id, "-Role", "B");
+    expect(await readFile(file, "utf8")).toContain(`IN_PROGRESS epic=true phase=STEP revision=1 completed=0 step=1/2 plan=${plan} role=B`);
+
+    await direction(file, "-Action", "Candidate", "-Id", added.id, "-Commit", "step1");
+    await direction(file, "-Action", "AcceptStep", "-Id", added.id, "-Commit", "step1");
+    expect(await readFile(file, "utf8")).toContain(`IN_PROGRESS epic=true phase=STEP revision=1 completed=1 step=1/2 next=2/2 plan=${plan}`);
+
+    await direction(file, "-Action", "Start", "-Id", added.id, "-Role", "A");
+    await direction(file, "-Action", "Candidate", "-Id", added.id, "-Commit", "step2");
+    await direction(file, "-Action", "Complete", "-Id", added.id, "-Commit", "step2");
+    expect(await readFile(file, "utf8")).toContain(`DONE stable=step2 completed=`);
+  });
+
+  it("requires plan revisions to return through the human plan gate", async () => {
+    const file = await boardFile();
+    const added = JSON.parse((await direction(file, "-Action", "Add", "-Epic", "-Text", "Replanned feature")).stdout);
+    const plan = `process/reciprocal/epics/${added.id}-plan.md`;
+    await direction(file, "-Action", "Start", "-Id", added.id, "-Role", "A");
+    await direction(file, "-Action", "Candidate", "-Id", added.id, "-Commit", "plan1", "-Steps", "3", "-Plan", plan);
+    await direction(file, "-Action", "ApprovePlan", "-Id", added.id);
+    await direction(file, "-Action", "Start", "-Id", added.id, "-Role", "A");
+    await direction(file, "-Action", "Candidate", "-Id", added.id, "-Commit", "plan2", "-Steps", "4", "-Plan", plan, "-PlanRevision");
+
+    const revised = await readFile(file, "utf8");
+    expect(revised).toContain("CANDIDATE epic=true candidate=PLAN revision=2");
+    await expect(direction(file, "-Action", "Start", "-Id", added.id, "-Role", "B"))
+      .rejects.toThrow(/plan must be approved by a human/);
+  });
+});

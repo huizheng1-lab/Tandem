@@ -66,6 +66,8 @@ Edit its General Direction and Human Notes directly. Add a feature safely while 
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts/reciprocal-direction.ps1 -Action Add -Priority P1 -Text "Add Feature A with requirements X, Y, and Z"
 ```
 
+For work that must span several independently validated commits, add an epic with `-Epic`. Its first turn commits only `process/reciprocal/epics/<ID>-plan.md`; implementation starts only after peer validation and human approval in the dashboard. Each later turn performs one checked plan step and keeps the normal turn-size limit.
+
 Show the shared board with `-Action Show`. Executors prioritize queued human items, record the item in their durable checkpoint, mark it as a candidate after implementation, and mark it done only after the opposite executor independently accepts the commit. Self-selected work is recorded as a lower-priority `[AUTO]` item, so its result remains visible too. New items do not interrupt the item already in progress; they are picked up on a later working turn.
 
 ## Observe and recover

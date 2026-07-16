@@ -13,11 +13,11 @@ Improve Tandem's reliability, usefulness, autonomy, cost discipline, and recover
 - Until a human removes this guardrail after a few reviewed batches, executors must not self-select `[AUTO]` improvements; if no human wishlist item is QUEUED, use Pause with reason "no queued human item".
 - Keep each turn small enough to implement, verify, and review independently.
 - Do not weaken tests, safety controls, rollback behavior, or audit history to make progress appear faster.
-- Large features should be split into stable, useful increments.
+- Large features should be split into stable increments. Feature-flagged and scaffolding-only increments are acceptable when they keep the suite green and follow an approved epic plan.
 
 ## Wishlist And Progress
 
-Statuses are `QUEUED`, `IN_PROGRESS`, `CANDIDATE`, `BLOCKED`, and `DONE`. Only independently accepted candidates become `DONE`.
+Statuses are `QUEUED`, `IN_PROGRESS`, `CANDIDATE`, `PLAN_APPROVED`, `BLOCKED`, and `DONE`. Only independently accepted candidates become `DONE`.
 
 <!-- wishlist-items -->
 - [x] W0001 | P1 | Establish isolated reciprocal worktrees and pinned executors | DONE stable=55bb194
