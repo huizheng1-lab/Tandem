@@ -122,6 +122,39 @@ describe("codex cli discovery", () => {
     expect(locateCodexCli({ env: { PATH: "C:/bin" }, pathSeparator: path.delimiter, exists: (filePath) => filePath === found })).toBe(found);
   });
 
+  it("D124: skips protected MSIX payloads and continues to a spawnable PATH candidate", () => {
+    clearCodexCliPathCache();
+    const protectedPath = path.win32.join("C:\\Program Files", "WindowsApps", "OpenAI.Codex_1.0_x64", "app", "resources", "codex.exe");
+    const spawnablePath = path.win32.join("C:\\Tools", "Codex", "codex.exe");
+    expect(
+      locateCodexCli({
+        platform: "win32",
+        env: { PATH: `${path.win32.dirname(protectedPath)};${path.win32.dirname(spawnablePath)}` },
+        pathSeparator: ";",
+        exists: (filePath) => [protectedPath, spawnablePath].includes(filePath)
+      })
+    ).toBe(spawnablePath);
+  });
+
+  it("D124: falls back past a protected PATH payload and version folders without codex.exe", () => {
+    clearCodexCliPathCache();
+    const local = "C:/Users/me/AppData/Local";
+    const binRoot = path.join(local, "OpenAI", "Codex", "bin");
+    const protectedDir = "C:/Program Files/WindowsApps/OpenAI.Codex_1.0_x64/app/resources";
+    const protectedPath = path.join(protectedDir, "codex.exe");
+    const spawnablePath = path.join(binRoot, "3135b80b111fd431", "codex.exe");
+    expect(
+      locateCodexCli({
+        platform: "win32",
+        env: { PATH: protectedDir, LOCALAPPDATA: local },
+        pathSeparator: ";",
+        exists: (filePath) => filePath === protectedPath || filePath === binRoot || filePath === spawnablePath,
+        readdir: () => ["ada252862d154cdd", "3135b80b111fd431"],
+        stat: () => ({ mtimeMs: 1 })
+      })
+    ).toBe(spawnablePath);
+  });
+
   it("chooses the newest Windows fallback install", () => {
     clearCodexCliPathCache();
     const local = "C:/Users/me/AppData/Local";
