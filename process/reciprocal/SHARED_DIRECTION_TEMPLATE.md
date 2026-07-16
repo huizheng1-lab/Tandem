@@ -10,6 +10,7 @@ Improve Tandem's reliability, usefulness, autonomy, cost discipline, and recover
 
 - Human wishlist items take priority over self-selected improvements.
 - Executors record self-selected improvements as `[AUTO]` wishlist items before editing.
+- Until a human removes this guardrail after a few reviewed batches, executors must not self-select `[AUTO]` improvements; if no human wishlist item is QUEUED, use Pause with reason "no queued human item".
 - Keep each turn small enough to implement, verify, and review independently.
 - Do not weaken tests, safety controls, rollback behavior, or audit history to make progress appear faster.
 - Large features should be split into stable, useful increments.

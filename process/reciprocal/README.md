@@ -100,3 +100,11 @@ git push -u origin codex/reciprocal-b
 Push the branch that completed after reviewed turns, or automate remote backup separately. Do not make remote availability part of the turn token, because a transient network failure should not corrupt local sequencing.
 
 After a reviewed batch, select the branch containing `lastCompletedCommit`, run all checks plus `npm run dist:app`, stop the corresponding pinned executor, replace only its runtime directory with the reviewed build, and restart it. Keep the other executor pinned until the promoted build completes at least one clean turn. This creates a simple canary rollback path.
+
+## Master reconciliation
+
+`master` remains the trunk. Before starting or resuming a relay session, compare each reciprocal branch with `master`. If `codex/reciprocal-a` and `codex/reciprocal-b` are strict ancestors of `master`, fast-forward both branches to `master` and update `refs/tandem-relay/stable` to that same commit. If either branch has commits that `master` lacks, stop for human reconciliation instead of merging inside the relay.
+
+After a reviewed reciprocal batch, pause the relay, merge the stable ref into `master` through the normal human-supervised flow, then fast-forward both reciprocal branches to the new `master` before resuming. A merge commit on `master` is fine; the fast-forward-only rule applies to the relay branches.
+
+Do not run D-round `master` work and reciprocal relay turns concurrently on overlapping files. If a D-round lands on `master` mid-batch, finish the active reciprocal batch, pause, reconcile against `master`, and then resume the relay.
