@@ -1105,7 +1105,6 @@ if (args.length === 1 && sub === "clear") {
 
   const activeSessions = sessions.filter((item) => !item.archived);
   const archivedSessions = sessions.filter((item) => item.archived);
-  const sessionScopeLabel = contextProjectDir ? displayPath(contextProjectDir) : "current folder";
   const switchingSessionId = pendingSessionAction?.kind === "switch" ? pendingSessionAction.id : undefined;
   const visibleEntries = useMemo(() => (showActivity ? entries : entries.filter((entry) => entry.kind !== "tool")), [entries, showActivity]);
   const fallbackRole: "leader" | "worker" = phase === "BUILDING" ? "worker" : "leader";
@@ -1139,7 +1138,7 @@ if (args.length === 1 && sub === "clear") {
           <div className="sideValue">{session?.sessionId ?? "not started"}</div>
         </div>
         <div className="sideSection">
-          <div className="sideLabel">Sessions - {sessionScopeLabel}</div>
+          <div className="sideLabel">Sessions</div>
           <div className="sideList">
             {activeSessions.map((item) => {
               const pendingKind = pendingSessionAction?.id === item.id ? pendingSessionAction.kind : undefined;
