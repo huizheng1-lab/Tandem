@@ -305,7 +305,9 @@ describe("codex cli execution", () => {
 
   it("D129: grants only explicitly configured roots to workspace-write Codex runs", () => {
     const separator = path.delimiter;
-    const roots = codexWritableRoots({ TANDEM_CODEX_WRITABLE_ROOTS: [`C:${path.sep}control`, `C:${path.sep}relay`, `C:${path.sep}control`].join(separator) });
+    const roots = codexWritableRoots({
+      TANDEM_CODEX_WRITABLE_ROOTS: [`C:${path.sep}control`, `C:${path.sep}relay-state`, `C:${path.sep}relay-refs`, `C:${path.sep}control`].join(separator)
+    });
     const argv = buildCodexExecArgv({
       cwd: "C:/project",
       sandbox: "workspace-write",
@@ -315,8 +317,17 @@ describe("codex cli execution", () => {
       writableRoots: roots
     });
 
-    expect(argv.filter((arg) => arg === "--add-dir")).toHaveLength(2);
-    expect(argv).toEqual(expect.arrayContaining(["--add-dir", path.resolve(`C:${path.sep}control`), "--add-dir", path.resolve(`C:${path.sep}relay`)]));
+    expect(argv.filter((arg) => arg === "--add-dir")).toHaveLength(3);
+    expect(argv).toEqual(
+      expect.arrayContaining([
+        "--add-dir",
+        path.resolve(`C:${path.sep}control`),
+        "--add-dir",
+        path.resolve(`C:${path.sep}relay-state`),
+        "--add-dir",
+        path.resolve(`C:${path.sep}relay-refs`)
+      ])
+    );
     expect(
       buildCodexExecArgv({
         cwd: "C:/project",

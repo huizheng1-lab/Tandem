@@ -52,7 +52,8 @@ function Start-Executor([string]$SelectedRole) {
         $env:TANDEM_PROTECTED_ROOTS = $protectedRoots -join [IO.Path]::PathSeparator
         $codexWritableRoots = @(
             (Join-Path $RelayRoot "control"),
-            (Join-Path (Join-Path $adminRepo ".git") "tandem-relay")
+            (Join-Path (Join-Path $adminRepo ".git") "tandem-relay"),
+            (Join-Path (Join-Path (Join-Path $adminRepo ".git") "refs") "tandem-relay")
         )
         $env:TANDEM_CODEX_WRITABLE_ROOTS = $codexWritableRoots -join [IO.Path]::PathSeparator
         $arguments = @(
