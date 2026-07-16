@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { TandemService } from "../app/main/tandem-service.js";
+import { startupErrorInfo } from "../app/main/startup-error.js";
 import { ipcChannels } from "../app/shared/ipc.js";
 import type { BuildPlan } from "../src/orchestrator/artifacts.js";
 import type { AgentFns, RunOptions, RunResult } from "../src/orchestrator/machine.js";
@@ -67,6 +68,39 @@ function respondToPlan(service: TandemService, id: string, approved: boolean): v
 }
 
 describe("TandemService", () => {
+  it("loads a BOM-prefixed desktop state and preserves its peer worktree", async () => {
+    const cwd = await tempDir();
+    const home = await tempDir();
+    await mkdir(path.join(home, ".tandem"), { recursive: true });
+    await writeFile(path.join(home, ".tandem", "desktop-state.json"), `\uFEFF${JSON.stringify({ lastProjectDir: cwd })}`, "utf8");
+
+    const { window } = fakeWindow();
+    const service = new TandemService(window as never, { registerIpcResponses: false, homeDir: home, baseEnv: {} });
+
+    await expect(service.getAppState()).resolves.toMatchObject({ projectDir: cwd, lastProjectDir: cwd });
+  });
+
+  it("turns invalid startup config into a visible actionable error payload", async () => {
+    const home = await tempDir();
+    await mkdir(path.join(home, ".tandem"), { recursive: true });
+    const configPath = path.join(home, ".tandem", "config.json");
+    await writeFile(configPath, "{ definitely-not-json", "utf8");
+    const { window } = fakeWindow();
+
+    let startupFailure: unknown;
+    try {
+      new TandemService(window as never, { registerIpcResponses: false, homeDir: home, baseEnv: {} });
+    } catch (error) {
+      startupFailure = error;
+    }
+
+    expect(startupFailure).toBeTruthy();
+    expect(startupErrorInfo(startupFailure)).toMatchObject({
+      title: "Tandem could not start",
+      message: expect.stringContaining(configPath)
+    });
+  });
+
   it("initializes launch context from the last project without starting a session", async () => {
     const cwd = await tempDir();
     const home = await tempDir();

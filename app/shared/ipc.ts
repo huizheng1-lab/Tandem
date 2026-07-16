@@ -19,6 +19,7 @@ export type { ToolActivityEvent } from "../../src/tools/fs.js";
 
 export const ipcChannels = {
   ping: "app:ping",
+  startupErrorGet: "startup-error:get",
   sessionStart: "session:start",
   pipelineRun: "pipeline:run",
   pipelineAbort: "pipeline:abort",
@@ -79,6 +80,11 @@ export interface DesktopAppStateResponse {
   lastProjectDir?: string;
   config: TandemConfig;
   projectSummary: string;
+}
+
+export interface StartupErrorInfo {
+  title: string;
+  message: string;
 }
 
 export interface PipelineRunRequest {
@@ -229,6 +235,7 @@ export interface ScheduleRemoveRequest {
 
 export interface TandemDesktopApi {
   ping(): Promise<string>;
+  getStartupError(): Promise<StartupErrorInfo | undefined>;
   startSession(request: SessionStartRequest): Promise<SessionStartResponse>;
   runPipeline(request: PipelineRunRequest): Promise<void>;
   abortPipeline(): Promise<void>;

@@ -72,7 +72,8 @@ foreach ($role in @("a", "b")) {
         promotedAt = (Get-Date).ToString("o")
         artifact = "release/win-unpacked"
     }
-    $buildInfo | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $targetDir "BUILD_INFO.json") -Encoding utf8
+    $buildInfoJson = $buildInfo | ConvertTo-Json
+    [IO.File]::WriteAllText((Join-Path $targetDir "BUILD_INFO.json"), $buildInfoJson + [Environment]::NewLine, [Text.UTF8Encoding]::new($false))
 
     if (-not (Test-Path -LiteralPath (Join-Path $targetDir "Tandem.exe"))) {
         throw "Promoted runtime for executor $role is missing Tandem.exe."

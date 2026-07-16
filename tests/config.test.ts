@@ -18,6 +18,15 @@ async function tempDir(name: string): Promise<string> {
 }
 
 describe("config", () => {
+  it("loads UTF-8 BOM-prefixed global configuration", async () => {
+    const home = await tempDir("bom-home");
+    const cwd = await tempDir("bom-cwd");
+    await mkdir(path.join(home, ".tandem"), { recursive: true });
+    await writeFile(path.join(home, ".tandem", "config.json"), `\uFEFF${JSON.stringify({ permissionMode: "yolo", leader: "codex/cli" })}`, "utf8");
+
+    expect(loadConfig({ cwd, homeDir: home })).toMatchObject({ permissionMode: "yolo", leader: "codex/cli" });
+  });
+
   it("merges defaults < global < project < flags", async () => {
     const home = await tempDir("home");
     const cwd = await tempDir("cwd");

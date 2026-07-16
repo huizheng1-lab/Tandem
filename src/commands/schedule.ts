@@ -1,9 +1,10 @@
 import { existsSync } from "node:fs";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { z } from "zod";
 import cron from "node-cron";
+import { readJsonFile } from "../json.js";
 
 export const ScheduleSchema = z.object({ id: z.string(), cron: z.string(), prompt: z.string(), createdAt: z.string(), lastRunAt: z.string().optional() });
 export type Schedule = z.infer<typeof ScheduleSchema>;
@@ -16,7 +17,7 @@ export function schedulesPath(cwd = process.cwd()): string {
 export async function listSchedules(cwd = process.cwd()): Promise<Schedule[]> {
   const filePath = schedulesPath(cwd);
   if (!existsSync(filePath)) return [];
-  return SchedulesSchema.parse(JSON.parse(await readFile(filePath, "utf8")) as unknown);
+  return SchedulesSchema.parse(await readJsonFile(filePath));
 }
 
 async function saveSchedules(schedules: Schedule[], cwd = process.cwd()): Promise<void> {

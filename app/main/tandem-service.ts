@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync } from "node:fs";
 import { BrowserWindow, ipcMain } from "electron";
 import { mkdir, readdir, writeFile } from "node:fs/promises";
 import path from "node:path";
@@ -29,6 +29,7 @@ import { appendProjectMemoryNote, formatProjectInstructions, readProjectInstruct
 import { archiveSession, deleteSession, findSessionProjectDir, listAllSessions, renameSession, sessionDir, SessionStore } from "../../src/session/store.js";
 import type { SessionMetadata } from "../../src/session/store.js";
 import { safeDefaultProjectDir } from "../../src/tools/protection.js";
+import { readJsonFileSync } from "../../src/json.js";
 import type { PermissionBridge, PermissionRequest } from "../../src/tools/permissions.js";
 import { addSchedule, listSchedules, markScheduleRun, removeSchedule } from "../../src/commands/schedule.js";
 import type { Schedule } from "../../src/commands/schedule.js";
@@ -63,11 +64,11 @@ function desktopAppStatePath(homeDir?: string): string {
   return path.join(tandemStateDir(homeDir), "desktop-state.json");
 }
 
-function readDesktopAppState(homeDir?: string): DesktopAppState {
+export function readDesktopAppState(homeDir?: string): DesktopAppState {
   const filePath = desktopAppStatePath(homeDir);
   if (!existsSync(filePath)) return {};
   try {
-    const parsed = JSON.parse(readFileSync(filePath, "utf8")) as DesktopAppState;
+    const parsed = readJsonFileSync<DesktopAppState>(filePath);
     const lastProjectDir = typeof parsed.lastProjectDir === "string" && existsSync(parsed.lastProjectDir) ? parsed.lastProjectDir : undefined;
     return { lastProjectDir };
   } catch {

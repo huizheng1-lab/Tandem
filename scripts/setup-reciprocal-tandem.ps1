@@ -41,7 +41,8 @@ function Ensure-Worktree([string]$Path, [string]$Branch) {
 
 function Write-Json([object]$Value, [string]$Path) {
     New-Item -ItemType Directory -Path (Split-Path $Path -Parent) -Force | Out-Null
-    ConvertTo-Json -InputObject $Value -Depth 10 | Set-Content -LiteralPath $Path -Encoding utf8
+    $json = ConvertTo-Json -InputObject $Value -Depth 10
+    [IO.File]::WriteAllText($Path, $json + [Environment]::NewLine, [Text.UTF8Encoding]::new($false))
 }
 
 function Initialize-ExecutorState([string]$Role, [string]$TargetWorktree) {

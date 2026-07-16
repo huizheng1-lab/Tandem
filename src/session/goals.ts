@@ -1,7 +1,8 @@
 import { existsSync } from "node:fs";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { z } from "zod";
+import { readJsonFile } from "../json.js";
 
 export const GoalSchema = z.object({
   id: z.number().int().positive(),
@@ -21,7 +22,7 @@ export function goalsPath(cwd = process.cwd()): string {
 export async function listGoals(cwd = process.cwd()): Promise<Goal[]> {
   const filePath = goalsPath(cwd);
   if (!existsSync(filePath)) return [];
-  return GoalsFileSchema.parse(JSON.parse(await readFile(filePath, "utf8")) as unknown);
+  return GoalsFileSchema.parse(await readJsonFile(filePath));
 }
 
 async function saveGoals(goals: Goal[], cwd = process.cwd()): Promise<void> {

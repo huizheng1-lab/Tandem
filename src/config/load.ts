@@ -1,8 +1,9 @@
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync } from "node:fs";
 import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import dotenv from "dotenv";
 import { tandemStateDir } from "../paths.js";
+import { readJsonFileSync } from "../json.js";
 import { ConfigFlags, ConfigSchema, TandemConfig, defaultConfig } from "./schema.js";
 
 export class ConfigError extends Error {}
@@ -25,7 +26,7 @@ export function globalConfigPath(homeDir?: string): string {
 function readJsonIfPresent(filePath: string): unknown {
   if (!existsSync(filePath)) return {};
   try {
-    return JSON.parse(readFileSync(filePath, "utf8")) as unknown;
+    return readJsonFileSync(filePath);
   } catch (error) {
     throw new ConfigError(`Could not parse ${filePath}. Fix the JSON and try again. ${String(error)}`);
   }

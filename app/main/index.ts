@@ -3,6 +3,8 @@ import { fileURLToPath } from "node:url";
 import path from "node:path";
 import { ipcChannels } from "../shared/ipc.js";
 import { TandemService } from "./tandem-service.js";
+import { startupErrorInfo } from "./startup-error.js";
+import type { StartupErrorInfo } from "../shared/ipc.js";
 import type {
   AttachmentAddDataRequest,
   AttachmentAddFilesRequest,
@@ -34,6 +36,7 @@ process.env.TANDEM_PROTECTED_ROOTS = [
 
 let mainWindow: BrowserWindow | undefined;
 let service: TandemService | undefined;
+let startupError: StartupErrorInfo | undefined;
 const gotSingleInstanceLock = app.requestSingleInstanceLock();
 
 function createWindow(): void {
@@ -50,7 +53,15 @@ function createWindow(): void {
       preload: path.join(currentDir, "../preload/index.js")
     }
   });
-  service = new TandemService(mainWindow);
+  try {
+    service = new TandemService(mainWindow);
+    startupError = undefined;
+  } catch (error) {
+    service = undefined;
+    startupError = startupErrorInfo(error);
+    console.error(startupError.message);
+    dialog.showErrorBox(startupError.title, startupError.message);
+  }
 
   if (process.env.ELECTRON_RENDERER_URL) {
     void mainWindow.loadURL(process.env.ELECTRON_RENDERER_URL);
@@ -60,6 +71,7 @@ function createWindow(): void {
 }
 
 ipcMain.handle(ipcChannels.ping, () => "pong");
+ipcMain.handle(ipcChannels.startupErrorGet, () => startupError);
 ipcMain.handle(ipcChannels.sessionStart, (_event, request: SessionStartRequest) => {
   return service?.startSession(request);
 });

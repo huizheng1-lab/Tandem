@@ -115,7 +115,8 @@ try {
     function Save-State {
         $state.updatedAt = (Get-Date).ToUniversalTime().ToString("o")
         $tempPath = "$statePath.tmp-$PID"
-        $state | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath $tempPath -Encoding utf8
+        $json = $state | ConvertTo-Json -Depth 5
+        [IO.File]::WriteAllText($tempPath, $json + [Environment]::NewLine, [Text.UTF8Encoding]::new($false))
         Move-Item -LiteralPath $tempPath -Destination $statePath -Force
         Update-RelayRefs
     }

@@ -20,6 +20,7 @@ function on<T>(channel: string, callback: (event: T) => void): () => void {
 
 const api: TandemDesktopApi = {
   ping: () => ipcRenderer.invoke(ipcChannels.ping),
+  getStartupError: () => ipcRenderer.invoke(ipcChannels.startupErrorGet),
   startSession: (request) => ipcRenderer.invoke(ipcChannels.sessionStart, request),
   runPipeline: (request) => ipcRenderer.invoke(ipcChannels.pipelineRun, request),
   abortPipeline: () => ipcRenderer.invoke(ipcChannels.pipelineAbort),

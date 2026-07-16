@@ -240,6 +240,7 @@ function App(): React.ReactElement {
   }
 
   const [session, setSession] = useState<SessionStartResponse>();
+  const [startupError, setStartupError] = useState<{ title: string; message: string }>();
   const needsProjectPick = needsProjectPickForSession(session);
   const [config, setConfig] = useState<TandemConfig>();
   const [appState, setAppState] = useState<DesktopAppStateResponse>();
@@ -595,8 +596,13 @@ function App(): React.ReactElement {
       tandem.onPlanConfirm(setPlanModal)
     ];
 
-    void Promise.all([tandem.getAppState(), tandem.listModels(), refreshSidebar()])
-      .then(([state, modelItems]) => {
+    void tandem.getStartupError()
+      .then(async (error) => {
+        if (error) {
+          setStartupError(error);
+          return;
+        }
+        const [state, modelItems] = await Promise.all([tandem.getAppState(), tandem.listModels(), refreshSidebar()]);
         setAppState(state);
         setConfig(state.config);
         setShowThinking(state.config.showThinking);
@@ -1112,6 +1118,16 @@ if (args.length === 1 && sub === "clear") {
   const strip = activityStripState({ activeTool, activityPulse, fallbackRole, noActivitySeconds, activityTick, secondsSince });
   const stripRole = strip.role;
   const stripText = strip.text;
+
+  if (startupError) {
+    return (
+      <main className="errorBoundary">
+        <h1>{startupError.title}</h1>
+        <p>Tandem could not load its local state. Fix the file named below, then restart the app.</p>
+        <pre>{startupError.message}</pre>
+      </main>
+    );
+  }
 
   return (
     <main

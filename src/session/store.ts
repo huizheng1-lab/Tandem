@@ -3,6 +3,7 @@ import { createWriteStream, existsSync } from "node:fs";
 import { mkdir, open, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { tandemStateDir } from "../paths.js";
+import { parseJsonText, readJsonFile, stripJsonBom } from "../json.js";
 
 export interface SessionEvent {
   type: string;
@@ -170,7 +171,7 @@ function boundedSessionEvent(event: SessionEvent): SessionEvent {
 
 async function readProjectOwnershipSidecar(ownershipPath: string): Promise<string | undefined> {
   try {
-    const parsed = JSON.parse(await readFile(ownershipPath, "utf8")) as { projectDir?: unknown };
+    const parsed = await readJsonFile<{ projectDir?: unknown }>(ownershipPath);
     return typeof parsed.projectDir === "string" ? parsed.projectDir : undefined;
   } catch {
     return undefined;
@@ -211,7 +212,7 @@ async function enqueueIndexMutation<T>(operation: () => Promise<T>): Promise<T> 
 
 async function readIndex(cwd: string, homeDir: string | undefined): Promise<SessionIndex> {
   try {
-    return JSON.parse(await readFile(sessionIndexPath(cwd, homeDir), "utf8")) as SessionIndex;
+    return await readJsonFile<SessionIndex>(sessionIndexPath(cwd, homeDir));
   } catch {
     return {};
   }
@@ -226,11 +227,11 @@ async function writeIndex(cwd: string, homeDir: string | undefined, index: Sessi
 async function readSessionEvents(filePath: string): Promise<SessionEvent[]> {
   if (!existsSync(filePath)) return [];
   const content = await readFile(filePath, "utf8");
-  return content
+  return stripJsonBom(content)
     .trim()
     .split(/\r?\n/)
     .filter(Boolean)
-    .map((line) => JSON.parse(line) as SessionEvent);
+    .map((line) => parseJsonText<SessionEvent>(line));
 }
 
 export async function readSessionStartEvent(filePath: string): Promise<SessionEvent | undefined> {
@@ -249,7 +250,7 @@ export async function readSessionStartEvent(filePath: string): Promise<SessionEv
       pending = lines.pop() ?? "";
       for (const line of lines) {
         if (!line.trim()) continue;
-        const event = JSON.parse(line) as SessionEvent;
+        const event = parseJsonText<SessionEvent>(line);
         if (event.type === "session:start") return event;
         return undefined;
       }
@@ -285,7 +286,7 @@ async function readRecentSessionEvents(filePath: string, limit: number): Promise
       .filter(Boolean);
     const truncated = position > 0 || lines.length > limit;
     return {
-      events: lines.slice(-limit).map((line) => JSON.parse(line) as SessionEvent),
+      events: lines.slice(-limit).map((line) => parseJsonText<SessionEvent>(line)),
       truncated
     };
   } finally {
@@ -566,7 +567,7 @@ export async function listAllSessions(homeDir?: string): Promise<SessionMetadata
 
     let index: SessionIndex = {};
     try {
-      index = JSON.parse(await readFile(path.join(dir, "index.json"), "utf8")) as SessionIndex;
+      index = await readJsonFile<SessionIndex>(path.join(dir, "index.json"));
     } catch {
       index = {};
     }
