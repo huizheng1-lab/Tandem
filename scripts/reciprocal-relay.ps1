@@ -1,6 +1,6 @@
 param(
     [Parameter(Mandatory = $true)]
-    [ValidateSet("Status", "Claim", "Accept", "Complete", "Rollback", "CompleteRollback", "Abandon", "Pause", "Reset")]
+    [ValidateSet("Status", "Claim", "Accept", "Complete", "Rollback", "CompleteRollback", "Abandon", "Pause", "Resume", "Reset")]
     [string]$Action,
 
     [ValidateSet("A", "B")]
@@ -44,6 +44,7 @@ function New-RelayState([string]$StableCommit) {
         nextRole = "A"
         activeRole = $null
         phase = "idle"
+        pausedFromPhase = $null
         baseCommit = $null
         stableCommit = $StableCommit
         candidateCommit = $null
@@ -124,6 +125,7 @@ try {
             nextRole = $state.nextRole
             activeRole = $state.activeRole
             phase = $state.phase
+            pausedFromPhase = $state.pausedFromPhase
             baseCommit = $state.baseCommit
             stableCommit = $state.stableCommit
             candidateCommit = $state.candidateCommit
@@ -153,6 +155,30 @@ try {
     if ($Action -eq "Status") {
         Save-State
         Write-Result "STATUS"
+        exit 0
+    }
+
+    if ($Action -eq "Pause") {
+        if (-not $Summary.Trim()) { throw "Pause requires a human-readable -Summary." }
+        if ($state.phase -eq "paused") { throw "Relay is already paused." }
+        $state.pausedFromPhase = $state.phase
+        $state.phase = "paused"
+        $state.lastSummary = $Summary.Trim()
+        Save-State
+        Write-Result "PAUSED"
+        exit 0
+    }
+
+    if ($Action -eq "Resume") {
+        if (-not $Summary.Trim()) { throw "Resume requires a human-readable -Summary." }
+        if ($state.phase -ne "paused") { throw "Resume is valid only when the relay phase is paused. Current phase: $($state.phase)." }
+        $restorePhase = if ($state.pausedFromPhase) { [string]$state.pausedFromPhase } else { "idle" }
+        if ($restorePhase -eq "paused") { throw "Cannot resume from malformed pausedFromPhase=paused." }
+        $state.phase = $restorePhase
+        $state.pausedFromPhase = $null
+        $state.lastSummary = $Summary.Trim()
+        Save-State
+        Write-Result "RESUMED"
         exit 0
     }
 
@@ -203,15 +229,6 @@ try {
 
     if ($state.activeRole -ne $Role) {
         throw "Role $Role does not own the active turn. Current owner: $($state.activeRole)."
-    }
-
-    if ($Action -eq "Pause") {
-        if (-not $Summary.Trim()) { throw "Pause requires a human-readable -Summary." }
-        $state.phase = "paused"
-        $state.lastSummary = $Summary.Trim()
-        Save-State
-        Write-Result "PAUSED"
-        exit 0
     }
 
     if ($Action -eq "Accept") {

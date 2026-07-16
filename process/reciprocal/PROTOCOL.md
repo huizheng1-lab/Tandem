@@ -28,6 +28,8 @@ If no high-confidence improvement is available, use the `Pause` command with a r
 
 If an in-progress approach becomes unrecoverable before it is committed, use the role's `Abandon` command. It stashes tracked and untracked work with a recovery label, restores the stable branch state, and lets the same role retry later. Never abandon merely because a model quota is exhausted; quota interruptions should resume from the checkpoint.
 
+Human pause is reversible. `Pause` records the current relay phase in `pausedFromPhase`, leaves the owner, turn token, refs, and worktrees untouched, and makes later `Claim` attempts return `PAUSED`. `Resume` is valid only while the relay is paused; it restores the saved phase and requires a human-readable summary. `Reset -Force` remains the heavy human recovery path and must not be used as a casual resume.
+
 ## Safety boundaries
 
 - Never modify the executor runtime, the peer worktree, the admin worktree, the relay state under the common git directory, or either branch by any route other than the relay command and the current target worktree.
