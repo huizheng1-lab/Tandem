@@ -1,6 +1,7 @@
 import { readFile } from "node:fs/promises";
 import { spawn } from "node:child_process";
 import { once } from "node:events";
+import path from "node:path";
 import type { CodexCliReasoningEffort, PermissionMode } from "../../config/schema.js";
 import type { ModelEntry } from "../../providers/registry.js";
 import { CostLedger, CostRole } from "../../session/cost.js";
@@ -35,6 +36,12 @@ export function codexSandboxFor(permissionMode: PermissionMode, forceReadOnly = 
   return permissionMode === "ask" ? "workspace-write" : "workspace-write";
 }
 
+export function codexWritableRoots(env: NodeJS.ProcessEnv): string[] {
+  const value = env.TANDEM_CODEX_WRITABLE_ROOTS?.trim();
+  if (!value) return [];
+  return [...new Set(value.split(path.delimiter).map((root) => root.trim()).filter(Boolean).map((root) => path.resolve(root)))];
+}
+
 export function buildCodexExecArgv(input: {
   cwd: string;
   sandbox: "read-only" | "workspace-write" | "danger-full-access";
@@ -43,6 +50,7 @@ export function buildCodexExecArgv(input: {
   prompt: string;
   modelName?: string;
   modelReasoningEffort?: CodexCliReasoningEffort;
+  writableRoots?: string[];
 }): string[] {
   const args = [
     "exec",
@@ -58,6 +66,9 @@ export function buildCodexExecArgv(input: {
     "--output-last-message",
     input.outputPath
   ];
+  if (input.sandbox === "workspace-write") {
+    for (const root of input.writableRoots ?? []) args.push("--add-dir", root);
+  }
   if (input.modelName) args.push("-m", input.modelName);
   if (input.modelReasoningEffort) args.push("-c", `model_reasoning_effort=${input.modelReasoningEffort}`);
   args.push("-");
@@ -143,7 +154,8 @@ export async function runCodexExec(options: CodexExecOptions & { readOnly?: bool
       outputPath,
       prompt: options.prompt,
       modelName: options.modelName || undefined,
-      modelReasoningEffort: options.modelReasoningEffort
+      modelReasoningEffort: options.modelReasoningEffort,
+      writableRoots: codexWritableRoots(options.env ?? process.env)
     });
     const child = spawn(codexPath, args, {
       cwd: options.cwd,

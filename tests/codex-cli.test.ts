@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { createLiveAgents } from "../src/agents/live.js";
-import { buildCodexExecArgv, handleCodexJsonLine, runCodexExec, stripNulls } from "../src/agents/codex-cli/exec.js";
+import { buildCodexExecArgv, codexWritableRoots, handleCodexJsonLine, runCodexExec, stripNulls } from "../src/agents/codex-cli/exec.js";
 import { clearCodexCliPathCache, locateCodexCli } from "../src/agents/codex-cli/locate.js";
 import { buildPlanJsonSchema, completionReportJsonSchema, jsonSchemaFor, planOrAnswerJsonSchema, reviewVerdictJsonSchema, takeoverJsonSchema } from "../src/agents/codex-cli/schema-json.js";
 import { buildCodexWorkerPrompt } from "../src/agents/codex-cli/worker.js";
@@ -301,6 +301,32 @@ describe("codex cli execution", () => {
     expect(prompt.length).toBeGreaterThan(10000);
     expect(argv).not.toContain(prompt);
     expect(argv.at(-1)).toBe("-");
+  });
+
+  it("D129: grants only explicitly configured roots to workspace-write Codex runs", () => {
+    const separator = path.delimiter;
+    const roots = codexWritableRoots({ TANDEM_CODEX_WRITABLE_ROOTS: [`C:${path.sep}control`, `C:${path.sep}relay`, `C:${path.sep}control`].join(separator) });
+    const argv = buildCodexExecArgv({
+      cwd: "C:/project",
+      sandbox: "workspace-write",
+      schemaPath: "schema.json",
+      outputPath: "out.json",
+      prompt: "do work",
+      writableRoots: roots
+    });
+
+    expect(argv.filter((arg) => arg === "--add-dir")).toHaveLength(2);
+    expect(argv).toEqual(expect.arrayContaining(["--add-dir", path.resolve(`C:${path.sep}control`), "--add-dir", path.resolve(`C:${path.sep}relay`)]));
+    expect(
+      buildCodexExecArgv({
+        cwd: "C:/project",
+        sandbox: "read-only",
+        schemaPath: "schema.json",
+        outputPath: "out.json",
+        prompt: "review",
+        writableRoots: roots
+      })
+    ).not.toContain("--add-dir");
   });
 
   it("parses JSONL events into tool events and usage without streaming schema JSON text", () => {

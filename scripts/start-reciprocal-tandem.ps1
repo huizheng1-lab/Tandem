@@ -33,6 +33,7 @@ function Start-Executor([string]$SelectedRole) {
     $oldHome = $env:TANDEM_HOME
     $oldInstance = $env:TANDEM_INSTANCE_ID
     $oldProtectedRoots = $env:TANDEM_PROTECTED_ROOTS
+    $oldCodexWritableRoots = $env:TANDEM_CODEX_WRITABLE_ROOTS
     try {
         $env:TANDEM_HOME = $stateHome
         $env:TANDEM_INSTANCE_ID = $SelectedRole
@@ -49,6 +50,11 @@ function Start-Executor([string]$SelectedRole) {
             (Join-Path $RelayRoot "user-data\executor-b")
         ) | Where-Object { $_ }
         $env:TANDEM_PROTECTED_ROOTS = $protectedRoots -join [IO.Path]::PathSeparator
+        $codexWritableRoots = @(
+            (Join-Path $RelayRoot "control"),
+            (Join-Path (Join-Path $adminRepo ".git") "tandem-relay")
+        )
+        $env:TANDEM_CODEX_WRITABLE_ROOTS = $codexWritableRoots -join [IO.Path]::PathSeparator
         $arguments = @(
             "--user-data-dir=`"$userData`"",
             "--hidden",
@@ -61,6 +67,7 @@ function Start-Executor([string]$SelectedRole) {
         $env:TANDEM_HOME = $oldHome
         $env:TANDEM_INSTANCE_ID = $oldInstance
         $env:TANDEM_PROTECTED_ROOTS = $oldProtectedRoots
+        $env:TANDEM_CODEX_WRITABLE_ROOTS = $oldCodexWritableRoots
     }
     Write-Host "Started executor $SelectedRole hidden; automation endpoint 127.0.0.1:$automationPort targets $targetWorktree."
 }
