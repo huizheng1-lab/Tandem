@@ -1,6 +1,6 @@
 param(
     [Parameter(Mandatory = $true)]
-    [ValidateSet("Show", "Add", "Start", "Candidate", "Complete", "Block", "Requeue")]
+    [ValidateSet("Show", "Add", "Remove", "Start", "Candidate", "Complete", "Block", "Requeue")]
     [string]$Action,
 
     [string]$Text,
@@ -78,7 +78,11 @@ try {
     if ($Action -eq "Add") {
         $cleanText = if ($null -eq $Text) { "" } else { ($Text -replace "\s+", " ").Trim().Replace("|", "/") }
         if (-not $cleanText) { throw "Add requires -Text." }
-        $numbers = @($lines | ForEach-Object { if ($_ -match '^- \[(?: |x)\] W(\d{4}) \|') { [int]$Matches[1] } })
+        $numbers = @($lines | ForEach-Object {
+            if ($_ -match '^- \[(?: |x)\] W(\d{4}) \|' -or $_ -match '^- id=W(\d{4}) \| removed=') {
+                [int]$Matches[1]
+            }
+        })
         $nextNumber = if ($numbers.Count) { ($numbers | Measure-Object -Maximum).Maximum + 1 } else { 1 }
         $Id = "W" + ([int]$nextNumber).ToString("D4")
         $marker = [Array]::IndexOf($lines, "<!-- wishlist-items -->")
@@ -93,11 +97,33 @@ try {
         $matches = @(0..($lines.Count - 1) | Where-Object { $lines[$_] -match $pattern })
         if ($matches.Count -ne 1) { throw "Expected exactly one wishlist item $Id; found $($matches.Count)." }
         $index = $matches[0]
-        $parts = @($lines[$index] -split ' \| ')
+        $originalLine = $lines[$index]
+        $parts = @($originalLine -split ' \| ')
         if ($parts.Count -lt 3) { throw "Wishlist item $Id is malformed." }
         $base = @($parts[0], $parts[1], $parts[2])
 
         switch ($Action) {
+            "Remove" {
+                $cleanNote = if ($null -eq $Note) { "" } else { ($Note -replace "\s+", " ").Trim().Replace("|", "/") }
+                if (-not $cleanNote) { throw "Remove requires -Note." }
+                $status = if ($parts.Count -ge 4) { ($parts[3] -split '\s+')[0] } else { "" }
+                if ($status -eq "IN_PROGRESS") {
+                    throw "Cannot remove $Id while it is IN_PROGRESS. Let the turn finish, requeue it, or end the turn first."
+                }
+
+                $before = if ($index -gt 0) { @($lines[0..($index - 1)]) } else { @() }
+                $after = if ($index + 1 -lt $lines.Count) { @($lines[($index + 1)..($lines.Count - 1)]) } else { @() }
+                $lines = @($before + $after)
+                $removedHeader = [Array]::IndexOf($lines, "## Removed")
+                if ($removedHeader -lt 0) {
+                    $lines = @($lines + "" + "## Removed" + "")
+                }
+                $lines = @(
+                    $lines +
+                    "- id=$Id | removed=$now | note=$cleanNote" +
+                    "  original: $originalLine"
+                )
+            }
             "Start" {
                 if (-not $Role) { throw "Start requires -Role." }
                 if ($base[0] -match '\[x\]') { throw "$Id is already complete." }
@@ -127,7 +153,7 @@ try {
     }
 
     $tempPath = "$ControlPath.tmp-$PID"
-    $lines | Set-Content -LiteralPath $tempPath -Encoding utf8
+    [IO.File]::WriteAllLines($tempPath, [string[]]$lines, [Text.UTF8Encoding]::new($false))
     Move-Item -LiteralPath $tempPath -Destination $ControlPath -Force
     [ordered]@{ action = $Action; id = $Id; path = $ControlPath } | ConvertTo-Json
 } finally {
