@@ -95,7 +95,7 @@ async function assertPreconditions() {
   if (headA !== stableSha || headB !== stableSha) {
     throw new Error(`Reciprocal branches must both equal stable ${stableSha.slice(0, 7)}; A=${headA.slice(0, 7)}, B=${headB.slice(0, 7)}.`);
   }
-  const dirty = (await gitText(["status", "--porcelain=v1", "--untracked-files=all"]))
+  const dirty = (await git(["status", "--porcelain=v1", "--untracked-files=all"])).output
     .split(/\r?\n/).filter(Boolean)
     .map(statusPath).filter((file) => !isKnownNonFeaturePath(file));
   if (dirty.length) throw new Error(`Admin repository has feature-file modifications: ${dirty.join(", ")}`);
