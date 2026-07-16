@@ -1,0 +1,29 @@
+Round: D115
+Status: completed
+
+Scope:
+- Rebuilt the packaged Tandem app from the current master checkout.
+- No code changes were required.
+
+Build source:
+- Commit: 57d93a82aa16da668513d14cb20575e6f4a429d7
+- Short SHA: 57d93a8
+
+Build command:
+- npm run dist:app
+
+Build result:
+- Completed successfully.
+- electron-builder packaged win32 x64 output under release/win-unpacked.
+- electron-builder produced release/Tandem Setup 0.1.0.exe.
+- electron-builder produced release/Tandem 0.1.0.exe.
+
+Verification:
+- Confirmed no Tandem.exe process was running before the rebuild.
+- npm run typecheck: passed.
+- npm test: passed, 36 test files passed and 1 skipped; 360 tests passed and 1 skipped.
+- git diff --check: passed, with only the existing CRLF warning for unrelated scripts/reciprocal-direction.ps1.
+
+Notes:
+- Handoff D114 was intentionally empty and explicitly instructed not to create a D114_done.txt marker.
+- Existing unrelated dirty/untracked workspace files were left untouched.
