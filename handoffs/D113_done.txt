@@ -1,0 +1,46 @@
+Round: D113
+Status: completed
+
+Commits:
+- 938c04a722f5ade02ed8ab3efe0f73f38189f19a D113-1: add Claude Fable CLI option
+- 2fa244418b8fae83d6914a96048fd635d8af7676 D113-2: commit handoffs folder migration
+- D113-3: this completion marker commit
+
+Implementation summary:
+- Added the verified Claude Code CLI Fable 5 model string to the renderer model picker list.
+- Moved Claude CLI model choices into app/renderer/src/cli-model-options.ts so tests can assert the supported list.
+- Added a regression test that requires claude-fable-5 to remain in claudeCliModelOptions.
+- Committed the local handoffs-folder migration, including moving root HANDOFF*.md and D*_done.txt files into handoffs/.
+
+Chosen Claude CLI model string:
+- claude-fable-5
+
+Live Claude CLI verification:
+- Command: claude --model fable -p "Reply with exactly: ok" --output-format json
+- Result: rejected with 404; raw output follows:
+{"type":"result","subtype":"success","is_error":true,"api_error_status":404,"duration_ms":1448,"duration_api_ms":0,"num_turns":1,"result":"There's an issue with the selected model (fable). It may not exist or you may not have access to it. Run --model to pick a different model.","stop_reason":"stop_sequence","session_id":"376e5a66-81c8-4d1f-8560-299c390f67d4","total_cost_usd":0,"usage":{"input_tokens":0,"cache_creation_input_tokens":0,"cache_read_input_tokens":0,"output_tokens":0,"server_tool_use":{"web_search_requests":0,"web_fetch_requests":0},"service_tier":"standard","cache_creation":{"ephemeral_1h_input_tokens":0,"ephemeral_5m_input_tokens":0},"inference_geo":"","iterations":[],"speed":"standard"},"modelUsage":{},"permission_denials":[],"terminal_reason":"completed","fast_mode_state":"off","uuid":"b44a773d-3ce6-4d4c-af52-4ae85f6438ef"}
+
+- Command: claude --model claude-fable-5 -p "Reply with exactly: ok" --output-format json
+- Result: succeeded; raw output follows:
+{"type":"result","subtype":"success","is_error":false,"api_error_status":null,"duration_ms":2598,"duration_api_ms":3626,"ttft_ms":2583,"num_turns":1,"result":"ok","stop_reason":"end_turn","session_id":"804448d0-6efa-4776-b746-541f06259e10","total_cost_usd":0.07543699999999999,"usage":{"input_tokens":2,"cache_creation_input_tokens":10296,"cache_read_input_tokens":20952,"output_tokens":4,"server_tool_use":{"web_search_requests":0,"web_fetch_requests":0},"service_tier":"standard","cache_creation":{"ephemeral_1h_input_tokens":10296,"ephemeral_5m_input_tokens":0},"inference_geo":"","iterations":[{"input_tokens":2,"output_tokens":4,"cache_read_input_tokens":20952,"cache_creation_input_tokens":10296,"cache_creation":{"ephemeral_5m_input_tokens":0,"ephemeral_1h_input_tokens":10296},"type":"message"}],"speed":"standard"},"modelUsage":{"claude-haiku-4-5-20251001":{"inputTokens":441,"outputTokens":12,"cacheReadInputTokens":0,"cacheCreationInputTokens":0,"webSearchRequests":0,"costUSD":0.000501,"contextWindow":200000,"maxOutputTokens":32000},"claude-fable-5":{"inputTokens":2,"outputTokens":4,"cacheReadInputTokens":20952,"cacheCreationInputTokens":10296,"webSearchRequests":0,"costUSD":0.07493599999999999,"contextWindow":200000,"maxOutputTokens":32000}},"permission_denials":[],"terminal_reason":"completed","fast_mode_state":"off","uuid":"28feb30e-4ec4-4b61-a1fc-7f161b6563df"}
+
+Manual UI verification:
+- Started the desktop app from the dev checkout and opened the leader model picker.
+- Confirmed the Claude Code CLI model list includes:
+  - cli default
+  - haiku
+  - sonnet
+  - opus
+  - claude-fable-5
+
+Checks:
+- npm run typecheck: passed
+- npm test -- --run tests/renderer-session-state.test.ts: passed, 5 tests
+- git diff --check -- app/renderer/src/cli-model-options.ts app/renderer/src/main.tsx tests/renderer-session-state.test.ts: passed, CRLF warnings only
+- npm test: passed, 36 passed and 1 skipped test files; 360 passed and 1 skipped tests
+- git diff --check: passed, CRLF warning only for unrelated scripts/reciprocal-direction.ps1
+- git log --all --oneline -- .env: no output
+- git ls-files .env: no output
+
+Push status:
+- Pending at marker creation; push and origin/master equality are verified immediately after this marker commit.
