@@ -1,0 +1,21 @@
+Round: D122
+
+Implementation commits:
+- cc8fcef D122-1: harden desktop JSON startup state
+- a24c253 D122-2: add hidden reciprocal automation control
+
+Verification:
+- npm run typecheck: passed
+- npm test: passed (37 files passed, 1 skipped; 365 tests passed, 1 skipped)
+- git diff --check and git diff --cached --check: passed
+- npm run dist:app: passed; packaged build promoted to both reciprocal runtimes at a24c253
+- Dashboard JavaScript syntax and PowerShell parser checks: passed
+- Packaged BOM-valid config/state smoke: rendered the full Tandem UI and the expected copy-b peer worktree
+- Packaged invalid-config smoke: rendered an actionable "Tandem could not start" screen with the failing file path and parse error
+- Real executor config.json and desktop-state.json files were rewritten as BOM-less UTF-8 and rechecked by byte prefix
+- One-click reciprocal smoke from a stopped state: started A and B hidden, opened loopback token-auth endpoints, injected the first-turn prompt into A, and reached relay phase=working with activeRole=A while A remained running
+- Hidden-process check: all packaged Tandem processes had MainWindowHandle 0
+- Control audit recorded endpoint readiness, prompt acceptance, and relay claim for turn 1
+
+Operational note:
+- The initial live run exposed an inaccessible WindowsApps codex/cli executable. Both reciprocal executors were switched to the configured minimax/minimax-m3 provider, after which the one-click acceptance completed successfully.
