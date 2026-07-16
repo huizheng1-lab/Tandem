@@ -1,0 +1,38 @@
+Round: D125
+
+Implementation commit:
+- 07af355 D125-1: add auditable wishlist removal
+
+Script behavior:
+- Added `-Action Remove -Id <id> -Note <reason>` under the existing shared-control mutex.
+- Removal requires a non-empty reason and refuses items whose current status is IN_PROGRESS.
+- QUEUED, BLOCKED, CANDIDATE, and DONE items can be removed from the active board.
+- Each removal appends its ID, UTC removal timestamp, sanitized note, and exact original wishlist line under `## Removed` in SHARED_DIRECTION.md.
+- Removed IDs participate in future ID allocation, preventing accidental ID reuse.
+- Direction writes now use BOM-less UTF-8.
+
+Dashboard changes (C:\Users\huizh\Apps\Tandem Reciprocal\dashboard):
+- Added token-gated POST /api/wishlist/remove with ID/note validation and wishlist.remove audit entries.
+- Added a Remove control to each wishlist row with a required reason prompt and confirmation.
+- Remove is disabled for IN_PROGRESS rows with tooltip: "Cannot remove an item while an executor owns it".
+
+Live acceptance:
+- Added W0004 as `D125 scratch removal acceptance item` through the dashboard.
+- Removed W0004 through the dashboard endpoint with note `D125 dashboard acceptance cleanup`.
+- W0004 no longer appears as an active wishlist row; `## Removed` retains its exact original line, removal timestamp, and note.
+- CONTROL_PANEL_AUDIT.jsonl contains wishlist.remove for W0004 with the same note.
+- Added W0005, changed it to IN_PROGRESS role=A, and attempted dashboard removal.
+- The endpoint returned HTTP 400: `Cannot remove W0005 while it is IN_PROGRESS...`; the item survived unchanged until explicit cleanup.
+- Browser DOM verification showed W0006's IN_PROGRESS Remove button disabled with the required tooltip.
+- W0005 and W0006 were requeued and removed after their guard demonstrations; no D125 scratch item remains on the active board.
+- Shared direction byte prefix was `23-20-54` (`# T`), confirming no UTF-8 BOM.
+
+Verification:
+- npm run typecheck: passed
+- npm test: passed (38 files passed, 1 skipped; 369 tests passed, 1 skipped)
+- npx vitest run tests/reciprocal-direction.test.ts: passed (2 tests)
+- Dashboard JavaScript and reciprocal-direction PowerShell parser checks: passed
+- git diff --check and git diff --cached --check: passed
+
+Worktree note:
+- A pre-existing uncommitted UpdateDirection change in scripts/reciprocal-direction.ps1 was preserved but deliberately excluded from the D125 commit.
