@@ -1,0 +1,86 @@
+Round: D116
+Status: completed
+
+Commits:
+- bdbafce D116-1: harden reciprocal protocol
+- D116-2: this completion marker
+
+D116-1 branch fast-forward:
+- codex/reciprocal-a before: f1bae2c Add shared reciprocal direction board
+- codex/reciprocal-b before: f1bae2c Add shared reciprocal direction board
+- Both branches were strict ancestors of master before fast-forward.
+- copy-a fast-forward result: 6857e2f D115: rebuild packaged app
+- copy-b fast-forward result: 6857e2f D115: rebuild packaged app
+- Worktree status after fast-forward:
+  - copy-a: ## codex/reciprocal-a...origin/codex/reciprocal-a [ahead 10]
+  - copy-b: ## codex/reciprocal-b...origin/codex/reciprocal-b [ahead 10]
+- refs/tandem-relay/stable after fast-forward: 6857e2fef732d9ef8d3a6e7fd3e161a293065403
+
+D116-2 runtime promotion:
+- No Tandem.exe process was running before promotion.
+- Replaced runtimes/executor-a and runtimes/executor-b packaged app contents with release/win-unpacked.
+- Preserved relay root state and user-data directories outside the runtime folders.
+- executor-a BUILD_INFO.json:
+{
+  "sourceSha": "6857e2fef732d9ef8d3a6e7fd3e161a293065403",
+  "sourceShortSha": "6857e2f",
+  "sourceBranch": "master",
+  "buildRound": "D115",
+  "promotedRound": "D116",
+  "promotedAt": "2026-07-16T07:50:13.7847516-04:00",
+  "artifact": "release/win-unpacked"
+}
+- executor-b BUILD_INFO.json:
+{
+  "sourceSha": "6857e2fef732d9ef8d3a6e7fd3e161a293065403",
+  "sourceShortSha": "6857e2f",
+  "sourceBranch": "master",
+  "buildRound": "D115",
+  "promotedRound": "D116",
+  "promotedAt": "2026-07-16T07:50:13.7847516-04:00",
+  "artifact": "release/win-unpacked"
+}
+
+D116-3 protocol live-smoke gate:
+> VALIDATE: the other executor produced a candidate. Before editing anything, run npm run typecheck, npm test, and git diff --check. If the candidate touches src/agents/, src/orchestrator/, src/session/compaction, prompt files, or src/providers/, also run one cheap real-model smoke using minimax-m3 credentials from this executor's isolated .env (for example scripts/live-minimax-m3.ts or an equivalent createLiveAgents().plan() call on a trivial request). Require a schema-valid planning result, not merely exit code 0. This costs only fractions of a cent and catches live-dead code that static checks have missed.
+
+D116-4 no-AUTO guardrail:
+> Do not begin an improvement until the relay is in working phase. Read .tandem/shared-control/SHARED_DIRECTION.md with scripts/reciprocal-direction.ps1 -Action Show. Select the highest-priority queued human wishlist item. Until a human explicitly removes this restriction after a few reviewed batches, do not self-select [AUTO] improvements; if no human wishlist item is QUEUED, use Pause with reason no queued human item.
+
+Shared direction guardrail added to template and live control file:
+> Until a human removes this guardrail after a few reviewed batches, executors must not self-select [AUTO] improvements; if no human wishlist item is QUEUED, use Pause with reason "no queued human item".
+
+W0003 note:
+> W0003 ... | BLOCKED note=requires human-reviewed handoff design first - not eligible for autonomous implementation updated=2026-07-16T11:51:49Z
+
+D116-5 master reconciliation policy:
+> master remains the trunk. Before starting or resuming a relay session, compare each reciprocal branch with master. If codex/reciprocal-a and codex/reciprocal-b are strict ancestors of master, fast-forward both branches to master and update refs/tandem-relay/stable to that same commit. If either branch has commits that master lacks, stop for human reconciliation instead of merging inside the relay.
+> After a reviewed reciprocal batch, pause the relay, merge the stable ref into master through the normal human-supervised flow, then fast-forward both reciprocal branches to the new master before resuming. A merge commit on master is fine; the fast-forward-only rule applies to the relay branches.
+> Do not run D-round master work and reciprocal relay turns concurrently on overlapping files. If a D-round lands on master mid-batch, finish the active reciprocal batch, pause, reconcile against master, and then resume the relay.
+
+D116-6 dashboard drift telemetry:
+- Added BUILD_INFO.json reading for each pinned runtime.
+- Added branch ahead/behind counts vs master to /api/status.
+- Added runtime-vs-master staleness fields and drift warnings to /api/status.
+- Added UI warning chip and version cards for runtime build identity and branch drift.
+- Dashboard status payload smoke on port 4783:
+{
+  "master": "6857e2f",
+  "driftOk": true,
+  "driftWarnings": [],
+  "copyA": { "aheadOfMaster": 0, "behindMaster": 0, "upToDate": true },
+  "copyB": { "aheadOfMaster": 0, "behindMaster": 0, "upToDate": true },
+  "runtimeA": { "build": "6857e2f", "lagsMaster": false, "promoted": "D116" },
+  "runtimeB": { "build": "6857e2f", "lagsMaster": false, "promoted": "D116" }
+}
+
+Verification:
+- node --check dashboard/server.mjs: passed.
+- node --check dashboard/public/app.js: passed.
+- npm run typecheck: passed.
+- npm test: passed, 36 test files passed and 1 skipped; 360 tests passed and 1 skipped.
+- git diff --check: passed, with CRLF warnings only.
+
+Notes:
+- Dashboard and live control file changes are outside the admin git repository and were applied in C:\Users\huizh\Apps\Tandem Reciprocal.
+- Unrelated dirty files, including scripts/reciprocal-direction.ps1 and older scratch/release files, were left untouched.
