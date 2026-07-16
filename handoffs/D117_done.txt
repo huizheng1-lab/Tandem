@@ -1,0 +1,66 @@
+Round: D117
+Status: completed
+
+Commits:
+- 09f86ed D117-1: add reversible relay pause
+- D117-2: this completion marker
+
+Implementation summary:
+- Added `Resume` to `scripts/reciprocal-relay.ps1`.
+- Made `Pause` and `Resume` role-independent relay-state operations so the dashboard can control an idle relay.
+- `Pause` now records `pausedFromPhase`, preserves owner/turn token/refs, and makes `Claim` return `PAUSED`.
+- `Resume` is valid only from `phase: paused`; it restores the saved phase and requires a summary.
+- Updated `process/reciprocal/PROTOCOL.md` to document reversible pause/resume and keep `Reset -Force` as heavy recovery only.
+- Added dashboard token-gated endpoints outside the admin repo:
+  - POST /api/relay/pause
+  - POST /api/relay/resume
+  - POST /api/executor/kickstart
+- Added dashboard UI buttons for Pause relay, Resume relay, and Kickstart.
+- Updated the dashboard README control boundary outside the admin repo.
+
+Kickstart investigation:
+- The persisted schedule mechanism runs inside an already-running Tandem app on cron ticks.
+- I found no safe local IPC/CLI endpoint for injecting an immediate prompt into a desktop Tandem instance.
+- I deliberately did not use SendKeys or other synthesized UI input because it can land in the wrong window.
+- The kickstart button therefore uses the honest fallback: it copies and displays the exact Executor A first-turn prompt and target worktree.
+
+Kickstart fallback prompt:
+Follow the injected TANDEM.md and execute exactly one reciprocal improvement invocation. Begin with the Claim command.
+
+Protocol quote:
+> Human pause is reversible. `Pause` records the current relay phase in `pausedFromPhase`, leaves the owner, turn token, refs, and worktrees untouched, and makes later `Claim` attempts return `PAUSED`. `Resume` is valid only while the relay is paused; it restores the saved phase and requires a human-readable summary. `Reset -Force` remains the heavy human recovery path and must not be used as a casual resume.
+
+Dashboard API smoke evidence:
+{
+  "beforePhase": "idle",
+  "pauseOutcome": "PAUSED",
+  "pausedPhase": "paused",
+  "pausedFromPhase": "idle",
+  "claimOutcomeWhilePaused": "PAUSED",
+  "resumeOutcome": "RESUMED",
+  "resumedPhase": "idle",
+  "kickstartMode": "manual-fallback",
+  "kickstartExecutor": "A",
+  "kickstartSchedule": "relay-a 7 * * * *",
+  "recentAudit": [
+    "executor.kickstart",
+    "relay.resume",
+    "relay.pause"
+  ]
+}
+
+Relay-state repair note:
+- While testing, I found `.git/tandem-relay/state.json` still pointed `stableCommit` at f1bae2c even though both reciprocal branches were already at b369fec from D116.
+- Because the relay was idle with no active owner, no candidate, and no rollback, I aligned `state.stableCommit` and `refs/tandem-relay/stable` to b369fec4dce41fcc8320862d7ca510fa31aac9b3 before testing.
+- No branch refs, tokens, or worktrees were otherwise changed by this repair.
+
+Verification:
+- node --check dashboard/server.mjs: passed.
+- node --check dashboard/public/app.js: passed.
+- npm run typecheck: passed.
+- npm test: passed, 36 test files passed and 1 skipped; 360 tests passed and 1 skipped.
+- git diff --check: passed with CRLF warnings only.
+
+Notes:
+- Dashboard files live outside this git repo at C:\Users\huizh\Apps\Tandem Reciprocal\dashboard and are not committed here.
+- Unrelated dirty/untracked files were left untouched.
