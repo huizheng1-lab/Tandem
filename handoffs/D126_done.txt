@@ -1,0 +1,39 @@
+Round: D126
+
+Implementation commits:
+- 0e23f32cf8abf6040f0a46768b03319f166ba233 D126-1: add validated multi-turn epics
+- 47b53c5f4f0f7880ff7e0fa535e0127741756ae4 D126-2: preserve epic recovery state
+
+Epic workflow:
+- Epic wishlist items enter a plan-only first turn and use a tracked `process/reciprocal/epics/<ID>-plan.md` file.
+- Human plan approval is required before implementation starts; plan revisions return the epic to approval.
+- Normal candidates advance exactly one approved step, persist checked plan history, and require independent validation.
+- Final-step acceptance uses the existing completion path; block/requeue recovery preserves epic revision and step position.
+- The relay protocol itself was not changed.
+
+Dashboard changes (C:\Users\huizh\Apps\Tandem Reciprocal\dashboard):
+- Added a Multi-turn epic option, EPIC badge, step progress, and complete checked/unchecked plan history.
+- Added token-gated plan approval and rejection endpoints and controls.
+- Approval verifies the candidate commit is the relay stable commit and contains the declared plan file.
+- Plan approvals and rejections are recorded in CONTROL_PANEL_AUDIT.jsonl.
+
+Live acceptance:
+- Added scratch epic W0007 and confirmed its first executor turn was plan-only.
+- Plan commit f6c61f256356c31225805b39365eacbbfeaba948 created a two-step tracked plan.
+- Starting implementation before approval was refused with: `Epic W0007 plan must be approved by a human before a step turn can start.`
+- Copy B independently validated the plan; the dashboard approved it and recorded wishlist.planApprove.
+- Step-one commit 566b7c64e5eb1939fcb4a31d71082e78fc3836a4 checked only step 1 and added its evidence file.
+- Copy A independently validated step 1; the board advanced to completed=1 and next=2/2 with step 2 still unchecked.
+- Browser verification showed the EPIC badge, Step 1/2, checked step 1, and unchecked step 2.
+- The scratch item was blocked and removed after the demonstration. Its plan and step commits remain in relay history.
+- Full multi-step DONE was intentionally not exercised; D126 required at least one approved, independently validated step.
+
+Verification:
+- npm run typecheck: passed
+- npm test: passed (38 files passed, 1 skipped; 372 tests passed, 1 skipped)
+- npx vitest run tests/reciprocal-direction.test.ts: passed (5 tests)
+- PowerShell parser and dashboard JavaScript syntax checks: passed
+- git diff --check and git diff --cached --check: passed
+
+Worktree note:
+- A pre-existing uncommitted UpdateDirection change in scripts/reciprocal-direction.ps1 was preserved but deliberately excluded from D126 commits.
