@@ -30,7 +30,7 @@ if (!comment) throw new Error("A human comment is required for a main update.");
 
 async function command(file, args, cwd = repoRoot, reject = true) {
   const result = await execa(file, args, { cwd, reject, all: true });
-  return { ok: result.exitCode === 0, exitCode: result.exitCode, output: String(result.all || "").trim() };
+  return { ok: result.exitCode === 0, exitCode: result.exitCode, output: String(result.all || "").trimEnd() };
 }
 
 async function git(args, cwd = repoRoot, reject = true) {
