@@ -1,0 +1,40 @@
+Round: D127
+
+Implementation commit:
+- 1036b6f D127-1: add policy-controlled autonomous epics
+
+Autonomy policy:
+- `Add -Epic -Autonomy full` records per-item full autonomy; omitted autonomy follows the human-editable `AutonomyDefault: plan-gated|autonomous` board line.
+- The shipped board default is `plan-gated`.
+- Autonomous epics retain the plan-only first turn and independent peer validation.
+- After validation, `AutoApprovePlan -Commit <accepted-stable>` verifies the relay stable ref, records `approval=auto`, and appends `wishlist.planAutoApprove` to the control-panel audit log.
+- A noted Requeue during an autonomous plan or step is a retroactive rejection that preserves completed history, increments the plan revision, and returns the epic to planning.
+- Authentication, credentials, pairing, and remote-control items are forced to plan-gated mode. Runtime promotion, master integration, and every protocol safety boundary remain human-only.
+
+Dashboard changes (C:\Users\huizh\Apps\Tandem Reciprocal\dashboard):
+- Added a Fully autonomous option to the epic add form and passes `-Autonomy full` to the script.
+- Added an AUTONOMOUS badge, full visible plan history, validation/auto-approval status, and a Return to planning intervention.
+- Added token-gated POST /api/wishlist/requeue with required reason and wishlist.requeue audit entries.
+- Status resolves and exposes each epic's effective item/default autonomy policy.
+
+Live acceptance:
+- Main update `main-update-004` reconciled D127 into both reciprocal branches at master 8c4ac19.
+- Added autonomous scratch epic W0008 with `-Autonomy full`.
+- Its first turn committed only `process/reciprocal/epics/W0008-plan.md` as 244fbc77fd7b612007132fe4c67d3c40cb85156e.
+- The opposite executor independently ran typecheck, 375 tests, and diff/status checks before accepting that plan as relay stable.
+- `AutoApprovePlan` advanced W0008 without a human plan click and audit recorded `plan auto-approved (item autonomy: full)`.
+- The same validating turn started step 1 directly at `IN_PROGRESS ... step=1/2`.
+- Browser verification showed EPIC and AUTONOMOUS badges, Step 1/2, both plan steps, and Return to planning.
+- Requeue with note returned W0008 to `QUEUED ... phase=PLAN revision=2 completed=0`.
+- Plan-gated scratch epic W0009 still refused a step start with `plan must be approved by a human`.
+- W0008 and W0009 were removed after the demonstrations; their exact final lines and reasons remain in Removed history. The relay is paused idle with no candidate or owner.
+
+Verification:
+- npm run typecheck: passed
+- npm test: passed (38 files passed, 1 skipped; 375 tests passed, 1 skipped)
+- npx vitest run tests/reciprocal-direction.test.ts: passed (8 tests)
+- Dashboard server/app JavaScript syntax and PowerShell parser checks: passed
+- git diff --check and both reciprocal worktree cleanliness checks: passed
+
+Worktree note:
+- A pre-existing uncommitted UpdateDirection change in scripts/reciprocal-direction.ps1 was preserved but deliberately excluded from D127 commits.
