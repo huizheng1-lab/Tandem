@@ -141,7 +141,7 @@ try {
                 $cleanNote = if ($null -eq $Note) { "" } else { ($Note -replace "\s+", " ").Trim().Replace("|", "/") }
                 if (-not $cleanNote) { throw "Remove requires -Note." }
                 $status = if ($parts.Count -ge 4) { ($parts[3] -split '\s+')[0] } else { "" }
-                if ($status -eq "IN_PROGRESS") {
+                if ($status -eq "IN_PROGRESS" -and $metadata.role) {
                     throw "Cannot remove $Id while it is IN_PROGRESS. Let the turn finish, requeue it, or end the turn first."
                 }
 
@@ -256,7 +256,8 @@ try {
             "Block" {
                 $cleanNote = if ($null -eq $Note) { "" } else { ($Note -replace "\s+", " ").Trim().Replace("|", "/") }
                 if (-not $cleanNote) { throw "Block requires -Note." }
-                $lines[$index] = ($base + "BLOCKED note=$cleanNote updated=$now") -join " | "
+                $preserved = if ($isEpic) { ($statusAndDetail.Substring($status.Length)).Trim() + " previous=$status " } else { "" }
+                $lines[$index] = ($base + "BLOCKED $($preserved)note=$cleanNote updated=$now") -join " | "
             }
             "Requeue" {
                 $base[0] = $base[0] -replace '^- \[x\]', '- [ ]'
@@ -264,6 +265,20 @@ try {
                 if ($isEpic -and $metadata.candidate -eq "STEP" -and $metadata.step -match '^(\d+)/(\d+)$') {
                     $noteSuffix = if ($cleanNote) { " note=$cleanNote" } else { "" }
                     $lines[$index] = ($base + "PLAN_APPROVED epic=true revision=$($metadata.revision) completed=$($metadata.completed) steps=$($Matches[2]) next=$($Matches[1])/$($Matches[2]) plan=$($metadata.plan)$noteSuffix updated=$now") -join " | "
+                    break
+                }
+                if ($isEpic -and $metadata.phase -eq "PLAN") {
+                    $noteSuffix = if ($cleanNote) { " note=$cleanNote" } else { "" }
+                    $lines[$index] = ($base + "QUEUED epic=true phase=PLAN revision=$($metadata.revision) completed=$($metadata.completed) plan=$($metadata.plan)$noteSuffix updated=$now") -join " | "
+                    break
+                }
+                if ($isEpic -and $metadata.phase -eq "STEP" -and $metadata.step -match '^(\d+)/(\d+)$') {
+                    $step = [int]$Matches[1]
+                    $total = [int]$Matches[2]
+                    $completed = if ($metadata.completed) { [int]$metadata.completed } else { [Math]::Max(0, $step - 1) }
+                    $retry = if ($metadata.next) { $metadata.next } elseif ($metadata.role) { "$step/$total" } else { "$($completed + 1)/$total" }
+                    $noteSuffix = if ($cleanNote) { " note=$cleanNote" } else { "" }
+                    $lines[$index] = ($base + "PLAN_APPROVED epic=true revision=$($metadata.revision) completed=$completed steps=$total next=$retry plan=$($metadata.plan)$noteSuffix updated=$now") -join " | "
                     break
                 }
                 $suffix = if ($cleanNote) { "QUEUED note=$cleanNote updated=$now" } else { "QUEUED updated=$now" }

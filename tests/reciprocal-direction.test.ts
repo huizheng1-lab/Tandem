@@ -114,4 +114,21 @@ describeWindows("reciprocal direction epics", () => {
     await expect(direction(file, "-Action", "Start", "-Id", added.id, "-Role", "B"))
       .rejects.toThrow(/plan must be approved by a human/);
   });
+
+  it("preserves epic step metadata through block and requeue recovery", async () => {
+    const file = await boardFile();
+    const added = JSON.parse((await direction(file, "-Action", "Add", "-Epic", "-Text", "Recoverable epic")).stdout);
+    const plan = `process/reciprocal/epics/${added.id}-plan.md`;
+    await direction(file, "-Action", "Start", "-Id", added.id, "-Role", "A");
+    await direction(file, "-Action", "Candidate", "-Id", added.id, "-Commit", "plan1", "-Steps", "2", "-Plan", plan);
+    await direction(file, "-Action", "ApprovePlan", "-Id", added.id);
+    await direction(file, "-Action", "Start", "-Id", added.id, "-Role", "A");
+    await direction(file, "-Action", "Candidate", "-Id", added.id, "-Commit", "step1");
+    await direction(file, "-Action", "AcceptStep", "-Id", added.id, "-Commit", "step1");
+    await direction(file, "-Action", "Block", "-Id", added.id, "-Note", "human dependency");
+    await direction(file, "-Action", "Requeue", "-Id", added.id, "-Note", "dependency resolved");
+
+    const recovered = await readFile(file, "utf8");
+    expect(recovered).toContain(`PLAN_APPROVED epic=true revision=1 completed=1 steps=2 next=2/2 plan=${plan}`);
+  });
 });
