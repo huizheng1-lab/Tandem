@@ -1,0 +1,31 @@
+Round: D119
+
+Status: Complete
+
+Implementation:
+- Updated the reciprocal dashboard backend at C:\Users\huizh\Apps\Tandem Reciprocal\dashboard\server.mjs to resolve Codex CLI and Claude Code CLI using Tandem's source locator modules instead of dashboard-process PATH probing.
+- Updated the reciprocal dashboard browser at C:\Users\huizh\Apps\Tandem Reciprocal\dashboard\public\app.js to populate Claude CLI model variants from the backend payload sourced from app/renderer/src/cli-model-options.ts.
+- Dashboard files are intentionally outside the HZ code git repository; this marker is the repo-side record for D119.
+
+API verification excerpt from http://127.0.0.1:4793/api/status:
+- models.a.claudeCliModelOptions: haiku, sonnet, opus, claude-fable-5
+- models.a.cliResolved.codex-cli: C:\Program Files\WindowsApps\OpenAI.Codex_26.707.9981.0_x64__2p2nqsd0c76g0\app\resources\codex.exe
+- models.a.cliResolved.claude-code-cli: C:\Users\huizh\AppData\Roaming\npm\node_modules\@anthropic-ai\claude-code\bin\claude.exe
+- models.a codex/cli available: true
+- models.a claude-code/cli available: true
+- models.b.claudeCliModelOptions: haiku, sonnet, opus, claude-fable-5
+- models.b.cliResolved.codex-cli: C:\Program Files\WindowsApps\OpenAI.Codex_26.707.9981.0_x64__2p2nqsd0c76g0\app\resources\codex.exe
+- models.b.cliResolved.claude-code-cli: C:\Users\huizh\AppData\Roaming\npm\node_modules\@anthropic-ai\claude-code\bin\claude.exe
+- models.b codex/cli available: true
+- models.b claude-code/cli available: true
+
+Verification:
+- node --check C:\Users\huizh\Apps\Tandem Reciprocal\dashboard\server.mjs
+- node --check C:\Users\huizh\Apps\Tandem Reciprocal\dashboard\public\app.js
+- npm run typecheck
+- npm test
+- git diff --check
+
+Notes:
+- git diff --check emitted the existing CRLF warning for scripts/reciprocal-direction.ps1; that unrelated file was not changed or staged.
+- Temporary dashboard test server on port 4793 was stopped after verification.
