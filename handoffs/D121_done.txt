@@ -1,0 +1,87 @@
+Round: D121
+Status: COMPLETE
+
+Repository commits:
+- 29d2a39 D121-1: add guarded reciprocal main updates
+- f522d02 D121-2: preserve porcelain status columns
+- 17cd1e6 D121-3: parse raw porcelain status
+- f27fb19 D121-4: validate stable without dependency junctions
+
+Implemented:
+- Added scripts/reciprocal-main-update.mjs. It requires a human comment, rejects active relay turns, dangling candidates, branch/stable mismatches, dirty reciprocal worktrees, feature-file modifications, and a tracked .env.
+- The main-update flow pauses an idle relay, runs npm run typecheck and npm test on the clean worktree at the exact stable SHA, merges stable into master, creates a sequential annotated main-update-NNN tag, atomically pushes master plus the tag without force, fast-forwards both reciprocal branches, updates relay stable state through ReconcileMain, and resumes only when the flow paused the relay.
+- Added the ReconcileMain relay action with paused/no-owner/no-candidate guards and exact reciprocal branch-head verification.
+- Updated process/reciprocal/README.md and PROTOCOL.md for branch-only backups and dashboard-driven master integration.
+- Updated the external dashboard under C:\Users\huizh\Apps\Tandem Reciprocal\dashboard:
+  - server.mjs: token-gated /api/git/backup and /api/main/update endpoints, audited push/update results, MAIN_UPDATES.md review records, main tag/status discovery, pending stable counts, and candidate/runtime tag identities.
+  - public/index.html: prominent Main branch update panel, Backup to GitHub button, required integration comment, and runtime/master identity fields in the D120 candidate panel.
+  - public/app.js: rendering, confirmation, backup offer after approval, mutation handling, and dirty-input-aware refresh behavior.
+  - public/update-gate.css: main-update panel styling and responsive spacing.
+
+Backup push evidence from dashboard endpoint:
+- Attempted refs:
+  refs/heads/codex/reciprocal-a:refs/heads/codex/reciprocal-a
+  refs/heads/codex/reciprocal-b:refs/heads/codex/reciprocal-b
+  refs/tandem-relay/stable:refs/tandem-relay/stable
+- Branch output:
+  To https://github.com/huizheng1-lab/Tandem.git
+  = refs/heads/codex/reciprocal-a:refs/heads/codex/reciprocal-a [up to date]
+  = refs/heads/codex/reciprocal-b:refs/heads/codex/reciprocal-b [up to date]
+  Done
+- Stable output:
+  To https://github.com/huizheng1-lab/Tandem.git
+  * refs/tandem-relay/stable:refs/tandem-relay/stable [new reference]
+  Done
+- origin/master before: 8df6320f5bf6afdc0e118ed69cd2d4d97fb40333
+- origin/master after:  8df6320f5bf6afdc0e118ed69cd2d4d97fb40333
+- Audit action git.backup recorded ok=true, all attempted refs and outputs, and masterUnchanged=true in CONTROL_PANEL_AUDIT.jsonl.
+
+Precondition rejection evidence:
+- A temporary src/d121-precondition-probe.tmp was created and the token-gated endpoint was called.
+- Rejection: Admin repository has feature-file modifications: src/d121-precondition-probe.tmp.
+- Audit action main.update recorded ok=false, stage=preconditions, masterUpdated=false, pushed=false, branchesResynced=false, relayResumed=false.
+- The probe was removed before integration.
+
+Successful main-update evidence:
+- main-update-001 integrated the D121 admin implementation and included the completed wishlist IDs.
+- Push output:
+  To https://github.com/huizheng1-lab/Tandem.git
+     8df6320..17cd1e6  master -> master
+   * [new tag]         main-update-001 -> main-update-001
+- Tag message:
+  Tandem reciprocal main update main-update-001
+  Stable SHA: b369fec4dce41fcc8320862d7ca510fa31aac9b3
+  Relay turn: 1
+  Wishlist items: W0001, W0002
+  Timestamp: 2026-07-16T15:18:18.504Z
+  Human comment: D121 acceptance: branch backup verified, stable checks passed, approve guarded integration and round tagging.
+- The first live run revealed that a Windows directory junction used by the temporary validation worktree could damage the shared dependency directory during cleanup. Dependencies were restored with npm ci, junction validation was removed, and the exact stable commit is now checked in the existing clean reciprocal worktree.
+- main-update-002 integrated that final safety fix:
+  To https://github.com/huizheng1-lab/Tandem.git
+     17cd1e6..f27fb19  master -> master
+   * [new tag]         main-update-002 -> main-update-002
+- Final main-update-002 result: stage=complete, pausedByFlow=true, pushed=true, branchesResynced=true, relayResumed=true.
+- Final local refs/state before marker commit:
+  master=f27fb199b8c8d284ca2a7b65c96fd8dfc09098e6
+  codex/reciprocal-a=f27fb199b8c8d284ca2a7b65c96fd8dfc09098e6
+  codex/reciprocal-b=f27fb199b8c8d284ca2a7b65c96fd8dfc09098e6
+  refs/tandem-relay/stable=f27fb199b8c8d284ca2a7b65c96fd8dfc09098e6
+  relay phase=idle, activeRole=null
+- MAIN_UPDATES.md and CONTROL_PANEL_AUDIT.jsonl contain both successful integration records.
+
+Dashboard evidence:
+- /api/status reported: main-update-002 (f27fb19, 7/16/2026), stable=f27fb19, pendingStableCommits=0, relay phase=idle, Copy A=f27fb19, Copy B=f27fb19.
+- Desktop visual verification showed the Main branch update and Candidate runtime update panels together, with Backup to GitHub, Update main branch, master identity, pending count, and runtime identities visible without overlap.
+- Mobile verification at 390x844 showed main-update-001 during the first cycle, pending=0, both controls visible, and document scrollWidth equal to clientWidth (no horizontal overflow). The status API and desktop view were reverified after main-update-002.
+
+Verification:
+- node --check scripts/reciprocal-main-update.mjs: PASS
+- PowerShell parser check for scripts/reciprocal-relay.ps1: PASS
+- node --check dashboard/server.mjs: PASS
+- node --check dashboard/public/app.js: PASS
+- npm run typecheck: PASS
+- npm test: PASS (36 files passed, 1 skipped; 360 tests passed, 1 skipped)
+- Stable-gate npm run typecheck: PASS
+- Stable-gate npm test: PASS (36 files passed, 1 skipped; 360 tests passed, 1 skipped)
+- git diff --check: PASS; only the pre-existing CRLF warning for unrelated scripts/reciprocal-direction.ps1 was emitted.
+- .env tracked-file check: PASS (.env is not tracked).
