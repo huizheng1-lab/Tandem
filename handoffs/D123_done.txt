@@ -1,0 +1,27 @@
+Round: D123
+
+Implementation commit:
+- b19aa10 D123-1: drain active relay turns before pausing
+
+Dashboard implementation (C:\Users\huizh\Apps\Tandem Reciprocal\dashboard):
+- Approve now orchestrates safe boundary -> stop both -> promote -> hidden restart -> resume.
+- Active turns receive a durable pause-after-turn request; the UI shows waiting progress and offers Cancel wait or an explicit checkpoint-stop override.
+- A checkpoint-stop override restarts both executors, injects a resume prompt into the interrupted owner, and then clears the flow-owned pause.
+- Every step is audited and failed operations report a remaining-work list.
+- Standalone Stop actions require explicit confirmation when the selected executor owns an active turn.
+- Approval progress, completed steps, cancellation, and override controls are visible in the runtime update panel.
+
+Verification:
+- npm run typecheck: passed
+- npm test: passed (37 files passed, 1 skipped; 365 tests passed, 1 skipped)
+- git diff --check and git diff --cached --check: passed
+- npm run dist:app: passed; candidate BUILD_INFO stamped b19aa10
+- Dashboard JavaScript syntax and PowerShell parser checks: passed
+- Desktop and 390x844 mobile dashboard visual checks: passed
+- Relay guard simulation: Claim -> PAUSE_REQUESTED kept phase=working and activeRole=A; Resume -> PAUSE_CANCELLED; cleanup returned idle
+- Active-turn dashboard demonstration: Approve entered waiting with A/working, Cancel wait restored the turn, no executor PID changed, and no promotion occurred
+- Standalone Stop guard demonstration: unconfirmed Stop A returned HTTP 400 while A owned a working turn; executor PIDs were unchanged
+- Idle live Approve demonstration: one request paused idle relay, stopped both executors, promoted both runtime directories to b19aa10, restarted authenticated hidden endpoints (A PID 18176, B PID 41900), and resumed relay to idle
+- Promotion proof: executor-a and executor-b BUILD_INFO.json both report sourceSha b19aa102467a6f78451da94a38a26b2a049faf62, buildRound/promotedRound D123; both Tandem.exe files were listed at 235,939,840 bytes
+- Hidden restart proof: every Tandem process reported MainWindowHandle 0
+- CONTROL_PANEL_AUDIT.jsonl records pause request/cancel and each successful live approval step
