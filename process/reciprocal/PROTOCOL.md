@@ -22,6 +22,8 @@ This protocol runs two pinned Tandem executors against two independent git workt
 9. Review the complete diff, stage only intended files, and commit once with a descriptive message beginning `relay:`. Never stage `.tandem`, `TANDEM.md`, secrets, build output, or unrelated files. Mark a wishlist item `Candidate` with that commit before handing off. Epic plan files are tracked under `process/reciprocal/epics/`, not the ignored `.tandem/` directory.
 10. Re-run `git status --short`. It must be clean before completion. Run the exact relay `Complete` command from `TANDEM.md`, including a concise verification summary.
 
+Acceptance infrastructure follows the same cleanup rule as scratch files: stop every temporary dashboard or test-server instance and verify its port is no longer listening before writing the round marker.
+
 After the opposite executor accepts a candidate, it marks the matching wishlist item `Complete` with the accepted commit. After a verified rollback or abandoned attempt, it `Requeue`s the item with a concise failure note. Use `Block` only when human input is genuinely required. Do not mark work accomplished merely because its implementing executor reported success.
 
 If no high-confidence improvement is available, use the `Pause` command with a reason. Do not manufacture code churn merely to pass the turn.
