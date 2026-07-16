@@ -10,7 +10,7 @@
   "scripts": {
     "build": "tsup src/index.ts --format esm --dts --clean",
     "dev:app": "electron-vite dev",
-    "dist:app": "npm run build && electron-vite build && electron-builder",
+    "dist:app": "npm run build && electron-vite build && electron-builder && node scripts/stamp-app-build.mjs",
     "test": "vitest run",
     "typecheck": "tsc --noEmit"
   },

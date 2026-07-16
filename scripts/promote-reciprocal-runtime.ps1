@@ -20,10 +20,19 @@ function Assert-UnderRoot([string]$Path, [string]$Root) {
 $sourceDir = (Resolve-Path -LiteralPath $Source).Path
 $sourceExe = Join-Path $sourceDir "Tandem.exe"
 if (-not (Test-Path -LiteralPath $sourceExe)) { throw "Source runtime is missing Tandem.exe: $sourceExe" }
+$sourceBuildInfoPath = Join-Path $sourceDir "BUILD_INFO.json"
+$sourceBuildInfo = $null
+if (Test-Path -LiteralPath $sourceBuildInfoPath) {
+    $sourceBuildInfo = Get-Content -LiteralPath $sourceBuildInfoPath -Raw | ConvertFrom-Json
+}
 
 $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 if (-not $SourceSha) {
-    $SourceSha = (& git -C $repoRoot rev-parse HEAD).Trim()
+    if ($sourceBuildInfo -and $sourceBuildInfo.sourceSha) {
+        $SourceSha = [string]$sourceBuildInfo.sourceSha
+    } else {
+        $SourceSha = (& git -C $repoRoot rev-parse HEAD).Trim()
+    }
 }
 $sourceShortSha = if ($SourceSha.Length -ge 7) { $SourceSha.Substring(0, 7) } else { $SourceSha }
 
@@ -58,6 +67,8 @@ foreach ($role in @("a", "b")) {
         sourceBranch = "master"
         buildRound = $BuildRound
         promotedRound = $PromotedRound
+        builtAt = if ($sourceBuildInfo -and $sourceBuildInfo.builtAt) { [string]$sourceBuildInfo.builtAt } else { $null }
+        sourceBuildInfo = if ($sourceBuildInfo) { $sourceBuildInfo } else { $null }
         promotedAt = (Get-Date).ToString("o")
         artifact = "release/win-unpacked"
     }
