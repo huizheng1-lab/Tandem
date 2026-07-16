@@ -4,7 +4,7 @@ Objective: exercise the D126 epic workflow with stable, independently validated 
 
 ## Ordered Steps
 
-- [ ] Step 1: add `W0007-step-evidence.md` with a reusable evidence checklist and record this checkbox as complete in the same commit.
+- [x] Step 1: add `W0007-step-evidence.md` with a reusable evidence checklist and record this checkbox as complete in the same commit.
 - [ ] Step 2: extend the evidence note with final peer-acceptance guidance and complete the epic.
 
 ## Invariants
