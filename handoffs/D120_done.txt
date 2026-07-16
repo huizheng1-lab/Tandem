@@ -1,0 +1,67 @@
+Round: D120
+
+Status: Complete
+
+Repo commit(s):
+- 13e032bb4b3ec7f48509de8e75a70291b9185ab0 D120-1: stamp packaged runtime provenance
+
+Implementation:
+- Added scripts/stamp-app-build.mjs and appended it to npm run dist:app so release/win-unpacked/BUILD_INFO.json is stamped at build time.
+- Updated scripts/promote-reciprocal-runtime.ps1 to read the stamped source SHA and build metadata from release/win-unpacked/BUILD_INFO.json unless -SourceSha is explicitly supplied.
+- Updated the reciprocal dashboard outside the repo at C:\Users\huizh\Apps\Tandem Reciprocal\dashboard:
+  - /api/status now includes candidateUpdate with candidate SHA, builtAt, pending state, promoted runtime SHAs, ahead counts, and isolated preview state.
+  - Added Launch Candidate and Stop Candidate endpoints using release/win-unpacked/Tandem.exe with isolated TANDEM_HOME, user-data, and neutral preview project folders.
+  - Added Approve and Reject endpoints with token-gated review logging to C:\Users\huizh\Apps\Tandem Reciprocal\control\UPDATE_REVIEWS.md and CONTROL_PANEL_AUDIT.jsonl.
+  - Added a Versions-view approval panel for launching/stopping candidates and submitting review comments.
+
+Build stamp evidence:
+{
+  "sourceSha": "13e032bb4b3ec7f48509de8e75a70291b9185ab0",
+  "sourceShortSha": "13e032b",
+  "sourceBranch": "master",
+  "builtAt": "2026-07-16T14:08:04.289Z",
+  "artifact": "release/win-unpacked"
+}
+
+Pending update evidence before approval:
+- /api/status candidateUpdate.pending: true
+- candidateUpdate.shortSha: 13e032b
+- candidateUpdate.builtAt: 2026-07-16T14:08:04.289Z
+- candidateUpdate.aheadCounts: A 8, B 8
+- promoted runtime sources before approval: A 6857e2f, B 6857e2f
+
+Launch Candidate / Stop Candidate evidence:
+- Launch endpoint returned PID 34904 for C:\Users\huizh\Apps\HZ code\release\win-unpacked\Tandem.exe.
+- Preview state folders:
+  - TANDEM_HOME: C:\Users\huizh\Apps\Tandem Reciprocal\state\candidate-preview
+  - user-data: C:\Users\huizh\Apps\Tandem Reciprocal\user-data\candidate-preview
+  - project: C:\Users\huizh\Apps\Tandem Reciprocal\candidate-preview-project
+- /api/status showed preview running with PIDs 17012, 25512, 27504, 34904.
+- Stop endpoint returned those PIDs and /api/status then showed preview.running false.
+
+Reject evidence:
+- Reject comment recorded: D120 verification reject path: manual review found a pretend issue; runtimes must remain untouched.
+- UPDATE_REVIEWS.md contains a REJECT 13e032b entry.
+- CONTROL_PANEL_AUDIT.jsonl contains update.review decision reject for sourceSha 13e032bb4b3ec7f48509de8e75a70291b9185ab0.
+- Runtime BUILD_INFO files remained on 6857e2f after reject.
+
+Approve evidence:
+- Approve comment recorded: D120 verification approve path: candidate launched in isolation, stopped cleanly, and is approved for pinned runtimes.
+- CONTROL_PANEL_AUDIT.jsonl contains update.approvePromote with output:
+  Promoted executor-a runtime to 13e032b.
+  Promoted executor-b runtime to 13e032b.
+- Runtime BUILD_INFO files for executor-a and executor-b now have sourceSha 13e032bb4b3ec7f48509de8e75a70291b9185ab0, buildRound D120, promotedRound D120, and builtAt 2026-07-16T14:08:04.289Z.
+- Runtime directory listings include BUILD_INFO.json, Tandem.exe, resources, locales, chrome_100_percent.pak, chrome_200_percent.pak, d3dcompiler_47.dll, dxcompiler.dll, dxil.dll, ffmpeg.dll, icudtl.dat, libEGL.dll, and libGLESv2.dll.
+- /api/status after approval showed candidateUpdate.pending false and aheadCounts A 0, B 0.
+
+Verification:
+- npm run dist:app
+- node --check C:\Users\huizh\Apps\Tandem Reciprocal\dashboard\server.mjs
+- node --check C:\Users\huizh\Apps\Tandem Reciprocal\dashboard\public\app.js
+- npm run typecheck
+- npm test
+- git diff --check
+
+Notes:
+- git diff --check emitted only the existing CRLF warning for scripts/reciprocal-direction.ps1, which was not modified or staged.
+- The approve/reject HTTP wrapper timed out while promotion/review work completed, but disk evidence, audit records, and runtime BUILD_INFO files confirm both actions completed.
