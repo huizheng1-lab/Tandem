@@ -43,4 +43,6 @@ Checks:
 - git ls-files .env: no output
 
 Push status:
-- Pending at marker creation; push and origin/master equality are verified immediately after this marker commit.
+- git push origin master: completed
+- origin/master verification: local HEAD 1c7c3335751cee6b7f2a52b67f37f574eae4c28f matched origin/master 1c7c3335751cee6b7f2a52b67f37f574eae4c28f after fetch
+- Root handoff migration verification on origin/master: no root D*_done.txt or HANDOFF*.md entries found
