@@ -23,6 +23,7 @@ import { parseLoop } from "../../../src/commands/loop.js";
 import { cliModelPatch, modelCommandUsage, modelDisplayName } from "../../../src/providers/cli-models.js";
 import { ErrorBoundary } from "./ErrorBoundary.js";
 import { activityStripState } from "./activity-strip.js";
+import { claudeCliModelOptions } from "./cli-model-options.js";
 import { formatTotalCost } from "./cost-display.js";
 import { MODEL_STALL_WARNING_SECONDS, effectiveRendererConfig, isSessionActionable, needsProjectPickForSession, sessionFromResume } from "./session-state.js";
 import { boundedMessageTextForState, MessageText } from "./TranscriptText.js";
@@ -33,7 +34,6 @@ type Role = "user" | "leader" | "worker" | "system";
 type PendingSessionActionKind = "rename" | "archive" | "unarchive" | "delete" | "switch";
 const MAX_TRANSCRIPT_ENTRIES = 600;
 const codexEffortOptions = CodexCliReasoningEffortSchema.options;
-const claudeCliModelOptions = ["haiku", "sonnet", "opus"] as const;
 const cliDefaultOption = "default";
 
 type TranscriptEntry =

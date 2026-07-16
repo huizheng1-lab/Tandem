@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { defaultConfig } from "../src/config/schema.js";
+import { claudeCliModelOptions } from "../app/renderer/src/cli-model-options.js";
 import { MODEL_STALL_WARNING_SECONDS, effectiveRendererConfig, isSessionActionable, needsProjectPickForSession, sessionFromResume } from "../app/renderer/src/session-state.js";
 import type { SessionResumeResponse } from "../app/shared/ipc.js";
 
@@ -50,5 +51,9 @@ describe("renderer session resume state", () => {
     expect(isSessionActionable({ projectDir: "C:\\project" })).toBe(true);
     expect(isSessionActionable({ projectDir: "" })).toBe(false);
     expect(isSessionActionable({ projectDir: undefined })).toBe(false);
+  });
+
+  it("D113: includes verified Claude Code CLI Fable 5 option", () => {
+    expect(claudeCliModelOptions).toEqual(expect.arrayContaining(["haiku", "sonnet", "opus", "claude-fable-5"]));
   });
 });
