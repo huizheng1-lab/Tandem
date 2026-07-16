@@ -1,0 +1,50 @@
+Round: D124
+
+Implementation commit:
+- 55f90d0 D124-1: reject protected Codex MSIX payloads
+
+Resolution fix:
+- Codex CLI discovery now rejects candidates under Program Files\WindowsApps on Windows, including cached, override, and PATH candidates.
+- PATH resolution continues after a rejected MSIX payload and then uses the existing newest LocalAppData fallback when needed.
+- The fallback remains version-agnostic and filters candidates by the existence of codex.exe; no update hash is hardcoded in production code.
+- Regression tests cover continuing past a protected PATH candidate and skipping a newer hash folder that lacks codex.exe.
+
+Why reciprocal execution differed:
+- The hidden executors were launched from the Codex desktop/dashboard process and inherited its augmented PATH.
+- That PATH contained C:\Users\huizh\AppData\Local\OpenAI\Codex\bin\ada252862d154cdd (no codex.exe), followed by C:\Program Files\WindowsApps\OpenAI.Codex_...\app\resources (codex.exe exists but ordinary processes cannot spawn it).
+- Existence-only PATH resolution therefore selected the protected payload before the LocalAppData fallback. Normal Explorer-launched Tandem does not inherit those Codex-host PATH additions and reaches the spawnable fallback.
+- After the fix, the same dashboard/executor environment resolves C:\Users\huizh\AppData\Local\OpenAI\Codex\bin\3135b80b111fd431\codex.exe dynamically.
+
+Verified GPT-5.6 model:
+- Installed CLI: codex-cli 0.144.2
+- Exact accepted model string: gpt-5.6-sol
+- Raw cheap-call evidence:
+  OpenAI Codex v0.144.2
+  model: gpt-5.6-sol
+  provider: openai
+  reasoning effort: medium
+  codex
+  D124_MODEL_OK
+
+Reciprocal configuration/state:
+- Executor A and B leader: codex/cli
+- Executor A and B codexCliModel: gpt-5.6-sol
+- Executor A and B codexCliReasoningEffort: medium
+- Executor A and B worker: minimax/minimax-m3
+- Both config.json byte prefixes: 123 13 10 (BOM-less UTF-8 JSON)
+- Both promoted runtime BUILD_INFO files report source/build 55f90d0 and round D124.
+
+Hidden executor proof:
+- Executor A automation session: 89f5da01-9c80-43cb-92db-92801797b964
+- Session recorded PLANNING / leader planning, then BuildPlanOrAnswer { kind: answer, answer: D124_EXECUTOR_CODEX_OK }.
+- Cost event recorded leader inputTokens=14923, outputTokens=29 and worker input/output tokens=0, proving the leader served the answer.
+- Session completed in about 9 seconds with no spawn EPERM, WindowsApps ACL, or ENOENT error.
+- Every reciprocal Tandem process reported MainWindowHandle 0.
+- Dashboard model picker showed codex/cli available and selected for both leaders as "codex/cli (model gpt-5.6-sol, reasoning medium)"; both workers remained M3 and both cards reported "Selected models ready."
+
+Verification:
+- npm run typecheck: passed
+- npm test: passed (37 files passed, 1 skipped; 367 tests passed, 1 skipped)
+- npx vitest run tests/codex-cli.test.ts: passed (19 tests)
+- npm run dist:app: passed; BUILD_INFO stamped 55f90d0
+- git diff --check and git diff --cached --check: passed
