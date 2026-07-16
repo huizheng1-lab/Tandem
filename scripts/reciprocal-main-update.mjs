@@ -1,4 +1,4 @@
-import { readFile, rm, symlink } from "node:fs/promises";
+import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { execa } from "execa";
 
@@ -95,6 +95,13 @@ async function assertPreconditions() {
   if (headA !== stableSha || headB !== stableSha) {
     throw new Error(`Reciprocal branches must both equal stable ${stableSha.slice(0, 7)}; A=${headA.slice(0, 7)}, B=${headB.slice(0, 7)}.`);
   }
+  const [dirtyA, dirtyB] = await Promise.all([
+    gitText(["status", "--porcelain=v1", "--untracked-files=all"], worktreeA),
+    gitText(["status", "--porcelain=v1", "--untracked-files=all"], worktreeB),
+  ]);
+  if (dirtyA || dirtyB) {
+    throw new Error(`Reciprocal worktrees must be clean before main update; A=${dirtyA || "clean"}, B=${dirtyB || "clean"}.`);
+  }
   const dirty = (await git(["status", "--porcelain=v1", "--untracked-files=all"])).output
     .split(/\r?\n/).filter(Boolean)
     .map(statusPath).filter((file) => !isKnownNonFeaturePath(file));
@@ -109,19 +116,11 @@ function tail(value, count = 18) {
 }
 
 async function validateStable(stableSha) {
-  const validationRoot = path.resolve(relayRoot, "state", `main-update-validation-${process.pid}`);
-  const stateRoot = path.resolve(relayRoot, "state");
-  if (!validationRoot.startsWith(`${stateRoot}${path.sep}`)) throw new Error("Validation path escaped reciprocal state root.");
-  await git(["worktree", "add", "--detach", validationRoot, stableSha]);
-  try {
-    await symlink(path.join(repoRoot, "node_modules"), path.join(validationRoot, "node_modules"), "junction");
-    const typecheck = await command("npm.cmd", ["run", "typecheck"], validationRoot);
-    const tests = await command("npm.cmd", ["test"], validationRoot);
-    return { typecheck: tail(typecheck.output), tests: tail(tests.output) };
-  } finally {
-    await git(["worktree", "remove", "--force", validationRoot], repoRoot, false);
-    await rm(validationRoot, { recursive: true, force: true }).catch(() => {});
-  }
+  const validationHead = await gitText(["rev-parse", "HEAD"], worktreeA);
+  if (validationHead !== stableSha) throw new Error(`Validation worktree moved from stable: ${validationHead}.`);
+  const typecheck = await command("npm.cmd", ["run", "typecheck"], worktreeA);
+  const tests = await command("npm.cmd", ["test"], worktreeA);
+  return { workspace: worktreeA, typecheck: tail(typecheck.output), tests: tail(tests.output) };
 }
 
 async function isAncestor(ancestor, descendant) {
