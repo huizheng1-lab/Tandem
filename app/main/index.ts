@@ -5,6 +5,8 @@ import { ipcChannels } from "../shared/ipc.js";
 import { TandemService } from "./tandem-service.js";
 import { startupErrorInfo } from "./startup-error.js";
 import type { StartupErrorInfo } from "../shared/ipc.js";
+import { parseDesktopLaunchOptions } from "./launch-options.js";
+import { startAutomationServer, type AutomationServerHandle } from "./automation-server.js";
 import type {
   AttachmentAddDataRequest,
   AttachmentAddFilesRequest,
@@ -25,6 +27,7 @@ import type {
 
 const currentFile = fileURLToPath(import.meta.url);
 const currentDir = path.dirname(currentFile);
+const launchOptions = parseDesktopLaunchOptions();
 process.env.TANDEM_PROTECTED_ROOTS = [
   process.env.TANDEM_PROTECTED_ROOTS,
   app.getAppPath(),
@@ -37,6 +40,7 @@ process.env.TANDEM_PROTECTED_ROOTS = [
 let mainWindow: BrowserWindow | undefined;
 let service: TandemService | undefined;
 let startupError: StartupErrorInfo | undefined;
+let automationServer: AutomationServerHandle | undefined;
 const gotSingleInstanceLock = app.requestSingleInstanceLock();
 
 function createWindow(): void {
@@ -47,6 +51,8 @@ function createWindow(): void {
     minHeight: 620,
     backgroundColor: "#101114",
     title: "Tandem",
+    show: !launchOptions.hidden,
+    skipTaskbar: launchOptions.hidden,
     webPreferences: {
       contextIsolation: true,
       nodeIntegration: false,
@@ -60,7 +66,20 @@ function createWindow(): void {
     service = undefined;
     startupError = startupErrorInfo(error);
     console.error(startupError.message);
-    dialog.showErrorBox(startupError.title, startupError.message);
+    if (!launchOptions.hidden) dialog.showErrorBox(startupError.title, startupError.message);
+  }
+
+  if (service && launchOptions.automation) {
+    void startAutomationServer({
+      ...launchOptions.automation,
+      instanceId: process.env.TANDEM_INSTANCE_ID,
+      service
+    }).then((server) => {
+      automationServer = server;
+      console.log(`Tandem automation ready on 127.0.0.1:${server.port}`);
+    }).catch((error: unknown) => {
+      console.error(`Tandem automation failed: ${String(error)}`);
+    });
   }
 
   if (process.env.ELECTRON_RENDERER_URL) {
@@ -114,7 +133,7 @@ if (!gotSingleInstanceLock) {
   app.quit();
 } else {
   app.on("second-instance", () => {
-    if (!mainWindow) return;
+    if (!mainWindow || launchOptions.hidden) return;
     if (mainWindow.isMinimized()) mainWindow.restore();
     mainWindow.focus();
   });
@@ -129,6 +148,11 @@ if (!gotSingleInstanceLock) {
 
   app.on("window-all-closed", () => {
     if (process.platform !== "darwin") app.quit();
+  });
+
+  app.on("before-quit", () => {
+    void automationServer?.close();
+    automationServer = undefined;
   });
 }
 

@@ -1,7 +1,9 @@
 param(
     [ValidateSet("A", "B", "Both")]
     [string]$Role = "Both",
-    [string]$RelayRoot = (Join-Path (Split-Path (Resolve-Path (Join-Path $PSScriptRoot "..")).Path -Parent) "Tandem Reciprocal")
+    [string]$RelayRoot = (Join-Path (Split-Path (Resolve-Path (Join-Path $PSScriptRoot "..")).Path -Parent) "Tandem Reciprocal"),
+    [int]$AutomationPortA = 4783,
+    [int]$AutomationPortB = 4784
 )
 
 $ErrorActionPreference = "Stop"
@@ -13,6 +15,10 @@ function Start-Executor([string]$SelectedRole) {
     $exe = Join-Path $runtimeDir "Tandem.exe"
     $stateHome = Join-Path $RelayRoot "state\executor-$slug"
     $userData = Join-Path $RelayRoot "user-data\executor-$slug"
+    $targetSlug = if ($SelectedRole -eq "A") { "b" } else { "a" }
+    $targetWorktree = Join-Path $RelayRoot "worktrees\copy-$targetSlug"
+    $automationPort = if ($SelectedRole -eq "A") { $AutomationPortA } else { $AutomationPortB }
+    $automationTokenFile = Join-Path $stateHome "automation.json"
     if (-not (Test-Path -LiteralPath $exe)) { throw "Executor $SelectedRole runtime is missing: $exe" }
 
     $alreadyRunning = Get-Process -Name Tandem -ErrorAction SilentlyContinue | Where-Object {
@@ -22,6 +28,7 @@ function Start-Executor([string]$SelectedRole) {
         Write-Host "Executor $SelectedRole is already running."
         return
     }
+    Remove-Item -LiteralPath $automationTokenFile -Force -ErrorAction SilentlyContinue
 
     $oldHome = $env:TANDEM_HOME
     $oldInstance = $env:TANDEM_INSTANCE_ID
@@ -42,13 +49,20 @@ function Start-Executor([string]$SelectedRole) {
             (Join-Path $RelayRoot "user-data\executor-b")
         ) | Where-Object { $_ }
         $env:TANDEM_PROTECTED_ROOTS = $protectedRoots -join [IO.Path]::PathSeparator
-        Start-Process -FilePath $exe -WorkingDirectory $runtimeDir -ArgumentList "--user-data-dir=`"$userData`""
+        $arguments = @(
+            "--user-data-dir=`"$userData`"",
+            "--hidden",
+            "--automation-port=$automationPort",
+            "--automation-token-file=`"$automationTokenFile`"",
+            "--automation-project-dir=`"$targetWorktree`""
+        )
+        Start-Process -FilePath $exe -WorkingDirectory $runtimeDir -ArgumentList $arguments -WindowStyle Hidden
     } finally {
         $env:TANDEM_HOME = $oldHome
         $env:TANDEM_INSTANCE_ID = $oldInstance
         $env:TANDEM_PROTECTED_ROOTS = $oldProtectedRoots
     }
-    Write-Host "Started executor $SelectedRole."
+    Write-Host "Started executor $SelectedRole hidden; automation endpoint 127.0.0.1:$automationPort targets $targetWorktree."
 }
 
 if ($Role -in @("A", "Both")) { Start-Executor "A" }

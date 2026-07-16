@@ -50,6 +50,8 @@ The common git repository also stores `refs/tandem-relay/stable`, `refs/tandem-r
 
 The schedules are intentionally staggered by 30 minutes. Tandem skips a scheduled prompt while another run in that same app is active. Inactive executors exit at `WAIT`, keeping their token use small. `/loop` is suitable only for supervised temporary retries because loop state disappears when the app closes; the persisted `/schedule` entries are the normal unattended mechanism.
 
+Reciprocal executors normally run hidden and are started through the dashboard Kickstart flow. Their local automation server exists only with explicit launcher flags, binds to `127.0.0.1`, requires a per-launch bearer token stored in the isolated executor state directory, and restricts session/prompt requests to the configured peer worktree. It does not expose shell or arbitrary command verbs. The manual visible-app prompt remains a diagnostic fallback.
+
 ## Master reconciliation
 
 `master` remains the trunk. Before starting a relay session, if `codex/reciprocal-a` and `codex/reciprocal-b` are strict ancestors of `master`, fast-forward both reciprocal branches to `master` and update `refs/tandem-relay/stable` to that same commit. If either reciprocal branch contains commits that `master` lacks, stop and ask for human reconciliation.

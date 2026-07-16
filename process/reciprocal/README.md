@@ -29,24 +29,28 @@ The setup script is safe to rerun: it preserves an existing relay token. Use its
 
 ## Start and kickstart
 
-Start both isolated apps:
+The dashboard **Kickstart** button is the normal entry point. It starts both executor runtimes hidden, waits for their authenticated loopback endpoints, and injects the first-turn prompt into executor A for worktree B. The executors do not steal focus or show composer input; relay state and step results remain visible in the dashboard.
+
+The reciprocal launcher opts each runtime into the otherwise-disabled automation surface with `--hidden`, `--automation-port`, `--automation-token-file`, and `--automation-project-dir`. Each launch generates a new bearer token in its isolated executor state directory. The server binds only to `127.0.0.1` and exposes only `/status`, `/session`, and `/prompt`; every session and prompt is restricted to that executor's configured peer worktree.
+
+To start both hidden apps manually without injecting a prompt:
 
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts/start-reciprocal-tandem.ps1 -Role Both
 ```
 
-Each app opens its preselected peer worktree. Confirm the path shown in the UI:
+Each app loads its preselected peer worktree:
 
 - executor A must show `...\worktrees\copy-b`;
 - executor B must show `...\worktrees\copy-a`.
 
-To begin immediately, send this once in executor A:
+If dashboard automation is unavailable, launch executor A without `--hidden` for diagnosis and send this fallback prompt once:
 
 ```text
 Follow the injected TANDEM.md and execute exactly one reciprocal improvement invocation. Begin with the Claim command.
 ```
 
-No manual message is needed in B. On completion, A hands the durable turn token to B. The persisted schedules then poll at minute 07 for A and minute 37 for B each hour. A waiting executor exits before planning. If a quota limit interrupts a turn, the owner and `.tandem/reciprocal-checkpoint.md` remain on disk; that same executor resumes on a later hourly trigger after the rolling five-hour limit clears.
+No manual message is normally needed in either app. On completion, A hands the durable turn token to B. The persisted schedules then poll at minute 07 for A and minute 37 for B each hour. A waiting executor exits before planning. If a quota limit interrupts a turn, the owner and `.tandem/reciprocal-checkpoint.md` remain on disk; that same executor resumes on a later hourly trigger after the rolling five-hour limit clears.
 
 Use `/loop 1h <the same prompt>` only for a supervised temporary retry. Stop it with `/loop stop` before relying on the schedules; loops are not restored after an app restart.
 

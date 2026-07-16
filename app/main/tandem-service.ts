@@ -147,6 +147,10 @@ export class TandemService {
     });
   }
 
+  getAutomationState(): { projectDir: string; sessionId?: string; running: boolean } {
+    return { projectDir: this.projectDir, sessionId: this.session?.id, running: Boolean(this.controller) };
+  }
+
   async startSession(request: SessionStartRequest): Promise<SessionStartResponse> {
     const defaultProject = !request.projectDir;
     this.projectDir = request.projectDir || safeDefaultProjectDir(this.homeDir);
