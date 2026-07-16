@@ -1,0 +1,43 @@
+Round: D128
+
+Repository commit:
+- be66148 D128-1: require acceptance server cleanup
+
+Dashboard changes (C:\Users\huizh\Apps\Tandem Reciprocal\dashboard):
+- `start-dashboard.ps1` now launches one hidden per-port `dashboard-watchdog.ps1` supervisor and uses a human-quit signal to distinguish intentional shutdown from a crash.
+- The watchdog redirects and timestamps Node stdout/stderr into `C:\Users\huizh\Apps\Tandem Reciprocal\control\dashboard-server.log`, rotates it to `.1` at 2 MB, records process PIDs and restart decisions, and restarts a missing listener after a two-second backoff.
+- `server.mjs` records server start, stop, process exit, client errors, response-write failures, uncaught exceptions, and unhandled rejections in the same bounded log.
+- Global uncaught-exception and unhandled-rejection handlers preserve the process and full stack. Provably unrecoverable listener startup errors (`EADDRINUSE`/`EACCES`) still exit so the supervisor can recover.
+- The async HTTP handler returned to `createServer` is now explicitly observed. Its final rejection path is logged and safely answered, and `send()` tolerates browser-disconnected/destroyed responses instead of creating a second unhandled rejection.
+- The dashboard README documents the watchdog, intentional Quit behavior, log location, and rotation.
+
+Crash log evidence:
+- Log file exists and received timestamped lines including:
+  `2026-07-16T19:06:53.5219690Z pid=41268 port=4782 watchdog server launched serverPid=13336`
+  `2026-07-16T19:06:53.575Z pid=13336 port=4782 server.start url=http://127.0.0.1:4782`
+
+Unhandled rejection evidence:
+- A temporary port-4797 server was launched with the D128 test-fault environment switch.
+- The log recorded `pid=29068 port=4797 unhandledRejection Error: D128 injected unhandled rejection` with its full stack.
+- After the injected rejection, PID 29068 remained alive and port 4797 remained listening. The test process was then stopped and the port verified closed.
+
+Concurrent refresh reproduction:
+- Sent 160 concurrent `/api/status` and `/api/revision` requests while 40 mutex-protected relay `Status` operations rewrote the relay state file.
+- All 160 requests succeeded, no original crash was reproduced, and the primary server remained PID 13336 throughout.
+- The specific hardening still fixes the identified structural failure path: the async request promise was previously unobserved, and a browser disconnect during the error response could reject outside the request try/catch.
+
+Watchdog and cleanup evidence:
+- Attached the watchdog to the old unsupervised 4782 process PID 43044, killed it, and observed replacement PID 13336 listening within about four seconds.
+- The log records listener loss, two-second backoff, replacement launch, and the replacement server's own start line.
+- A temporary supervised port-4796 instance received `/api/quit`; server stop, process exit, and watchdog intentional-stop lines were logged, and neither server nor watchdog restarted.
+- Ports 4796, 4797, and the leftover D127 port 4798 were verified closed before this marker. Only the operational dashboard on 4782 remains listening.
+
+Verification:
+- npm run typecheck: passed
+- npm test: passed (38 files passed, 1 skipped; 375 tests passed, 1 skipped)
+- node --check server.mjs and public/app.js: passed
+- PowerShell parser checks for start-dashboard.ps1 and dashboard-watchdog.ps1: passed
+- git diff --check: passed
+
+Worktree note:
+- A pre-existing uncommitted UpdateDirection change in scripts/reciprocal-direction.ps1 and unrelated untracked files were preserved and excluded from D128 commits.
