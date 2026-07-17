@@ -437,7 +437,7 @@ function App(): React.ReactElement {
     } else if (event.type === "checkpoint") {
       setPhase(event.checkpoint.phase);
       setRound(event.checkpoint.round);
-    } else {
+    } else if (event.type !== "heartbeat") {
       appendMessage("system", event.message);
     }
   };

@@ -14,6 +14,7 @@ import {
 } from "./artifacts.js";
 import { sanitizePromptValue } from "../tools/sanitize.js";
 import { VerificationRunner, VerificationResult } from "./verification.js";
+import type { RunHealthEventKind, RunHealthState } from "./run-health.js";
 
 export type MachinePhase = "IDLE" | "PLANNING" | "BUILDING" | "REVIEWING" | "FEEDBACK" | "TAKEOVER" | "DONE";
 export interface OrchestrationCheckpoint {
@@ -30,7 +31,18 @@ export type MachineEvent =
   | { type: "artifact"; name: string; value: unknown }
   | { type: "checkpoint"; checkpoint: OrchestrationCheckpoint }
   | { type: "notice"; message: string }
-  | { type: "error"; message: string; stack?: string };
+  | { type: "error"; message: string; stack?: string }
+  | {
+      type: "heartbeat";
+      state: RunHealthState;
+      phase: MachinePhase;
+      lastEventAt: number;
+      lastEventKind: RunHealthEventKind;
+      lastEventRole?: "leader" | "worker";
+      elapsedMs: number;
+      quietSeconds: number;
+      stalledSeconds: number;
+    };
 
 export type PlanResult = { kind: "answer"; answer: string } | { kind: "plan"; plan: BuildPlan };
 

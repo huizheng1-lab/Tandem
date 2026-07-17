@@ -16,6 +16,9 @@ export type { SessionMemoryNote } from "../../src/session/memory.js";
 export type { Schedule } from "../../src/commands/schedule.js";
 export type { SessionMetadata } from "../../src/session/store.js";
 export type { ToolActivityEvent } from "../../src/tools/fs.js";
+export type { RunHealthState } from "../../src/orchestrator/run-health.js";
+
+export type RunHeartbeatEvent = Extract<MachineEvent, { type: "heartbeat" }>;
 
 export const ipcChannels = {
   ping: "app:ping",
@@ -52,6 +55,7 @@ export const ipcChannels = {
   permissionSessionAutoApproveSet: "permission:auto-approve:set",
   dialogPickFolder: "dialog:pickFolder",
   machineEvent: "evt:machine",
+  heartbeatEvent: "evt:heartbeat",
   textEvent: "evt:text",
   costEvent: "evt:cost",
   toolEvent: "evt:tool",
@@ -180,6 +184,7 @@ export interface SessionResumeResponse {
   eventsTruncated?: boolean;
   checkpoint?: OrchestrationCheckpoint;
   cost?: CostTotals;
+  lastHeartbeat?: RunHeartbeatEvent;
 }
 
 export interface SessionRenameRequest {
@@ -268,6 +273,7 @@ export interface TandemDesktopApi {
   respondToPermission(response: PermissionResponse): void;
   respondToPlan(response: PlanResponse): void;
   onMachineEvent(callback: (event: MachineEvent) => void): () => void;
+  onHeartbeatEvent(callback: (event: RunHeartbeatEvent) => void): () => void;
   onTextEvent(callback: (event: TextEvent) => void): () => void;
   onToolEvent(callback: (event: ToolActivityEvent) => void): () => void;
   onMemoryEvent(callback: (event: MemoryEvent) => void): () => void;

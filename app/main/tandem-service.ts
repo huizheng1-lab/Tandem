@@ -11,7 +11,8 @@ import { createLiveAgents } from "../../src/agents/live.js";
 import { locateCodexCli } from "../../src/agents/codex-cli/locate.js";
 import { locateClaudeCli } from "../../src/agents/claude-code-cli/locate.js";
 import { createDiffTracker } from "../../src/orchestrator/diff.js";
-import { runOrchestration, type MachineEvent, type OrchestrationCheckpoint } from "../../src/orchestrator/machine.js";
+import { runOrchestration, type MachineEvent, type MachinePhase, type OrchestrationCheckpoint } from "../../src/orchestrator/machine.js";
+import { RunHealthTracker, type RecordMeaningfulInput } from "../../src/orchestrator/run-health.js";
 import type { CompletionReport } from "../../src/orchestrator/artifacts.js";
 import { createVerificationRunner } from "../../src/orchestrator/verification.js";
 import { commitReciprocalCandidate, prepareReciprocalWorktree } from "../../src/reciprocal/candidate-commit.js";
@@ -48,6 +49,7 @@ import {
   type SessionAutoApproveMode,
   type SessionDeleteResponse,
   type SessionResumeResponse,
+  type RunHeartbeatEvent,
   type ToolActivityEvent,
   type SessionStartRequest,
   type SessionStartResponse
@@ -57,6 +59,7 @@ type PendingResolver = (approved: boolean) => void;
 type DesktopWindow = Pick<BrowserWindow, "webContents">;
 type SessionLike = Pick<SessionStore, "id" | "append" | "read"> & Partial<Pick<SessionStore, "readRecent">>;
 const DESKTOP_RESUME_EVENT_LIMIT = 2500;
+const HEARTBEAT_INTERVAL_MS = 5000;
 
 interface DesktopAppState {
   lastProjectDir?: string;
@@ -131,6 +134,8 @@ export class TandemService {
   private sessionAutoApprove: SessionAutoApproveMode = "none";
   private lastPersistedCostKey?: string;
   private runBaselineTotals?: CostTotals;
+  private currentPhase: MachinePhase = "IDLE";
+  private activeRunHealth?: RunHealthTracker;
   constructor(
     private readonly window: DesktopWindow,
     private readonly deps: TandemServiceDeps = {}
@@ -194,6 +199,12 @@ export class TandemService {
     const session = this.session as SessionLike;
     await this.prepareReciprocalRun();
     this.controller = new AbortController();
+    this.currentPhase = "IDLE";
+    this.activeRunHealth = new RunHealthTracker({ quietSeconds: 30, stalledSeconds: 180, initialPhase: this.currentPhase });
+    const heartbeatTimer = setInterval(() => {
+      const snapshot = this.activeRunHealth?.tick({ phase: this.currentPhase });
+      if (snapshot) void this.emitMachine({ type: "heartbeat", ...snapshot });
+    }, HEARTBEAT_INTERVAL_MS);
     this.runBaselineTotals = this.ledger.totals();
     try {
       let sessionEvents = await session.read();
@@ -267,6 +278,9 @@ export class TandemService {
       this.lastCheckpoint = undefined;
     } finally {
       this.controller = undefined;
+      clearInterval(heartbeatTimer);
+      this.activeRunHealth = undefined;
+      this.currentPhase = "IDLE";
     }
   }
 
@@ -390,7 +404,8 @@ export class TandemService {
       events,
       eventsTruncated: recent.truncated || undefined,
       checkpoint: this.lastCheckpoint,
-      cost: this.costEventTotals()
+      cost: this.costEventTotals(),
+      lastHeartbeat: this.findLastHeartbeat(events.map((event) => event.payload))
     };
   }
 
@@ -480,6 +495,7 @@ export class TandemService {
   }
 
   private async emitText(role: "leader" | "worker", delta: string, thinking = false): Promise<void> {
+    if (delta.length > 0) await this.recordRunActivity({ kind: "modelDelta", role, phase: this.currentPhase });
     const event = { role, delta, thinking };
     this.window.webContents.send(ipcChannels.textEvent, event);
     const totals = this.costTotals();
@@ -489,6 +505,14 @@ export class TandemService {
   }
 
   private async emitMachine(event: MachineEvent): Promise<void> {
+    if (event.type === "heartbeat") {
+      this.window.webContents.send(ipcChannels.heartbeatEvent, event);
+      await this.session?.append("machine", event);
+      return;
+    }
+    if (event.type === "transition") this.currentPhase = event.phase;
+    const kind: RecordMeaningfulInput["kind"] = event.type === "error" ? "notice" : event.type;
+    await this.recordRunActivity({ kind, phase: this.currentPhase });
     if (event.type === "checkpoint") this.lastCheckpoint = event.checkpoint;
     this.window.webContents.send(ipcChannels.machineEvent, event);
     const totals = this.costTotals();
@@ -498,6 +522,7 @@ export class TandemService {
   }
 
   private async emitTool(event: ToolActivityEvent): Promise<void> {
+    await this.recordRunActivity({ kind: "toolCall", role: event.role, phase: this.currentPhase });
     this.window.webContents.send(ipcChannels.toolEvent, event);
     await this.session?.append("tool", event);
   }
@@ -665,6 +690,19 @@ export class TandemService {
       if (event?.type === "checkpoint") return event.checkpoint;
     }
     return undefined;
+  }
+
+  private findLastHeartbeat(payloads: unknown[]): RunHeartbeatEvent | undefined {
+    for (const payload of [...payloads].reverse()) {
+      const event = payload as RunHeartbeatEvent;
+      if (event?.type === "heartbeat") return event;
+    }
+    return undefined;
+  }
+
+  private async recordRunActivity(input: RecordMeaningfulInput): Promise<void> {
+    const snapshot = this.activeRunHealth?.recordMeaningful(input);
+    if (snapshot) await this.emitMachine({ type: "heartbeat", ...snapshot });
   }
 
   private loadProjectEnv(projectDir: string): NodeJS.ProcessEnv {

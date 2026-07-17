@@ -8,6 +8,7 @@ import type {
   PermissionResponse,
   PlanConfirmEvent,
   PlanResponse,
+  RunHeartbeatEvent,
   TextEvent,
   ToolActivityEvent
 } from "../shared/ipc.js";
@@ -51,6 +52,7 @@ const api: TandemDesktopApi = {
   respondToPermission: (response: PermissionResponse) => ipcRenderer.send(ipcChannels.permissionRespond, response),
   respondToPlan: (response: PlanResponse) => ipcRenderer.send(ipcChannels.planRespond, response),
   onMachineEvent: (callback) => on<MachineEvent>(ipcChannels.machineEvent, callback),
+  onHeartbeatEvent: (callback) => on<RunHeartbeatEvent>(ipcChannels.heartbeatEvent, callback),
   onTextEvent: (callback) => on<TextEvent>(ipcChannels.textEvent, callback),
   onToolEvent: (callback) => on<ToolActivityEvent>(ipcChannels.toolEvent, callback),
   onMemoryEvent: (callback) => on<MemoryEvent>(ipcChannels.memoryEvent, callback),

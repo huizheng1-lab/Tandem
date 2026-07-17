@@ -172,7 +172,7 @@ that bucket window. This is the deduplication guarantee: consecutive
 
 ## Ordered Steps
 
-- [ ] Step 1: add the orchestration-level `RunHealthTracker`, emit `heartbeat` machine events on state transitions, persist them in the session JSONL, surface them through a new IPC channel, and compute `lastHeartbeat` from the session events on resume.
+- [x] Step 1: add the orchestration-level `RunHealthTracker`, emit `heartbeat` machine events on state transitions, persist them in the session JSONL, surface them through a new IPC channel, and compute `lastHeartbeat` from the session events on resume.
 - [ ] Step 2: replace the renderer's silent-stall inference with the orchestrator's run-health state, so the activity strip and session log show a single honest "healthy / quiet Ns / likely stalled" indicator instead of a stale "thinking..." pulse.
 
 ## Invariants for every step

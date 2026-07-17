@@ -6,6 +6,7 @@ import { AgentFns, OrchestrationCheckpoint, runOrchestration, WorkerStepExhausti
 import { BuildPlan, CompletionReport, ReviewVerdict } from "../src/orchestrator/artifacts.js";
 import { createVerificationRunner } from "../src/orchestrator/verification.js";
 import type { PermissionRequest } from "../src/tools/permissions.js";
+import { RunHealthTracker } from "../src/orchestrator/run-health.js";
 
 const plan: BuildPlan = {
   title: "Todo CLI",
@@ -43,6 +44,21 @@ function agents(overrides: Partial<AgentFns> = {}): AgentFns {
 }
 
 describe("orchestration", () => {
+  it("tracks healthy, quiet, stalled, and recovered orchestration activity", () => {
+    let now = 0;
+    const health = new RunHealthTracker({ quietSeconds: 30, stalledSeconds: 180, initialPhase: "IDLE", now: () => now });
+    expect(health.recordMeaningful({ kind: "modelDelta", role: "leader", phase: "BUILDING" })).toMatchObject({ state: "healthy", elapsedMs: 0 });
+    now = 31_000;
+    expect(health.tick({ phase: "BUILDING" })).toMatchObject({ state: "quiet" });
+    expect(health.snapshot({ phase: "BUILDING" })).toMatchObject({ state: "quiet" });
+    expect(health.tick({ phase: "BUILDING" })).toBeUndefined();
+    now = 181_000;
+    expect(health.tick({ phase: "BUILDING" })).toMatchObject({ state: "stalled" });
+    expect(health.recordMeaningful({ kind: "toolCall", role: "worker", phase: "BUILDING" })).toMatchObject({
+      state: "healthy", lastEventKind: "toolCall", lastEventRole: "worker", elapsedMs: 0
+    });
+  });
+
   it("covers approve path", async () => {
     const result = await runOrchestration({ request: "build", config: { maxReviewRounds: 3, maxParallelWorkers: 1 }, agents: agents() });
     expect(result.takeover).toBe(false);

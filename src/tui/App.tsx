@@ -231,7 +231,7 @@ export function App({ config: initialConfig, env, cwd, initialError }: { config:
       setRound(event.checkpoint.round);
       setPlan(event.checkpoint.plan);
       setVerdict(event.checkpoint.verdicts.at(-1));
-    } else {
+    } else if (event.type !== "heartbeat") {
       addMessage("SYSTEM", event.message);
     }
   };

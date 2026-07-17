@@ -1,7 +1,7 @@
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { TandemService } from "../app/main/tandem-service.js";
 import { startupErrorInfo } from "../app/main/startup-error.js";
 import { ipcChannels } from "../app/shared/ipc.js";
@@ -10,6 +10,7 @@ import type { AgentFns, RunOptions, RunResult } from "../src/orchestrator/machin
 import type { PermissionBridge } from "../src/tools/permissions.js";
 import { safeDefaultProjectDir } from "../src/tools/protection.js";
 import { SessionStore } from "../src/session/store.js";
+import { RunHealthTracker } from "../src/orchestrator/run-health.js";
 
 async function tempDir(): Promise<string> {
   const dir = path.join(tmpdir(), `tandem-desktop-${Date.now()}-${Math.random().toString(16).slice(2)}`);
@@ -68,6 +69,97 @@ function respondToPlan(service: TandemService, id: string, approved: boolean): v
 }
 
 describe("TandemService", () => {
+  it("resets one shared run-health tracker for model and tool activity", async () => {
+    let now = 0;
+    const { window, sent } = fakeWindow();
+    const service = new TandemService(window as never, {
+      registerIpcResponses: false,
+      createSession: async () => ({ id: "health", append: async () => undefined, read: async () => [] })
+    });
+    await service.startSession({ projectDir: await tempDir() });
+    const internals = service as unknown as {
+      currentPhase: "BUILDING";
+      activeRunHealth: RunHealthTracker;
+      emitText(role: "leader" | "worker", delta: string): Promise<void>;
+      emitTool(event: { role: "leader" | "worker"; tool: string; target: string; phase: "start" | "end" }): Promise<void>;
+      emitMachine(event: import("../src/orchestrator/machine.js").MachineEvent): Promise<void>;
+    };
+    internals.currentPhase = "BUILDING";
+    internals.activeRunHealth = new RunHealthTracker({ quietSeconds: 30, stalledSeconds: 180, initialPhase: "BUILDING", now: () => now });
+    await internals.emitMachine({ type: "transition", phase: "BUILDING", message: "building" });
+    now = 25_000;
+    await internals.emitText("leader", "working");
+    now = 50_000;
+    await internals.emitTool({ role: "worker", tool: "write", target: "file", phase: "end" });
+    now = 80_000;
+    const quiet = internals.activeRunHealth.tick({ phase: "BUILDING" });
+    if (quiet) await internals.emitMachine({ type: "heartbeat", ...quiet });
+    now = 230_000;
+    const stalled = internals.activeRunHealth.tick({ phase: "BUILDING" });
+    if (stalled) await internals.emitMachine({ type: "heartbeat", ...stalled });
+    now = 231_000;
+    await internals.emitText("leader", "recovered");
+
+    const heartbeats = sent.filter((event) => event.channel === ipcChannels.heartbeatEvent).map((event) => event.payload as { state: string; lastEventKind: string; elapsedMs: number });
+    expect(heartbeats.filter((event) => event.state === "quiet")).toEqual([expect.objectContaining({ lastEventKind: "toolCall", elapsedMs: 30_000 })]);
+    expect(heartbeats.filter((event) => event.state === "stalled")).toEqual([expect.objectContaining({ lastEventKind: "toolCall", elapsedMs: 180_000 })]);
+    expect(heartbeats.at(-1)).toMatchObject({ state: "healthy", lastEventKind: "modelDelta", elapsedMs: 0 });
+  });
+
+  it("clears the heartbeat interval when a run finishes", async () => {
+    const setSpy = vi.spyOn(globalThis, "setInterval");
+    const clearSpy = vi.spyOn(globalThis, "clearInterval");
+    try {
+      const service = new TandemService(fakeWindow().window as never, {
+        registerIpcResponses: false,
+        createSession: async () => ({ id: "cleanup", append: async () => undefined, read: async () => [] }),
+        createAgents: async () => fakeAgents(),
+        runOrchestration: async () => ({ phase: "DONE", summary: "done", reports: [], verdicts: [], takeover: false })
+      });
+      await service.startSession({ projectDir: await tempDir() });
+      await service.run("finish");
+      expect(setSpy).toHaveBeenCalledTimes(1);
+      expect(setSpy).toHaveBeenCalledWith(expect.any(Function), 5_000);
+      expect(clearSpy).toHaveBeenCalledTimes(1);
+      expect(clearSpy).toHaveBeenCalledWith(setSpy.mock.results[0]?.value);
+    } finally {
+      setSpy.mockRestore();
+      clearSpy.mockRestore();
+    }
+  });
+
+  it("publishes and persists heartbeat events without recording them as activity", async () => {
+    const appended: Array<{ type: string; payload: unknown }> = [];
+    const { window, sent } = fakeWindow();
+    const service = new TandemService(window as never, {
+      registerIpcResponses: false,
+      createSession: async () => ({ id: "self", append: async (type, payload) => void appended.push({ type, payload }), read: async () => [] })
+    });
+    await service.startSession({ projectDir: await tempDir() });
+    const tracker = new RunHealthTracker({ quietSeconds: 30, stalledSeconds: 180, initialPhase: "IDLE", now: () => 0 });
+    const recordSpy = vi.spyOn(tracker, "recordMeaningful");
+    const internals = service as unknown as { activeRunHealth: RunHealthTracker; emitMachine(event: import("../src/orchestrator/machine.js").MachineEvent): Promise<void> };
+    internals.activeRunHealth = tracker;
+    await internals.emitMachine({ type: "heartbeat", state: "quiet", phase: "BUILDING", lastEventAt: 0, lastEventKind: "toolCall", elapsedMs: 30_000, quietSeconds: 30, stalledSeconds: 180 });
+    expect(recordSpy).not.toHaveBeenCalled();
+    expect(sent.at(-1)).toMatchObject({ channel: ipcChannels.heartbeatEvent, payload: { type: "heartbeat", state: "quiet" } });
+    expect(appended.at(-1)).toMatchObject({ type: "machine", payload: { type: "heartbeat", state: "quiet" } });
+  });
+
+  it("resumes with the newest persisted heartbeat", async () => {
+    const events = [
+      { type: "machine", at: new Date().toISOString(), payload: { type: "heartbeat", state: "quiet", phase: "BUILDING", lastEventAt: 1, lastEventKind: "modelDelta", elapsedMs: 30_000, quietSeconds: 30, stalledSeconds: 180 } },
+      { type: "machine", at: new Date().toISOString(), payload: { type: "notice", message: "still running" } },
+      { type: "machine", at: new Date().toISOString(), payload: { type: "heartbeat", state: "stalled", phase: "BUILDING", lastEventAt: 1, lastEventKind: "toolCall", elapsedMs: 180_000, quietSeconds: 30, stalledSeconds: 180 } }
+    ];
+    const service = new TandemService(fakeWindow().window as never, {
+      registerIpcResponses: false,
+      openSession: async () => ({ id: "resume-health", append: async () => undefined, read: async () => events })
+    });
+    const resumed = await service.resumeSession("resume-health");
+    expect(resumed.lastHeartbeat).toMatchObject({ state: "stalled", lastEventKind: "toolCall" });
+  });
+
   it("loads a BOM-prefixed desktop state and preserves its peer worktree", async () => {
     const cwd = await tempDir();
     const home = await tempDir();
