@@ -29,6 +29,8 @@ export type BuildPlan = z.infer<typeof BuildPlanSchema>;
 export type PlanStreamId = string;
 // D54: implicit stream id for tasks that don't declare one.
 export const DEFAULT_STREAM_ID = "__default__";
+export const AUTHORITATIVE_ONLY_PREFIX = "authoritative-only:";
+export const AUTHORITATIVE_ONLY_SKIPPED_MARKER = "[authoritative-only skipped]";
 
 // D57-2: small explicit allowlist of SHELL BUILT-INS that don't resolve via PATH lookup
 // (they're interpreter internals, not separate executables). This list must stay tiny and
@@ -162,6 +164,15 @@ function normalizeCommand(value: string): string {
   return value.replace(/\s+/g, " ").trim();
 }
 
+export function isAuthoritativeOnlyVerificationCommand(command: string): boolean {
+  return command.trimStart().toLowerCase().startsWith(AUTHORITATIVE_ONLY_PREFIX);
+}
+
+export function runnableVerificationCommand(command: string): string {
+  if (!isAuthoritativeOnlyVerificationCommand(command)) return command;
+  return command.trimStart().slice(AUTHORITATIVE_ONLY_PREFIX.length).trimStart();
+}
+
 function commandToken(segment: string): string {
   const match = segment.trim().match(/^["']?([^\s"'`]+)["']?/);
   return match?.[1]?.toLowerCase() ?? "";
@@ -217,7 +228,8 @@ async function hasCommandShape(
 
 async function validateVerificationEntry(entry: string, platform: NodeJS.Platform, env: NodeJS.ProcessEnv = process.env): Promise<string[]> {
   const errors: string[] = [];
-  const normalized = normalizeCommand(entry);
+  const executableEntry = runnableVerificationCommand(entry);
+  const normalized = normalizeCommand(executableEntry);
   if (!normalized) return ["verification entry is empty"];
   if (platform === "win32") {
     const posixTools = [...new Set(verificationSegments(normalized)
@@ -331,6 +343,15 @@ function matchResult(planEntry: string, results: CompletionReport["verificationR
   });
 }
 
+function isAuthoritativeOnlySkippedResult(planEntry: string, result: CompletionReport["verificationResults"][number] | undefined): boolean {
+  return Boolean(
+    result &&
+      isAuthoritativeOnlyVerificationCommand(planEntry) &&
+      result.passed === false &&
+      result.output.includes(AUTHORITATIVE_ONLY_SKIPPED_MARKER)
+  );
+}
+
 function looseCommand(value: string): string {
   return normalizeCommand(value)
     .replace(/[“”]/g, "\"")
@@ -433,7 +454,10 @@ export function enforceVerification(
     }
   }
   if (enforceCompleteVerification) {
-    const failed = expectedCommands.filter((entry) => matchResult(entry, report.verificationResults)?.passed !== true);
+    const failed = expectedCommands.filter((entry) => {
+      const result = matchResult(entry, report.verificationResults);
+      return result?.passed !== true && !isAuthoritativeOnlySkippedResult(entry, result);
+    });
     if (failed.length > 0 && report.status === "complete") {
       throw new Error(`Completion report marked complete with failing verification: ${failed.join(", ")}`);
     }

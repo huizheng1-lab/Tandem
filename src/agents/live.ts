@@ -671,7 +671,7 @@ Standing goals are context only; do not redirect unrelated requests toward them.
         modelEntry: worker.entry,
         costRole: "worker",
         ledger: options.ledger,
-        system: `${workerPrompt}\n${hostPrompt}\n${await projectInstructions()}\n${memoryInstruction}\nIf read_file says you CANNOT view a file's visual content, never guess, infer, or claim to know what it shows. If the task depends on that content and the plan lacks sufficient leader-provided findings, submit a blocked CompletionReport.\nYou must run every verification command before submit_completion_report. In verificationResults[].command, repeat the BuildPlan verification command string verbatim. If you adapt a command for the host platform, still use the plan's original command as command and describe the adapted command plus real output in output.`,
+        system: `${workerPrompt}\n${hostPrompt}\n${await projectInstructions()}\n${memoryInstruction}\nIf read_file says you CANNOT view a file's visual content, never guess, infer, or claim to know what it shows. If the task depends on that content and the plan lacks sufficient leader-provided findings, submit a blocked CompletionReport.\nBefore submit_completion_report, follow Tandem's verification rule: run every non-authoritative-only verification command, and skip authoritative-only entries with the required skipped marker. In verificationResults[].command, repeat the BuildPlan verification command string verbatim. If you adapt a command for the host platform, still use the plan's original command as command and describe the adapted command plus real output in output.`,
         providerOptions: openAiPromptCacheProviderOptions(worker.entry, options.cwd, "worker"),
         messages: [
           {
@@ -830,7 +830,7 @@ Standing goals are context only; do not redirect unrelated requests toward them.
           }
         })
       };
-      const system = `${leaderTakeoverPrompt}\n${hostPrompt}\n${await projectInstructions()}\n${absoluteCwdLine(options.cwd)}\n${memoryInstruction}\nRun every verification command, then call submit_takeover. In verificationResults[].command, repeat the BuildPlan verification command string verbatim. If you adapt a command for the host platform, still use the plan's original command as command and describe the adapted command plus real output in output. Quote absolute path arguments that contain spaces.`;
+      const system = `${leaderTakeoverPrompt}\n${hostPrompt}\n${await projectInstructions()}\n${absoluteCwdLine(options.cwd)}\n${memoryInstruction}\nRun every non-authoritative-only verification command, skip authoritative-only entries with the required skipped marker, then call submit_takeover. In verificationResults[].command, repeat the BuildPlan verification command string verbatim. If you adapt a command for the host platform, still use the plan's original command as command and describe the adapted command plus real output in output. Quote absolute path arguments that contain spaces.`;
       await compactLeaderThread(system);
       leaderThread.push({
         role: "user",

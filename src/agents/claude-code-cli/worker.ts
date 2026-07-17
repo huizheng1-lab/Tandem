@@ -35,7 +35,7 @@ export async function buildClaudeWorkerPrompts(
 ${hostPlatformPrompt(process.platform, options.env)}
 ${await projectInstructions(options)}
 If read_file says you CANNOT view a file's visual content, never guess, infer, or claim to know what it shows. If the task depends on that content and the plan lacks sufficient leader-provided findings, submit a blocked CompletionReport.
-You must run every verification command before submit_completion_report. In verificationResults[].command, repeat the BuildPlan verification command string verbatim. If you adapt a command for the host platform, still use the plan's original command as command and describe the adapted command plus real output in output.`,
+Before submit_completion_report, follow Tandem's verification rule: run every non-authoritative-only verification command, and skip authoritative-only entries with the required skipped marker. In verificationResults[].command, repeat the BuildPlan verification command string verbatim. If you adapt a command for the host platform, still use the plan's original command as command and describe the adapted command plus real output in output.`,
     prompt: buildWorkerContext(input)
   };
 }

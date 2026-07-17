@@ -1,3 +1,6 @@
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { AgentFns, OrchestrationCheckpoint, runOrchestration, WorkerStepExhaustionError } from "../src/orchestrator/machine.js";
 import { BuildPlan, CompletionReport, ReviewVerdict } from "../src/orchestrator/artifacts.js";
@@ -485,6 +488,26 @@ describe("orchestration", () => {
     expect(approvalRequests).toHaveLength(1);
     expect(approvalRequests[0]?.target).toContain("Run the plan's 1 verification command");
     expect(notices.some((message) => message.includes("authoritative verification skipped"))).toBe(true);
+  });
+
+  it("D133: authoritative runner executes prefixed commands but reports the original entry", async () => {
+    const cwd = await mkdtemp(path.join(tmpdir(), "tandem-d133-verification-"));
+    const runner = createVerificationRunner({
+      cwd,
+      permissionMode: "yolo",
+      timeoutMs: 30_000
+    });
+
+    try {
+      const results = await runner(["authoritative-only: node --version"]);
+
+      expect(results).toHaveLength(1);
+      expect(results[0]?.command).toBe("authoritative-only: node --version");
+      expect(results[0]?.passed).toBe(true);
+      expect(results[0]?.output).toMatch(/v\d+\.\d+\.\d+/);
+    } finally {
+      await rm(cwd, { recursive: true, force: true });
+    }
   });
 
   it("sanitizes prompt-unsafe control characters in reports before review", async () => {

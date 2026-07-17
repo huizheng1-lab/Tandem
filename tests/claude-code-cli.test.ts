@@ -352,6 +352,7 @@ describe("claude code cli mixed roles", () => {
     expect(prompts.systemPrompt).toContain("Project instructions:\n- Use the local style.");
     expect(prompts.systemPrompt).toContain("Host: Windows");
     expect(prompts.systemPrompt).toContain("If read_file says you CANNOT view a file's visual content");
+    expect(prompts.systemPrompt).toContain("skip authoritative-only entries with the required skipped marker");
     expect(prompts.systemPrompt).toContain("In verificationResults[].command, repeat the BuildPlan verification command string verbatim.");
     expect(prompts.systemPrompt).not.toContain("BuildPlan:");
     expect(prompts.prompt).toMatch(/^BuildPlan:/);

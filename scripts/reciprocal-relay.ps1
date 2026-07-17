@@ -16,6 +16,7 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
+$ResumePauseThreshold = 3
 
 function Invoke-Git {
     param([Parameter(ValueFromRemainingArguments = $true)][string[]]$Arguments)
@@ -61,6 +62,8 @@ function New-RelayState([string]$StableCommit) {
         phase = "idle"
         pausedFromPhase = $null
         pauseAfterTurn = $false
+        resumeCount = 0
+        resumeTurn = $null
         baseCommit = $null
         stableCommit = $StableCommit
         candidateCommit = $null
@@ -109,6 +112,12 @@ try {
     }
     if (-not $state.PSObject.Properties["pauseAfterTurn"]) {
         $state | Add-Member -NotePropertyName pauseAfterTurn -NotePropertyValue $false
+    }
+    if (-not $state.PSObject.Properties["resumeCount"]) {
+        $state | Add-Member -NotePropertyName resumeCount -NotePropertyValue 0
+    }
+    if (-not $state.PSObject.Properties["resumeTurn"]) {
+        $state | Add-Member -NotePropertyName resumeTurn -NotePropertyValue $null
     }
 
     function Update-RelayRefs {
@@ -171,6 +180,9 @@ try {
             phase = $state.phase
             pausedFromPhase = $state.pausedFromPhase
             pauseAfterTurn = [bool]$state.pauseAfterTurn
+            resumeCount = [int]$state.resumeCount
+            resumeThreshold = $ResumePauseThreshold
+            resumeTurn = $state.resumeTurn
             baseCommit = $state.baseCommit
             stableCommit = $state.stableCommit
             candidateCommit = $state.candidateCommit
@@ -262,6 +274,31 @@ try {
         }
     }
 
+    function Reset-ResumeCounter {
+        $state.resumeCount = 0
+        $state.resumeTurn = $null
+    }
+
+    function Increment-ResumeCounter {
+        if ($state.resumeTurn -ne $state.turn) {
+            $state.resumeTurn = $state.turn
+            $state.resumeCount = 0
+        }
+        $state.resumeCount = [int]$state.resumeCount + 1
+        return [int]$state.resumeCount
+    }
+
+    function Pause-ResumeLoop([string]$SelectedRole) {
+        $previousPhase = $state.phase
+        $state.phase = "paused"
+        $state.pausedFromPhase = $previousPhase
+        $state.pauseAfterTurn = $false
+        $state.lastSummary = "Auto-paused turn $($state.turn): executor $SelectedRole received $($state.resumeCount) consecutive RESUME claims without completing. Human attention is required before resuming."
+        Save-State
+        Write-Result "PAUSED"
+        exit 0
+    }
+
     if ($Action -eq "Reset") {
         if (-not $Force) { throw "Reset requires -Force and is reserved for human recovery." }
         $state = [pscustomobject](New-RelayState $currentHead)
@@ -317,6 +354,7 @@ try {
         if (-not $Summary.Trim()) { throw "Resume requires a human-readable -Summary." }
         if ($state.pauseAfterTurn) {
             $state.pauseAfterTurn = $false
+            Reset-ResumeCounter
             $state.lastSummary = $Summary.Trim()
             Save-State
             Write-Result "PAUSE_CANCELLED"
@@ -327,6 +365,7 @@ try {
         if ($restorePhase -eq "paused") { throw "Cannot resume from malformed pausedFromPhase=paused." }
         $state.phase = $restorePhase
         $state.pausedFromPhase = $null
+        Reset-ResumeCounter
         $state.lastSummary = $Summary.Trim()
         Save-State
         Write-Result "RESUMED"
@@ -353,6 +392,7 @@ try {
         $state.candidateCommit = $null
         $state.candidateKind = $null
         $state.rollbackCommit = $null
+        Reset-ResumeCounter
         $state.lastCompletedCommit = $resolved
         $state.lastSummary = if ($Summary.Trim()) { $Summary.Trim() } else { "Reconciled reciprocal branches with master." }
         Save-State
@@ -373,7 +413,16 @@ try {
             exit 0
         }
         if ($state.activeRole) {
-            Write-Result $(if ($state.activeRole -eq $Role) { "RESUME" } else { "WAIT" })
+            if ($state.activeRole -eq $Role) {
+                $count = Increment-ResumeCounter
+                if ($count -ge $ResumePauseThreshold) {
+                    Pause-ResumeLoop $Role
+                }
+                Save-State
+                Write-Result "RESUME"
+            } else {
+                Write-Result "WAIT"
+            }
             exit 0
         }
         if ($state.pauseAfterTurn) {
@@ -395,6 +444,7 @@ try {
         $state.activeRole = $Role
         $state.baseCommit = $head
         $state.startedAt = (Get-Date).ToUniversalTime().ToString("o")
+        Reset-ResumeCounter
         $outcome = "CLAIMED"
         if ($state.candidateCommit) {
             if ($head -ne $state.candidateCommit) {
@@ -430,6 +480,7 @@ try {
         $state.rollbackCommit = $null
         $state.phase = "working"
         $state.baseCommit = $head
+        Reset-ResumeCounter
         $state.lastSummary = if ($Summary.Trim()) { $Summary.Trim() } else { "Candidate baseline accepted after verification." }
         Save-State
         Write-Result "ACCEPTED"
@@ -453,6 +504,7 @@ try {
         }
         $state.rollbackCommit = (@(Invoke-Git rev-parse HEAD))[0].Trim()
         $state.phase = "rollback-verification"
+        Reset-ResumeCounter
         $state.lastSummary = $Summary.Trim()
         Save-State
         Write-Result "ROLLBACK_CREATED"
@@ -477,6 +529,7 @@ try {
         $state.candidateKind = "rollback"
         $state.rollbackCommit = $null
         $state.startedAt = $null
+        Reset-ResumeCounter
         $state.lastCompletedCommit = $head
         $state.lastSummary = $Summary.Trim()
         Save-State
@@ -505,6 +558,7 @@ try {
         Set-IdleOrPauseAfterTurn
         $state.baseCommit = $null
         $state.startedAt = $null
+        Reset-ResumeCounter
         $state.lastSummary = $Summary.Trim()
         Save-State
         Remove-Item -LiteralPath (Join-Path $Workspace ".tandem\reciprocal-checkpoint.md") -Force -ErrorAction SilentlyContinue
@@ -534,6 +588,7 @@ try {
     $state.candidateKind = "improvement"
     $state.rollbackCommit = $null
     $state.startedAt = $null
+    Reset-ResumeCounter
     $state.lastCompletedCommit = $head
     $state.lastSummary = $Summary.Trim()
     Save-State

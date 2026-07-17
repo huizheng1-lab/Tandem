@@ -137,7 +137,7 @@ export async function codexLeaderTakeover(options: CodexLeaderOptions, input: { 
   const prompt = `${leaderTakeoverPrompt}
 ${hostPlatformPrompt(process.platform, options.env)}
 ${await projectInstructions(options)}${absoluteCwdLine(options.cwd)}
-Run every verification command, then return takeover JSON with a CompletionReport and userSummary.
+Run every non-authoritative-only verification command, skip authoritative-only entries with the required skipped marker, then return takeover JSON with a CompletionReport and userSummary.
 
 BuildPlan:
 ${jsonBlock(input.plan)}

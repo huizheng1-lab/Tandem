@@ -28,6 +28,29 @@ const report: CompletionReport = {
 };
 
 describe("reciprocal candidate commit", () => {
+  it("D133: no-ops outside a git repository instead of failing desktop sessions", async () => {
+    const cwd = await relayWorktree();
+    const result = await commitReciprocalCandidate({
+      cwd,
+      role: "B",
+      report,
+      commandRunner: async () => {
+        throw new Error("git branch --show-current failed: fatal: not a git repository (or any of the parent directories): .git");
+      }
+    });
+
+    await expect(
+      prepareReciprocalWorktree({
+        cwd,
+        role: "B",
+        commandRunner: async () => {
+          throw new Error("fatal: not a git repository (or any of the parent directories): .git");
+        }
+      })
+    ).resolves.toBeUndefined();
+    expect(result).toEqual(report);
+  });
+
   it("refuses forbidden paths before staging", async () => {
     const cwd = await relayWorktree();
     await expect(

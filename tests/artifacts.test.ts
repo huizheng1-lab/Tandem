@@ -1,6 +1,16 @@
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { BuildPlan, CompletionReport, mergeCompletionReports, partitionPlan, ReviewVerdictSchema, validateBuildPlan, validateCompletionReport, validateStreamFileOwnership } from "../src/orchestrator/artifacts.js";
+import {
+  AUTHORITATIVE_ONLY_SKIPPED_MARKER,
+  BuildPlan,
+  CompletionReport,
+  mergeCompletionReports,
+  partitionPlan,
+  ReviewVerdictSchema,
+  validateBuildPlan,
+  validateCompletionReport,
+  validateStreamFileOwnership
+} from "../src/orchestrator/artifacts.js";
 
 const plan: BuildPlan = {
   title: "Demo",
@@ -48,6 +58,49 @@ describe("artifacts", () => {
 
   it("accepts Windows-safe and cross-platform verification commands", async () => {
     expect((await validateBuildPlan({ ...plan, verification: ["npm test", "node test.mjs", "type launch.bat"] }, "win32")).verification).toHaveLength(3);
+  });
+
+  it("D133: accepts authoritative-only verification entries and skipped worker reports", async () => {
+    const prefixedPlan: BuildPlan = {
+      ...plan,
+      verification: ["authoritative-only: npm test"]
+    };
+
+    expect((await validateBuildPlan(prefixedPlan, "win32")).verification).toEqual(["authoritative-only: npm test"]);
+    expect(() =>
+      validateCompletionReport(prefixedPlan, {
+        status: "complete",
+        summary: "done",
+        taskResults: [{ id: "T1", status: "done" }],
+        filesChanged: [],
+        verificationResults: [
+          {
+            command: "authoritative-only: npm test",
+            passed: false,
+            output: `${AUTHORITATIVE_ONLY_SKIPPED_MARKER} Tandem authoritative runner executes this command.`
+          }
+        ],
+        deviationsFromPlan: []
+      })
+    ).not.toThrow();
+  });
+
+  it("D133: rejects failed authoritative-only results without the skipped marker", async () => {
+    const prefixedPlan: BuildPlan = {
+      ...plan,
+      verification: ["authoritative-only: npm test"]
+    };
+
+    expect(() =>
+      validateCompletionReport(prefixedPlan, {
+        status: "complete",
+        summary: "done",
+        taskResults: [{ id: "T1", status: "done" }],
+        filesChanged: [],
+        verificationResults: [{ command: "authoritative-only: npm test", passed: false, output: "boom" }],
+        deviationsFromPlan: []
+      })
+    ).toThrow(/failing verification/);
   });
 
   it("requires completion reports to echo plan verification commands exactly", async () => {

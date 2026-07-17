@@ -97,11 +97,28 @@ async function runRaw(runner: NonNullable<ReciprocalCandidateCommitOptions["comm
   return result.stdout;
 }
 
+function isNotGitRepositoryError(error: unknown): boolean {
+  const text = String(error instanceof Error ? `${error.message}\n${(error as Error & { stderr?: unknown }).stderr ?? ""}` : error);
+  return /fatal:\s*not a git repository|not a git repository/i.test(text);
+}
+
+async function currentBranchOrUndefined(
+  runner: NonNullable<ReciprocalCandidateCommitOptions["commandRunner"]>,
+  cwd: string
+): Promise<string | undefined> {
+  try {
+    return await run(runner, cwd, "git", ["branch", "--show-current"]);
+  } catch (error) {
+    if (isNotGitRepositoryError(error)) return undefined;
+    throw error;
+  }
+}
+
 export async function commitReciprocalCandidate(options: ReciprocalCandidateCommitOptions): Promise<CompletionReport> {
   if (!isRole(options.role) || options.report.status !== "complete" || options.report.filesChanged.length === 0) return options.report;
   const expectedBranch = roleBranch[options.role];
   const runner = options.commandRunner ?? defaultRunner;
-  const branch = await run(runner, options.cwd, "git", ["branch", "--show-current"]);
+  const branch = await currentBranchOrUndefined(runner, options.cwd);
   if (branch !== expectedBranch) return options.report;
 
   const files = [...new Set(options.report.filesChanged.map(normalizeReportedPath))];
@@ -171,7 +188,7 @@ export async function commitReciprocalCandidate(options: ReciprocalCandidateComm
 export async function prepareReciprocalWorktree(options: Omit<ReciprocalCandidateCommitOptions, "report">): Promise<void> {
   if (!isRole(options.role)) return;
   const runner = options.commandRunner ?? defaultRunner;
-  const branch = await run(runner, options.cwd, "git", ["branch", "--show-current"]);
+  const branch = await currentBranchOrUndefined(runner, options.cwd);
   if (branch !== roleBranch[options.role]) return;
   const status = await runRaw(runner, options.cwd, "git", ["status", "--porcelain", "--untracked-files=all"]);
   if (status.trim()) return;

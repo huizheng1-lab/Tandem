@@ -77,6 +77,40 @@ describe("reciprocal relay script", () => {
     }
   });
 
+  windowsIt("D133: repeated RESUME claims auto-pause and reset after recovery actions", async () => {
+    const repo = await mkdtemp(path.join(tmpdir(), "tandem-relay-d133-resume-"));
+    try {
+      await initRepo(repo);
+      await relay(repo, "-Action", "Reset", "-Force");
+      await relay(repo, "-Action", "Claim", "-Role", "A");
+
+      const firstResume = await relay(repo, "-Action", "Claim", "-Role", "A");
+      const secondResume = await relay(repo, "-Action", "Claim", "-Role", "A");
+      const thirdResume = await relay(repo, "-Action", "Claim", "-Role", "A");
+
+      expect(firstResume).toMatchObject({ outcome: "RESUME", resumeCount: 1, resumeThreshold: 3 });
+      expect(secondResume).toMatchObject({ outcome: "RESUME", resumeCount: 2, resumeThreshold: 3 });
+      expect(thirdResume).toMatchObject({
+        outcome: "PAUSED",
+        phase: "paused",
+        pausedFromPhase: "working",
+        activeRole: "A",
+        resumeCount: 3,
+        resumeThreshold: 3,
+      });
+      expect(thirdResume.lastSummary).toContain("Auto-paused turn");
+
+      await relay(repo, "-Action", "Resume", "-Summary", "human inspected the stalled turn");
+      const afterResume = await relay(repo, "-Action", "Claim", "-Role", "A");
+      expect(afterResume).toMatchObject({ outcome: "RESUME", resumeCount: 1 });
+
+      const abandoned = await relay(repo, "-Action", "Abandon", "-Role", "A", "-Summary", "reset stalled no-work turn");
+      expect(abandoned).toMatchObject({ outcome: "ABANDONED", resumeCount: 0, activeRole: null });
+    } finally {
+      await rm(repo, { recursive: true, force: true });
+    }
+  }, 30_000);
+
   windowsIt("D132: accept completes a matching non-epic direction candidate", async () => {
     const repo = await mkdtemp(path.join(tmpdir(), "tandem-relay-d132-accept-"));
     try {
@@ -121,5 +155,5 @@ describe("reciprocal relay script", () => {
     } finally {
       await rm(repo, { recursive: true, force: true });
     }
-  });
+  }, 30_000);
 });

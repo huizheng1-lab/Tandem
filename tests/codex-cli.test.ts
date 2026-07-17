@@ -445,6 +445,7 @@ describe("codex cli mixed roles", () => {
     expect(prompt).toContain("Project instructions:\n- Use the local style.");
     expect(prompt).toContain("Host: Windows");
     expect(prompt).toContain("If read_file says you CANNOT view a file's visual content");
+    expect(prompt).toContain("skip authoritative-only entries with the required skipped marker");
     expect(prompt).toContain(
       "In verificationResults[].command, repeat the BuildPlan verification command string verbatim. If you adapt a command for the host platform, still use the plan's original command as command and describe the adapted command plus real output in output."
     );
