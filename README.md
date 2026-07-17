@@ -108,6 +108,7 @@ npm run dist:app
 ```
 
 The installer uses product name `Tandem` and creates its own desktop and Start Menu shortcuts. The packaged app reads the selected project folder's `.env` and `.tandem/config.json`, just like the CLI.
+The desktop chat pane accepts the same slash commands as the terminal CLI, so `npx tandem /help` and the in-app help menu list the same set of commands.
 
 ## Verification
 
