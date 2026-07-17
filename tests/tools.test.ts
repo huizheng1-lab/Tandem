@@ -5,7 +5,7 @@ import { describe, expect, it } from "vitest";
 import { editFileTool, readFileTool, writeFileTool } from "../src/tools/fs.js";
 import type { ToolActivityEvent } from "../src/tools/fs.js";
 import { makeToolSet } from "../src/tools/index.js";
-import { bashTool, effectiveBashTimeout, MAX_BASH_TIMEOUT_MS, tailOutput } from "../src/tools/shell.js";
+import { BASH_SETTLE_GRACE_MS, bashTool, effectiveBashTimeout, MAX_BASH_TIMEOUT_MS, tailOutput } from "../src/tools/shell.js";
 import { isDestructiveCommand } from "../src/tools/permissions.js";
 
 async function tempDir(): Promise<string> {
@@ -291,6 +291,30 @@ describe("tools", () => {
     await expectProcessGone(childPid);
     await expectProcessGone(grandchildPid);
   }, 15000);
+
+  it.runIf(process.platform === "win32")("returns by the hard deadline when a detached descendant holds the output pipe open", async () => {
+    const cwd = await tempDir();
+    await writeFile(
+      path.join(cwd, "pipe-parent.cjs"),
+      [
+        'const { spawn } = require("node:child_process");',
+        'const child = spawn(process.execPath, ["-e", "setTimeout(() => {}, 12000)"], { detached: true, stdio: ["ignore", "inherit", "inherit"] });',
+        "child.unref();",
+        "process.exit(0);"
+      ].join("\n"),
+      "utf8"
+    );
+    const toolTimeoutMs = 500;
+    const startedAt = Date.now();
+
+    const result = await bashTool({ cwd, permissionMode: "yolo" }, "node pipe-parent.cjs", toolTimeoutMs);
+    const elapsedMs = Date.now() - startedAt;
+
+    expect(result.passed).toBe(false);
+    expect(result.output).toContain(`Command timed out after ${toolTimeoutMs}ms`);
+    expect(elapsedMs).toBeGreaterThanOrEqual(toolTimeoutMs);
+    expect(elapsedMs).toBeLessThan(toolTimeoutMs + BASH_SETTLE_GRACE_MS + 2000);
+  }, 10000);
 
   it.runIf(process.platform === "win32")("aborts running shell commands and kills descendants promptly", async () => {
     const cwd = await tempDir();
