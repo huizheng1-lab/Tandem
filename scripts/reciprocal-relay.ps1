@@ -19,8 +19,15 @@ $ErrorActionPreference = "Stop"
 
 function Invoke-Git {
     param([Parameter(ValueFromRemainingArguments = $true)][string[]]$Arguments)
-    $output = @(& git -C $Workspace @Arguments 2>&1)
-    if ($LASTEXITCODE -ne 0) {
+    $oldErrorAction = $ErrorActionPreference
+    try {
+        $ErrorActionPreference = "Continue"
+        $output = @(& git -C $Workspace @Arguments 2>&1)
+        $exitCode = $LASTEXITCODE
+    } finally {
+        $ErrorActionPreference = $oldErrorAction
+    }
+    if ($exitCode -ne 0) {
         throw "git $($Arguments -join ' ') failed: $($output -join [Environment]::NewLine)"
     }
     return $output
@@ -28,8 +35,14 @@ function Invoke-Git {
 
 function Test-Git {
     param([Parameter(ValueFromRemainingArguments = $true)][string[]]$Arguments)
-    & git -C $Workspace @Arguments *> $null
-    return $LASTEXITCODE -eq 0
+    $oldErrorAction = $ErrorActionPreference
+    try {
+        $ErrorActionPreference = "Continue"
+        & git -C $Workspace @Arguments *> $null
+        return $LASTEXITCODE -eq 0
+    } finally {
+        $ErrorActionPreference = $oldErrorAction
+    }
 }
 
 function Get-RoleConfig([string]$SelectedRole) {
