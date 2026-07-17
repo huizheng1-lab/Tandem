@@ -56,6 +56,12 @@ export const CustomModelSchema = z
     }
   });
 
+export const RemoteControlConfigSchema = z.object({
+  enabled: z.boolean().optional(),
+  telegramUserId: z.number().int().positive().optional()
+});
+export type RemoteControlConfig = z.infer<typeof RemoteControlConfigSchema>;
+
 export const ConfigSchema = z.object({
   leader: z.string().min(1),
   worker: z.string().min(1),
@@ -82,6 +88,7 @@ export const ConfigSchema = z.object({
   // that many simultaneous workers. Streams beyond the cap are scheduled as earlier ones
   // finish. Settable like maxReviewRounds.
   maxParallelWorkers: z.number().int().min(1),
+  remoteControl: RemoteControlConfigSchema.optional(),
   customModels: z.array(CustomModelSchema)
 });
 

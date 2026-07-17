@@ -122,6 +122,9 @@ ipcMain.handle(ipcChannels.memoryRemove, (_event, request: MemoryRemoveRequest) 
 ipcMain.handle(ipcChannels.schedulesList, () => service?.listSchedules());
 ipcMain.handle(ipcChannels.scheduleAdd, (_event, request: ScheduleAddRequest) => service?.addSchedule(request.cron, request.prompt));
 ipcMain.handle(ipcChannels.scheduleRemove, (_event, request: ScheduleRemoveRequest) => service?.removeSchedule(request.id));
+ipcMain.handle(ipcChannels.remoteControlGet, () => service?.getRemoteControlState());
+ipcMain.handle(ipcChannels.remoteControlEnable, () => service?.enableRemoteControl());
+ipcMain.handle(ipcChannels.remoteControlRevoke, () => service?.revokeRemoteControl());
 ipcMain.handle(ipcChannels.permissionSessionAutoApproveSet, (_event, request: SessionAutoApproveRequest) => service?.setSessionAutoApprove(request.mode));
 ipcMain.handle(ipcChannels.dialogPickFolder, async () => {
   if (!mainWindow) return undefined;

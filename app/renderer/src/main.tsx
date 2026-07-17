@@ -10,6 +10,7 @@ import type {
   ModelListItem,
   PermissionRequestEvent,
   PlanConfirmEvent,
+  RemoteControlState,
   Schedule,
   SessionAutoApproveMode,
   SessionMemoryNote,
@@ -148,6 +149,16 @@ function relativeTime(value: string): string {
   return `${Math.floor(hours / 24)}d ago`;
 }
 
+function timeUntil(value: string | undefined): string {
+  if (!value) return "";
+  const ms = new Date(value).getTime() - Date.now();
+  if (!Number.isFinite(ms) || ms <= 0) return "expired";
+  const minutes = Math.ceil(ms / 60_000);
+  if (minutes < 60) return `${minutes}m left`;
+  const hours = Math.ceil(minutes / 60);
+  return `${hours}h left`;
+}
+
 function secondsSince(startedAt: number, now: number): number {
   return Math.max(0, Math.floor((now - startedAt) / 1000));
 }
@@ -276,6 +287,8 @@ function App(): React.ReactElement {
   const [showMemory, setShowMemory] = useState(true);
   const [memoryText, setMemoryText] = useState("");
   const [schedules, setSchedules] = useState<Schedule[]>([]);
+  const [remoteControl, setRemoteControl] = useState<RemoteControlState>();
+  const [remoteBusy, setRemoteBusy] = useState(false);
   const [goalText, setGoalText] = useState("");
   const [scheduleCron, setScheduleCron] = useState("");
   const [schedulePrompt, setSchedulePrompt] = useState("");
@@ -305,6 +318,13 @@ function App(): React.ReactElement {
     ? `Leader: ${cost.leader.inputTokens}/${cost.leader.outputTokens} tokens, $${cost.leader.dollars.toFixed(4)}${effectiveConfig?.leader === "codex/cli" ? " (billed via your Codex CLI account, not by token price)" : ""}${effectiveConfig?.leader === "claude-code/cli" ? " (reported directly by Claude Code CLI)" : ""}\nWorker: ${cost.worker.inputTokens}/${cost.worker.outputTokens} tokens, $${cost.worker.dollars.toFixed(4)}${effectiveConfig?.worker === "codex/cli" ? " (billed via your Codex CLI account, not by token price)" : ""}${effectiveConfig?.worker === "claude-code/cli" ? " (reported directly by Claude Code CLI)" : ""}`
     : "No usage yet";
   const cumulativeCostTitle = cumulativeTooltip(cost, effectiveConfig);
+  const remoteStatus = useMemo(() => {
+    if (!remoteControl?.configured) return "Telegram token missing";
+    if (!remoteControl.enabled) return "Off";
+    if (remoteControl.paired) return `Paired ${remoteControl.pairedUserId ?? ""}${remoteControl.polling ? " - polling" : ""}`;
+    if (remoteControl.pairingCode) return `Pairing code active - ${timeUntil(remoteControl.pairingExpiresAt)}`;
+    return remoteControl.polling ? "Waiting" : "Idle";
+  }, [remoteControl]);
 
   const limitEntries = (items: TranscriptEntry[]): TranscriptEntry[] => items.slice(Math.max(0, items.length - MAX_TRANSCRIPT_ENTRIES));
 
@@ -586,6 +606,7 @@ function App(): React.ReactElement {
       tandem.onMemoryEvent((event) => setMemoryNotes(event.notes)),
       tandem.onMachineEvent(handleMachineEvent),
       tandem.onCostEvent(setCost),
+      tandem.onRemoteControlEvent(setRemoteControl),
       tandem.onDoneEvent((event) => {
         setRunning(false);
         setPhase(event.error ? "IDLE" : "DONE");
@@ -607,12 +628,13 @@ function App(): React.ReactElement {
           setStartupError(error);
           return;
         }
-        const [state, modelItems] = await Promise.all([tandem.getAppState(), tandem.listModels(), refreshSidebar()]);
+        const [state, modelItems, remoteState] = await Promise.all([tandem.getAppState(), tandem.listModels(), tandem.getRemoteControl(), refreshSidebar()]);
         setAppState(state);
         setConfig(state.config);
         setShowThinking(state.config.showThinking);
         showThinkingRef.current = state.config.showThinking;
         setModels(modelItems);
+        setRemoteControl(remoteState);
       })
       .catch((error: unknown) => {
         appendMessage("system", `Failed to initialize desktop data: ${errorText(error)}`);
@@ -760,6 +782,28 @@ function App(): React.ReactElement {
     const nextConfig = await tandem.setConfig({ desktopTheme });
     setConfig(nextConfig);
     setSession((current) => (current ? { ...current, config: nextConfig } : current));
+  };
+
+  const enableRemoteControl = async () => {
+    setRemoteBusy(true);
+    try {
+      setRemoteControl(await tandem.enableRemoteControl());
+    } catch (error) {
+      appendMessage("system", `Remote control enable failed: ${errorText(error)}`);
+    } finally {
+      setRemoteBusy(false);
+    }
+  };
+
+  const revokeRemoteControl = async () => {
+    setRemoteBusy(true);
+    try {
+      setRemoteControl(await tandem.revokeRemoteControl());
+    } catch (error) {
+      appendMessage("system", `Remote control revoke failed: ${errorText(error)}`);
+    } finally {
+      setRemoteBusy(false);
+    }
   };
 
   const archiveSession = async (id: string, archived: boolean) => {
@@ -1162,6 +1206,26 @@ if (args.length === 1 && sub === "clear") {
         <div className="sideSection">
           <div className="sideLabel">Session cost</div>
           <div className="sideValue" title={cumulativeCostTitle}>{cumulativeCostText}</div>
+        </div>
+        <div className="sideSection remotePanel">
+          <div className="sideLabel">Remote control</div>
+          <div className="sideValue">{remoteStatus}</div>
+          {remoteControl?.lastError ? <div className="remoteError">{remoteControl.lastError}</div> : null}
+          {remoteControl?.pairingCode ? (
+            <div className="pairingBox">
+              <span>Telegram</span>
+              <code>/pair {remoteControl.pairingCode}</code>
+              <small>{timeUntil(remoteControl.pairingExpiresAt)}</small>
+            </div>
+          ) : null}
+          <button
+            type="button"
+            className={remoteControl?.enabled ? "remoteButton dangerAction" : "remoteButton"}
+            disabled={remoteBusy || !remoteControl || remoteControl.configured === false}
+            onClick={() => void (remoteControl?.enabled ? revokeRemoteControl() : enableRemoteControl())}
+          >
+            {remoteBusy ? "Working..." : remoteControl?.enabled ? "Revoke" : "Enable pair code"}
+          </button>
         </div>
         <div className="sideSection">
           <div className="sideLabel">Sessions</div>

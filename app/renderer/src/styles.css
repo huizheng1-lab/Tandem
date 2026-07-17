@@ -217,6 +217,64 @@ select {
   text-decoration: line-through;
 }
 
+.remotePanel {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 10px;
+  background: var(--surface-raised);
+}
+
+.remoteButton {
+  border: 1px solid var(--border-strong);
+  border-radius: 6px;
+  color: var(--button-text);
+  background: var(--accent-bg);
+  padding: 8px 10px;
+}
+
+.remoteButton:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.remoteButton.dangerAction {
+  border-color: var(--danger-bg);
+  color: var(--danger-text);
+  background: var(--danger-bg);
+}
+
+.remoteError {
+  overflow-wrap: anywhere;
+  border: 1px solid var(--danger-bg);
+  border-radius: 6px;
+  padding: 6px;
+  color: var(--danger-text);
+  background: var(--danger-bg);
+  font-size: 12px;
+  line-height: 1.35;
+}
+
+.pairingBox {
+  display: grid;
+  gap: 4px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 8px;
+  background: var(--surface-inset);
+}
+
+.pairingBox span,
+.pairingBox small {
+  color: var(--text-subtle);
+  font-size: 11px;
+}
+
+.pairingBox code {
+  overflow-wrap: anywhere;
+  color: var(--text-strong);
+  font-size: 13px;
+}
+
 .sessionRow {
   display: grid;
   gap: 5px;

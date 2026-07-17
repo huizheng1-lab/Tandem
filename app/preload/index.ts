@@ -8,6 +8,7 @@ import type {
   PermissionResponse,
   PlanConfirmEvent,
   PlanResponse,
+  RemoteControlState,
   TextEvent,
   ToolActivityEvent
 } from "../shared/ipc.js";
@@ -46,6 +47,9 @@ const api: TandemDesktopApi = {
   listSchedules: () => ipcRenderer.invoke(ipcChannels.schedulesList),
   addSchedule: (request) => ipcRenderer.invoke(ipcChannels.scheduleAdd, request),
   removeSchedule: (request) => ipcRenderer.invoke(ipcChannels.scheduleRemove, request),
+  getRemoteControl: () => ipcRenderer.invoke(ipcChannels.remoteControlGet),
+  enableRemoteControl: () => ipcRenderer.invoke(ipcChannels.remoteControlEnable),
+  revokeRemoteControl: () => ipcRenderer.invoke(ipcChannels.remoteControlRevoke),
   setSessionAutoApprove: (request) => ipcRenderer.invoke(ipcChannels.permissionSessionAutoApproveSet, request),
   pickFolder: () => ipcRenderer.invoke(ipcChannels.dialogPickFolder),
   respondToPermission: (response: PermissionResponse) => ipcRenderer.send(ipcChannels.permissionRespond, response),
@@ -54,6 +58,7 @@ const api: TandemDesktopApi = {
   onTextEvent: (callback) => on<TextEvent>(ipcChannels.textEvent, callback),
   onToolEvent: (callback) => on<ToolActivityEvent>(ipcChannels.toolEvent, callback),
   onMemoryEvent: (callback) => on<MemoryEvent>(ipcChannels.memoryEvent, callback),
+  onRemoteControlEvent: (callback) => on<RemoteControlState>(ipcChannels.remoteControlEvent, callback),
   onCostEvent: (callback) => on(ipcChannels.costEvent, callback),
   onDoneEvent: (callback) => on<PipelineDoneEvent>(ipcChannels.doneEvent, callback),
   onPermissionRequest: (callback) => on<PermissionRequestEvent>(ipcChannels.permissionRequest, callback),

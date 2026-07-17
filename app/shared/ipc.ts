@@ -49,6 +49,9 @@ export const ipcChannels = {
   schedulesList: "schedules:list",
   scheduleAdd: "schedule:add",
   scheduleRemove: "schedule:remove",
+  remoteControlGet: "remote-control:get",
+  remoteControlEnable: "remote-control:enable",
+  remoteControlRevoke: "remote-control:revoke",
   permissionSessionAutoApproveSet: "permission:auto-approve:set",
   dialogPickFolder: "dialog:pickFolder",
   machineEvent: "evt:machine",
@@ -56,6 +59,7 @@ export const ipcChannels = {
   costEvent: "evt:cost",
   toolEvent: "evt:tool",
   memoryEvent: "evt:memory",
+  remoteControlEvent: "evt:remote-control",
   doneEvent: "evt:done"
 } as const;
 
@@ -235,6 +239,17 @@ export interface ScheduleRemoveRequest {
   id: string;
 }
 
+export interface RemoteControlState {
+  configured: boolean;
+  enabled: boolean;
+  polling: boolean;
+  paired: boolean;
+  pairedUserId?: string;
+  pairingCode?: string;
+  pairingExpiresAt?: string;
+  lastError?: string;
+}
+
 export interface TandemDesktopApi {
   ping(): Promise<string>;
   getStartupError(): Promise<StartupErrorInfo | undefined>;
@@ -263,6 +278,9 @@ export interface TandemDesktopApi {
   listSchedules(): Promise<Schedule[]>;
   addSchedule(request: ScheduleAddRequest): Promise<Schedule[]>;
   removeSchedule(request: ScheduleRemoveRequest): Promise<Schedule[]>;
+  getRemoteControl(): Promise<RemoteControlState>;
+  enableRemoteControl(): Promise<RemoteControlState>;
+  revokeRemoteControl(): Promise<RemoteControlState>;
   setSessionAutoApprove(request: SessionAutoApproveRequest): Promise<SessionAutoApproveMode>;
   pickFolder(): Promise<string | undefined>;
   respondToPermission(response: PermissionResponse): void;
@@ -271,6 +289,7 @@ export interface TandemDesktopApi {
   onTextEvent(callback: (event: TextEvent) => void): () => void;
   onToolEvent(callback: (event: ToolActivityEvent) => void): () => void;
   onMemoryEvent(callback: (event: MemoryEvent) => void): () => void;
+  onRemoteControlEvent(callback: (event: RemoteControlState) => void): () => void;
   onCostEvent(callback: (event: CostTotals) => void): () => void;
   onDoneEvent(callback: (event: PipelineDoneEvent) => void): () => void;
   onPermissionRequest(callback: (event: PermissionRequestEvent) => void): () => void;

@@ -18,6 +18,8 @@ import { commitReciprocalCandidate, prepareReciprocalWorktree } from "../../src/
 import { modelRegistry } from "../../src/providers/registry.js";
 import { withConfiguredCliModel } from "../../src/providers/cli-models.js";
 import { tandemStateDir } from "../../src/paths.js";
+import { RemoteBridge, type RemoteControlState, type RemoteTransport } from "../../src/remote-control/bridge.js";
+import { TelegramLongPollingTransport } from "../../src/remote-control/telegram.js";
 import { CostLedger } from "../../src/session/cost.js";
 import { copyAttachment, formatAttachmentBlock, writeAttachmentData } from "../../src/session/attachments.js";
 import type { AttachmentRef } from "../../src/session/attachments.js";
@@ -109,6 +111,7 @@ export interface TandemServiceDeps {
   createSession?: (cwd: string) => Promise<SessionLike>;
   openSession?: (id: string, cwd: string) => Promise<SessionLike>;
   findSessionProjectDir?: typeof findSessionProjectDir;
+  remoteTransportFactory?: (token: string) => RemoteTransport;
   registerIpcResponses?: boolean;
   homeDir?: string;
   baseEnv?: NodeJS.ProcessEnv;
@@ -131,6 +134,8 @@ export class TandemService {
   private sessionAutoApprove: SessionAutoApproveMode = "none";
   private lastPersistedCostKey?: string;
   private runBaselineTotals?: CostTotals;
+  private currentPhase = "IDLE";
+  private remoteBridge: RemoteBridge;
   constructor(
     private readonly window: DesktopWindow,
     private readonly deps: TandemServiceDeps = {}
@@ -140,6 +145,16 @@ export class TandemService {
     this.projectDir = this.lastProjectDir ?? safeDefaultProjectDir(this.homeDir);
     this.env = this.loadProjectEnv(this.projectDir);
     this.config = loadConfig({ cwd: this.projectDir, homeDir: this.homeDir, env: this.env });
+    this.remoteBridge = new RemoteBridge({
+      auditPath: path.join(tandemStateDir(this.homeDir), "remote-control-audit.jsonl"),
+      transportFactory: this.deps.remoteTransportFactory ?? ((token) => new TelegramLongPollingTransport(token)),
+      tokenProvider: () => this.env.TELEGRAM_BOT_TOKEN,
+      statusProvider: () => this.remoteStatusSnapshot(),
+      sessionsProvider: async () => (await this.listSessions()).map((session) => ({ id: session.id, title: session.title, projectDir: session.projectDir })),
+      saveConfig: (patch) => this.saveRemoteControlConfig(patch),
+      onStateChange: (state) => this.window.webContents.send(ipcChannels.remoteControlEvent, state)
+    });
+    void this.remoteBridge.configure(this.config.remoteControl ?? {});
     void this.refreshCronTasks();
     if (deps.registerIpcResponses === false) return;
     ipcMain.on(ipcChannels.permissionRespond, (_event, response: PermissionResponse) => {
@@ -166,6 +181,7 @@ export class TandemService {
     const loaded = loadConfigDetails({ cwd: this.projectDir, homeDir: this.homeDir, env: this.env });
     this.config = loaded.config;
     this.projectConfigOverrides = loaded.projectOverrides;
+    await this.remoteBridge.configure(this.config.remoteControl ?? {});
     this.ledger = new CostLedger();
     this.runBaselineTotals = this.ledger.totals();
     this.lastPersistedCostKey = undefined;
@@ -194,6 +210,7 @@ export class TandemService {
     const session = this.session as SessionLike;
     await this.prepareReciprocalRun();
     this.controller = new AbortController();
+    this.currentPhase = "IDLE";
     this.runBaselineTotals = this.ledger.totals();
     try {
       let sessionEvents = await session.read();
@@ -296,6 +313,7 @@ export class TandemService {
     this.config = { ...this.config, ...patch };
     await saveGlobalConfigPatch(patch, this.homeDir);
     if (this.session) await saveProjectConfig(this.config, this.projectDir);
+    if (patch.remoteControl) await this.remoteBridge.configure(this.config.remoteControl ?? {});
     return this.config;
   }
 
@@ -365,6 +383,7 @@ export class TandemService {
     const loaded = loadConfigDetails({ cwd: projectDir, homeDir: this.homeDir, env: this.env });
     this.config = loaded.config;
     this.projectConfigOverrides = loaded.projectOverrides;
+    await this.remoteBridge.configure(this.config.remoteControl ?? {});
     this.ledger = new CostLedger();
     this.lastPersistedCostKey = undefined;
     await this.refreshCronTasks();
@@ -479,6 +498,18 @@ export class TandemService {
     return this.sessionAutoApprove;
   }
 
+  getRemoteControlState(): RemoteControlState {
+    return this.remoteBridge.state();
+  }
+
+  enableRemoteControl(): Promise<RemoteControlState> {
+    return this.remoteBridge.enablePairing();
+  }
+
+  revokeRemoteControl(): Promise<RemoteControlState> {
+    return this.remoteBridge.revoke();
+  }
+
   private async emitText(role: "leader" | "worker", delta: string, thinking = false): Promise<void> {
     const event = { role, delta, thinking };
     this.window.webContents.send(ipcChannels.textEvent, event);
@@ -490,6 +521,8 @@ export class TandemService {
 
   private async emitMachine(event: MachineEvent): Promise<void> {
     if (event.type === "checkpoint") this.lastCheckpoint = event.checkpoint;
+    if (event.type === "checkpoint") this.currentPhase = event.checkpoint.phase;
+    if (event.type === "transition") this.currentPhase = event.phase;
     this.window.webContents.send(ipcChannels.machineEvent, event);
     const totals = this.costTotals();
     this.window.webContents.send(ipcChannels.costEvent, this.costEventTotals(totals));
@@ -599,6 +632,24 @@ export class TandemService {
         worker: { ...currentTotals.worker }
       }
     };
+  }
+
+  private remoteStatusSnapshot() {
+    return {
+      sessionId: this.session?.id,
+      phase: this.controller ? this.currentPhase : this.lastCheckpoint?.phase ?? "IDLE",
+      activeRole: this.controller ? (this.currentPhase === "BUILDING" ? "worker" : "leader") : undefined,
+      runHealth: undefined,
+      cost: this.costEventTotals()
+    };
+  }
+
+  private async saveRemoteControlConfig(patch: { enabled?: boolean; telegramUserId?: number }): Promise<void> {
+    const current = this.config.remoteControl ?? {};
+    const remoteControl = { ...current, ...patch };
+    if (remoteControl.telegramUserId === undefined) delete remoteControl.telegramUserId;
+    this.config = { ...this.config, remoteControl };
+    await saveGlobalConfigPatch({ remoteControl }, this.homeDir);
   }
 
   private findLastCostTotals(events: Array<{ type: string; payload: unknown }>): CostTotals | undefined {

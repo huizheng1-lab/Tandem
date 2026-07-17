@@ -7,7 +7,7 @@ import { resolveModel, validateModelEnv } from "../src/providers/registry.js";
 import { makeModel } from "../src/providers/client.js";
 import { buildCodexExecArgv } from "../src/agents/codex-cli/exec.js";
 import { buildClaudeExecArgv } from "../src/agents/claude-code-cli/exec.js";
-import { defaultConfig } from "../src/config/schema.js";
+import { ConfigSchema, defaultConfig } from "../src/config/schema.js";
 import { sessionDir } from "../src/session/store.js";
 import { withConfiguredCliModel } from "../src/providers/cli-models.js";
 
@@ -52,6 +52,12 @@ describe("config", () => {
     await writeFile(path.join(home, ".tandem", "config.json"), JSON.stringify({ triage: "always-plan" }));
 
     expect(loadConfig({ cwd, homeDir: home }).triage).toBe("always-plan");
+  });
+
+  it("keeps remote control configuration optional for old configs", () => {
+    expect(ConfigSchema.parse(defaultConfig).remoteControl).toBeUndefined();
+    expect(ConfigSchema.parse({ ...defaultConfig, remoteControl: {} }).remoteControl).toEqual({});
+    expect(ConfigSchema.parse({ ...defaultConfig, remoteControl: { enabled: true, telegramUserId: 12345 } }).remoteControl).toEqual({ enabled: true, telegramUserId: 12345 });
   });
 
   it("tracks project config fields that override global defaults", async () => {
