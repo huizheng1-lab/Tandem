@@ -89,6 +89,7 @@ Supported commands: `/help`, `/models`, `/model`, `/model leader <id>`, `/model 
 Bare `/model` opens a minimal picker in the TUI: choose leader or worker, then choose a model. Entries marked `ok` have their API key configured; entries marked `key` need the shown env var.
 
 Schedules run only while Tandem is open.
+`/cost` shows cumulative leader and worker token counts plus dollar totals straight from the live ledger.
 
 For the isolated reciprocal self-improvement setup, large wishlist items can use epics. `-Autonomy full` authorizes automatic plan approval only after independent validation; `AutonomyDefault: autonomous` applies the same policy to epics without an explicit mode. Plans remain committed and visible, while runtime promotion, master integration, security-surface work, and all reciprocal safety boundaries remain human-gated. See `process/reciprocal/README.md`.
 
