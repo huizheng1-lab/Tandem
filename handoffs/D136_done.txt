@@ -1,0 +1,28 @@
+Round: D136
+Status: complete
+
+Source commits:
+- 84f5048 D135-1 add read-only Telegram remote control bridge
+- 091559a D135-2 mark handoff complete
+
+Packaged build:
+- Artifact: release/win-unpacked
+- Source SHA: 091559a8d4a09fb13e29a151c40e8ee6981bf05f
+- Source branch: master
+- Built at: 2026-07-17T21:36:12.925Z
+
+Verification summary:
+- npm run dist:app: passed; BUILD_INFO.json stamped with source 091559a.
+- Remote bridge inert before enablement: confirmed; no audit log existed before the human enabled pairing.
+- Telegram live pairing: passed at 2026-07-17T21:43:55Z.
+- Telegram /status: inbound command and outbound status reply confirmed at 2026-07-17T21:44:04Z.
+- Telegram /sessions: inbound command and outbound sessions reply confirmed at 2026-07-17T21:45:53Z.
+- Audit privacy: chat and sender identifiers are intentionally omitted from this marker; the JSONL audit recorded the expected event kinds.
+- Wrong-sender rejection: not live-tested because a second Telegram identity was not available.
+- Dead-token resilience: not disrupted live; covered by the D135 automated remote-control tests.
+- npm run typecheck: passed.
+- npm test: passed on rerun (43 files passed, 1 skipped; 405 tests passed, 1 skipped). The first run had a transient timeout in the unrelated reciprocal-direction suite.
+- git diff --check: passed.
+
+Human UX notes:
+- No pairing or command-response friction reported.
