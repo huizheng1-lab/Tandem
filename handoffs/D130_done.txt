@@ -1,0 +1,78 @@
+Round: D130
+Status: COMPLETE
+
+Commits:
+- 613d627320dbde0957944b9559066452b677dfc7 D130-1: relocate reciprocal full-suite verification
+- 11a4f515d665ba917e0f70daa9ea3b496fb4c30e relay: persist cumulative session cost across resumes
+- ef103d36c5432e4fe80d4759c79879825a3c5b75 D130-2: integrate W0010 cost resume
+
+Protocol amendment:
+- process/reciprocal/PROTOCOL.md now says:
+  "Inside a sandboxed producing turn, run focused tests for every changed
+  behavior plus, at minimum: npm run typecheck; git diff --check."
+- It also says:
+  "Every implementation plan must still list the full npm test command in its
+  verification array. Tandem's authoritative verification runner executes that
+  full suite outside the producing Codex sandbox after the worker returns, and
+  the opposite executor repeats the full suite during VALIDATE before stable
+  advances."
+- The protocol explicitly forbids weakening, skipping, or suppressing runnable
+  tests and states that a failure at either authoritative full-suite gate
+  prevents acceptance.
+- TANDEM_EXECUTOR_A.md and TANDEM_EXECUTOR_B.md repeat the same producing-turn
+  rule and keep npm test mandatory in authoritative verification and peer
+  validation. The generated ignored TANDEM.md in both reciprocal worktrees was
+  refreshed from those templates after reconciliation.
+
+Executor A recovery and candidate evidence:
+- Session: C:\Users\huizh\Apps\Tandem Reciprocal\state\executor-a\sessions\d029c3483314\9cfa9555-125b-4395-b614-793b21448c29.jsonl
+- Human recovery canceled the pending pause-after-turn only for completion and
+  peer validation: PAUSE_CANCELLED, turn=5, activeRole=A, phase=working.
+- Claim returned RESUME for the preserved W0010 Step 1 turn.
+- Producing checks passed: focused Vitest 34/34, typecheck, and diff check.
+- Exactly five files were committed; Step 1 was checked and Step 2 remained
+  unchecked. Candidate commit 11a4f515 had parent 3e968e719 and message
+  "relay: persist cumulative session cost across resumes".
+- Candidate and Complete succeeded. The authoritative unsandboxed runner then
+  passed full npm test: 40 files passed, 1 skipped; 381 tests passed, 1 skipped.
+
+Executor B peer validation evidence:
+- Session: C:\Users\huizh\Apps\Tandem Reciprocal\state\executor-b\sessions\6fd69ea03b6c\113ee9b0-eaf4-4c0c-a01d-d1496f6aca22.jsonl
+- Claim returned VALIDATE for candidate 11a4f515.
+- Independent review confirmed the sole parent, exact five-file scope, Step 1
+  checked, Step 2 unchecked, and coverage for hydration, accumulation, resume
+  emission/persistence, and resume without a cost snapshot.
+- Peer typecheck and diff check passed. One full-suite invocation had a
+  transient Vitest worker exit after 374 passing tests; the exact unchanged
+  command was rerun and passed 381 with 1 skipped. Tandem's authoritative peer
+  runner independently passed the same 381/1 baseline.
+- Accept advanced stable to 11a4f515. AcceptStep updated W0010 to completed=1,
+  step=1/2, next=2/2. No Step 2 Start action occurred.
+- B accidentally claimed an empty post-validation turn while attempting an
+  unnecessary Complete. The command was correctly rejected with no commit or
+  product change. The clean empty turn was abandoned, then the relay was paused.
+
+Windows process-cleanup investigation:
+- The original c9125eac session's prose claimed three unrelated cleanup
+  failures in an alternate in-sandbox run, but that same session's recorded
+  authoritative verification passed the full suite at 381/1 outside Codex.
+- D130's producing authoritative run, peer unchanged rerun, peer authoritative
+  run, and final admin run all passed 381/1. The original three failures are
+  therefore Codex Windows sandbox/process-control artifacts, not persistent
+  product failures.
+- The peer's one transient worker exit shows Vitest process teardown can flake
+  outside the producing sandbox too, but it did not reproduce under an exact
+  unchanged rerun or either authoritative run. No assertion or test was changed;
+  the event is documented here rather than masking it with a code workaround.
+
+Final verification and state:
+- npm run typecheck: PASS
+- npm test: PASS (40 files passed, 1 skipped; 381 tests passed, 1 skipped)
+- git diff --check: PASS
+- copy-a and copy-b: clean at ef103d36c5432e4fe80d4759c79879825a3c5b75
+- refs/tandem-relay/stable: ef103d36c5432e4fe80d4759c79879825a3c5b75
+- W0010: IN_PROGRESS, completed=1, next=2/2, last=11a4f515
+- relay: phase=paused, activeRole=null, candidateCommit=null
+
+Step 2 was not started. Runtime promotion was intentionally not performed; the
+reciprocal protocol reserves promotion for a separate human-supervised action.
