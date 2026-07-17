@@ -488,15 +488,34 @@ describe("TandemService", () => {
 
     await service.resumeSession("cost-session");
     expect(internals.ledger.totals()).toEqual(baseline);
-    internals.ledger.addDirectCost("worker", 0.1, 4, 2);
-    await internals.emitMachine({ type: "notice", message: "new usage" });
-
-    const expected = {
+    const firstCumulative = {
       leader: baseline.leader,
       worker: { role: "worker", inputTokens: 54, outputTokens: 12, dollars: 0.35 }
     };
-    expect(sent.filter((event) => event.channel === ipcChannels.costEvent).at(-1)?.payload).toEqual(expected);
-    expect(appended.filter((event) => event.type === "cost").at(-1)?.payload).toEqual(expected);
+    internals.ledger.addDirectCost("worker", 0.1, 4, 2);
+    await internals.emitMachine({ type: "notice", message: "new usage" });
+    internals.ledger.addDirectCost("leader", 0.2, 8, 3);
+    await internals.emitMachine({ type: "notice", message: "more usage" });
+
+    expect(sent.filter((event) => event.channel === ipcChannels.costEvent).map((event) => event.payload)).toEqual([
+      {
+        leader: { role: "leader", inputTokens: 0, outputTokens: 0, dollars: 0 },
+        worker: { role: "worker", inputTokens: 4, outputTokens: 2, dollars: 0.09999999999999998 },
+        cumulative: firstCumulative
+      },
+      {
+        leader: { role: "leader", inputTokens: 8, outputTokens: 3, dollars: 0.19999999999999996 },
+        worker: { role: "worker", inputTokens: 4, outputTokens: 2, dollars: 0.09999999999999998 },
+        cumulative: {
+          leader: { role: "leader", inputTokens: 108, outputTokens: 23, dollars: 0.7 },
+          worker: firstCumulative.worker
+        }
+      }
+    ]);
+    expect(appended.filter((event) => event.type === "cost").at(-1)?.payload).toEqual({
+      leader: { role: "leader", inputTokens: 108, outputTokens: 23, dollars: 0.7 },
+      worker: firstCumulative.worker
+    });
   });
 
   it("keeps the ledger empty when a resumed session has no cost snapshot", async () => {

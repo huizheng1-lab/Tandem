@@ -115,6 +115,7 @@ export interface TextEvent {
 export interface CostTotals {
   leader: CostTick;
   worker: CostTick;
+  cumulative?: { leader: CostTick; worker: CostTick };
 }
 
 export interface PermissionRequestEvent {
@@ -178,6 +179,7 @@ export interface SessionResumeResponse {
   events: SessionEvent[];
   eventsTruncated?: boolean;
   checkpoint?: OrchestrationCheckpoint;
+  cost?: CostTotals;
 }
 
 export interface SessionRenameRequest {
