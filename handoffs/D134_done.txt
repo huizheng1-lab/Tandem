@@ -1,0 +1,58 @@
+Round: D134
+
+Admin commits:
+- 40018e9 D134-1: raise reciprocal executor step budget
+
+Reciprocal candidate:
+- 23d4221ac8eb235b1552ea51ec410fc4c939428c W0013 step 1: add run health heartbeat tracking
+- Pushed to origin/codex/reciprocal-a and origin/codex/reciprocal-b.
+
+Config recovery:
+- Stopped all Tandem.exe processes under C:\Users\huizh\Apps\Tandem Reciprocal\runtimes before editing.
+- Confirmed no reciprocal Tandem.exe processes remained after stop.
+- Updated both live executor configs:
+  - C:\Users\huizh\Apps\Tandem Reciprocal\state\executor-a\config.json
+  - C:\Users\huizh\Apps\Tandem Reciprocal\state\executor-b\config.json
+- Both configs now include:
+  "maxStepsPerAgentTurn": 250
+- 250 was chosen because reciprocal turns include implementation, verification, and relay handoff; it is above the requested 150+ and in the handoff's suggested 200-250 range.
+- Patched scripts/setup-reciprocal-tandem.ps1 so fresh executor configs set maxStepsPerAgentTurn to 250 while preserving existing configs on rerun.
+- Restarted both hidden executors. Automation status confirmed:
+  - Executor A endpoint ready at 127.0.0.1:4783 targeting copy-b.
+  - Executor B endpoint ready at 127.0.0.1:4784 targeting copy-a.
+
+Setup script verification:
+- npm test -- tests/reciprocal-setup-script.test.ts: passed.
+- npm run typecheck: passed.
+- npm test: 42 passed, 1 skipped; 398 passed, 1 skipped.
+- git diff --check: passed.
+
+W0013 recovery:
+- Initial relay status showed turn 2, activeRole B, phase working, resumeCount 2/3.
+- Executor B resumed under the new budget, reused the existing W0013 Step 1 work, and produced verification evidence:
+  - focused vitest for run-health/orchestrator/desktop-service: passed.
+  - npm run typecheck: passed.
+  - git diff --check: passed.
+  - npm test in copy-a: 42 passed, 1 skipped; 405 passed, 1 skipped.
+- B still hit the D133 resume circuit breaker at resumeCount 3/3 and correctly stopped on PAUSED.
+- Human/app-layer recovery resumed the relay after the budget fix and passing verification.
+- Committed the verified Step 1 candidate in copy-a:
+  23d4221ac8eb235b1552ea51ec410fc4c939428c
+- Relay Complete recorded candidate 23d4221 as an improvement candidate.
+
+Peer validation:
+- Executor A/copy-b Claim returned VALIDATE for candidate 23d4221.
+- Peer-side checks in copy-b:
+  - npm run typecheck: passed.
+  - npm test: 42 passed, 1 skipped; 405 passed, 1 skipped.
+  - git diff --check: passed.
+- Relay Accept succeeded and updated stableCommit to 23d4221ac8eb235b1552ea51ec410fc4c939428c.
+- Shared direction was advanced through reciprocal-direction.ps1 Candidate + AcceptStep because the app-layer recovery bypassed the normal board candidate transition. W0013 now shows completed=1, next=2/2, last=23d4221ac8eb235b1552ea51ec410fc4c939428c.
+
+Final relay status:
+- turn: 3
+- activeRole: A
+- phase: working
+- stableCommit: 23d4221ac8eb235b1552ea51ec410fc4c939428c
+- candidateCommit: null
+- lastSummary: Peer validation accepted W0013 Step 1 candidate 23d4221 after npm run typecheck, npm test, and git diff --check passed in copy-b.
