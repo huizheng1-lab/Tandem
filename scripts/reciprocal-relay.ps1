@@ -242,7 +242,6 @@ try {
             if ($metadata.candidate -eq "PLAN") {
                 if ($metadata.autonomy -eq "full") {
                     & $directionScript -Action AutoApprovePlan -Id $id -Commit $AcceptedCommit -ControlPath $boardPath | Out-Null
-                    if ($LASTEXITCODE -ne 0) { throw "AutoApprovePlan failed for accepted candidate $id." }
                 }
                 return
             }
@@ -253,14 +252,12 @@ try {
                 } else {
                     & $directionScript -Action Complete -Id $id -Commit $AcceptedCommit -ControlPath $boardPath | Out-Null
                 }
-                if ($LASTEXITCODE -ne 0) { throw "Accepted epic step update failed for $id." }
                 return
             }
             return
         }
 
         & $directionScript -Action Complete -Id $id -Commit $AcceptedCommit -ControlPath $boardPath | Out-Null
-        if ($LASTEXITCODE -ne 0) { throw "Complete failed for accepted candidate $id." }
     }
 
     function Set-IdleOrPauseAfterTurn {
@@ -473,7 +470,16 @@ try {
         $head = (@(Invoke-Git rev-parse HEAD))[0].Trim()
         if ($head -ne $state.candidateCommit) { throw "Validated HEAD does not match the candidate commit." }
         $acceptedKind = $state.candidateKind
-        Complete-AcceptedDirectionCandidate $head $acceptedKind
+        $previousStableCommit = $state.stableCommit
+        $state.stableCommit = $head
+        Update-RelayRefs
+        try {
+            Complete-AcceptedDirectionCandidate $head $acceptedKind
+        } catch {
+            $state.stableCommit = $previousStableCommit
+            Update-RelayRefs
+            throw
+        }
         $state.stableCommit = $head
         $state.candidateCommit = $null
         $state.candidateKind = $null
