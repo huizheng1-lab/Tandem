@@ -24,7 +24,7 @@ import { cliModelPatch, modelCommandUsage, modelDisplayName } from "../../../src
 import { ErrorBoundary } from "./ErrorBoundary.js";
 import { activityStripState } from "./activity-strip.js";
 import { claudeCliModelOptions } from "./cli-model-options.js";
-import { formatTotalCost } from "./cost-display.js";
+import { cumulativeTooltip, formatCumulativeCost, formatTotalCost } from "./cost-display.js";
 import { MODEL_STALL_WARNING_SECONDS, effectiveRendererConfig, isSessionActionable, needsProjectPickForSession, sessionFromResume } from "./session-state.js";
 import { boundedMessageTextForState, MessageText } from "./TranscriptText.js";
 import { applyDesktopTheme, THEME_REFRESH_INTERVAL_MS } from "./theme.js";
@@ -297,10 +297,14 @@ function App(): React.ReactElement {
   const totalCost = useMemo(() => {
     return formatTotalCost(cost, effectiveConfig, models);
   }, [cost, effectiveConfig, models]);
+  const cumulativeCostText = useMemo(() => {
+    return formatCumulativeCost(cost, effectiveConfig, models);
+  }, [cost, effectiveConfig, models]);
 
   const costTitle = cost
     ? `Leader: ${cost.leader.inputTokens}/${cost.leader.outputTokens} tokens, $${cost.leader.dollars.toFixed(4)}${effectiveConfig?.leader === "codex/cli" ? " (billed via your Codex CLI account, not by token price)" : ""}${effectiveConfig?.leader === "claude-code/cli" ? " (reported directly by Claude Code CLI)" : ""}\nWorker: ${cost.worker.inputTokens}/${cost.worker.outputTokens} tokens, $${cost.worker.dollars.toFixed(4)}${effectiveConfig?.worker === "codex/cli" ? " (billed via your Codex CLI account, not by token price)" : ""}${effectiveConfig?.worker === "claude-code/cli" ? " (reported directly by Claude Code CLI)" : ""}`
     : "No usage yet";
+  const cumulativeCostTitle = cumulativeTooltip(cost, effectiveConfig);
 
   const limitEntries = (items: TranscriptEntry[]): TranscriptEntry[] => items.slice(Math.max(0, items.length - MAX_TRANSCRIPT_ENTRIES));
 
@@ -510,6 +514,7 @@ function App(): React.ReactElement {
     setAppState({ projectDir: resumed.projectDir, lastProjectDir: resumed.projectDir, config: resumed.config, projectSummary: resumed.projectSummary });
     setShowThinking(resumed.config.showThinking);
     showThinkingRef.current = resumed.config.showThinking;
+    setCost(resumed.cost);
     const replayed: TranscriptEntry[] = [];
     for (const stored of resumed.events) {
       const payload = stored.payload as { prompt?: string; role?: "leader" | "worker"; delta?: string; summary?: string; takeover?: boolean } | MachineEvent;
@@ -798,10 +803,11 @@ function App(): React.ReactElement {
 
   const costText = () => {
     const totals = cost ?? { leader: { inputTokens: 0, outputTokens: 0, dollars: 0 }, worker: { inputTokens: 0, outputTokens: 0, dollars: 0 } };
+    const cumulative = cost?.cumulative ?? totals;
     return [
       `leader: ${totals.leader.inputTokens} in / ${totals.leader.outputTokens} out / $${totals.leader.dollars.toFixed(4)}`,
       `worker: ${totals.worker.inputTokens} in / ${totals.worker.outputTokens} out / $${totals.worker.dollars.toFixed(4)}`,
-      `total: $${(totals.leader.dollars + totals.worker.dollars).toFixed(4)}`
+      `total: $${(cumulative.leader.dollars + cumulative.worker.dollars).toFixed(4)} / ${cumulative.leader.inputTokens + cumulative.worker.inputTokens} in / ${cumulative.leader.outputTokens + cumulative.worker.outputTokens} out`
     ].join("\n");
   };
 
@@ -1152,6 +1158,10 @@ if (args.length === 1 && sub === "clear") {
         <div className="sideSection">
           <div className="sideLabel">Session</div>
           <div className="sideValue">{session?.sessionId ?? "not started"}</div>
+        </div>
+        <div className="sideSection">
+          <div className="sideLabel">Session cost</div>
+          <div className="sideValue" title={cumulativeCostTitle}>{cumulativeCostText}</div>
         </div>
         <div className="sideSection">
           <div className="sideLabel">Sessions</div>

@@ -26,7 +26,7 @@ instead of the cumulative multi-resume total.
 ## Ordered Steps
 
 - [x] Step 1: replay the last persisted cost snapshot on resume and unit-test it.
-- [ ] Step 2: surface cumulative and current-run cost in the desktop sidebar cost area, with regression tests for the display formatting and the IPC payload.
+- [x] Step 2: surface cumulative and current-run cost in the desktop sidebar cost area, with regression tests for the display formatting and the IPC payload.
 
 ## Invariants for every step
 

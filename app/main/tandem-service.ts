@@ -128,7 +128,7 @@ export class TandemService {
   private readonly cronTasks = new Map<string, ScheduledTask>();
   private sessionAutoApprove: SessionAutoApproveMode = "none";
   private lastPersistedCostKey?: string;
-
+  private runBaselineTotals?: CostTotals;
   constructor(
     private readonly window: DesktopWindow,
     private readonly deps: TandemServiceDeps = {}
@@ -164,6 +164,7 @@ export class TandemService {
     this.config = loaded.config;
     this.projectConfigOverrides = loaded.projectOverrides;
     this.ledger = new CostLedger();
+    this.runBaselineTotals = this.ledger.totals();
     this.lastPersistedCostKey = undefined;
     this.lastCheckpoint = undefined;
     this.sessionAutoApprove = "none";
@@ -189,6 +190,7 @@ export class TandemService {
     if (!this.session) await this.startSession({ projectDir: this.projectDir });
     const session = this.session as SessionLike;
     this.controller = new AbortController();
+    this.runBaselineTotals = this.ledger.totals();
     try {
       let sessionEvents = await session.read();
       if (isCliBackedLeader(this.config)) {
@@ -366,6 +368,7 @@ export class TandemService {
     this.session = store;
     const persistedCost = this.findLastCostTotals(events);
     if (persistedCost) this.ledger.hydrate(persistedCost);
+    this.runBaselineTotals = this.ledger.totals();
     const checkpoint = this.findLastCheckpoint(events.map((event) => event.payload));
     this.lastCheckpoint = checkpoint?.phase === "DONE" ? undefined : checkpoint;
     const projectInstructions = await readProjectInstructions(projectDir);
@@ -381,7 +384,8 @@ export class TandemService {
         : undefined,
       events,
       eventsTruncated: recent.truncated || undefined,
-      checkpoint: this.lastCheckpoint
+      checkpoint: this.lastCheckpoint,
+      cost: this.costEventTotals()
     };
   }
 
@@ -474,7 +478,7 @@ export class TandemService {
     const event = { role, delta, thinking };
     this.window.webContents.send(ipcChannels.textEvent, event);
     const totals = this.costTotals();
-    this.window.webContents.send(ipcChannels.costEvent, totals);
+    this.window.webContents.send(ipcChannels.costEvent, this.costEventTotals(totals));
     await this.session?.append(thinking ? "thinking" : "text", event);
     await this.persistCostSnapshot(totals);
   }
@@ -483,7 +487,7 @@ export class TandemService {
     if (event.type === "checkpoint") this.lastCheckpoint = event.checkpoint;
     this.window.webContents.send(ipcChannels.machineEvent, event);
     const totals = this.costTotals();
-    this.window.webContents.send(ipcChannels.costEvent, totals);
+    this.window.webContents.send(ipcChannels.costEvent, this.costEventTotals(totals));
     await this.session?.append("machine", event);
     await this.persistCostSnapshot(totals);
   }
@@ -556,6 +560,27 @@ export class TandemService {
     return this.ledger.totals();
   }
 
+  private costEventTotals(currentTotals: CostTotals = this.ledger.totals()): CostTotals {
+    const baseline = this.runBaselineTotals ?? {
+      leader: { role: "leader" as const, inputTokens: 0, outputTokens: 0, dollars: 0 },
+      worker: { role: "worker" as const, inputTokens: 0, outputTokens: 0, dollars: 0 }
+    };
+    const currentRunTick = (role: "leader" | "worker") => ({
+      role,
+      inputTokens: Math.max(0, currentTotals[role].inputTokens - baseline[role].inputTokens),
+      outputTokens: Math.max(0, currentTotals[role].outputTokens - baseline[role].outputTokens),
+      dollars: Math.max(0, currentTotals[role].dollars - baseline[role].dollars)
+    });
+    return {
+      leader: currentRunTick("leader"),
+      worker: currentRunTick("worker"),
+      cumulative: {
+        leader: { ...currentTotals.leader },
+        worker: { ...currentTotals.worker }
+      }
+    };
+  }
+
   private findLastCostTotals(events: Array<{ type: string; payload: unknown }>): CostTotals | undefined {
     const isTick = (value: unknown, role: "leader" | "worker"): boolean => {
       if (!value || typeof value !== "object") return false;
@@ -569,7 +594,10 @@ export class TandemService {
       const event = events[index];
       if (event?.type !== "cost" || !event.payload || typeof event.payload !== "object") continue;
       const totals = event.payload as Record<string, unknown>;
-      if (isTick(totals.leader, "leader") && isTick(totals.worker, "worker")) return event.payload as CostTotals;
+      const candidate = totals.cumulative && typeof totals.cumulative === "object" ? totals.cumulative as Record<string, unknown> : totals;
+      if (isTick(candidate.leader, "leader") && isTick(candidate.worker, "worker")) {
+        return { leader: candidate.leader, worker: candidate.worker } as CostTotals;
+      }
     }
     return undefined;
   }

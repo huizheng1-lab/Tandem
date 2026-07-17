@@ -21,3 +21,16 @@ export function formatTotalCost(cost: CostTotals | undefined, config: TandemConf
   }
   return `$${totalDollars.toFixed(4)}`;
 }
+
+export function formatCumulativeCost(cost: CostTotals | undefined, config: TandemConfig | undefined, models: ModelListItem[]): string {
+  const cumulative = cost?.cumulative ? { leader: cost.cumulative.leader, worker: cost.cumulative.worker } : cost;
+  return `this run ${formatTotalCost(cost, config, models)} / total ${formatTotalCost(cumulative, config, models)}`;
+}
+
+export function cumulativeTooltip(cost: CostTotals | undefined, config: TandemConfig | undefined): string {
+  const cumulative = cost?.cumulative ?? cost;
+  if (!cumulative) return "No usage yet";
+  const cliNote = (role: "leader" | "worker") =>
+    config?.[role] === "codex/cli" ? " (billed via your Codex CLI account, not by token price)" : config?.[role] === "claude-code/cli" ? " (reported directly by Claude Code CLI)" : "";
+  return `Leader: ${cumulative.leader.inputTokens}/${cumulative.leader.outputTokens} tokens, $${cumulative.leader.dollars.toFixed(4)}${cliNote("leader")}\nWorker: ${cumulative.worker.inputTokens}/${cumulative.worker.outputTokens} tokens, $${cumulative.worker.dollars.toFixed(4)}${cliNote("worker")}`;
+}
