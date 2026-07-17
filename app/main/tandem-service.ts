@@ -358,11 +358,14 @@ export class TandemService {
     const loaded = loadConfigDetails({ cwd: projectDir, homeDir: this.homeDir, env: this.env });
     this.config = loaded.config;
     this.projectConfigOverrides = loaded.projectOverrides;
+    this.ledger = new CostLedger();
     this.lastPersistedCostKey = undefined;
     await this.refreshCronTasks();
     const recent = store.readRecent ? await store.readRecent(DESKTOP_RESUME_EVENT_LIMIT) : { events: await store.read(), truncated: false };
     const events = recent.events;
     this.session = store;
+    const persistedCost = this.findLastCostTotals(events);
+    if (persistedCost) this.ledger.hydrate(persistedCost);
     const checkpoint = this.findLastCheckpoint(events.map((event) => event.payload));
     this.lastCheckpoint = checkpoint?.phase === "DONE" ? undefined : checkpoint;
     const projectInstructions = await readProjectInstructions(projectDir);
@@ -551,6 +554,24 @@ export class TandemService {
 
   private costTotals(): CostTotals {
     return this.ledger.totals();
+  }
+
+  private findLastCostTotals(events: Array<{ type: string; payload: unknown }>): CostTotals | undefined {
+    const isTick = (value: unknown, role: "leader" | "worker"): boolean => {
+      if (!value || typeof value !== "object") return false;
+      const tick = value as Record<string, unknown>;
+      return tick.role === role
+        && typeof tick.inputTokens === "number" && Number.isFinite(tick.inputTokens)
+        && typeof tick.outputTokens === "number" && Number.isFinite(tick.outputTokens)
+        && typeof tick.dollars === "number" && Number.isFinite(tick.dollars);
+    };
+    for (let index = events.length - 1; index >= 0; index -= 1) {
+      const event = events[index];
+      if (event?.type !== "cost" || !event.payload || typeof event.payload !== "object") continue;
+      const totals = event.payload as Record<string, unknown>;
+      if (isTick(totals.leader, "leader") && isTick(totals.worker, "worker")) return event.payload as CostTotals;
+    }
+    return undefined;
   }
 
   private async persistCostSnapshot(totals: CostTotals): Promise<void> {

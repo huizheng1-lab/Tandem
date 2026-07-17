@@ -9,8 +9,17 @@ export interface CostTick {
   dollars: number;
 }
 
+export type CostTotals = Record<CostRole, CostTick>;
+
 export class CostLedger {
   private ticks: CostTick[] = [];
+
+  hydrate(totals: CostTotals): void {
+    this.ticks = [
+      { ...totals.leader, role: "leader" },
+      { ...totals.worker, role: "worker" }
+    ];
+  }
 
   add(role: CostRole, model: ModelEntry, inputTokens: number, outputTokens: number): CostTick {
     const dollars =
@@ -31,7 +40,7 @@ export class CostLedger {
     return tick;
   }
 
-  totals(): Record<CostRole, CostTick> {
+  totals(): CostTotals {
     const empty = (role: CostRole): CostTick => ({ role, inputTokens: 0, outputTokens: 0, dollars: 0 });
     const totals: Record<CostRole, CostTick> = { leader: empty("leader"), worker: empty("worker") };
     for (const tick of this.ticks) {
