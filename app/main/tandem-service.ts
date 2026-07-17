@@ -138,6 +138,7 @@ export class TandemService {
     this.projectDir = this.lastProjectDir ?? safeDefaultProjectDir(this.homeDir);
     this.env = this.loadProjectEnv(this.projectDir);
     this.config = loadConfig({ cwd: this.projectDir, homeDir: this.homeDir, env: this.env });
+    void this.refreshCronTasks();
     if (deps.registerIpcResponses === false) return;
     ipcMain.on(ipcChannels.permissionRespond, (_event, response: PermissionResponse) => {
       this.resolvePending(this.pendingPermissions, response.id, response.approved);

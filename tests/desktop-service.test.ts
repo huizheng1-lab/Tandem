@@ -123,6 +123,30 @@ describe("TandemService", () => {
     expect(renamed.find((session) => session.id === store.id)?.title).toBe("Pre-pick rename");
   });
 
+  it("loads persisted schedules for the last project at launch", async () => {
+    const cwd = await tempDir();
+    const home = await tempDir();
+    await mkdir(path.join(home, ".tandem"), { recursive: true });
+    await mkdir(path.join(cwd, ".tandem"), { recursive: true });
+    await writeFile(path.join(home, ".tandem", "desktop-state.json"), `${JSON.stringify({ lastProjectDir: cwd })}\n`, "utf8");
+    await writeFile(
+      path.join(cwd, ".tandem", "schedules.json"),
+      `${JSON.stringify([{ id: "boot", cron: "37 * * * *", prompt: "run", createdAt: new Date().toISOString() }])}\n`,
+      "utf8"
+    );
+    const { window } = fakeWindow();
+
+    const service = new TandemService(window as never, { registerIpcResponses: false, homeDir: home, baseEnv: {} });
+    const internals = service as unknown as { cronTasks: Map<string, { stop(): void }> };
+    const deadline = Date.now() + 1000;
+    while (internals.cronTasks.size === 0 && Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+
+    expect(internals.cronTasks.has("boot")).toBe(true);
+    for (const task of internals.cronTasks.values()) task.stop();
+  });
+
   it("persists explicit desktop projects and pre-session config changes", async () => {
     const cwd = await tempDir();
     const home = await tempDir();
