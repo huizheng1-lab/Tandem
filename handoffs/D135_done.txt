@@ -1,0 +1,19 @@
+Round: D135
+Commit(s):
+- 84f5048 D135-1 add read-only Telegram remote control bridge
+
+Verification:
+- npm run typecheck: passed
+- npm test: passed, 43 files passed, 1 skipped; 405 tests passed, 1 skipped
+- git diff --check: passed
+- Targeted checks: npx vitest run tests/remote-control.test.ts tests/config.test.ts tests/desktop-ipc.test.ts passed, 26 tests passed
+
+Implementation summary:
+- Added a read-only remote control bridge for Telegram long polling. It is disabled by default and starts no network activity unless remote control is enabled and TELEGRAM_BOT_TOKEN is configured.
+- Added one-time 8-digit desktop pairing codes with five-minute expiry, sender allowlisting, silent wrong-sender rejection, append-only JSONL audit logging, and global command rate limiting.
+- Added read-only Telegram commands: /status and /sessions. Added /revoke for unbinding and stopping polling. No prompt, pause, stop, approval, or other mutating remote verbs were implemented.
+- Added desktop IPC, preload, and renderer controls for enabling pairing, viewing pairing state, and revoking remote control.
+- Added optional remoteControl config schema support while preserving old config compatibility.
+
+Live verification:
+- Real Telegram/phone pairing was not performed because TELEGRAM_BOT_TOKEN is not configured in the project .env or global Tandem .env in this workspace. The implementation is ready for live verification once a bot token and phone pairing step are available.
