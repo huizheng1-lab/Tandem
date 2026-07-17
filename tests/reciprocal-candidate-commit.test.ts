@@ -2,7 +2,7 @@ import { mkdir, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { commitReciprocalCandidate } from "../src/reciprocal/candidate-commit.js";
+import { commitReciprocalCandidate, prepareReciprocalWorktree } from "../src/reciprocal/candidate-commit.js";
 import type { CompletionReport } from "../src/orchestrator/artifacts.js";
 
 async function relayWorktree(): Promise<string> {
@@ -61,5 +61,22 @@ describe("reciprocal candidate commit", () => {
     expect(calls.some((call) => call.file === "powershell" && call.args.includes("Candidate") && call.args.includes("W1234") && call.args.includes("abc123"))).toBe(true);
     expect(calls.some((call) => call.file === "powershell" && call.args.includes("Complete") && call.args.includes("B"))).toBe(true);
     expect(result.summary).toContain("abc123");
+  });
+
+  it("pre-fast-forwards a clean reciprocal worktree from its peer branch", async () => {
+    const cwd = await relayWorktree();
+    const calls: Array<{ file: string; args: string[] }> = [];
+    await prepareReciprocalWorktree({
+      cwd,
+      role: "B",
+      commandRunner: async (file, args) => {
+        calls.push({ file, args });
+        if (file === "git" && args.join(" ") === "branch --show-current") return { stdout: "codex/reciprocal-a\n", stderr: "" };
+        if (file === "git" && args[0] === "status") return { stdout: "", stderr: "" };
+        return { stdout: "", stderr: "" };
+      }
+    });
+
+    expect(calls.some((call) => call.file === "git" && call.args.join(" ") === "merge --ff-only codex/reciprocal-b")).toBe(true);
   });
 });

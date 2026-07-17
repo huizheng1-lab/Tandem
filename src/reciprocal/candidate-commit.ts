@@ -19,6 +19,11 @@ const roleBranch: Record<"A" | "B", string> = {
   B: "codex/reciprocal-a"
 };
 
+const rolePeerBranch: Record<"A" | "B", string> = {
+  A: "codex/reciprocal-a",
+  B: "codex/reciprocal-b"
+};
+
 function isRole(value: string | undefined): value is "A" | "B" {
   return value === "A" || value === "B";
 }
@@ -161,4 +166,14 @@ export async function commitReciprocalCandidate(options: ReciprocalCandidateComm
     summary: `${options.report.summary}\n\nReciprocal relay candidate committed by Tandem app layer: ${commit}`,
     deviationsFromPlan: [...options.report.deviationsFromPlan, `Tandem app layer created reciprocal relay commit ${commit}`]
   };
+}
+
+export async function prepareReciprocalWorktree(options: Omit<ReciprocalCandidateCommitOptions, "report">): Promise<void> {
+  if (!isRole(options.role)) return;
+  const runner = options.commandRunner ?? defaultRunner;
+  const branch = await run(runner, options.cwd, "git", ["branch", "--show-current"]);
+  if (branch !== roleBranch[options.role]) return;
+  const status = await runRaw(runner, options.cwd, "git", ["status", "--porcelain", "--untracked-files=all"]);
+  if (status.trim()) return;
+  await run(runner, options.cwd, "git", ["merge", "--ff-only", rolePeerBranch[options.role]]);
 }

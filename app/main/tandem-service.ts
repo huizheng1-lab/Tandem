@@ -14,7 +14,7 @@ import { createDiffTracker } from "../../src/orchestrator/diff.js";
 import { runOrchestration, type MachineEvent, type OrchestrationCheckpoint } from "../../src/orchestrator/machine.js";
 import type { CompletionReport } from "../../src/orchestrator/artifacts.js";
 import { createVerificationRunner } from "../../src/orchestrator/verification.js";
-import { commitReciprocalCandidate } from "../../src/reciprocal/candidate-commit.js";
+import { commitReciprocalCandidate, prepareReciprocalWorktree } from "../../src/reciprocal/candidate-commit.js";
 import { modelRegistry } from "../../src/providers/registry.js";
 import { withConfiguredCliModel } from "../../src/providers/cli-models.js";
 import { tandemStateDir } from "../../src/paths.js";
@@ -192,6 +192,7 @@ export class TandemService {
     if (this.controller) throw new Error("A Tandem run is already active.");
     if (!this.session) await this.startSession({ projectDir: this.projectDir });
     const session = this.session as SessionLike;
+    await this.prepareReciprocalRun();
     this.controller = new AbortController();
     this.runBaselineTotals = this.ledger.totals();
     try {
@@ -521,6 +522,13 @@ export class TandemService {
       cwd: this.projectDir,
       role: this.env.TANDEM_INSTANCE_ID,
       report
+    });
+  }
+
+  private async prepareReciprocalRun(): Promise<void> {
+    await prepareReciprocalWorktree({
+      cwd: this.projectDir,
+      role: this.env.TANDEM_INSTANCE_ID
     });
   }
 
