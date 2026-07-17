@@ -432,6 +432,78 @@ describe("TandemService", () => {
     expect(initialStates).toEqual([checkpoint, undefined]);
   });
 
+  it("hydrates persisted cost on resume and emits baseline plus new usage", async () => {
+    const home = await tempDir();
+    const baseline = {
+      leader: { role: "leader" as const, inputTokens: 100, outputTokens: 20, dollars: 0.5 },
+      worker: { role: "worker" as const, inputTokens: 50, outputTokens: 10, dollars: 0.25 }
+    };
+    const appended: Array<{ type: string; payload: unknown }> = [];
+    const { window, sent } = fakeWindow();
+    const service = new TandemService(window as never, {
+      registerIpcResponses: false,
+      homeDir: home,
+      openSession: async () => ({
+        id: "cost-session",
+        append: async (type, payload) => {
+          appended.push({ type, payload });
+        },
+        read: async () => [
+          { type: "cost", at: new Date().toISOString(), payload: baseline },
+          { type: "machine", at: new Date().toISOString(), payload: { type: "notice", message: "later" } }
+        ]
+      })
+    });
+    const internals = service as unknown as {
+      ledger: {
+        totals(): typeof baseline;
+        addDirectCost(role: "leader" | "worker", dollars: number, input: number, output: number): unknown;
+      };
+      emitMachine(event: { type: "notice"; message: string }): Promise<void>;
+    };
+
+    await service.resumeSession("cost-session");
+    expect(internals.ledger.totals()).toEqual(baseline);
+    internals.ledger.addDirectCost("worker", 0.1, 4, 2);
+    await internals.emitMachine({ type: "notice", message: "new usage" });
+
+    const expected = {
+      leader: baseline.leader,
+      worker: { role: "worker", inputTokens: 54, outputTokens: 12, dollars: 0.35 }
+    };
+    expect(sent.filter((event) => event.channel === ipcChannels.costEvent).at(-1)?.payload).toEqual(expected);
+    expect(appended.filter((event) => event.type === "cost").at(-1)?.payload).toEqual(expected);
+  });
+
+  it("keeps the ledger empty when a resumed session has no cost snapshot", async () => {
+    const cwd = await tempDir();
+    const home = await tempDir();
+    const { window } = fakeWindow();
+    const service = new TandemService(window as never, {
+      registerIpcResponses: false,
+      homeDir: home,
+      openSession: async () => ({
+        id: "fresh-session",
+        append: async () => undefined,
+        read: async () => [{ type: "session:start", at: new Date().toISOString(), payload: { projectDir: cwd } }]
+      })
+    });
+    const internals = service as unknown as {
+      ledger: {
+        totals(): unknown;
+        addDirectCost(role: "leader" | "worker", dollars: number, input: number, output: number): unknown;
+      };
+    };
+    internals.ledger.addDirectCost("leader", 1, 100, 20);
+
+    await service.resumeSession("fresh-session");
+
+    expect(internals.ledger.totals()).toEqual({
+      leader: { role: "leader", inputTokens: 0, outputTokens: 0, dollars: 0 },
+      worker: { role: "worker", inputTokens: 0, outputTokens: 0, dollars: 0 }
+    });
+  });
+
   it("resumes a session from its real project when no project is active", async () => {
     const cwd = await tempDir();
     const home = await tempDir();
