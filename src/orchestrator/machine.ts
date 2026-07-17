@@ -67,6 +67,7 @@ export interface RunOptions {
   attachments?: AttachmentRef[];
   diffProvider?: (() => Promise<string>) | { beforeBuild?: () => Promise<void>; diff: () => Promise<string> };
   verificationRunner?: VerificationRunner;
+  postBuildReport?: (report: CompletionReport, context: { plan: BuildPlan; round: number }) => Promise<CompletionReport>;
   confirmPlan?: (plan: BuildPlan) => Promise<boolean>;
   addSessionNote?: (text: string, by: "system") => Promise<void>;
   removeSessionNotesByPrefix?: (prefix: string) => Promise<void>;
@@ -525,6 +526,10 @@ export async function runOrchestration(options: RunOptions): Promise<RunResult> 
           // dropped every carried-forward stream's task results / filesChanged, leaving the
           // leader reviewer with an incomplete picture and the final report missing work.
           report = mergeCompletionReports(roundStreams);
+          if (options.postBuildReport) {
+            report = await options.postBuildReport(report, { plan, round: currentRound });
+            emit({ type: "artifact", name: "PostBuildReport", value: report });
+          }
           const authoritative = await attachAuthoritativeVerification(report);
           report = authoritative.report;
           validateCompletionReport(plan, report, plan.verification, {

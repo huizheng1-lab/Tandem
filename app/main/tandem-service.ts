@@ -12,7 +12,9 @@ import { locateCodexCli } from "../../src/agents/codex-cli/locate.js";
 import { locateClaudeCli } from "../../src/agents/claude-code-cli/locate.js";
 import { createDiffTracker } from "../../src/orchestrator/diff.js";
 import { runOrchestration, type MachineEvent, type OrchestrationCheckpoint } from "../../src/orchestrator/machine.js";
+import type { CompletionReport } from "../../src/orchestrator/artifacts.js";
 import { createVerificationRunner } from "../../src/orchestrator/verification.js";
+import { commitReciprocalCandidate } from "../../src/reciprocal/candidate-commit.js";
 import { modelRegistry } from "../../src/providers/registry.js";
 import { withConfiguredCliModel } from "../../src/providers/cli-models.js";
 import { tandemStateDir } from "../../src/paths.js";
@@ -245,6 +247,7 @@ export class TandemService {
           permissionBridge,
           abortSignal: this.controller.signal
         }),
+        postBuildReport: (report) => this.postBuildReport(report),
         initialState,
         confirmPlan: (plan) => this.confirmPlan(plan),
         emit: (event) => void this.emitMachine(event)
@@ -511,6 +514,14 @@ export class TandemService {
 
   private async currentProjectInstructions(): Promise<string> {
     return formatProjectInstructions(await readProjectInstructions(this.projectDir));
+  }
+
+  private async postBuildReport(report: CompletionReport): Promise<CompletionReport> {
+    return commitReciprocalCandidate({
+      cwd: this.projectDir,
+      role: this.env.TANDEM_INSTANCE_ID,
+      report
+    });
   }
 
   private async rememberProjectNote(text: string, _by: "leader" | "worker"): Promise<string> {

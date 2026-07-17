@@ -46,6 +46,24 @@ describe("orchestration", () => {
     expect(result.summary).toBe("approve");
   });
 
+  it("runs a post-build report hook before leader review", async () => {
+    let reviewedReport: CompletionReport | undefined;
+    const result = await runOrchestration({
+      request: "build",
+      config: { maxReviewRounds: 1, maxParallelWorkers: 1 },
+      agents: agents({
+        review: async ({ report }) => {
+          reviewedReport = report;
+          return verdict("approve");
+        }
+      }),
+      postBuildReport: async (value) => ({ ...value, summary: `${value.summary} plus app-layer commit` })
+    });
+
+    expect(result.takeover).toBe(false);
+    expect(reviewedReport?.summary).toContain("app-layer commit");
+  });
+
   it("covers two revise rounds then approve", async () => {
     let reviews = 0;
     const result = await runOrchestration({

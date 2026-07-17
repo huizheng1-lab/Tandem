@@ -20,11 +20,7 @@ After a candidate passes the required baseline checks, accept it with:
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts/reciprocal-relay.ps1 -Action Accept -Role B -Summary "candidate baseline verified"
 ```
 
-After a clean verified commit, finish with:
-
-```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File scripts/reciprocal-relay.ps1 -Action Complete -Role B -Summary "<change and verification summary>"
-```
+After verification, submit a completion report with an exact `filesChanged` list and a concise summary. Do not run `git add`, `git commit`, wishlist `Candidate`, or relay `Complete` from inside the Codex sandbox; Tandem's app layer performs the guarded `relay:` candidate commit and completion from that report.
 
 If no safe, useful task exists:
 

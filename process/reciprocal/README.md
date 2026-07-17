@@ -9,7 +9,7 @@ The direction is deliberately crossed:
 
 The launcher also injects protected roots for the admin repository, the executor's own source worktree, both runtimes, and both state stores. Tandem rejects writes to those paths even if a model emits an absolute path; only the selected peer target remains writable.
 
-For Codex's child-process sandbox, the launcher grants write access to the shared control directory and the admin repository's common `.git` directory. Linked worktrees keep their index locks, objects, refs, reflogs, and packed-ref updates under that common Git directory rather than inside the checked-out worktree, so reciprocal turns cannot safely stage, commit, update relay refs, or complete branch fast-forwards without it. The source tree remains protected by Tandem's root guard; the `.git` permission exists for normal Git plumbing and relay refs, not for editing the admin worktree.
+For Codex's child-process sandbox, the launcher grants write access to the shared control directory and the admin repository's common `.git` relay state. Codex CLI still denies linked-worktree index metadata under `.git/worktrees/<name>`, so producing turns do not run `git add` or `git commit` directly. Instead, the worker reports an exact `filesChanged` list; Tandem's unsandboxed app layer validates that list, stages exactly those files, creates the single `relay:` commit, marks the active wishlist item candidate, and completes the relay turn. The source tree remains protected by Tandem's root guard.
 
 Only the executor named by the shared relay state may work. A completed turn gives ownership to the other executor. Each target branch first fast-forwards from its peer, so successful turns form one linear history and divergence stops the relay.
 
