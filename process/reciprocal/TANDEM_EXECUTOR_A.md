@@ -12,6 +12,8 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts/reciprocal-relay.ps1
 
 If it reports `WAIT` or `PAUSED`, answer directly with the relay status and stop. Follow the validation and recovery lifecycle in the shared protocol for `VALIDATE` or `RESUME`. Only choose a new improvement in `working` phase.
 
+For implementation in a Codex sandbox, run focused tests for changed behavior, `npm run typecheck`, and `git diff --check`. Keep the full `npm test` command in the plan verification list so Tandem's authoritative runner executes it outside the producing sandbox; the opposite executor must repeat the full suite during `VALIDATE` before stable advances. Never weaken or skip a test that can run in the sandbox.
+
 After a candidate passes the required baseline checks, accept it with:
 
 ```powershell
@@ -34,7 +36,7 @@ If an improvement candidate fails validation, create and then verify a history-p
 
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts/reciprocal-relay.ps1 -Action Rollback -Role A -Summary "<failed check and evidence>"
-# Run npm run typecheck, npm test, and git diff --check.
+# Run focused tests, npm run typecheck, and git diff --check here; keep npm test mandatory in authoritative verification and peer validation.
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts/reciprocal-relay.ps1 -Action CompleteRollback -Role A -Summary "rollback restored the stable tree; required checks passed"
 ```
 
