@@ -1,0 +1,78 @@
+Round: D131
+
+Summary:
+- Fixed the reciprocal launcher to grant Codex child processes the shared control directory plus the admin repository common Git directory:
+  - C:\Users\huizh\Apps\Tandem Reciprocal\control
+  - C:\Users\huizh\Apps\HZ code\.git
+- Documented why linked worktrees need the common Git directory: index/index.lock, objects, branch refs, reflogs, packed refs, and relay refs all live there, not inside the worktree checkout.
+- Found and fixed a second D131 blocker: after hidden executor restart, persisted schedules were not registered until startSession/resume/add/remove. The 2026-07-16 23:37 local B schedule did not fire after restart. Added startup schedule loading and a desktop-service regression test.
+- Built and promoted the D131 runtime to both reciprocal executors:
+  - source/promoted build: d582e5bfd7d695853183078d00902f25f8db6bf7
+  - executor-a BUILD_INFO sourceShortSha: d582e5b
+  - executor-b BUILD_INFO sourceShortSha: d582e5b
+- The repaired runtime proved schedule loading: B fired at 2026-07-17T04:37:00.016Z and A fired at 2026-07-17T05:07:00.013Z with no dashboard kickstart or automation /prompt call recorded in CONTROL_PANEL_AUDIT.jsonl during the D131 window.
+- The fully unattended candidate-commit requirement did not pass: B resumed W0010 Step 2 and verified it, but the Codex/takeover environment still denied the Git index-lock write. This was not hidden. Admin recovery preserved the exact seven intended files, reran checks, created the candidate commit, and let A's scheduled peer validation accept it.
+- W0010 Step 2 is DONE. Relay stable was reconciled to integrated master and left paused with no active owner.
+
+Commits:
+- 6268904d52a8f0468618d75d4ffdf61fd0e84492 D131-1: grant reciprocal git plumbing roots
+- d582e5bfd7d695853183078d00902f25f8db6bf7 D131-2: load persisted schedules on desktop startup
+- 897382a1a44de2152d54f1eac43cbd88f77f0e7f relay: surface cumulative session cost in desktop
+- f4e00b2b4e48635fcf7d555707a09007d4212c9d D131-3: integrate W0010 cumulative cost surface
+- d366501c9f0904aa8eec3aaba4a562522eacda76 D131-4: merge reciprocal W0010 stable
+
+Preserved Work Evidence:
+- Before recovery, worktrees/copy-a had exactly seven intended tracked modifications:
+  - app/main/tandem-service.ts
+  - app/renderer/src/cost-display.ts
+  - app/renderer/src/main.tsx
+  - app/shared/ipc.ts
+  - process/reciprocal/epics/W0010-plan.md
+  - tests/desktop-service.test.ts
+  - tests/renderer-cost-display.test.ts
+- The checkpoint at worktrees/copy-a/.tandem/reciprocal-checkpoint.md recorded W0010 Step 2, completed verification, visual approval, and the Git index-lock blocker.
+- Admin recovery committed those same seven files as 897382a; no .tandem checkpoint, secrets, runtime output, or unrelated files were staged.
+
+Unattended Sequence Evidence:
+- Initial restart after D131-1 did not fire B at 2026-07-17T03:37Z because startup did not register persisted schedules.
+- After D131-2 runtime promotion, B's schedule fired automatically at 2026-07-17T04:37:00.016Z and produced session 87535aa4-735a-41c3-af49-e1bfc760b59c.
+- B returned RESUME for turn 6, reran verification, but remained blocked at Git index-lock creation. It requested pause-after-turn rather than completing a candidate.
+- Admin recovery canceled the pending pause, reran checks, committed 897382a, marked W0010 Candidate, and ran relay Complete.
+- A's schedule fired automatically at 2026-07-17T05:07:00.013Z, validated candidate 897382a, advanced stable, and marked W0010 DONE.
+- A then found no queued human item. The empty A turn was closed with Abandon so the relay ended paused:
+  - phase: paused
+  - activeRole: null
+  - stableCommit: d366501c9f0904aa8eec3aaba4a562522eacda76
+
+Write-Surface Audit:
+- Target worktree contents: selected peer worktree under C:\Users\huizh\Apps\Tandem Reciprocal\worktrees\copy-a or copy-b. Covered by the Codex workspace cwd.
+- Shared direction and dashboard control files: C:\Users\huizh\Apps\Tandem Reciprocal\control. Covered by TANDEM_CODEX_WRITABLE_ROOTS.
+- Relay JSON state: C:\Users\huizh\Apps\HZ code\.git\tandem-relay\state.json. Covered by the common .git root.
+- Relay refs: C:\Users\huizh\Apps\HZ code\.git\refs\tandem-relay. Covered by the common .git root.
+- Linked worktree Git indexes: C:\Users\huizh\Apps\HZ code\.git\worktrees\copy-a and copy-b. Covered by the common .git root, though the D131 attended evidence shows the Codex/takeover environment still denied the index-lock write.
+- Git objects, branch refs, reflogs, and packed refs: C:\Users\huizh\Apps\HZ code\.git\objects, .git\refs, .git\logs, and packed-refs. Covered by the common .git root.
+- Epic plan file: process/reciprocal/epics/W0010-plan.md in the target worktree. Covered by the target workspace.
+- .tandem/reciprocal-checkpoint.md and .tandem/schedules.json: ignored target-worktree state. Covered by the target workspace.
+- npm/Vitest caches and child-process temp output: under the target workspace, node temp directories, or process temp. Verification did not reveal a persistent remaining blocker there.
+- TANDEM_HOME session logs and automation token files: written by the Tandem app process under C:\Users\huizh\Apps\Tandem Reciprocal\state\executor-a and executor-b, not by the sandboxed Codex child.
+- Runtime folders and user-data folders: intentionally protected from model writes; runtime promotion remains an admin/human-gated action.
+
+Verification:
+- Admin repository after D131 integration:
+  - npm run typecheck: PASS
+  - npm test: PASS (40 files passed, 1 skipped; 385 tests passed, 1 skipped)
+  - git diff --check: PASS
+- W0010 Step 2 candidate in copy-a before commit:
+  - npm run typecheck: PASS
+  - npm test: PASS (40 files passed, 1 skipped; 384 tests passed, 1 skipped)
+  - git diff --check: PASS
+- A peer validation:
+  - typecheck: PASS
+  - full npm test: PASS (384 passed, 1 skipped)
+  - git diff --check: PASS
+
+Final State:
+- master: d366501c9f0904aa8eec3aaba4a562522eacda76 before this marker
+- codex/reciprocal-a: d366501c9f0904aa8eec3aaba4a562522eacda76
+- codex/reciprocal-b: d366501c9f0904aa8eec3aaba4a562522eacda76
+- relay: paused, activeRole null, candidateCommit null, stableCommit d366501c9f0904aa8eec3aaba4a562522eacda76
