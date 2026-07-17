@@ -1,0 +1,32 @@
+Round: D137
+Status: complete
+
+Implementation commit:
+- c73e196 D137-1: bound shell timeout settlement
+
+Root cause:
+- The live executor-B session recorded an npm-test bash call starting at 2026-07-17T19:38:55.025Z with no matching end event.
+- Tandem passed the timeout to Execa and also started its own termination timer, but then awaited the Execa promise without an independent settlement deadline.
+- Execa 9.6.1 handles a timeout by killing the subprocess and entering its error path; that path still awaits the process exit promise plus stdout, stderr, and merged-all stream promises.
+- On Windows, a detached or missed descendant can retain an inherited output-pipe handle after the tracked shell process exits. The process can therefore be gone while Execa continues waiting for the stream to close.
+- Tandem's prior manual cleanup also waited to signal the Execa subprocess until taskkill cleanup finished, and the final cleanup awaits had no outer bound.
+
+Fix:
+- Timeout and abort now initiate subprocess termination and Windows tree cleanup immediately.
+- A separately observed settlement promise force-returns a synthetic failed result after a fixed grace period even when Execa never settles; the abandoned Execa promise remains rejection-observed.
+- Forced settlement destroys captured streams, sends a final force-kill, and continues Windows cleanup as bounded best effort.
+- Normal post-command cleanup is raced against a bounded deadline, using the original termination deadline when timeout or abort already began.
+- Internal PowerShell process-table and taskkill helpers now have timeouts; taskkill output is ignored so it cannot create another captured-pipe dependency.
+
+Reproduction evidence:
+- Controlled pre-fix fixture: a short-lived Node parent spawned a detached child with inherited stdout. With a 500ms bashTool timeout and an 8s pipe holder, bashTool returned after 8273ms, only when the child exited naturally.
+- Controlled post-fix fixture: the same inherited-pipe mechanism with a 500ms timeout returned a synthetic timeout result after 5560ms even though the pipe holder was configured to remain alive for 12s.
+- Regression coverage asserts return before timeout + hard grace + scheduling tolerance.
+- Existing Windows regressions for normal leftover-child cleanup, timeout child/grandchild cleanup, and prompt abort all pass.
+
+Verification summary:
+- npm run typecheck: passed.
+- npx vitest run tests/tools.test.ts: passed.
+- npm test: passed (43 files passed, 1 skipped; 406 tests passed, 1 skipped).
+- git diff --check: passed; only line-ending conversion warnings were emitted.
+- Executor B was not restarted or otherwise modified, per the handoff's operational restriction.
