@@ -1,5 +1,6 @@
-import type { ToolActivityEvent } from "../../shared/ipc.js";
+import type { RunHeartbeatEvent, ToolActivityEvent } from "../../shared/ipc.js";
 import { MODEL_STALL_WARNING_SECONDS } from "./session-state.js";
+import { formatRunHealth } from "./run-health-display.js";
 
 export interface ActivityPulse {
   role: "leader" | "worker";
@@ -19,7 +20,20 @@ export function activityStripState(input: {
   activityTick: number;
   secondsSince: (startedAt: number, now: number) => number;
   silenceThresholdSeconds?: number;
+  // W0013 Step 2: when provided, the formatter's serialized heartbeat is the
+  // sole source of truth for the strip text and stalled flag, replacing the
+  // stale pulse-clock inference. Optional so existing pulse-only callers keep
+  // their behaviour unchanged.
+  runHealth?: RunHeartbeatEvent;
 }): { role: "leader" | "worker"; text: string; stalled: boolean } {
+  if (input.runHealth) {
+    const formatted = formatRunHealth(input.runHealth, input.activityTick);
+    return {
+      role: input.runHealth.lastEventRole ?? input.fallbackRole,
+      text: formatted.label,
+      stalled: formatted.stalled
+    };
+  }
   const role = input.activeTool?.role ?? input.activityPulse?.role ?? input.fallbackRole;
   const stalled = input.noActivitySeconds > MODEL_STALL_WARNING_SECONDS;
   if (stalled) return { role, stalled, text: `no activity for ${input.noActivitySeconds}s - the model call may be stalled (Stop to abort)` };

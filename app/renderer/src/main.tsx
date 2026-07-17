@@ -10,6 +10,7 @@ import type {
   ModelListItem,
   PermissionRequestEvent,
   PlanConfirmEvent,
+  RunHeartbeatEvent,
   Schedule,
   SessionAutoApproveMode,
   SessionMemoryNote,
@@ -265,6 +266,8 @@ function App(): React.ReactElement {
   const [activityTick, setActivityTick] = useState(Date.now());
   const [showActivity, setShowActivity] = useState(false);
   const [runActivityCount, setRunActivityCount] = useState(0);
+  // W0013 Step 2: serialized heartbeat from the orchestrator run-health tracker; replaces the stale pulse-clock inference.
+  const [runHealth, setRunHealth] = useState<RunHeartbeatEvent | undefined>();
   const [sessions, setSessions] = useState<SessionMetadata[]>([]);
   const [showArchived, setShowArchived] = useState(false);
   const [renamingSession, setRenamingSession] = useState<string>();
@@ -474,6 +477,7 @@ function App(): React.ReactElement {
     setActivityTick(Date.now());
     setShowActivity(false);
     setRunActivityCount(0);
+    setRunHealth(undefined);
     setSessionAutoApprove("none");
     setModels(await tandem.listModels());
     await refreshSidebar();
@@ -515,6 +519,7 @@ function App(): React.ReactElement {
     setShowThinking(resumed.config.showThinking);
     showThinkingRef.current = resumed.config.showThinking;
     setCost(resumed.cost);
+    setRunHealth(resumed.lastHeartbeat);
     const replayed: TranscriptEntry[] = [];
     for (const stored of resumed.events) {
       const payload = stored.payload as { prompt?: string; role?: "leader" | "worker"; delta?: string; summary?: string; takeover?: boolean } | MachineEvent;
@@ -585,6 +590,7 @@ function App(): React.ReactElement {
       tandem.onToolEvent(handleToolEvent),
       tandem.onMemoryEvent((event) => setMemoryNotes(event.notes)),
       tandem.onMachineEvent(handleMachineEvent),
+      tandem.onHeartbeatEvent(setRunHealth),
       tandem.onCostEvent(setCost),
       tandem.onDoneEvent((event) => {
         setRunning(false);
@@ -592,6 +598,7 @@ function App(): React.ReactElement {
         setMissingKey(event.missingKey);
         setActivityPulse(undefined);
         setActiveTool(undefined);
+        setRunHealth(undefined);
         trimTrailingAgentBubble();
         appendMessage("system", `${event.summary}${event.takeover ? " (takeover)" : ""}`);
       }),
@@ -1062,6 +1069,7 @@ if (args.length === 1 && sub === "clear") {
     setActivityTick(Date.now());
     setShowActivity(false);
     setRunActivityCount(0);
+    setRunHealth(undefined);
     setPhase("PLANNING");
     setMissingKey(undefined);
     const sentAttachments = attachments;
@@ -1121,7 +1129,7 @@ if (args.length === 1 && sub === "clear") {
   const visibleEntries = useMemo(() => (showActivity ? entries : entries.filter((entry) => entry.kind !== "tool")), [entries, showActivity]);
   const fallbackRole: "leader" | "worker" = phase === "BUILDING" ? "worker" : "leader";
   const noActivitySeconds = secondsSince(lastActivityAt, activityTick);
-  const strip = activityStripState({ activeTool, activityPulse, fallbackRole, noActivitySeconds, activityTick, secondsSince });
+  const strip = activityStripState({ activeTool, activityPulse, fallbackRole, noActivitySeconds, activityTick, secondsSince, runHealth });
   const stripRole = strip.role;
   const stripText = strip.text;
 
