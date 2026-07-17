@@ -24,7 +24,7 @@ This protocol runs two pinned Tandem executors against two independent git workt
 
 Acceptance infrastructure follows the same cleanup rule as scratch files: stop every temporary dashboard or test-server instance and verify its port is no longer listening before writing the round marker.
 
-After the opposite executor accepts a candidate, it marks the matching wishlist item `Complete` with the accepted commit. After a verified rollback or abandoned attempt, it `Requeue`s the item with a concise failure note. Use `Block` only when human input is genuinely required. Do not mark work accomplished merely because its implementing executor reported success.
+After the opposite executor accepts a candidate, the relay command performs the mechanical shared-direction update when it can determine the matching candidate: ordinary items become `DONE`, autonomous plan candidates are auto-approved, and epic step candidates advance or complete according to their step metadata. Plan-gated epic plan candidates remain waiting for human plan approval. After a verified rollback or abandoned attempt, `Requeue` the item with a concise failure note. Use `Block` only when human input is genuinely required. Do not mark work accomplished merely because its implementing executor reported success.
 
 If no high-confidence improvement is available, use the `Pause` command with a reason. Do not manufacture code churn merely to pass the turn.
 
@@ -44,7 +44,7 @@ Feature-flagged or scaffolding-only steps are valid stable increments. Full auto
 
 If an in-progress approach becomes unrecoverable before it is committed, use the role's `Abandon` command. It stashes tracked and untracked work with a recovery label, restores the stable branch state, and lets the same role retry later. Never abandon merely because a model quota is exhausted; quota interruptions should resume from the checkpoint.
 
-Human pause is reversible. `Pause` records the current relay phase in `pausedFromPhase`, leaves the owner, turn token, refs, and worktrees untouched, and makes later `Claim` attempts return `PAUSED`. `Resume` is valid only while the relay is paused; it restores the saved phase and requires a human-readable summary. `Reset -Force` remains the heavy human recovery path and must not be used as a casual resume.
+Human pause is reversible. `Pause` records the current relay phase in `pausedFromPhase` and makes later `Claim` attempts return `PAUSED`. If the current owner is in a clean `working` turn with no commits beyond `baseCommit`, `Pause` releases that empty turn immediately and pauses the relay; otherwise it leaves the owner, turn token, refs, and worktrees untouched and records `pauseAfterTurn` so the active lifecycle can finish first. `Resume` is valid only while the relay is paused; it restores the saved phase and requires a human-readable summary. `Reset -Force` remains the heavy human recovery path and must not be used as a casual resume.
 
 ## Safety boundaries
 

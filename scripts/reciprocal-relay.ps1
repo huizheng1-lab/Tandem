@@ -175,6 +175,69 @@ try {
         if ($dirty.Count -gt 0) { throw "$Message`: $($dirty -join '; ')" }
     }
 
+    function Get-SharedDirectionPath {
+        $localPath = Join-Path $Workspace ".tandem\shared-control\SHARED_DIRECTION.md"
+        if (Test-Path -LiteralPath (Split-Path $localPath -Parent)) {
+            return $localPath
+        }
+        $commonRaw = (@(Invoke-Git rev-parse --git-common-dir))[0].Trim()
+        $commonDir = if ([IO.Path]::IsPathRooted($commonRaw)) { $commonRaw } else { [IO.Path]::GetFullPath((Join-Path $Workspace $commonRaw)) }
+        $adminRepo = Split-Path $commonDir -Parent
+        $relayRoot = Join-Path (Split-Path $adminRepo -Parent) "Tandem Reciprocal"
+        return (Join-Path $relayRoot "control\SHARED_DIRECTION.md")
+    }
+
+    function Get-Metadata([string]$Value) {
+        $metadata = @{}
+        foreach ($match in [regex]::Matches($Value, '(?:^|\s)([A-Za-z][A-Za-z0-9]*)=([^\s]+)')) {
+            $metadata[$match.Groups[1].Value] = $match.Groups[2].Value
+        }
+        return $metadata
+    }
+
+    function Complete-AcceptedDirectionCandidate([string]$AcceptedCommit, [string]$AcceptedKind) {
+        if ($AcceptedKind -ne "improvement") { return }
+        $directionScript = Join-Path $Workspace "scripts\reciprocal-direction.ps1"
+        if (-not (Test-Path -LiteralPath $directionScript)) { return }
+        $boardPath = Get-SharedDirectionPath
+        if (-not (Test-Path -LiteralPath $boardPath)) { return }
+
+        $escapedCommit = [regex]::Escape($AcceptedCommit)
+        $candidateLine = @(
+            Get-Content -LiteralPath $boardPath |
+                Where-Object { $_ -match "^- \[ \] (W\d+) \| .+ \| CANDIDATE\b" -and $_ -match "(^|\s)commit=$escapedCommit(\s|$)" }
+        )
+        if ($candidateLine.Count -eq 0) { return }
+        if ($candidateLine.Count -gt 1) { throw "Accepted commit $AcceptedCommit matches multiple shared-direction candidates." }
+
+        $line = $candidateLine[0]
+        $id = ([regex]::Match($line, "^- \[ \] (W\d+) \|")).Groups[1].Value
+        $metadata = Get-Metadata $line
+        if ($metadata.epic -eq "true") {
+            if ($metadata.candidate -eq "PLAN") {
+                if ($metadata.autonomy -eq "full") {
+                    & $directionScript -Action AutoApprovePlan -Id $id -Commit $AcceptedCommit -ControlPath $boardPath | Out-Null
+                    if ($LASTEXITCODE -ne 0) { throw "AutoApprovePlan failed for accepted candidate $id." }
+                }
+                return
+            }
+            if ($metadata.candidate -eq "STEP") {
+                if ($metadata.step -notmatch "^(\d+)/(\d+)$") { throw "Epic candidate $id has malformed step metadata." }
+                if ([int]$Matches[1] -lt [int]$Matches[2]) {
+                    & $directionScript -Action AcceptStep -Id $id -Commit $AcceptedCommit -ControlPath $boardPath | Out-Null
+                } else {
+                    & $directionScript -Action Complete -Id $id -Commit $AcceptedCommit -ControlPath $boardPath | Out-Null
+                }
+                if ($LASTEXITCODE -ne 0) { throw "Accepted epic step update failed for $id." }
+                return
+            }
+            return
+        }
+
+        & $directionScript -Action Complete -Id $id -Commit $AcceptedCommit -ControlPath $boardPath | Out-Null
+        if ($LASTEXITCODE -ne 0) { throw "Complete failed for accepted candidate $id." }
+    }
+
     function Set-IdleOrPauseAfterTurn {
         if ($state.pauseAfterTurn) {
             $state.phase = "paused"
@@ -205,6 +268,24 @@ try {
         if (-not $Summary.Trim()) { throw "Pause requires a human-readable -Summary." }
         if ($state.phase -eq "paused") { throw "Relay is already paused." }
         if ($state.activeRole -and $state.phase -in @("working", "validating", "rollback-verification")) {
+            if ($state.phase -eq "working" -and -not $state.candidateCommit -and -not $state.rollbackCommit) {
+                $head = (@(Invoke-Git rev-parse HEAD))[0].Trim()
+                $dirty = @(Invoke-Git status --porcelain --untracked-files=all)
+                if ($head -eq $state.baseCommit -and $dirty.Count -eq 0) {
+                    $state.nextRole = $state.activeRole
+                    $state.activeRole = $null
+                    $state.phase = "paused"
+                    $state.pausedFromPhase = "idle"
+                    $state.pauseAfterTurn = $false
+                    $state.baseCommit = $null
+                    $state.startedAt = $null
+                    $state.lastSummary = $Summary.Trim()
+                    Save-State
+                    Remove-Item -LiteralPath (Join-Path $Workspace ".tandem\reciprocal-checkpoint.md") -Force -ErrorAction SilentlyContinue
+                    Write-Result "PAUSED"
+                    exit 0
+                }
+            }
             $state.pauseAfterTurn = $true
             $state.lastSummary = $Summary.Trim()
             Save-State
@@ -328,6 +409,8 @@ try {
         Assert-Clean "Accept requires a clean worktree"
         $head = (@(Invoke-Git rev-parse HEAD))[0].Trim()
         if ($head -ne $state.candidateCommit) { throw "Validated HEAD does not match the candidate commit." }
+        $acceptedKind = $state.candidateKind
+        Complete-AcceptedDirectionCandidate $head $acceptedKind
         $state.stableCommit = $head
         $state.candidateCommit = $null
         $state.candidateKind = $null
