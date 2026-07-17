@@ -1,0 +1,42 @@
+Round: D132
+
+Commits:
+- 0101f72ee647a03121e6dc195ff5176198ff9224 D132-1: move reciprocal commits into app layer
+- bc4fec30d7f72d4df35d9029755a58c306755277 D132-2: pre-sync reciprocal worktrees outside sandbox
+- c3bc17e52223ef0c6e15e55f8c5534d919d1dbfd D132-3: release accepted empty relay turns
+- 8dc51d5ba14c450f9142d794ef4abaed91371ba5 D132-4: merge accepted scratch proof
+- c6462fd1f76420aed99fc1e87b50ce4b0ae41fd3 D132-5: tolerate nonfatal git stderr in relay
+- e7463759aa8cb45298d98dca0946ea7553f40f53 relay: [__default__] W0012 D132 doc-line proof
+
+Sandbox finding:
+- Codex CLI 0.144.2 can write the shared common git relay root under .git/tandem-relay when that root is granted.
+- The same sandbox still denies linked-worktree metadata writes under .git/worktrees/<name>, even when the child directory is granted.
+- Direct sandboxed git add failed on .git/worktrees/copy-a/index.lock.
+- A scheduled Claim also exposed ORIG_HEAD.lock denial when a linked worktree needed a fast-forward before claiming.
+
+Fix summary:
+- Moved reciprocal producer staging/commit/Candidate/Complete into Tandem's unsandboxed app layer after worker completion reports.
+- Added app-layer pre-fast-forward preparation for clean reciprocal worktrees before sandboxed Claim.
+- Added relay lifecycle support for accepting candidates to update matching shared-direction items mechanically.
+- Added clean no-work Pause release so accepted validators can pause without manufacturing a commit.
+- Made relay Git wrappers tolerate nonfatal Git stderr while still failing on nonzero exit codes.
+- Updated protocol docs and regression tests for the app-layer commit path and accepted-empty-turn behavior.
+
+Unattended proof:
+- W0011 first demonstrated the app-layer commit path via scheduled executor A and exposed the accepted-empty-turn gap.
+- After D132-3/D132-5, W0012 was queued and the relay was resumed with no prompt injection.
+- Executor B's persisted 05:37 schedule claimed W0012 and produced candidate e7463759aa8cb45298d98dca0946ea7553f40f53.
+- Executor A's persisted 06:07 schedule validated the candidate, accepted it, auto-completed W0012 to DONE, then paused cleanly with no active owner.
+- W0011 and W0012 scratch items were removed from the active wishlist after acceptance; their accepted commits remain auditable in relay/master history and the shared-direction Removed section.
+- Final relay state: phase=paused, activeRole=null, candidateCommit=null, stableCommit=e7463759aa8cb45298d98dca0946ea7553f40f53.
+
+Verification:
+- npm test -- tests/reciprocal-relay.test.ts: passed (3 tests).
+- npm run typecheck: passed.
+- npm test: passed (41 files passed, 1 skipped; 391 tests passed, 1 skipped).
+- git diff --check: passed (line-ending warnings only).
+- Final master, codex/reciprocal-a, codex/reciprocal-b, and refs/tandem-relay/stable converge on e7463759aa8cb45298d98dca0946ea7553f40f53.
+
+Notes:
+- scripts/reciprocal-direction.ps1 was already modified outside this round and was intentionally left unstaged.
+- Untracked handoff documents and unrelated helper files were intentionally left untouched.
