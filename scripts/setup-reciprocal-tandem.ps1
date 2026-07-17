@@ -16,6 +16,7 @@ $runtimeSource = Join-Path $SourceRepo "release\win-unpacked"
 $templateA = Join-Path $SourceRepo "process\reciprocal\TANDEM_EXECUTOR_A.md"
 $templateB = Join-Path $SourceRepo "process\reciprocal\TANDEM_EXECUTOR_B.md"
 $directionTemplate = Join-Path $SourceRepo "process\reciprocal\SHARED_DIRECTION_TEMPLATE.md"
+$reciprocalMaxStepsPerAgentTurn = 250
 
 function Invoke-Checked {
     param([string]$FilePath, [string[]]$Arguments, [string]$WorkingDirectory = $SourceRepo)
@@ -50,15 +51,21 @@ function Initialize-ExecutorState([string]$Role, [string]$TargetWorktree) {
     $userData = Join-Path $RelayRoot "user-data\executor-$($Role.ToLowerInvariant())"
     New-Item -ItemType Directory -Path $stateHome, $userData -Force | Out-Null
 
+    $targetConfig = Join-Path $stateHome "config.json"
     $sourceConfig = Join-Path $SourceRepo ".tandem\config.json"
-    if (Test-Path -LiteralPath $sourceConfig) {
+    if ((-not (Test-Path -LiteralPath $targetConfig)) -and (Test-Path -LiteralPath $sourceConfig)) {
         $config = Get-Content -LiteralPath $sourceConfig -Raw | ConvertFrom-Json
         if ($config.PSObject.Properties.Name -contains "permissionMode") {
             $config.permissionMode = "yolo"
         } else {
             $config | Add-Member -NotePropertyName permissionMode -NotePropertyValue "yolo"
         }
-        Write-Json $config (Join-Path $stateHome "config.json")
+        if ($config.PSObject.Properties.Name -contains "maxStepsPerAgentTurn") {
+            $config.maxStepsPerAgentTurn = $reciprocalMaxStepsPerAgentTurn
+        } else {
+            $config | Add-Member -NotePropertyName maxStepsPerAgentTurn -NotePropertyValue $reciprocalMaxStepsPerAgentTurn
+        }
+        Write-Json $config $targetConfig
     }
     if ($CopyEnv -and (Test-Path -LiteralPath (Join-Path $SourceRepo ".env"))) {
         Copy-Item -LiteralPath (Join-Path $SourceRepo ".env") -Destination (Join-Path $stateHome ".env") -Force
