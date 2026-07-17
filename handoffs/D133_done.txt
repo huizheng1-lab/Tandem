@@ -1,0 +1,42 @@
+Round: D133
+
+Main commits:
+- 4cd5bc0363952bbda35519c95324be6fedc851ff D133-1: break reciprocal verification resume loops
+- 910c384dd492096f7782530b3c1cec6d9118a1f6 D133-2: fix relay auto-approval ordering
+
+Reciprocal recovery commits/refs:
+- 4a1a00b0a9617f0fd94b1a877001941a56c3118f relay: W0013 plan candidate recovered after D133
+- 6f50304ee8be90d3dd31c622d656eb8b759fb669 D133-2 cherry-pick on reciprocal stable, both reciprocal branches reconciled here
+- Backup of loop-produced W0013 rev1/rev2 history: codex/w0013-loop-backup-20260717-1024 -> 4c23af5936e5ec5393c6ad79ef68218022acf42a
+
+Verification summary:
+- npm run typecheck: passed on main repo.
+- npm test: passed on main repo, 41 files passed, 397 tests passed, 1 skipped.
+- git diff --check: passed on main repo; only the pre-existing line-ending warning for unrelated scripts/reciprocal-direction.ps1 was emitted.
+- Focused D133 tests passed:
+  - tests/artifacts.test.ts, tests/orchestrator.test.ts, tests/codex-cli.test.ts, tests/claude-code-cli.test.ts, tests/reciprocal-candidate-commit.test.ts
+  - tests/reciprocal-relay.test.ts
+- W0013 peer validation in Copy A passed:
+  - npm run typecheck
+  - npm test: 41 files passed, 396 tests passed, 1 skipped
+  - git diff --check
+
+Acceptance notes:
+- D133-1 verification contradiction fixed with authoritative-only verification entries.
+  Workers skip only commands prefixed with "authoritative-only:", echo the original command verbatim, and include "[authoritative-only skipped]" in output.
+  The authoritative runner strips the prefix for execution and records the original command in the result.
+- Authoritative execution was regression-tested with "authoritative-only: node --version"; the runner executed node --version and reported the original prefixed command.
+- D133-2 desktop-service failures were a real app-layer no-repo assumption. commitReciprocalCandidate and prepareReciprocalWorktree now no-op outside git repositories instead of failing desktop sessions; other git errors still surface.
+- D133-3 relay circuit breaker added. Repeated same-turn RESUME claims increment resumeCount, auto-pause at 3, and reset on Resume, Complete, Abandon, Rollback, CompleteRollback, ReconcileMain, and new Claim. Regression test demonstrates RESUME counts 1/3, 2/3, then PAUSED at 3/3.
+- Dashboard visibility added outside the repo under C:\Users\huizh\Apps\Tandem Reciprocal\dashboard:
+  - public\app.js shows "resumes N/3" beside the active owner and cycle chip.
+  - server.mjs adds a Resume circuit breaker health row.
+- D133 recovery found and fixed an additional relay ordering bug: Accept now advances the stable relay ref while auto-approving autonomous epic plan candidates, and restores it if the direction update fails. Stale LASTEXITCODE checks after direction-script calls were removed.
+- W0013 recovered without redoing the plan from scratch. The uncommitted rev3 plan content was preserved, converted into a single candidate commit on the D133-fixed base, peer-validated by Executor B, and auto-approved:
+  W0013 is PLAN_APPROVED revision=2 completed=0 steps=2 next=1/2 plan=process/reciprocal/epics/W0013-plan.md commit=4a1a00b0a9617f0fd94b1a877001941a56c3118f.
+- Relay is intentionally left paused with no active owner:
+  phase=paused, nextRole=B, activeRole=null, stableCommit=6f50304ee8be90d3dd31c622d656eb8b759fb669.
+
+Token discipline:
+- The hourly RESUME loop now has a durable 3-RESUME circuit breaker.
+- The verification contradiction is machine-readable rather than prose-only, so future worker turns should not retry sandbox-hostile full-suite commands while the authoritative runner and peer validator still run them for real.
