@@ -428,15 +428,22 @@ export async function runOrchestration(options: RunOptions): Promise<RunResult> 
     transition("TAKEOVER", message, round);
     let lastTakeover: { report: unknown; userSummary: string } | undefined;
     let lastError: unknown;
+    const applyPostBuildReport = async (report: CompletionReport): Promise<CompletionReport> => {
+      if (!options.postBuildReport) return report;
+      const postBuildReport = await options.postBuildReport(report, { plan, round });
+      emit({ type: "artifact", name: "PostBuildReport", value: postBuildReport });
+      return postBuildReport;
+    };
     for (let attempt = 1; attempt <= 3; attempt += 1) {
       try {
         await waitIfPaused();
         const takeover = await options.agents.takeover({ plan, reports, feedback: allFeedback, previousAttemptError: lastError === undefined ? undefined : previousAttemptMessage(lastError) });
         lastTakeover = takeover;
-        const schemaReport = validateCompletionReport(plan, takeover.report, plan.verification, {
+        let schemaReport = validateCompletionReport(plan, takeover.report, plan.verification, {
           enforceCommandEcho: !options.verificationRunner,
           enforceCompleteVerification: !options.verificationRunner
         });
+        schemaReport = await applyPostBuildReport(schemaReport);
         const authoritative = await attachAuthoritativeVerification(schemaReport);
         const report = authoritative.report;
         validateCompletionReport(plan, report, plan.verification, {
@@ -458,7 +465,15 @@ export async function runOrchestration(options: RunOptions): Promise<RunResult> 
     }
     if (!lastTakeover) throw lastError instanceof Error ? lastError : new Error(String(lastError));
     const schemaOnly = CompletionReportSchema.safeParse(lastTakeover.report);
-    if (schemaOnly.success) reports.push(schemaOnly.data);
+    if (schemaOnly.success) {
+      let preservedReport = schemaOnly.data;
+      try {
+        preservedReport = await applyPostBuildReport(preservedReport);
+      } catch (error) {
+        emit(errorEvent(`PostBuildReport failed while preserving takeover report after validation retries: ${String(error)}`, error));
+      }
+      reports.push(preservedReport);
+    }
     emit({ type: "artifact", name: "TakeoverReport", value: lastTakeover.report });
     const summary = `Build finished under leader takeover, but takeover verification bookkeeping could not be finalized after retries: ${String(lastError)}. ${lastTakeover.userSummary}`;
     transition("DONE", "takeover report validation failed; build preserved", round);

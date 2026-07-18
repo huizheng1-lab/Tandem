@@ -122,6 +122,36 @@ describe("orchestration", () => {
     expect(result.takeover).toBe(true);
   });
 
+  it("D150: runs post-build report hook for completed takeover reports before authoritative verification", async () => {
+    const events: string[] = [];
+    let postBuildContext: { plan: BuildPlan; round: number } | undefined;
+    let postBuildInput: CompletionReport | undefined;
+    const result = await runOrchestration({
+      request: "build",
+      config: { maxReviewRounds: 0, maxParallelWorkers: 1 },
+      agents: agents({
+        takeover: async () => ({ report: report("complete"), userSummary: "takeover complete" })
+      }),
+      postBuildReport: async (value, context) => {
+        events.push("postBuildReport");
+        postBuildInput = value;
+        postBuildContext = context;
+        return { ...value, summary: `${value.summary} plus reciprocal candidate`, filesChanged: [...value.filesChanged, "src/preload.ts"] };
+      },
+      verificationRunner: async () => {
+        events.push("verificationRunner");
+        return [{ command: "npm test", passed: true, output: "real ok" }];
+      }
+    });
+
+    expect(result.takeover).toBe(true);
+    expect(postBuildInput).toMatchObject({ status: "complete", filesChanged: ["src/index.ts"] });
+    expect(postBuildContext).toMatchObject({ plan, round: 0 });
+    expect(events).toEqual(["postBuildReport", "verificationRunner"]);
+    expect(result.reports[0]?.summary).toContain("reciprocal candidate");
+    expect(result.reports[0]?.filesChanged).toContain("src/preload.ts");
+  });
+
   it("D64-1: a transient plan() failure self-corrects on retry instead of killing the session", async () => {
     // Simulates a transient leader hiccup (e.g. a permission-denial-style throw on the
     // first attempt's read-only explore step) that previously killed the whole session
