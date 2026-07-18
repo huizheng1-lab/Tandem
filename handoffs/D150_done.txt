@@ -1,0 +1,31 @@
+Round: D150
+
+Commits:
+- d1e8bbb151481160a83e855e66359671de576803 D150-1: commit takeover reports through post-build hook
+
+Root cause:
+- The normal worker-build path in src/orchestrator/machine.ts calls options.postBuildReport after merging and validating the CompletionReport, before authoritative verification, and emits PostBuildReport.
+- runTakeover validated the takeover CompletionReport, ran authoritative verification, emitted TakeoverReport, and completed without calling options.postBuildReport.
+- app/main/tandem-service.ts wires postBuildReport to commitReciprocalCandidate, so complete takeover reports with filesChanged skipped the only app-layer path that creates and hands off a reciprocal candidate.
+
+Changes:
+- runTakeover now applies the same postBuildReport hook before authoritative verification and emits PostBuildReport.
+- The takeover fallback preservation branch also attempts the post-build hook for schema-shaped preserved reports, so a complete preserved report is not silently excluded from candidate creation.
+- Added a D150 orchestrator regression proving a complete takeover report with filesChanged invokes postBuildReport before the authoritative verification runner and carries the post-build report into the final reports.
+
+Fallback branch investigation:
+- The final fallback branch can preserve a CompletionReportSchema-shaped takeover report after validation/bookkeeping retries are exhausted. Because CompletionReportSchema can include status=complete and filesChanged, it has the same candidate-commit omission risk. The fix applies there too; hook failures in that preservation path are emitted as errors and the takeover report is still preserved.
+
+Live proof:
+- copy-b initially had the completed W0014 step 2/3 files dirty and no relay candidate: app/main/index.ts, app/main/tandem-service.ts, app/preload/index.ts, app/shared/ipc.ts, process/reciprocal/epics/W0014-plan.md, tests/desktop-ipc.test.ts, tests/desktop-service.test.ts.
+- Resumed the paused relay and invoked commitReciprocalCandidate once with that completed takeover report; it created reciprocal candidate commit 72f3ce269ee2fe2b92b299eea397ef6982597cb7.
+- Role B then claimed validation from copy-a. Relay returned outcome=VALIDATE, phase=validating, activeRole=B, candidateCommit=72f3ce269ee2fe2b92b299eea397ef6982597cb7, stableCommit=3992fdf80cb4f3db9583fd5515bfde7427419900.
+- W0014 is marked CANDIDATE step=2/3 on the shared board with commit=72f3ce269ee2fe2b92b299eea397ef6982597cb7.
+- copy-a and copy-b worktrees are clean at 72f3ce2.
+
+Verification:
+- npm run typecheck: passed.
+- npm test -- tests/orchestrator.test.ts: passed, 30 tests.
+- npm test -- tests/reciprocal-direction.test.ts: passed after the first full-suite run timed out one reciprocal-direction test at 5s.
+- npm test: passed on rerun, 44 files passed and 1 skipped; 448 tests passed and 1 skipped.
+- git diff --check: passed.
