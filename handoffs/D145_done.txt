@@ -1,0 +1,40 @@
+Round: D145
+
+Commits:
+- 1235fdf D145-1: allow remote design doc during main update
+- 79c4dcf D145-2: reconcile W0014 step 1 into master
+- 3d91b1e D145-3: record W0014 reciprocal ancestry
+- 7566469 D145-4: relax reciprocal direction timing under full suite
+
+State-divergence finding:
+- The real relay state file had LastWriteTimeUtc 2026-07-18T18:11:15Z and exactly matched a fresh Reset shape: turn=1, baseCommit=null, candidateCommit=null, lastSummary=null, stableCommit=767f90c.
+- That timestamp falls in the D144 live scratch-evidence window, before the later successful scratch repo evidence and before the W0014 step commit at 2026-07-18T18:19:22Z.
+- The checked-in D144 Vitest cases were reviewed and use mkdtemp repos with the temp repo as cwd; they do not pass the production workspace path and are not the source of the production state write.
+- Durable refs, branch tips, and the shared board showed W0014 was a pending step candidate, not already stable: plan commit 7eebb3f was the candidate base, step commit 0ff5c74 was recorded on the board as candidate=STEP step=1/3.
+- Conclusion: the divergence was caused by an operator/live-scratch recovery/reset against the real relay state during D144 evidence gathering, not by a checked-in test isolation bug. The candidate was restored to the relay's observable pending-candidate state and then advanced through relay acceptance.
+
+Recovery and reconciliation:
+- Restored relay bookkeeping to stable=7eebb3f and candidate=0ff5c74, then claimed validation as role A against copy-b.
+- Mechanical validation artifacts 20260718-185735-role-A-turn-2.json and 20260718-185915-role-A-turn-2.json both passed npm run typecheck, npm test, and git diff --check refs/tandem-relay/stable refs/tandem-relay/candidate --.
+- Two accidental rollback commits caused by inline ReviewVerdictJson PowerShell quoting were preserved on backup branches:
+  - codex/d145-review-json-rollback-backup-20260718-1458 at 6e3d03c
+  - codex/d145-review-json-rollback-backup-20260718-1459b at 2f8e212
+- Accepted W0014 step 1 through the relay, then paused the D144 autonomous continuation instead of resuming it.
+- Reconciled W0014 step 1 into master, recorded 0ff5c74 in master ancestry, fast-forwarded codex/reciprocal-a and codex/reciprocal-b to 75664699ef2ac89779d33075ac47da9615788527, and updated refs/tandem-relay/stable/state.json to the same commit through ReconcileMain.
+- Relay final state is paused, activeRole=null, candidateCommit=null, rollbackCommit=null, stableCommit=75664699ef2ac89779d33075ac47da9615788527.
+
+Executor sync:
+- Re-ran setup-reciprocal-tandem.ps1 with -SkipInstall -SkipRuntimeCopy and without -ResetRelay.
+- copy-b/TANDEM.md SHA256 matches process/reciprocal/TANDEM_EXECUTOR_A.md.
+- copy-a/TANDEM.md SHA256 matches process/reciprocal/TANDEM_EXECUTOR_B.md.
+- rg autonomousContinuation in both worktree relay scripts found the D144 payload logic in copy-a and copy-b.
+
+Verification:
+- copy-a validation during reconciliation: npm run typecheck passed; npm test passed with 44 files passed, 1 skipped; 435 tests passed, 1 skipped.
+- Top-level npm run typecheck: passed.
+- Top-level git diff --check: passed.
+- Top-level npm test: passed with 44 files passed, 1 skipped; 443 tests passed, 1 skipped.
+
+Notes:
+- scripts/reciprocal-direction.ps1 was modified before D145 and left unstaged/untouched.
+- Existing untracked handoff docs, design docs, release folders, and helper scripts were left untouched.
