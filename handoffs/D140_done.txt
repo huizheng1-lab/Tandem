@@ -1,0 +1,29 @@
+Round: D140
+Status: complete; no additional code change required after D139 implementation
+
+Relevant fixing commit already present:
+- c913904 D139-1: route remote approvals through Telegram
+
+What happened:
+- D140 described a broken intermediate state where RemoteTransport.sendMessage had been changed to return a message id but TelegramLongPollingTransport still declared Promise<void>, and the approval callback edit test was failing.
+- That exact interface mismatch and callback-resolution ordering issue were fixed in c913904 before this D140 marker was written.
+- No D140 code patch was needed beyond verifying the current tree honestly and recording the result.
+
+Fresh verification output:
+- npm run typecheck:
+  - `> tandem@0.1.0 typecheck`
+  - `> tsc --noEmit`
+  - exit code 0
+- npm test:
+  - first D140 full run hit one transient 5s timeout in the unrelated reciprocal-direction suite.
+  - isolated rerun passed: `Test Files 1 passed (1); Tests 8 passed (8)`.
+  - focused D138/D139 rerun passed: `Test Files 2 passed (2); Tests 48 passed (48)`.
+  - final full rerun passed:
+    - `Test Files 43 passed | 1 skipped (44)`
+    - `Tests 415 passed | 1 skipped (416)`
+- git diff --check: passed with line-ending warnings only.
+
+Notes:
+- The approval-related test was not removed. It now passes.
+- D138 Round B coverage remains intact.
+- D139 Round C approval-routing implementation remains in its own D139 commits and marker.
