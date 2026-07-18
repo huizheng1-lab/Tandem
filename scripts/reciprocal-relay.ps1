@@ -216,6 +216,14 @@ try {
         if ($dirty.Count -gt 0) { throw "$Message`: $($dirty -join '; ')" }
     }
 
+    function Test-ReciprocalCheckpoint {
+        return Test-Path -LiteralPath (Join-Path $Workspace ".tandem\reciprocal-checkpoint.md")
+    }
+
+    function Test-GenuineResumeState {
+        return [bool]($state.candidateCommit -or $state.rollbackCommit -or (Test-ReciprocalCheckpoint))
+    }
+
     function Limit-Text([string]$Value, [int]$Limit = 6000) {
         if (-not $Value) { return "" }
         if ($Value.Length -le $Limit) { return $Value }
@@ -925,16 +933,22 @@ try {
         }
         if ($state.activeRole) {
             if ($state.activeRole -eq $Role) {
-                $count = Increment-ResumeCounter
-                if ($count -ge $ResumePauseThreshold) {
-                    Pause-ResumeLoop $Role
+                if (Test-GenuineResumeState) {
+                    $count = Increment-ResumeCounter
+                    if ($count -ge $ResumePauseThreshold) {
+                        Pause-ResumeLoop $Role
+                    }
+                    Save-State
+                    Write-Result "RESUME"
+                    exit 0
                 }
-                Save-State
-                Write-Result "RESUME"
+                $state.activeRole = $null
+                $state.nextRole = $Role
+                $state.startedAt = $null
             } else {
                 Write-Result "WAIT"
+                exit 0
             }
-            exit 0
         }
         if ($state.pauseAfterTurn) {
             $state.phase = "paused"

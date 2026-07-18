@@ -130,6 +130,8 @@ describe("reciprocal relay script", () => {
       await initRepo(repo);
       await relay(repo, "-Action", "Reset", "-Force");
       await relay(repo, "-Action", "Claim", "-Role", "A");
+      await mkdir(path.join(repo, ".tandem"), { recursive: true });
+      await writeFile(path.join(repo, ".tandem", "reciprocal-checkpoint.md"), "resume checkpoint\n", "utf8");
 
       const firstResume = await relay(repo, "-Action", "Claim", "-Role", "A");
       const secondResume = await relay(repo, "-Action", "Claim", "-Role", "A");
@@ -426,6 +428,17 @@ describe("reciprocal relay script", () => {
         stableCommit: candidateCommit,
         candidateCommit: null,
         reviewVerdict: "approve",
+      });
+
+      const nextClaim = await relay(repo, "-Action", "Claim", "-Role", "B");
+      expect(nextClaim).toMatchObject({
+        outcome: "CLAIMED",
+        phase: "working",
+        activeRole: "B",
+        stableCommit: candidateCommit,
+        candidateCommit: null,
+        rollbackCommit: null,
+        resumeCount: 0,
       });
     } finally {
       await rm(repo, { recursive: true, force: true });
