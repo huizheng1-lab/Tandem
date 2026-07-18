@@ -26,7 +26,7 @@ This epic is `autonomy=full`. After independent acceptance of this plan candidat
 
 ## Ordered steps
 
-- [ ] Step 1: implement and unit-test the read-only store-side incremental scanner.
+- [x] Step 1: implement and unit-test the read-only store-side incremental scanner.
 - [ ] Step 2: wire typed start/cancel/batch IPC, service orchestration, and the preload bridge.
 - [ ] Step 3: add the debounced sidebar search UI, progressive results, highlighting, project labels, cancellation, and rendered evidence.
 
