@@ -1,0 +1,37 @@
+Round: D138
+Status: implemented; live Telegram phone verification pending human availability
+
+Implementation commit:
+- ef64cbe D138-1: add Telegram remote run controls
+
+Summary:
+- Added Telegram remote-control Round B grammar for /pause, /resume, /stop, /use <id-prefix>, and Confirm STOP <nonce>.
+- Added reply-keyboard support to the Telegram transport while keeping the RemoteTransport boundary.
+- Added single-use 60-second emergency-stop confirmations with invalid, reused, and expired nonce rejection paths.
+- Added /use prefix matching with ambiguous and unmatched-prefix rejection before any session switch.
+- Wired remote actions into TandemService:
+  - pause/resume uses a service-level pause gate checked at orchestration boundaries.
+  - stop uses the existing abort controller path.
+  - session switching uses the existing resumeSession path and is rejected while a run is active.
+- Remote status now reports runHealth as idle, running, or paused.
+
+Verification summary:
+- npm run typecheck: passed.
+- npx vitest run tests/remote-control.test.ts tests/desktop-service.test.ts: passed, 43 tests.
+- npm test: passed, 43 files passed, 1 skipped; 410 tests passed, 1 skipped.
+- git diff --check: passed with line-ending warnings only.
+
+New regression coverage:
+- Stop confirmation nonce state machine: wrong value, expiry, successful confirmation, and reuse rejection.
+- /use session prefix matching: ambiguous, unmatched, and unique-prefix success.
+- Shared command rate limit applies to new mutating verbs.
+- TandemService pauses a running orchestration at the pause gate and resumes cleanly.
+
+Live verification still needed with the human's real phone and a real running session:
+- Pair/open the desktop app build containing this commit.
+- Send /pause during a real run and confirm desktop state reflects paused.
+- Send /resume and confirm the run continues.
+- Send /stop, confirm with the Telegram keyboard nonce, and verify the run actually stops.
+- Send /stop and let the nonce expire; confirm no stop occurs.
+- Use /sessions then /use <id-prefix> between two real sessions; confirm /status reflects the selected session.
+- Try an ambiguous /use prefix and confirm it is rejected with close matches.
