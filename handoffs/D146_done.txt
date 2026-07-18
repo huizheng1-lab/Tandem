@@ -1,0 +1,19 @@
+Round: D146
+
+Commits:
+- 3992fdf80cb4f3db9583fd5515bfde7427419900 - relay rollback commit rejecting bad candidate 5f97d0b092fa5c5de48143f1729dfd4093c20ebb
+- 5255dc2a93416a4f50cdb4dac01b9f437eb68162 - D146-1: guard reciprocal direction control path
+
+Verification:
+- Relay rollback path was used: Rollback created 3992fdf and CompleteRollback recorded it as a rollback candidate.
+- Relay remains paused with stableCommit d73bb2b6906adbf995721c08722de8a1b969bd13 and candidateCommit 3992fdf80cb4f3db9583fd5515bfde7427419900, candidateKind rollback. The bad improvement candidate 5f97d0b was not accepted.
+- W0013 plan content is intact: process/reciprocal/epics/W0013-plan.md has no diff versus stable after rollback.
+- D146-2 finding: executor A reused a stray scratch path, .tandem/direction.txt, created/read earlier in the same session. Search of the repo prompts/protocol found no prompt-level instruction or example making that path canonical; the real canonical path remained .tandem/shared-control/SHARED_DIRECTION.md.
+- D146-3 guard chosen: reciprocal-direction.ps1 now rejects explicit ControlPath values inside a worktree .tandem directory unless they point to .tandem/shared-control/SHARED_DIRECTION.md. I did not add reviewer-board-context plumbing because preventing the wrong board from being used closes this failure earlier and more narrowly.
+
+Checks:
+- PowerShell parser check for scripts/reciprocal-direction.ps1: passed.
+- npm run typecheck: passed.
+- npm test -- tests/reciprocal-direction.test.ts: passed, 9 tests.
+- npm test: passed, 44 files / 444 tests passed, 1 file / 1 test skipped.
+- git diff --check and git diff --cached --check: passed.
