@@ -1,5 +1,4 @@
 import { app, BrowserWindow, dialog, ipcMain } from "electron";
-import type { WebContents } from "electron";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
 import { ipcChannels } from "../shared/ipc.js";
@@ -23,8 +22,6 @@ import type {
   SessionDeleteRequest,
   SessionRenameRequest,
   SessionResumeRequest,
-  SessionSearchCancelRequest,
-  SessionSearchRequest,
   SessionStartRequest
 } from "../shared/ipc.js";
 
@@ -44,7 +41,6 @@ let mainWindow: BrowserWindow | undefined;
 let service: TandemService | undefined;
 let startupError: StartupErrorInfo | undefined;
 let automationServer: AutomationServerHandle | undefined;
-const rendererSearches = new Map<number, Map<string, symbol>>();
 const gotSingleInstanceLock = app.requestSingleInstanceLock();
 
 function createWindow(): void {
@@ -111,23 +107,6 @@ ipcMain.handle(ipcChannels.configGet, () => service?.getConfig());
 ipcMain.handle(ipcChannels.configSet, (_event, patch) => service?.setConfig(patch));
 ipcMain.handle(ipcChannels.modelsList, () => service?.listModels());
 ipcMain.handle(ipcChannels.sessionsList, () => service?.listSessions());
-ipcMain.handle(ipcChannels.sessionsSearchStart, (event, request: SessionSearchRequest) => {
-  untrackSearchId(request.searchId);
-  const token = trackRendererSearch(event.sender, request.searchId);
-  const run = service?.startSessionSearch(request, (batch) => {
-    if (!event.sender.isDestroyed()) event.sender.send(ipcChannels.sessionSearchBatch, batch);
-  });
-  if (!run) {
-    untrackRendererSearch(event.sender.id, request.searchId, token);
-    return undefined;
-  }
-  return run.finally(() => untrackRendererSearch(event.sender.id, request.searchId, token));
-});
-ipcMain.handle(ipcChannels.sessionsSearchCancel, (event, request: SessionSearchCancelRequest) => {
-  if (!rendererSearches.get(event.sender.id)?.has(request.searchId)) return;
-  service?.cancelSessionSearch(request.searchId);
-  rendererSearches.get(event.sender.id)?.delete(request.searchId);
-});
 ipcMain.handle(ipcChannels.sessionResume, (_event, request: SessionResumeRequest) => service?.resumeSession(request.id));
 ipcMain.handle(ipcChannels.sessionCompact, () => service?.compactSession());
 ipcMain.handle(ipcChannels.sessionRename, (_event, request: SessionRenameRequest) => service?.renameSession(request.id, request.title));
@@ -152,34 +131,6 @@ ipcMain.handle(ipcChannels.dialogPickFolder, async () => {
   const result = await dialog.showOpenDialog(mainWindow, { properties: ["openDirectory"] });
   return result.canceled ? undefined : result.filePaths[0];
 });
-
-function trackRendererSearch(sender: WebContents, searchId: string): symbol {
-  let searches = rendererSearches.get(sender.id);
-  if (!searches) {
-    searches = new Map();
-    rendererSearches.set(sender.id, searches);
-    sender.once("destroyed", () => {
-      for (const activeId of rendererSearches.get(sender.id)?.keys() ?? []) {
-        service?.cancelSessionSearch(activeId);
-      }
-      rendererSearches.delete(sender.id);
-    });
-  }
-  const token = Symbol(searchId);
-  searches.set(searchId, token);
-  return token;
-}
-
-function untrackRendererSearch(senderId: number, searchId: string, token: symbol): void {
-  const searches = rendererSearches.get(senderId);
-  if (searches?.get(searchId) !== token) return;
-  searches.delete(searchId);
-  if (searches.size === 0) rendererSearches.delete(senderId);
-}
-
-function untrackSearchId(searchId: string): void {
-  for (const searches of rendererSearches.values()) searches.delete(searchId);
-}
 
 if (!gotSingleInstanceLock) {
   app.quit();

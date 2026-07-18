@@ -6,7 +6,6 @@ import type { Goal } from "../../src/session/goals.js";
 import type { AttachmentRef } from "../../src/session/attachments.js";
 import type { SessionMemoryNote } from "../../src/session/memory.js";
 import type { SessionEvent, SessionMetadata } from "../../src/session/store.js";
-import type { SessionSearchBatch } from "../../src/session/search.js";
 import type { Schedule } from "../../src/commands/schedule.js";
 import type { ToolActivityEvent } from "../../src/tools/fs.js";
 
@@ -35,8 +34,6 @@ export const ipcChannels = {
   appStateGet: "app-state:get",
   modelsList: "models:list",
   sessionsList: "sessions:list",
-  sessionsSearchStart: "sessions:search:start",
-  sessionsSearchCancel: "sessions:search:cancel",
   sessionResume: "session:resume",
   sessionCompact: "session:compact",
   sessionRename: "session:rename",
@@ -63,7 +60,6 @@ export const ipcChannels = {
   toolEvent: "evt:tool",
   memoryEvent: "evt:memory",
   remoteControlEvent: "evt:remote-control",
-  sessionSearchBatch: "evt:session-search:batch",
   doneEvent: "evt:done"
 } as const;
 
@@ -176,20 +172,6 @@ export interface SessionResumeRequest {
   id: string;
 }
 
-export interface SessionSearchRequest {
-  searchId: string;
-  query: string;
-  limit?: number;
-}
-
-export interface SessionSearchCancelRequest {
-  searchId: string;
-}
-
-export interface SessionSearchBatchEvent extends SessionSearchBatch {
-  searchId: string;
-}
-
 export interface SessionResumeResponse {
   id: string;
   projectDir: string;
@@ -281,8 +263,6 @@ export interface TandemDesktopApi {
   setConfig(patch: Partial<TandemConfig>): Promise<TandemConfig>;
   listModels(): Promise<ModelListItem[]>;
   listSessions(): Promise<SessionMetadata[]>;
-  startSessionSearch(request: SessionSearchRequest): Promise<void>;
-  cancelSessionSearch(request: SessionSearchCancelRequest): Promise<void>;
   resumeSession(request: SessionResumeRequest): Promise<SessionResumeResponse>;
   compactSession(): Promise<SessionCompactResponse | undefined>;
   renameSession(request: SessionRenameRequest): Promise<SessionMetadata[]>;
@@ -310,7 +290,6 @@ export interface TandemDesktopApi {
   onToolEvent(callback: (event: ToolActivityEvent) => void): () => void;
   onMemoryEvent(callback: (event: MemoryEvent) => void): () => void;
   onRemoteControlEvent(callback: (event: RemoteControlState) => void): () => void;
-  onSessionSearchBatch(callback: (event: SessionSearchBatchEvent) => void): () => void;
   onCostEvent(callback: (event: CostTotals) => void): () => void;
   onDoneEvent(callback: (event: PipelineDoneEvent) => void): () => void;
   onPermissionRequest(callback: (event: PermissionRequestEvent) => void): () => void;
