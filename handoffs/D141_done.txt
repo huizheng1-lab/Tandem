@@ -1,0 +1,47 @@
+Round: D141
+Status: complete
+
+Dashboard-side files updated outside the main Git repo:
+- C:\Users\huizh\Apps\Tandem Reciprocal\dashboard\register-dashboard-watchdog-task.ps1
+- C:\Users\huizh\Apps\Tandem Reciprocal\dashboard\start-dashboard.ps1
+- C:\Users\huizh\Apps\Tandem Reciprocal\dashboard\README.md
+
+What changed:
+- Added an idempotent Windows Scheduled Task registrar for `TandemReciprocalDashboardWatchdog-<port>`.
+- The task runs the existing `dashboard-watchdog.ps1` directly, with `MultipleInstances IgnoreNew`, a user-scoped logon trigger, and a five-minute repeating trigger.
+- `start-dashboard.ps1` now clears the intentional quit signal, registers/refreshes the scheduled task, and starts the scheduled task instead of relying only on a hidden `Start-Process` watchdog.
+- The existing inner watchdog remains responsible for listener-down detection, two-second restart backoff, server stdout/stderr logging, and intentional-stop signal handling.
+- The README now documents the scheduled-task supervision model and the manual registrar command.
+
+Likely cause confirmed:
+- The previous launcher used a plain hidden PowerShell watchdog process started by `Start-Process`.
+- Because the watchdog and server were in ordinary user background process trees, an external process-tree cleanup could kill both without either process reaching its own exit logging path.
+- The scheduled task provides an outer service-managed supervisor so a later task tick can revive the watchdog/server pair even after that kind of coordinated kill.
+
+Live verification:
+- Registered `TandemReciprocalDashboardWatchdog-4782`.
+- Confirmed it has both `MSFT_TaskLogonTrigger` and `MSFT_TaskTimeTrigger`.
+- Confirmed it runs with `MultipleInstances IgnoreNew`.
+- Killed the active watchdog/server pair manually:
+  - watchdog pid 12372
+  - server pid 17376
+- Confirmed the next scheduled task tick at 2026-07-18 05:42:53 America/New_York restored the dashboard:
+  - restored listener server pid 30564
+  - log showed new watchdog pid 18404 and `server launched serverPid=30564`.
+- Called the real `/api/quit` endpoint with the dashboard control token.
+- Confirmed the listener stopped cleanly.
+- Manually triggered the scheduled task while the intentional-stop signal existed.
+- Confirmed no resurrection occurred; the new watchdog pid 19392 logged `stopped by shutdown signal`.
+- Relaunched the dashboard with `start-dashboard.ps1 -NoBrowser`; listener restored on port 4782 with server pid 25756.
+
+Sanity checks:
+- npm run typecheck: passed.
+- npm test:
+  - first full run had transient failures in `tests/codex-cli.test.ts` and `tests/reciprocal-direction.test.ts`.
+  - both failed files passed in isolated reruns.
+  - final full rerun passed: `Test Files 43 passed | 1 skipped (44)` and `Tests 415 passed | 1 skipped (416)`.
+- git diff --check: passed with the pre-existing line-ending warning for `scripts/reciprocal-direction.ps1`.
+
+Notes:
+- `scripts/reciprocal-direction.ps1` was already modified before this round and was left untouched.
+- Untracked handoff docs and unrelated untracked files were left untouched.
