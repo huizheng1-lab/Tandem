@@ -1,6 +1,6 @@
 param(
     [Parameter(Mandatory = $true)]
-    [ValidateSet("Status", "Claim", "Accept", "Complete", "Rollback", "CompleteRollback", "Abandon", "Pause", "Resume", "ReconcileMain", "Reset")]
+    [ValidateSet("Status", "Claim", "Validate", "Accept", "Complete", "Rollback", "CompleteRollback", "Abandon", "Pause", "Resume", "ReconcileMain", "Reset")]
     [string]$Action,
 
     [ValidateSet("A", "B")]
@@ -11,6 +11,16 @@ param(
     [string]$NewStableCommit,
 
     [string]$Workspace = (Get-Location).Path,
+
+    [string[]]$ValidationChecks,
+
+    [string]$TandemHome,
+
+    [string]$ReviewVerdictJson,
+
+    [string]$ValidationTracePath,
+
+    [switch]$DryRun,
 
     [switch]$Force
 )
@@ -171,8 +181,8 @@ try {
         Update-RelayRefs
     }
 
-    function Write-Result([string]$Outcome) {
-        [ordered]@{
+    function Write-Result([string]$Outcome, [object]$Extra) {
+        $result = [ordered]@{
             outcome = $Outcome
             turn = $state.turn
             nextRole = $state.nextRole
@@ -192,12 +202,252 @@ try {
             lastSummary = $state.lastSummary
             lastRecoveryStash = $state.lastRecoveryStash
             statePath = $statePath
-        } | ConvertTo-Json -Depth 5
+        }
+        if ($Extra) {
+            foreach ($property in $Extra.PSObject.Properties) {
+                $result[$property.Name] = $property.Value
+            }
+        }
+        $result | ConvertTo-Json -Depth 12
     }
 
     function Assert-Clean([string]$Message) {
         $dirty = @(Invoke-Git status --porcelain --untracked-files=all)
         if ($dirty.Count -gt 0) { throw "$Message`: $($dirty -join '; ')" }
+    }
+
+    function Limit-Text([string]$Value, [int]$Limit = 6000) {
+        if (-not $Value) { return "" }
+        if ($Value.Length -le $Limit) { return $Value }
+        return $Value.Substring(0, $Limit) + "`n...[truncated $($Value.Length - $Limit) chars]"
+    }
+
+    function Write-ValidationTrace([string]$Message) {
+        if (-not $ValidationTracePath.Trim()) { return }
+        $line = "$(Get-Date -Format o) $Message"
+        [IO.File]::AppendAllText($ValidationTracePath, $line + [Environment]::NewLine, [Text.UTF8Encoding]::new($false))
+    }
+
+    function Invoke-ValidationCommand([string]$Command) {
+        $oldErrorAction = $ErrorActionPreference
+        try {
+            $ErrorActionPreference = "Continue"
+            $output = @(& cmd.exe /d /s /c $Command 2>&1)
+            $exitCode = $LASTEXITCODE
+        } finally {
+            $ErrorActionPreference = $oldErrorAction
+        }
+        $text = ($output | ForEach-Object { $_.ToString() }) -join [Environment]::NewLine
+        return [pscustomobject]@{
+            command = $Command
+            exitCode = $exitCode
+            passed = ($exitCode -eq 0)
+            output = $text
+        }
+    }
+
+    function ConvertTo-FlatStringList([object]$Value) {
+        $items = @()
+        if ($null -eq $Value) { return $items }
+        foreach ($item in @($Value)) {
+            if ($null -eq $item) { continue }
+            if ($item -is [string]) {
+                $items += $item
+                continue
+            }
+            if ($item -is [System.Collections.IEnumerable] -and -not ($item -is [string])) {
+                $items += @(ConvertTo-FlatStringList $item)
+                continue
+            }
+            $items += [string]$item
+        }
+        return $items
+    }
+
+    function ConvertTo-FlatObjectList([object]$Value) {
+        $items = @()
+        if ($null -eq $Value) { return $items }
+        foreach ($item in @($Value)) {
+            if ($null -eq $item) { continue }
+            if ($item -is [System.Array]) {
+                $items += @(ConvertTo-FlatObjectList $item)
+                continue
+            }
+            $items += ,$item
+        }
+        return $items
+    }
+
+    function ConvertTo-ValidationCostSummary([object]$Cost) {
+        if ($null -eq $Cost) { return $null }
+        $leader = $Cost.leader
+        $worker = $Cost.worker
+        return [ordered]@{
+            leader = if ($null -eq $leader) { $null } else {
+                [ordered]@{
+                    role = [string]$leader.role
+                    inputTokens = [int]$leader.inputTokens
+                    outputTokens = [int]$leader.outputTokens
+                    dollars = [double]$leader.dollars
+                }
+            }
+            worker = if ($null -eq $worker) { $null } else {
+                [ordered]@{
+                    role = [string]$worker.role
+                    inputTokens = [int]$worker.inputTokens
+                    outputTokens = [int]$worker.outputTokens
+                    dollars = [double]$worker.dollars
+                }
+            }
+        }
+    }
+
+    function ConvertTo-ValidationReportSummary([object]$Report) {
+        if ($null -eq $Report) { return $null }
+        return [ordered]@{
+            status = [string]$Report.status
+            summary = [string]$Report.summary
+            taskResults = @(ConvertTo-FlatObjectList $Report.taskResults | ForEach-Object {
+                [ordered]@{
+                    id = [string]$_.id
+                    status = [string]$_.status
+                    notes = [string]$_.notes
+                }
+            })
+            filesChanged = @(ConvertTo-FlatStringList $Report.filesChanged)
+            verificationResults = @(ConvertTo-FlatObjectList $Report.verificationResults | ForEach-Object {
+                [ordered]@{
+                    command = [string]$_.command
+                    exitCode = [int]$_.exitCode
+                    passed = [bool]$_.passed
+                    output = [string]$_.output
+                }
+            })
+            deviationsFromPlan = @(ConvertTo-FlatStringList $Report.deviationsFromPlan)
+        }
+    }
+
+    function ConvertTo-ValidationPlanSummary([object]$Plan) {
+        if ($null -eq $Plan) { return $null }
+        return [ordered]@{
+            title = [string]$Plan.title
+            objective = [string]$Plan.objective
+            constraints = @(ConvertTo-FlatStringList $Plan.constraints)
+            tasks = @(ConvertTo-FlatObjectList $Plan.tasks | ForEach-Object {
+                [ordered]@{
+                    id = [string]$_.id
+                    description = [string]$_.description
+                    files = @(ConvertTo-FlatStringList $_.files)
+                }
+            })
+            acceptanceCriteria = @(ConvertTo-FlatStringList $Plan.acceptanceCriteria)
+            verification = @(ConvertTo-FlatStringList $Plan.verification)
+        }
+    }
+
+    function ConvertTo-ValidationReviewSummary([object]$Review) {
+        if ($null -eq $Review) { return $null }
+        $verdict = $Review.verdict
+        $scores = $verdict.scores
+        return [ordered]@{
+            source = [string]$Review.source
+            totalDollars = [double]$Review.totalDollars
+            cost = ConvertTo-ValidationCostSummary $Review.cost
+            verdict = [ordered]@{
+                verdict = [string]$verdict.verdict
+                scores = if ($null -eq $scores) { $null } else {
+                    [ordered]@{
+                        correctness = [int]$scores.correctness
+                        planAdherence = [int]$scores.planAdherence
+                        codeQuality = [int]$scores.codeQuality
+                    }
+                }
+                feedback = @(ConvertTo-FlatStringList $verdict.feedback)
+                userSummary = [string]$verdict.userSummary
+            }
+        }
+    }
+
+    function Save-ValidationArtifact([object]$Artifact) {
+        $validationDir = Join-Path $relayDir "validations"
+        New-Item -ItemType Directory -Path $validationDir -Force | Out-Null
+        $stamp = (Get-Date).ToUniversalTime().ToString("yyyyMMdd-HHmmss")
+        $path = Join-Path $validationDir "$stamp-role-$Role-turn-$($state.turn).json"
+        $plainArtifact = [ordered]@{
+            candidateCommit = [string]$Artifact["candidateCommit"]
+            stableCommit = [string]$Artifact["stableCommit"]
+            candidateKind = [string]$Artifact["candidateKind"]
+            role = [string]$Artifact["role"]
+            dryRun = [bool]$Artifact["dryRun"]
+            commandStartedAt = [string]$Artifact["commandStartedAt"]
+            changedFiles = @(ConvertTo-FlatStringList $Artifact["changedFiles"])
+            diffStat = [string]$Artifact["diffStat"]
+            planText = [string]$Artifact["planText"]
+            mechanicalChecks = @(ConvertTo-FlatObjectList $Artifact["mechanicalChecks"] | ForEach-Object {
+                [ordered]@{
+                    command = [string]$_.command
+                    exitCode = [int]$_.exitCode
+                    passed = [bool]$_.passed
+                    output = [string]$_.output
+                }
+            })
+            report = ConvertTo-ValidationReportSummary $Artifact["report"]
+            plan = ConvertTo-ValidationPlanSummary $Artifact["plan"]
+            review = ConvertTo-ValidationReviewSummary $Artifact["review"]
+            reviewError = [string]$Artifact["reviewError"]
+            outcome = [string]$Artifact["outcome"]
+        }
+        $json = $plainArtifact | ConvertTo-Json -Depth 12
+        [IO.File]::WriteAllText($path, $json + [Environment]::NewLine, [Text.UTF8Encoding]::new($false))
+        return $path
+    }
+
+    function Invoke-LeaderOnlyReview([object]$Payload) {
+        if ($ReviewVerdictJson.Trim()) {
+            return [pscustomobject]@{
+                verdict = ($ReviewVerdictJson | ConvertFrom-Json)
+                cost = $null
+                totalDollars = 0
+                source = "inline-json"
+            }
+        }
+
+        $payloadPath = Join-Path $relayDir "validation-review-$PID.json"
+        Write-ValidationTrace "review-payload-write-start"
+        $payloadJson = $payload | ConvertTo-Json -Depth 12
+        [IO.File]::WriteAllText($payloadPath, $payloadJson + [Environment]::NewLine, [Text.UTF8Encoding]::new($false))
+        Write-ValidationTrace "review-payload-write-done"
+        $scriptRoot = Split-Path -Parent $PSCommandPath
+        $sourceRoot = Split-Path -Parent $scriptRoot
+        $reviewScript = Join-Path $scriptRoot "reciprocal-validate-review.ts"
+        if (-not (Test-Path -LiteralPath $reviewScript)) {
+            throw "Missing reciprocal validation review helper: $reviewScript"
+        }
+
+        $oldTandemHome = $env:TANDEM_HOME
+        try {
+            if ($TandemHome.Trim()) { $env:TANDEM_HOME = $TandemHome }
+            $oldErrorAction = $ErrorActionPreference
+            try {
+                $ErrorActionPreference = "Continue"
+                $output = @(& npm --prefix $sourceRoot exec -- tsx $reviewScript --input $payloadPath 2>&1)
+                $exitCode = $LASTEXITCODE
+            } finally {
+                $ErrorActionPreference = $oldErrorAction
+            }
+            $stdout = ($output | ForEach-Object { $_.ToString() }) -join [Environment]::NewLine
+            $stderr = ""
+        } finally {
+            if ($null -eq $oldTandemHome) { Remove-Item Env:\TANDEM_HOME -ErrorAction SilentlyContinue } else { $env:TANDEM_HOME = $oldTandemHome }
+            Remove-Item -LiteralPath $payloadPath -Force -ErrorAction SilentlyContinue
+        }
+        if ($exitCode -ne 0) { throw "Leader-only validation review failed: $stdout$([Environment]::NewLine)$stderr" }
+        try {
+            $jsonLine = @($stdout -split "\r?\n" | Where-Object { $_.Trim() })[-1]
+            return ($jsonLine | ConvertFrom-Json)
+        } catch {
+            throw "Leader-only validation review returned non-JSON output: $stdout$([Environment]::NewLine)$stderr"
+        }
     }
 
     function Get-SharedDirectionPath {
@@ -258,6 +508,240 @@ try {
         }
 
         & $directionScript -Action Complete -Id $id -Commit $AcceptedCommit -ControlPath $boardPath | Out-Null
+    }
+
+    function Approve-Candidate([string]$AcceptSummary, [object]$Extra) {
+        if ($state.phase -ne "validating") { throw "Accept is valid only after a VALIDATE claim." }
+        Assert-Clean "Accept requires a clean worktree"
+        $head = (@(Invoke-Git rev-parse HEAD))[0].Trim()
+        if ($head -ne $state.candidateCommit) { throw "Validated HEAD does not match the candidate commit." }
+        $acceptedKind = $state.candidateKind
+        $previousStableCommit = $state.stableCommit
+        $state.stableCommit = $head
+        Update-RelayRefs
+        try {
+            Complete-AcceptedDirectionCandidate $head $acceptedKind
+        } catch {
+            $state.stableCommit = $previousStableCommit
+            Update-RelayRefs
+            throw
+        }
+        $state.stableCommit = $head
+        $state.candidateCommit = $null
+        $state.candidateKind = $null
+        $state.rollbackCommit = $null
+        $state.phase = "working"
+        $state.baseCommit = $head
+        Reset-ResumeCounter
+        $state.lastSummary = if ($AcceptSummary.Trim()) { $AcceptSummary.Trim() } else { "Candidate baseline accepted after verification." }
+        Save-State
+        Write-Result "ACCEPTED" $Extra
+    }
+
+    function Reject-Candidate([string]$FailureSummary, [object]$Extra) {
+        if ($state.phase -ne "validating") { throw "Rollback is valid only after a VALIDATE claim." }
+        if ($state.candidateKind -ne "improvement") { throw "Only an unaccepted improvement candidate can be rolled back automatically." }
+        if (-not $FailureSummary.Trim()) { throw "Rollback requires a failure summary." }
+        Assert-Clean "Rollback requires a clean worktree"
+        $head = (@(Invoke-Git rev-parse HEAD))[0].Trim()
+        if ($head -ne $state.candidateCommit) { throw "Rollback candidate is not HEAD." }
+        $parent = (@(Invoke-Git rev-parse "$head^"))[0].Trim()
+        if ($parent -ne $state.stableCommit) { throw "Candidate is not a direct child of the stable commit; automatic rollback stopped." }
+        try {
+            Invoke-Git revert --no-edit $head | Out-Null
+        } catch {
+            & git -C $Workspace revert --abort *> $null
+            throw
+        }
+        $state.rollbackCommit = (@(Invoke-Git rev-parse HEAD))[0].Trim()
+        $state.phase = "rollback-verification"
+        Reset-ResumeCounter
+        $state.lastSummary = $FailureSummary.Trim()
+        Save-State
+        Write-Result "ROLLBACK_CREATED" $Extra
+    }
+
+    function Invoke-CandidateValidation([bool]$DryRunMode) {
+        if (-not $state.candidateCommit) { throw "Validate requires a pending candidate commit." }
+        Assert-Clean "Validate requires a clean worktree"
+        $head = (@(Invoke-Git rev-parse HEAD))[0].Trim()
+        if ($head -ne $state.candidateCommit) { throw "Validate requires HEAD to match candidate commit $($state.candidateCommit), but HEAD is $head." }
+        if (-not $state.stableCommit) { throw "Validate requires a stable commit." }
+        Write-ValidationTrace "start head=$head candidate=$($state.candidateCommit)"
+
+        $checks = if ($ValidationChecks -and $ValidationChecks.Count -gt 0) {
+            $ValidationChecks
+        } else {
+            @(
+                "npm run typecheck",
+                "npm test",
+                "git diff --check refs/tandem-relay/stable refs/tandem-relay/candidate --"
+            )
+        }
+        $mechanical = @()
+        foreach ($check in $checks) {
+            Write-ValidationTrace "check-start $check"
+            $mechanical += Invoke-ValidationCommand $check
+            Write-ValidationTrace "check-done $check"
+        }
+        $failed = @($mechanical | Where-Object { -not $_.passed })
+        $changedFiles = @(Invoke-Git diff --name-only $state.stableCommit $state.candidateCommit --)
+        $simpleChangedFiles = @($changedFiles | ForEach-Object { [string]$_ })
+        $simpleChecks = @($checks | ForEach-Object { [string]$_ })
+        $diff = (@(Invoke-Git diff --no-ext-diff $state.stableCommit $state.candidateCommit --) -join [Environment]::NewLine)
+        $diffStat = (@(Invoke-Git diff --stat $state.stableCommit $state.candidateCommit --) -join [Environment]::NewLine)
+        $commitSubject = (@(Invoke-Git log -1 --format=%s $state.candidateCommit))[0].Trim()
+
+        $planFile = @($changedFiles | Where-Object { $_ -match '^process[\\/]reciprocal[\\/]epics[\\/].+-plan\.md$' } | Select-Object -First 1)
+        $planText = ""
+        if ($planFile.Count -gt 0) {
+            $planPath = Join-Path $Workspace $planFile[0]
+            if (Test-Path -LiteralPath $planPath) { $planText = Get-Content -LiteralPath $planPath -Raw }
+        }
+
+        $verificationResults = @($mechanical | ForEach-Object {
+            [ordered]@{
+                command = $_.command
+                exitCode = [int]$_.exitCode
+                passed = [bool]$_.passed
+                output = (Limit-Text $_.output 6000)
+            }
+        })
+        $deviationsFromPlan = if ($failed.Count -eq 0) { [string[]]@("None.") } else { [string[]]@("Mechanical validation failed before leader-only review.") }
+        $report = [ordered]@{
+            status = if ($failed.Count -eq 0) { "complete" } else { "blocked" }
+            summary = if ($failed.Count -eq 0) { "Mechanical validation checks passed for reciprocal candidate $($state.candidateCommit)." } else { "Mechanical validation checks failed for reciprocal candidate $($state.candidateCommit)." }
+            taskResults = ,@(
+                [ordered]@{
+                    id = "mechanical-checks"
+                    status = if ($failed.Count -eq 0) { "done" } else { "partial" }
+                    notes = if ($failed.Count -eq 0) { "All mechanical validation commands passed." } else { "Failed: $((@($failed | ForEach-Object { $_.command })) -join ', ')" }
+                },
+                [ordered]@{
+                    id = "candidate-diff-review"
+                    status = "done"
+                    notes = "Candidate diff and changed files captured for leader-only review."
+                }
+            )
+            filesChanged = ,$simpleChangedFiles
+            verificationResults = ,$verificationResults
+            deviationsFromPlan = ,$deviationsFromPlan
+        }
+        $plan = [ordered]@{
+            title = "Reciprocal validation for candidate $($state.candidateCommit.Substring(0, 7))"
+            objective = "Validate the reciprocal candidate before advancing the stable relay baseline. Candidate subject: $commitSubject"
+            constraints = ,@(
+                "Producer turn output is unchanged; validate only the committed candidate.",
+                "Run mechanical checks directly in the validating worktree.",
+                "Use one leader-only review of the plan/report/diff after mechanical checks pass.",
+                "Accept approved candidates through the relay; reject failed candidates through rollback."
+            )
+            tasks = ,@(
+                [ordered]@{
+                    id = "mechanical-checks"
+                    description = "Run npm run typecheck, npm test, and candidate diff whitespace checks in the validating worktree."
+                    files = ,[string[]]@()
+                },
+                [ordered]@{
+                    id = "candidate-diff-review"
+                    description = "Review the candidate's epic plan or implementation diff and decide whether it should advance."
+                    files = ,$simpleChangedFiles
+                }
+            )
+            acceptanceCriteria = ,@(
+                "All mechanical checks pass.",
+                "The diff matches the shared reciprocal direction and keeps the relay safety boundaries.",
+                "The leader-only ReviewVerdict is approve before relay Accept."
+            )
+            verification = ,$simpleChecks
+        }
+
+        $artifact = [ordered]@{
+            candidateCommit = $state.candidateCommit
+            stableCommit = $state.stableCommit
+            candidateKind = $state.candidateKind
+            role = $Role
+            dryRun = $DryRunMode
+            commandStartedAt = (Get-Date).ToUniversalTime().ToString("o")
+            changedFiles = $simpleChangedFiles
+            diffStat = $diffStat
+            planText = $planText
+            mechanicalChecks = $verificationResults
+            report = $report
+            plan = $plan
+            review = $null
+            outcome = $null
+        }
+
+        if ($failed.Count -gt 0) {
+            Write-ValidationTrace "mechanical-failed"
+            $artifact["outcome"] = "mechanical-failed"
+            $artifactPath = Save-ValidationArtifact $artifact
+            $summaryText = "Mechanical validation failed for candidate $($state.candidateCommit): $((@($failed | ForEach-Object { $_.command })) -join ', ')"
+            $extra = [pscustomobject]@{ validationArtifactPath = $artifactPath; validationOutcome = $artifact["outcome"] }
+            if ($DryRunMode) {
+                Write-Result "VALIDATION_FAILED_DRY_RUN" $extra
+                exit 0
+            }
+            Reject-Candidate $summaryText $extra
+            exit 0
+        }
+
+        Write-ValidationTrace "review-start"
+        $payload = [ordered]@{
+            cwd = $Workspace
+            round = [int]$state.turn
+            tandemHome = $TandemHome
+            plan = $plan
+            report = $report
+            diff = $diff
+        }
+        try {
+            $review = Invoke-LeaderOnlyReview $payload
+            Write-ValidationTrace "review-done"
+        } catch {
+            Write-ValidationTrace "review-error $($_.Exception.Message)"
+            $artifact["reviewError"] = $_.Exception.Message
+            $artifact["outcome"] = "review-failed"
+            $artifactPath = Save-ValidationArtifact $artifact
+            $extra = [pscustomobject]@{
+                validationArtifactPath = $artifactPath
+                validationOutcome = $artifact["outcome"]
+                reviewVerdict = $null
+                validationCost = $null
+                validationTotalDollars = $null
+            }
+            if ($DryRunMode) {
+                Write-Result "VALIDATION_REVIEW_FAILED_DRY_RUN" $extra
+                exit 0
+            }
+            Reject-Candidate "leader-only validation failed: $($_.Exception.Message)" $extra
+            exit 0
+        }
+        $artifact["review"] = $review
+        $verdict = [string]$review.verdict.verdict
+        $artifact["outcome"] = "review-$verdict"
+        Write-ValidationTrace "artifact-save-start"
+        $artifactPath = Save-ValidationArtifact $artifact
+        Write-ValidationTrace "artifact-save-done $artifactPath"
+        $extra = [pscustomobject]@{
+            validationArtifactPath = $artifactPath
+            validationOutcome = $artifact["outcome"]
+            reviewVerdict = $verdict
+            validationCost = $review.cost
+            validationTotalDollars = $review.totalDollars
+        }
+
+        if ($DryRunMode) {
+            Write-Result "VALIDATION_$($verdict.ToUpperInvariant())_DRY_RUN" $extra
+            exit 0
+        }
+        if ($verdict -eq "approve") {
+            Approve-Candidate "candidate baseline verified by mechanical checks and leader-only review" $extra
+            exit 0
+        }
+        Reject-Candidate "leader-only validation requested revision: $($review.verdict.userSummary)" $extra
+        exit 0
     }
 
     function Set-IdleOrPauseAfterTurn {
@@ -460,60 +944,29 @@ try {
         exit 0
     }
 
+    if ($Action -eq "Validate" -and $DryRun) {
+        if ($state.phase -ne "paused" -or $state.activeRole) {
+            throw "Validate -DryRun requires a paused relay with no active owner. Current phase: $($state.phase), owner: $($state.activeRole)."
+        }
+        Invoke-CandidateValidation $true
+    }
+
     if ($state.activeRole -ne $Role) {
         throw "Role $Role does not own the active turn. Current owner: $($state.activeRole)."
     }
 
+    if ($Action -eq "Validate") {
+        if ($state.phase -ne "validating") { throw "Validate is valid only after a VALIDATE claim unless -DryRun is used while paused." }
+        Invoke-CandidateValidation $false
+    }
+
     if ($Action -eq "Accept") {
-        if ($state.phase -ne "validating") { throw "Accept is valid only after a VALIDATE claim." }
-        Assert-Clean "Accept requires a clean worktree"
-        $head = (@(Invoke-Git rev-parse HEAD))[0].Trim()
-        if ($head -ne $state.candidateCommit) { throw "Validated HEAD does not match the candidate commit." }
-        $acceptedKind = $state.candidateKind
-        $previousStableCommit = $state.stableCommit
-        $state.stableCommit = $head
-        Update-RelayRefs
-        try {
-            Complete-AcceptedDirectionCandidate $head $acceptedKind
-        } catch {
-            $state.stableCommit = $previousStableCommit
-            Update-RelayRefs
-            throw
-        }
-        $state.stableCommit = $head
-        $state.candidateCommit = $null
-        $state.candidateKind = $null
-        $state.rollbackCommit = $null
-        $state.phase = "working"
-        $state.baseCommit = $head
-        Reset-ResumeCounter
-        $state.lastSummary = if ($Summary.Trim()) { $Summary.Trim() } else { "Candidate baseline accepted after verification." }
-        Save-State
-        Write-Result "ACCEPTED"
+        Approve-Candidate $Summary $null
         exit 0
     }
 
     if ($Action -eq "Rollback") {
-        if ($state.phase -ne "validating") { throw "Rollback is valid only after a VALIDATE claim." }
-        if ($state.candidateKind -ne "improvement") { throw "Only an unaccepted improvement candidate can be rolled back automatically." }
-        if (-not $Summary.Trim()) { throw "Rollback requires a failure summary." }
-        Assert-Clean "Rollback requires a clean worktree"
-        $head = (@(Invoke-Git rev-parse HEAD))[0].Trim()
-        if ($head -ne $state.candidateCommit) { throw "Rollback candidate is not HEAD." }
-        $parent = (@(Invoke-Git rev-parse "$head^"))[0].Trim()
-        if ($parent -ne $state.stableCommit) { throw "Candidate is not a direct child of the stable commit; automatic rollback stopped." }
-        try {
-            Invoke-Git revert --no-edit $head | Out-Null
-        } catch {
-            & git -C $Workspace revert --abort *> $null
-            throw
-        }
-        $state.rollbackCommit = (@(Invoke-Git rev-parse HEAD))[0].Trim()
-        $state.phase = "rollback-verification"
-        Reset-ResumeCounter
-        $state.lastSummary = $Summary.Trim()
-        Save-State
-        Write-Result "ROLLBACK_CREATED"
+        Reject-Candidate $Summary $null
         exit 0
     }
 

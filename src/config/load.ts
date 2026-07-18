@@ -57,8 +57,8 @@ function parsePartialConfig(value: unknown, filePath: string): Partial<TandemCon
 export function loadEnv(cwd = process.cwd(), homeDir: string | undefined = undefined, env: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
   const projectEnv = path.join(cwd, ".env");
   const globalEnv = path.join(tandemStateDir(homeDir), ".env");
-  if (existsSync(globalEnv)) dotenv.config({ path: globalEnv, processEnv: env, override: false });
-  if (existsSync(projectEnv)) dotenv.config({ path: projectEnv, processEnv: env, override: true });
+  if (existsSync(globalEnv)) dotenv.config({ path: globalEnv, processEnv: env, override: false, quiet: true });
+  if (existsSync(projectEnv)) dotenv.config({ path: projectEnv, processEnv: env, override: true, quiet: true });
   return env;
 }
 

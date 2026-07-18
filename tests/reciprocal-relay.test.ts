@@ -34,6 +34,26 @@ describe("reciprocal relay script", () => {
     return JSON.parse(result.stdout);
   }
 
+  const approveVerdict = JSON.stringify({
+    verdict: "approve",
+    scores: { correctness: 5, planAdherence: 5, codeQuality: 5 },
+    feedback: [],
+    userSummary: "Candidate is approved."
+  });
+
+  async function createCandidate(repo: string) {
+    await relay(repo, "-Action", "Reset", "-Force");
+    await relay(repo, "-Action", "Claim", "-Role", "A");
+    await writeFile(path.join(repo, "README.md"), "initial\ncandidate\n", "utf8");
+    await execa("git", ["add", "README.md"], { cwd: repo });
+    await execa("git", ["commit", "-m", "candidate"], { cwd: repo });
+    const completed = await relay(repo, "-Action", "Complete", "-Role", "A", "-Summary", "candidate ready");
+    const candidateCommit = completed.candidateCommit as string;
+    await execa("git", ["switch", "codex/reciprocal-a"], { cwd: repo });
+    await execa("git", ["merge", "--ff-only", candidateCommit], { cwd: repo });
+    return candidateCommit;
+  }
+
   windowsIt("D129: status does not lock packed refs when relay refs are unchanged", async () => {
     const repo = await mkdtemp(path.join(tmpdir(), "tandem-relay-d129-"));
     const script = path.resolve("scripts/reciprocal-relay.ps1");
@@ -198,6 +218,99 @@ describe("reciprocal relay script", () => {
 
       const board = await readFile(boardPath, "utf8");
       expect(board).toContain(`PLAN_APPROVED epic=true autonomy=full revision=1 completed=0 steps=2 next=1/2 plan=process/reciprocal/epics/W0002-plan.md commit=${candidateCommit}`);
+    } finally {
+      await rm(repo, { recursive: true, force: true });
+    }
+  }, 30_000);
+
+  windowsIt("D143: validate dry-run reviews a paused candidate without advancing relay state", async () => {
+    const repo = await mkdtemp(path.join(tmpdir(), "tandem-relay-d143-dryrun-"));
+    try {
+      await initRepo(repo);
+      const candidateCommit = await createCandidate(repo);
+      await relay(repo, "-Action", "Pause", "-Summary", "human paused before validation redesign");
+
+      const result = await relay(
+        repo,
+        "-Action",
+        "Validate",
+        "-Role",
+        "B",
+        "-DryRun",
+        "-ValidationChecks",
+        "git diff --check refs/tandem-relay/stable refs/tandem-relay/candidate --",
+        "-ReviewVerdictJson",
+        approveVerdict,
+      );
+
+      expect(result).toMatchObject({
+        outcome: "VALIDATION_APPROVE_DRY_RUN",
+        phase: "paused",
+        activeRole: null,
+        candidateCommit,
+        reviewVerdict: "approve",
+      });
+      expect(result.stableCommit).not.toBe(candidateCommit);
+    } finally {
+      await rm(repo, { recursive: true, force: true });
+    }
+  }, 30_000);
+
+  windowsIt("D143: validate accepts an approved candidate after mechanical checks", async () => {
+    const repo = await mkdtemp(path.join(tmpdir(), "tandem-relay-d143-approve-"));
+    try {
+      await initRepo(repo);
+      const candidateCommit = await createCandidate(repo);
+      await relay(repo, "-Action", "Claim", "-Role", "B");
+
+      const result = await relay(
+        repo,
+        "-Action",
+        "Validate",
+        "-Role",
+        "B",
+        "-ValidationChecks",
+        "git diff --check refs/tandem-relay/stable refs/tandem-relay/candidate --",
+        "-ReviewVerdictJson",
+        approveVerdict,
+      );
+
+      expect(result).toMatchObject({
+        outcome: "ACCEPTED",
+        phase: "working",
+        stableCommit: candidateCommit,
+        candidateCommit: null,
+        reviewVerdict: "approve",
+      });
+    } finally {
+      await rm(repo, { recursive: true, force: true });
+    }
+  }, 30_000);
+
+  windowsIt("D143: validate rejects and rolls back when a mechanical check fails", async () => {
+    const repo = await mkdtemp(path.join(tmpdir(), "tandem-relay-d143-reject-"));
+    try {
+      await initRepo(repo);
+      const candidateCommit = await createCandidate(repo);
+      await relay(repo, "-Action", "Claim", "-Role", "B");
+
+      const result = await relay(
+        repo,
+        "-Action",
+        "Validate",
+        "-Role",
+        "B",
+        "-ValidationChecks",
+        "git rev-parse --verify refs/heads/definitely-missing-d143",
+      );
+
+      expect(result).toMatchObject({
+        outcome: "ROLLBACK_CREATED",
+        phase: "rollback-verification",
+        candidateCommit,
+        validationOutcome: "mechanical-failed",
+      });
+      expect(result.rollbackCommit).toMatch(/^[0-9a-f]{40}$/);
     } finally {
       await rm(repo, { recursive: true, force: true });
     }
