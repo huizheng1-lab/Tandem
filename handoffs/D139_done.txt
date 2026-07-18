@@ -1,0 +1,36 @@
+Round: D139
+Status: implemented; live Telegram phone verification pending human availability
+
+Implementation commit:
+- c913904 D139-1: route remote approvals through Telegram
+
+Summary:
+- Added Telegram callback-query support to the long-polling transport.
+- Added inline approval buttons for remote-surfaced permission and plan confirmation requests.
+- Routed Telegram approval/denial callbacks into the same TandemService pending permission/plan resolver maps used by the desktop UI.
+- Kept remote approvals as an additional surface: desktop resolution still wins if it happens first, and Telegram messages are edited to show the resolved outcome.
+- Added five-minute remote approval timeout with default-deny; timeout never auto-approves.
+- Added bounded Telegram approval formatting so long commands/plans are truncated with an explicit note.
+- Added audit lines for approval push, callback, resolution, and timeout paths.
+
+Verification summary:
+- npm run typecheck: passed.
+- npx vitest run tests/remote-control.test.ts tests/desktop-service.test.ts: passed, 48 tests.
+- npm test: first full run had two transient failures/timeouts in the unrelated reciprocal-direction suite; rerunning that suite alone passed all 8 tests, and rerunning full npm test then passed.
+- npm test final result: 43 files passed, 1 skipped; 415 tests passed, 1 skipped.
+- git diff --check: passed with line-ending warnings only.
+
+New regression coverage:
+- Telegram approval button resolves the pending request and edits the Telegram message.
+- Desktop-first resolution edits the Telegram message and makes later callback taps stale.
+- Remote approval timeout default-denies after five minutes.
+- Long approval bodies are truncated before sending to Telegram.
+- TandemService integration: Telegram approval resolves the same pending build plan confirmation promise as the desktop surface.
+
+Live verification still needed with the human's real phone:
+- Run a real Tandem desktop session in ask mode with this build.
+- Trigger a real file-write or shell permission request and confirm it appears on Telegram.
+- Approve from Telegram and confirm the desktop session proceeds.
+- Trigger another permission request, deny from Telegram, and confirm the action is blocked.
+- Trigger another permission request and let it time out; confirm default-deny.
+- If practical, resolve one request on desktop first and confirm the Telegram message updates as resolved.
