@@ -1,0 +1,29 @@
+Round: D148
+
+Commits:
+- 5e5693908b8e9f8276a5b295ceec82bf2124fbd6 D148-1: use executor home for validation review
+
+Root cause:
+- The real executor A session invoked Validate with -TandemHome $env:TANDEM_HOME, and executor A config at C:\Users\huizh\Apps\Tandem Reciprocal\state\executor-a\config.json selected leader codex/cli with codexCliModel gpt-5.6-sol.
+- reciprocal-validate-review.ts injected payload.tandemHome into the env object, but loadConfig/loadEnv ignored env.TANDEM_HOME when no homeDir argument was passed because tandemStateDir() reads process.env directly. That allowed the validation review helper to fall back to the wrong/global config and request anthropic/claude-fable-5.
+
+Changes:
+- loadConfig/loadEnv now resolve the global state directory from an injected env.TANDEM_HOME before falling back to process.env.
+- reciprocal-validate-review.ts now emits ReviewVerdict source details with leader/provider/model so live validation artifacts show which leader actually reviewed.
+- Codex CLI leader read-only plan/review calls no longer trip the self-protection write guard; non-read-only leader takeover/write calls remain protected.
+- Added regressions for injected TANDEM_HOME config/env loading and read-only Codex CLI review from a protected source checkout.
+
+Live validation:
+- Retried the pending rollback candidate 3992fdf80cb4f3db9583fd5515bfde7427419900 using:
+  powershell -NoProfile -ExecutionPolicy Bypass -File C:\Users\huizh\Apps\HZ code\scripts\reciprocal-relay.ps1 -Action Validate -Role A -Workspace C:\Users\huizh\Apps\Tandem Reciprocal\worktrees\copy-b -TandemHome C:\Users\huizh\Apps\Tandem Reciprocal\state\executor-a
+- Relay outcome: ACCEPTED; validationOutcome review-approve; reviewVerdict approve.
+- Artifact: C:\Users\huizh\Apps\HZ code\.git\tandem-relay\validations\20260718-203756-role-A-turn-4.json
+- Review source: AgentFns.review leader=codex/cli provider=codex-cli model=gpt-5.6-sol
+- Review summary: Approved. Mechanical checks passed, and the empty stable-to-candidate diff was expected for the rollback candidate restoring stable state.
+
+Verification:
+- npm run typecheck: passed.
+- npm test -- tests/config.test.ts tests/codex-cli.test.ts: passed, 40 tests.
+- npm test: passed, 44 files passed and 1 skipped; 447 tests passed and 1 skipped.
+- git diff --check: passed.
+- Live relay validation mechanical checks in copy-b: npm run typecheck passed, npm test passed, and git diff --check refs/tandem-relay/stable refs/tandem-relay/candidate -- passed.
