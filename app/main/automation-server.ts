@@ -59,6 +59,22 @@ export async function startAutomationServer(options: AutomationServerOptions): P
   let completedAt: string | undefined;
   let lastError: string | undefined;
   let activeRun: Promise<void> | undefined;
+  let completedRun: { projectDir: string; sessionId?: string } | undefined;
+
+  const currentState = () => {
+    const serviceState = options.service.getAutomationState();
+    if (!serviceState.running) completedRun = undefined;
+    const serviceMatchesCompletedRun = Boolean(
+      completedRun
+      && completedRun.sessionId
+      && serviceState.sessionId === completedRun.sessionId
+      && sameProject(serviceState.projectDir, completedRun.projectDir)
+    );
+    return {
+      serviceState,
+      running: Boolean(activeRun) || (serviceState.running && !serviceMatchesCompletedRun)
+    };
+  };
 
   const server = createServer(async (request, response) => {
     try {
@@ -67,13 +83,14 @@ export async function startAutomationServer(options: AutomationServerOptions): P
       }
       const url = new URL(request.url || "/", "http://127.0.0.1");
       if (request.method === "GET" && url.pathname === "/status") {
+        const state = currentState();
         return send(response, 200, {
           ok: true,
           pid: process.pid,
           instanceId: options.instanceId || null,
           allowedProjectDir,
-          ...options.service.getAutomationState(),
-          running: Boolean(activeRun) || options.service.getAutomationState().running,
+          ...state.serviceState,
+          running: state.running,
           acceptedAt,
           completedAt,
           lastError
@@ -95,21 +112,30 @@ export async function startAutomationServer(options: AutomationServerOptions): P
       if (url.pathname === "/prompt") {
         const prompt = typeof input.prompt === "string" ? input.prompt.trim() : "";
         if (!prompt || prompt.length > 20_000) return send(response, 400, { error: "Prompt must be between 1 and 20000 characters." });
-        if (activeRun || options.service.getAutomationState().running) return send(response, 409, { error: "A Tandem run is already active." });
-        const current = options.service.getAutomationState();
+        const state = currentState();
+        if (state.running) return send(response, 409, { error: "A Tandem run is already active." });
+        let current = state.serviceState;
         if (!current.sessionId || !sameProject(current.projectDir, allowedProjectDir)) {
           await options.service.startSession({ projectDir: allowedProjectDir });
+          current = options.service.getAutomationState();
         }
         acceptedAt = new Date().toISOString();
         completedAt = undefined;
         lastError = undefined;
-        activeRun = options.service.run(prompt)
+        completedRun = undefined;
+        const runProjectDir = current.projectDir;
+        const runSessionId = current.sessionId;
+        let rejectedBecauseAlreadyActive = false;
+        activeRun = Promise.resolve()
+          .then(() => options.service.run(prompt))
           .catch((error: unknown) => {
             lastError = error instanceof Error ? error.message : String(error);
+            rejectedBecauseAlreadyActive = /already active/i.test(lastError);
           })
           .finally(() => {
             completedAt = new Date().toISOString();
             activeRun = undefined;
+            if (!rejectedBecauseAlreadyActive) completedRun = { projectDir: runProjectDir, sessionId: runSessionId };
           });
         return send(response, 202, { ok: true, accepted: true, projectDir: allowedProjectDir, acceptedAt });
       }

@@ -6,6 +6,15 @@ import { startAutomationServer } from "../app/main/automation-server.js";
 import { parseDesktopLaunchOptions } from "../app/main/launch-options.js";
 import { defaultConfig } from "../src/config/schema.js";
 
+async function waitForCompletedStatus(base: string, headers: Record<string, string>): Promise<Record<string, unknown>> {
+  for (let attempt = 0; attempt < 20; attempt += 1) {
+    const status = await fetch(`${base}/status`, { headers }).then((response) => response.json()) as Record<string, unknown>;
+    if (typeof status.completedAt === "string") return status;
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  throw new Error("Timed out waiting for automation status to complete.");
+}
+
 describe("desktop automation", () => {
   it("is absent unless every explicit opt-in argument is supplied", () => {
     expect(parseDesktopLaunchOptions(["app.exe"])).toEqual({ hidden: false });
@@ -51,6 +60,41 @@ describe("desktop automation", () => {
       expect(accepted.status).toBe(202);
       expect(prompts).toEqual(["claim one turn"]);
       await expect(fetch(`${base}/status`, { headers }).then((response) => response.json())).resolves.toMatchObject({ ok: true, instanceId: "A", allowedProjectDir: projectDir });
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("clears a stale service running flag after a completed automation run", async () => {
+    const root = path.join(tmpdir(), `tandem-automation-stale-${Date.now()}-${Math.random().toString(16).slice(2)}`);
+    const projectDir = path.join(root, "peer");
+    const tokenFile = path.join(root, "state", "automation.json");
+    await mkdir(projectDir, { recursive: true });
+    const sessionId = "session-1";
+    let running = false;
+    const prompts: string[] = [];
+    const service = {
+      startSession: async () => ({ projectDir, sessionId, config: defaultConfig, defaultProject: false, projectSummary: "test" }),
+      resumeSession: async (id: string) => ({ id, projectDir, config: defaultConfig, defaultProject: false, projectSummary: "test", events: [] }),
+      run: async (prompt: string) => {
+        running = true;
+        prompts.push(prompt);
+      },
+      getAutomationState: () => ({ projectDir, sessionId, running })
+    };
+    const server = await startAutomationServer({ port: 0, tokenFile, projectDir, instanceId: "A", service });
+    try {
+      const credentials = JSON.parse(await readFile(tokenFile, "utf8")) as { token: string; port: number };
+      const base = `http://127.0.0.1:${credentials.port}`;
+      const headers = { Authorization: `Bearer ${credentials.token}`, "Content-Type": "application/json" };
+
+      const first = await fetch(`${base}/prompt`, { method: "POST", headers, body: JSON.stringify({ projectDir, prompt: "first" }) });
+      expect(first.status).toBe(202);
+      await expect(waitForCompletedStatus(base, headers)).resolves.toMatchObject({ running: false });
+
+      const second = await fetch(`${base}/prompt`, { method: "POST", headers, body: JSON.stringify({ projectDir, prompt: "second" }) });
+      expect(second.status).toBe(202);
+      expect(prompts).toEqual(["first", "second"]);
     } finally {
       await server.close();
     }
