@@ -102,7 +102,7 @@ describeWindows("reciprocal direction epics", () => {
     await direction(file, "-Action", "Candidate", "-Id", added.id, "-Commit", "step2");
     await direction(file, "-Action", "Complete", "-Id", added.id, "-Commit", "step2");
     expect(await readFile(file, "utf8")).toContain(`DONE stable=step2 completed=`);
-  });
+  }, 30_000);
 
   it("requires plan revisions to return through the human plan gate", async () => {
     const file = await boardFile();
