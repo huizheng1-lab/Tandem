@@ -106,6 +106,29 @@ describe("config", () => {
     }
   });
 
+  it("uses TANDEM_HOME from an injected env object for config and env loading", async () => {
+    const cwd = await tempDir("cwd");
+    const processHome = await tempDir("process-home");
+    const injectedHome = await tempDir("injected-home");
+    const previous = process.env.TANDEM_HOME;
+    process.env.TANDEM_HOME = processHome;
+    try {
+      await writeFile(path.join(processHome, "config.json"), JSON.stringify({ leader: "anthropic/claude-fable-5" }));
+      await writeFile(path.join(processHome, ".env"), "ANTHROPIC_API_KEY=process-key\n", "utf8");
+      await writeFile(path.join(injectedHome, "config.json"), JSON.stringify({ leader: "codex/cli", codexCliModel: "gpt-5.6-sol" }));
+      await writeFile(path.join(injectedHome, ".env"), "CODEX_CLI_PATH=C:\\tools\\codex.exe\n", "utf8");
+
+      const env: NodeJS.ProcessEnv = { TANDEM_HOME: injectedHome };
+
+      expect(loadConfig({ cwd, env })).toMatchObject({ leader: "codex/cli", codexCliModel: "gpt-5.6-sol" });
+      expect(loadEnv(cwd, undefined, env).CODEX_CLI_PATH).toBe("C:\\tools\\codex.exe");
+      expect(env.ANTHROPIC_API_KEY).toBeUndefined();
+    } finally {
+      if (previous === undefined) delete process.env.TANDEM_HOME;
+      else process.env.TANDEM_HOME = previous;
+    }
+  });
+
   it("names the missing env var for selected models", () => {
     const entry = resolveModel("openai/gpt-5", []);
     expect(() => validateModelEnv(entry, {})).toThrow(/OPENAI_API_KEY/);

@@ -478,4 +478,30 @@ describe("codex cli mixed roles", () => {
     await expect(agents.plan({ request: "What is 2+2?", goals: [] })).resolves.toEqual({ kind: "answer", answer: "4" });
     await expect(agents.plan({ request: "Create hello35.txt with hi", goals: [] })).resolves.toMatchObject({ kind: "plan" });
   });
+
+  it("D148: allows read-only Codex CLI leader reviews from a protected source checkout", async () => {
+    const codexCliPath = await fakeCodexScript();
+    const agents = await createLiveAgents({
+      config: { ...defaultConfig, leader: "codex/cli", worker: "openai/gpt-5-mini", permissionMode: "yolo", codexCliPath, codexCliModel: "gpt-5-mini" },
+      cwd: process.cwd(),
+      env: { OPENAI_API_KEY: "test-key" },
+      ledger: new CostLedger()
+    });
+
+    await expect(
+      agents.review({
+        plan,
+        report: {
+          status: "complete",
+          summary: "done",
+          taskResults: [{ id: "T1", status: "done" }],
+          filesChanged: [],
+          verificationResults: [{ command: "npm test", passed: true, output: "ok" }],
+          deviationsFromPlan: []
+        },
+        round: 1,
+        diff: ""
+      })
+    ).resolves.toMatchObject({ verdict: "approve" });
+  });
 });

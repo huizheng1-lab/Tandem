@@ -23,6 +23,12 @@ export function globalConfigPath(homeDir?: string): string {
   return path.join(tandemStateDir(homeDir), "config.json");
 }
 
+function globalStateDirFor(homeDir: string | undefined, env: NodeJS.ProcessEnv | undefined): string {
+  if (homeDir) return tandemStateDir(homeDir);
+  const envHome = env?.TANDEM_HOME?.trim();
+  return envHome ? path.resolve(envHome) : tandemStateDir();
+}
+
 function readJsonIfPresent(filePath: string): unknown {
   if (!existsSync(filePath)) return {};
   try {
@@ -56,7 +62,7 @@ function parsePartialConfig(value: unknown, filePath: string): Partial<TandemCon
 
 export function loadEnv(cwd = process.cwd(), homeDir: string | undefined = undefined, env: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
   const projectEnv = path.join(cwd, ".env");
-  const globalEnv = path.join(tandemStateDir(homeDir), ".env");
+  const globalEnv = path.join(globalStateDirFor(homeDir, env), ".env");
   if (existsSync(globalEnv)) dotenv.config({ path: globalEnv, processEnv: env, override: false, quiet: true });
   if (existsSync(projectEnv)) dotenv.config({ path: projectEnv, processEnv: env, override: true, quiet: true });
   return env;
@@ -68,7 +74,7 @@ export function loadConfig(options: LoadConfigOptions = {}): TandemConfig {
 
 export function loadConfigDetails(options: LoadConfigOptions = {}): { config: TandemConfig; globalConfig: TandemConfig; projectConfig: Partial<TandemConfig>; projectOverrides: Array<keyof TandemConfig> } {
   const cwd = options.cwd ?? process.cwd();
-  const globalPath = globalConfigPath(options.homeDir);
+  const globalPath = path.join(globalStateDirFor(options.homeDir, options.env), "config.json");
   const projectPath = projectConfigPath(cwd);
   const globalRaw = readObjectIfPresent(globalPath);
   const projectConfig = parsePartialConfig(readObjectIfPresent(projectPath), projectPath);

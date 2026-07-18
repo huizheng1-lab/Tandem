@@ -57,7 +57,7 @@ function absoluteCwdLine(cwd: string): string {
 }
 
 async function codexLeaderExec(options: CodexLeaderOptions, input: { schema: "plan-or-answer" | "review-verdict" | "takeover"; prompt: string; readOnly?: boolean }): Promise<unknown> {
-  assertSafeProjectDir(options.cwd);
+  if (!input.readOnly) assertSafeProjectDir(options.cwd);
   if (!input.readOnly && options.config.permissionMode === "ask") {
     const approved = await options.confirmCodexWrite?.("leader", "Run this leader takeover via Codex CLI with write access? Codex cannot prompt per-command in headless exec mode.");
     if (approved === false) throw new Error("Codex CLI leader write round was not approved.");

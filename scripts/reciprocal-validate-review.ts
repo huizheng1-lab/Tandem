@@ -3,6 +3,8 @@ import { z } from "zod";
 import { createLiveAgents } from "../src/agents/live.js";
 import { loadConfig, loadEnv } from "../src/config/load.js";
 import { BuildPlanSchema, CompletionReportSchema } from "../src/orchestrator/artifacts.js";
+import { withConfiguredCliModel } from "../src/providers/cli-models.js";
+import { resolveModel } from "../src/providers/registry.js";
 import { formatProjectInstructions, readProjectInstructions } from "../src/session/project-memory.js";
 import { CostLedger } from "../src/session/cost.js";
 
@@ -72,6 +74,7 @@ async function main(): Promise<void> {
   if (payload.tandemHome?.trim()) env.TANDEM_HOME = payload.tandemHome.trim();
   loadEnv(payload.cwd, undefined, env);
   const config = loadConfig({ cwd: payload.cwd, env });
+  const leader = withConfiguredCliModel(resolveModel(config.leader, config.customModels), config);
   const ledger = new CostLedger();
   const agents = await createLiveAgents({
     config,
@@ -88,7 +91,12 @@ async function main(): Promise<void> {
     diff: payload.diff
   });
   const cost = ledger.totals();
-  process.stdout.write(`${JSON.stringify({ verdict, cost, totalDollars: ledger.totalDollars(), source: "AgentFns.review" })}\n`);
+  process.stdout.write(`${JSON.stringify({
+    verdict,
+    cost,
+    totalDollars: ledger.totalDollars(),
+    source: `AgentFns.review leader=${config.leader} provider=${leader.provider} model=${leader.modelName || leader.id}`
+  })}\n`);
 }
 
 main().catch((error) => {
