@@ -1,0 +1,45 @@
+Round: D142
+Status: complete
+
+Implementation commit:
+- 5ffc8c0 D142-1: launch reciprocal executors as job breakaways
+
+Root cause finding:
+- The reciprocal executor launcher used plain PowerShell `Start-Process` from `scripts/start-reciprocal-tandem.ps1`.
+- A controlled Windows Job Object reproduction confirmed the root mechanism: a normal `Start-Process` child launched inside a job with `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE` was killed when the parent job closed.
+- The same reproduction with the fixed executor launcher confirmed the mitigation: Executor B survived after its parent kill-on-close job exited because the launcher now requests `CREATE_BREAKAWAY_FROM_JOB`.
+- Current live executor parents also matched this failure shape: both top-level executor processes shared a short-lived launcher parent PID, and that parent was gone while the executors continued.
+
+Event and reliability evidence:
+- Application log and Reliability records showed no Tandem.exe crash, no Application Error, and no Windows Error Reporting entry for Tandem during the investigated window.
+- Defender Operational log showed routine health reports and a quick scan around 2026-07-18 09:42-09:43 America/New_York, but no remediation/quarantine event for Tandem.
+- System log showed Modern Standby/session transitions and Windows Update activity, including an OpenAI.Codex store update failure at 2026-07-18 08:40, but no evidence that Windows Update or Defender directly terminated Tandem.exe.
+- That absence of app-crash/security evidence plus the job-object reproduction supports the shared external kill mechanism described in the handoff: parent/job cleanup can silently terminate a whole background process family without Tandem logging an exit.
+
+What changed:
+- `scripts/start-reciprocal-tandem.ps1` now launches executor Tandem.exe with a small Win32 `CreateProcessW` wrapper instead of `Start-Process`.
+- The wrapper sets `CREATE_BREAKAWAY_FROM_JOB | CREATE_NEW_PROCESS_GROUP` and uses hidden-window startup info.
+- The launcher now builds a Windows command line from raw arguments and reports the top-level executor PID.
+
+Live verification:
+- Restarted Executor B through the changed launcher.
+- Confirmed Executor B wrote a healthy automation token at `C:\Users\huizh\Apps\Tandem Reciprocal\state\executor-b\automation.json`.
+- Simulated a parent kill-on-close job and launched Executor B through `start-reciprocal-tandem.ps1` inside it.
+- Confirmed Executor B survived after the parent job closed:
+  - proof output: `BREAKAWAY_PROOF_SURVIVED pid=34684 parent=36204`
+  - automation token confirmed `pid: 34684`, `instanceId: B`, `projectDir: C:\Users\huizh\Apps\Tandem Reciprocal\worktrees\copy-a`.
+- Restarted Executor A through the same changed launcher while the relay was idle.
+- Confirmed both Executor A and Executor B are running from the reciprocal runtimes with fresh automation token files.
+
+Verification commands:
+- `npm run typecheck`: passed.
+- `npm test`:
+  - first full run hit the known transient `tests/reciprocal-direction.test.ts` 5s timeout.
+  - isolated rerun passed: `Test Files 1 passed (1); Tests 8 passed (8)`.
+  - final full rerun passed: `Test Files 43 passed | 1 skipped (44); Tests 415 passed | 1 skipped (416)`.
+- `git diff --check`: passed with line-ending warnings only for `scripts/reciprocal-direction.ps1` and `scripts/start-reciprocal-tandem.ps1`.
+
+Notes:
+- The temporary D142 proof harness was removed after use and was not staged.
+- `scripts/reciprocal-direction.ps1` was already modified before this round and was left untouched.
+- Untracked handoff docs and unrelated untracked files were left untouched.
