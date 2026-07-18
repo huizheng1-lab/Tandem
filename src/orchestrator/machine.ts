@@ -69,6 +69,7 @@ export interface RunOptions {
   verificationRunner?: VerificationRunner;
   postBuildReport?: (report: CompletionReport, context: { plan: BuildPlan; round: number }) => Promise<CompletionReport>;
   confirmPlan?: (plan: BuildPlan) => Promise<boolean>;
+  waitIfPaused?: () => Promise<void>;
   addSessionNote?: (text: string, by: "system") => Promise<void>;
   removeSessionNotesByPrefix?: (prefix: string) => Promise<void>;
   initialState?: OrchestrationCheckpoint;
@@ -317,6 +318,7 @@ export interface RunResult {
 
 export async function runOrchestration(options: RunOptions): Promise<RunResult> {
   const emit = options.emit ?? (() => undefined);
+  const waitIfPaused = options.waitIfPaused ?? (async () => undefined);
   const reports: CompletionReport[] = [...(options.initialState?.reports ?? [])];
   const verdicts: ReviewVerdict[] = [...(options.initialState?.verdicts ?? [])];
   const allFeedback: ReviewVerdict["feedback"][] = [...(options.initialState?.feedbackHistory ?? [])];
@@ -369,6 +371,7 @@ export async function runOrchestration(options: RunOptions): Promise<RunResult> 
     transition("PLANNING", "leader planning", 0);
     let planResult: PlanResult;
     try {
+      await waitIfPaused();
       // D64-1: wrap the plan() call in the same 3-attempt envelope build and review
       // already use. A transient leader hiccup (e.g. a permission-denial-style throw from
       // a read-only explore step) previously killed the whole session outright; the retry
@@ -404,6 +407,7 @@ export async function runOrchestration(options: RunOptions): Promise<RunResult> 
     emit({ type: "artifact", name: "BuildPlan", value: plan });
     emitCheckpoint();
     if (options.confirmPlan) {
+      await waitIfPaused();
       const confirmed = await options.confirmPlan(plan);
       if (!confirmed) {
         transition("DONE", "build plan rejected by user", 0);
@@ -426,6 +430,7 @@ export async function runOrchestration(options: RunOptions): Promise<RunResult> 
     let lastError: unknown;
     for (let attempt = 1; attempt <= 3; attempt += 1) {
       try {
+        await waitIfPaused();
         const takeover = await options.agents.takeover({ plan, reports, feedback: allFeedback, previousAttemptError: lastError === undefined ? undefined : previousAttemptMessage(lastError) });
         lastTakeover = takeover;
         const schemaReport = validateCompletionReport(plan, takeover.report, plan.verification, {
@@ -468,6 +473,7 @@ export async function runOrchestration(options: RunOptions): Promise<RunResult> 
   if (phase === "FEEDBACK") nextRound = reports.length + 1;
 
   for (let currentRound = nextRound; currentRound <= options.config.maxReviewRounds; currentRound += 1) {
+    await waitIfPaused();
     let report: CompletionReport;
     if (phase === "REVIEWING" && reports.length >= currentRound) {
       report = reports[currentRound - 1] as CompletionReport;
@@ -503,6 +509,7 @@ export async function runOrchestration(options: RunOptions): Promise<RunResult> 
         report = reports.at(-1) as CompletionReport;
       } else {
         try {
+          await waitIfPaused();
           const cap = options.config.maxParallelWorkers;
           const newReports = await dispatchStreams(
             options.agents,
@@ -556,9 +563,11 @@ export async function runOrchestration(options: RunOptions): Promise<RunResult> 
     }
 
     transition("REVIEWING", `round ${currentRound}/${options.config.maxReviewRounds} leader review`, currentRound);
+    await waitIfPaused();
     const diff = options.diffProvider ? await (typeof options.diffProvider === "function" ? options.diffProvider() : options.diffProvider.diff()) : "";
     let verdict: ReviewVerdict;
     try {
+      await waitIfPaused();
       verdict = await retryArtifact(
         "ReviewVerdict",
         emit,

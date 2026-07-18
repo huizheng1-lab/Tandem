@@ -250,6 +250,47 @@ describe("TandemService", () => {
     expect(sent.some((event) => event.channel === ipcChannels.doneEvent)).toBe(true);
   });
 
+  it("pauses a running orchestration at the service pause gate and resumes it", async () => {
+    const cwd = await tempDir();
+    const { window, sent } = fakeWindow();
+    let enteredRun!: () => void;
+    const enteredRunPromise = new Promise<void>((resolve) => {
+      enteredRun = resolve;
+    });
+    let releaseWait!: () => void;
+    const releaseWaitPromise = new Promise<void>((resolve) => {
+      releaseWait = resolve;
+    });
+    const service = new TandemService(window as never, {
+      registerIpcResponses: false,
+      createSession: async () => ({
+        id: "session-1",
+        append: async () => undefined,
+        read: async () => []
+      }),
+      createAgents: async () => fakeAgents(),
+      runOrchestration: async (options: RunOptions): Promise<RunResult> => {
+        enteredRun();
+        await releaseWaitPromise;
+        await options.waitIfPaused?.();
+        return { phase: "DONE", summary: "resumed", reports: [], verdicts: [], takeover: false };
+      }
+    });
+
+    await service.startSession({ projectDir: cwd });
+    const run = service.run("build");
+    await enteredRunPromise;
+    await expect(service.pauseRun()).resolves.toMatchObject({ ok: true });
+    releaseWait();
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(sent.some((event) => event.channel === ipcChannels.doneEvent)).toBe(false);
+
+    await expect(service.resumeRun()).resolves.toMatchObject({ ok: true });
+    await run;
+
+    expect(sent.find((event) => event.channel === ipcChannels.doneEvent)?.payload).toMatchObject({ summary: "resumed" });
+  });
+
   it("D98: persists only changed cost snapshots during repeated service events", async () => {
     const cwd = await tempDir();
     const { window, sent } = fakeWindow();

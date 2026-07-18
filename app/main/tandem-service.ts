@@ -127,6 +127,8 @@ export class TandemService {
   private ledger = new CostLedger();
   private session?: SessionLike;
   private controller?: AbortController;
+  private paused = false;
+  private pauseResolvers = new Set<() => void>();
   private lastCheckpoint?: OrchestrationCheckpoint;
   private readonly pendingPermissions = new Map<string, PendingResolver>();
   private readonly pendingPlans = new Map<string, PendingResolver>();
@@ -151,6 +153,12 @@ export class TandemService {
       tokenProvider: () => this.env.TELEGRAM_BOT_TOKEN,
       statusProvider: () => this.remoteStatusSnapshot(),
       sessionsProvider: async () => (await this.listSessions()).map((session) => ({ id: session.id, title: session.title, projectDir: session.projectDir })),
+      actions: {
+        pause: () => this.pauseRemoteRun(),
+        resume: () => this.resumeRemoteRun(),
+        stop: () => this.stopRemoteRun(),
+        useSession: (id) => this.useRemoteSession(id)
+      },
       saveConfig: (patch) => this.saveRemoteControlConfig(patch),
       onStateChange: (state) => this.window.webContents.send(ipcChannels.remoteControlEvent, state)
     });
@@ -210,6 +218,7 @@ export class TandemService {
     const session = this.session as SessionLike;
     await this.prepareReciprocalRun();
     this.controller = new AbortController();
+    this.paused = false;
     this.currentPhase = "IDLE";
     this.runBaselineTotals = this.ledger.totals();
     try {
@@ -268,6 +277,7 @@ export class TandemService {
         postBuildReport: (report) => this.postBuildReport(report),
         initialState,
         confirmPlan: (plan) => this.confirmPlan(plan),
+        waitIfPaused: () => this.waitIfPaused(),
         emit: (event) => void this.emitMachine(event)
       });
       const done = { summary: result.summary, takeover: result.takeover };
@@ -284,11 +294,29 @@ export class TandemService {
       this.lastCheckpoint = undefined;
     } finally {
       this.controller = undefined;
+      this.paused = false;
+      this.releasePauseWaiters();
     }
   }
 
   abort(): void {
     this.controller?.abort();
+  }
+
+  async pauseRun(): Promise<{ ok: boolean; message: string }> {
+    if (!this.controller) return { ok: false, message: "No active Tandem run to pause." };
+    if (this.paused) return { ok: true, message: "Tandem run is already paused." };
+    this.paused = true;
+    await this.emitMachine({ type: "notice", message: "Remote control paused the current run." });
+    return { ok: true, message: "Paused the current Tandem run. It will stop at the next orchestration boundary." };
+  }
+
+  async resumeRun(): Promise<{ ok: boolean; message: string }> {
+    if (!this.paused) return { ok: false, message: "No paused Tandem run to resume." };
+    this.paused = false;
+    this.releasePauseWaiters();
+    await this.emitMachine({ type: "notice", message: "Remote control resumed the current run." });
+    return { ok: true, message: "Resumed the current Tandem run." };
   }
 
   async compactSession(): Promise<LeaderCompactionEvent | undefined> {
@@ -357,6 +385,7 @@ export class TandemService {
   }
 
   async resumeSession(id: string): Promise<SessionResumeResponse> {
+    if (this.controller) throw new Error("Cannot switch sessions while a Tandem run is active.");
     let store: SessionLike;
     let projectDir = this.projectDir;
     const openSession = this.deps.openSession ?? ((sessionId, cwd) => SessionStore.open(sessionId, cwd, this.homeDir));
@@ -510,6 +539,51 @@ export class TandemService {
     return this.remoteBridge.revoke();
   }
 
+  private pauseRemoteRun(): Promise<{ ok: boolean; message: string }> {
+    return this.pauseRun();
+  }
+
+  private resumeRemoteRun(): Promise<{ ok: boolean; message: string }> {
+    return this.resumeRun();
+  }
+
+  private async stopRemoteRun(): Promise<{ ok: boolean; message: string }> {
+    if (!this.controller) return { ok: false, message: "No active Tandem run to stop." };
+    this.abort();
+    return { ok: true, message: "Emergency stop requested. Tandem is aborting the current run." };
+  }
+
+  private async useRemoteSession(id: string): Promise<{ ok: boolean; message: string }> {
+    if (this.controller) return { ok: false, message: "Cannot switch sessions while a Tandem run is active." };
+    const resumed = await this.resumeSession(id);
+    return { ok: true, message: `Using session ${resumed.id.slice(0, 8)}.` };
+  }
+
+  private waitIfPaused(): Promise<void> {
+    if (!this.paused) return Promise.resolve();
+    const signal = this.controller?.signal;
+    if (signal?.aborted) return Promise.reject(new Error("Run aborted while paused."));
+    return new Promise((resolve, reject) => {
+      const release = () => {
+        signal?.removeEventListener("abort", abort);
+        this.pauseResolvers.delete(release);
+        resolve();
+      };
+      const abort = () => {
+        this.pauseResolvers.delete(release);
+        reject(new Error("Run aborted while paused."));
+      };
+      this.pauseResolvers.add(release);
+      signal?.addEventListener("abort", abort, { once: true });
+    });
+  }
+
+  private releasePauseWaiters(): void {
+    const waiters = [...this.pauseResolvers];
+    this.pauseResolvers.clear();
+    for (const waiter of waiters) waiter();
+  }
+
   private async emitText(role: "leader" | "worker", delta: string, thinking = false): Promise<void> {
     const event = { role, delta, thinking };
     this.window.webContents.send(ipcChannels.textEvent, event);
@@ -639,7 +713,7 @@ export class TandemService {
       sessionId: this.session?.id,
       phase: this.controller ? this.currentPhase : this.lastCheckpoint?.phase ?? "IDLE",
       activeRole: this.controller ? (this.currentPhase === "BUILDING" ? "worker" : "leader") : undefined,
-      runHealth: undefined,
+      runHealth: this.paused ? "paused" : this.controller ? "running" : "idle",
       cost: this.costEventTotals()
     };
   }

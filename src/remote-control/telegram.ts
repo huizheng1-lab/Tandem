@@ -1,4 +1,4 @@
-import type { RemoteInboundMessage, RemoteTransport } from "./bridge.js";
+import type { RemoteInboundMessage, RemoteSendOptions, RemoteTransport } from "./bridge.js";
 
 interface TelegramUpdate {
   update_id: number;
@@ -30,11 +30,14 @@ export class TelegramLongPollingTransport implements RemoteTransport {
     this.stopped = true;
   }
 
-  async sendMessage(chatId: number, text: string): Promise<void> {
+  async sendMessage(chatId: number, text: string, options?: RemoteSendOptions): Promise<void> {
+    const replyMarkup = options?.keyboard
+      ? { keyboard: options.keyboard.map((row) => row.map((label) => ({ text: label }))), one_time_keyboard: options.oneTimeKeyboard ?? true, resize_keyboard: true }
+      : undefined;
     const response = await this.fetchImpl(this.url("sendMessage"), {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ chat_id: chatId, text })
+      body: JSON.stringify({ chat_id: chatId, text, reply_markup: replyMarkup })
     });
     if (!response.ok) throw new Error(`Telegram sendMessage failed: HTTP ${response.status}`);
   }

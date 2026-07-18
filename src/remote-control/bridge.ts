@@ -2,7 +2,7 @@ import { createHash, randomInt } from "node:crypto";
 import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 
-export type RemoteCommandVerb = "pair" | "status" | "sessions" | "revoke" | "unknown";
+export type RemoteCommandVerb = "pair" | "status" | "sessions" | "use" | "pause" | "resume" | "stop" | "confirm-stop" | "revoke" | "unknown";
 
 export interface RemoteCommand {
   verb: RemoteCommandVerb;
@@ -20,7 +20,12 @@ export interface RemoteInboundMessage {
 export interface RemoteTransport {
   start(onMessage: (message: RemoteInboundMessage) => void | Promise<void>, onError?: (error: unknown) => void | Promise<void>): void;
   stop(): void;
-  sendMessage(chatId: number, text: string): Promise<void>;
+  sendMessage(chatId: number, text: string, options?: RemoteSendOptions): Promise<void>;
+}
+
+export interface RemoteSendOptions {
+  keyboard?: string[][];
+  oneTimeKeyboard?: boolean;
 }
 
 export interface RemoteBridgeConfig {
@@ -49,12 +54,20 @@ export interface RemoteSessionSummary {
   projectDir?: string;
 }
 
+export interface RemoteControlActions {
+  pause: () => Promise<{ ok: boolean; message: string }>;
+  resume: () => Promise<{ ok: boolean; message: string }>;
+  stop: () => Promise<{ ok: boolean; message: string }>;
+  useSession: (id: string) => Promise<{ ok: boolean; message: string }>;
+}
+
 export interface RemoteBridgeDeps {
   auditPath: string;
   transportFactory: (token: string) => RemoteTransport;
   tokenProvider: () => string | undefined;
   statusProvider: () => RemoteStatusSnapshot;
   sessionsProvider: () => Promise<RemoteSessionSummary[]>;
+  actions?: RemoteControlActions;
   saveConfig: (patch: RemoteBridgeConfig) => Promise<void>;
   onStateChange?: (state: RemoteControlState) => void;
   now?: () => number;
@@ -76,9 +89,18 @@ interface PairingCode {
   expiresAt: number;
 }
 
+interface StopConfirmation {
+  nonce: string;
+  senderId: number;
+  chatId: number;
+  expiresAt: number;
+  used: boolean;
+}
+
 const PAIRING_TTL_MS = 5 * 60 * 1000;
 const RATE_LIMIT_WINDOW_MS = 60 * 1000;
 const RATE_LIMIT_MAX = 10;
+const STOP_CONFIRM_TTL_MS = 60 * 1000;
 
 export function parseRemoteCommand(text: string): RemoteCommand {
   const trimmed = text.trim();
@@ -87,8 +109,16 @@ export function parseRemoteCommand(text: string): RemoteCommand {
   const verb = match[1]?.toLowerCase();
   const args = (match[2] ?? "").trim();
   if (verb === "pair") return /^\d{8}$/.test(args) ? { verb, args } : { verb: "unknown", args };
-  if ((verb === "status" || verb === "sessions" || verb === "revoke") && !args) return { verb, args };
+  if (verb === "use") return /^[A-Za-z0-9-]{1,64}$/.test(args) ? { verb, args } : { verb: "unknown", args };
+  if ((verb === "status" || verb === "sessions" || verb === "pause" || verb === "resume" || verb === "stop" || verb === "revoke") && !args) return { verb, args };
   return { verb: "unknown", args };
+}
+
+export function parseRemoteMessage(text: string): RemoteCommand {
+  const trimmed = text.trim();
+  const confirm = /^Confirm STOP\s+([A-Za-z0-9]{6})$/.exec(trimmed);
+  if (confirm?.[1]) return { verb: "confirm-stop", args: confirm[1] };
+  return parseRemoteCommand(text);
 }
 
 export function maskTelegramUserId(id: number | undefined): string | undefined {
@@ -110,6 +140,7 @@ export class RemoteBridge {
   private readonly rejectedAuditAt = new Map<number, number>();
   private polling = false;
   private lastError: string | undefined;
+  private stopConfirmation?: StopConfirmation;
 
   constructor(private readonly deps: RemoteBridgeDeps) {}
 
@@ -153,7 +184,7 @@ export class RemoteBridge {
   }
 
   async handleMessage(message: RemoteInboundMessage): Promise<void> {
-    const command = parseRemoteCommand(message.text);
+    const command = parseRemoteMessage(message.text);
     await this.audit("inbound", {
       senderId: message.senderId,
       chatId: message.chatId,
@@ -176,12 +207,34 @@ export class RemoteBridge {
       return;
     }
 
+    if (command.verb !== "confirm-stop" && command.verb !== "stop") this.stopConfirmation = undefined;
+
     if (command.verb === "status") {
       await this.send(message.chatId, formatStatus(this.deps.statusProvider()), "status");
       return;
     }
     if (command.verb === "sessions") {
       await this.send(message.chatId, formatSessions(await this.deps.sessionsProvider()), "sessions");
+      return;
+    }
+    if (command.verb === "use") {
+      await this.handleUse(message, command.args);
+      return;
+    }
+    if (command.verb === "pause") {
+      await this.handleAction(message.chatId, "pause", "pause");
+      return;
+    }
+    if (command.verb === "resume") {
+      await this.handleAction(message.chatId, "resume", "resume");
+      return;
+    }
+    if (command.verb === "stop") {
+      await this.handleStopRequest(message);
+      return;
+    }
+    if (command.verb === "confirm-stop") {
+      await this.handleStopConfirm(message, command.args);
       return;
     }
     if (command.verb === "revoke") {
@@ -195,7 +248,7 @@ export class RemoteBridge {
       return;
     }
 
-    await this.send(message.chatId, "Supported commands: /status, /sessions, /revoke", "unknown");
+    await this.send(message.chatId, "Supported commands: /status, /sessions, /use <id>, /pause, /resume, /stop, /revoke", "unknown");
   }
 
   stop(): void {
@@ -271,8 +324,84 @@ export class RemoteBridge {
     await this.audit("rejected-sender", { senderId: message.senderId, chatId: message.chatId });
   }
 
-  private async send(chatId: number, text: string, kind: string): Promise<void> {
-    await this.transport?.sendMessage(chatId, text);
+  private async handleAction(chatId: number, action: "pause" | "resume", auditEvent: string): Promise<void> {
+    if (!this.deps.actions) {
+      await this.audit(auditEvent, { outcome: "unavailable" });
+      await this.send(chatId, "Remote control action is unavailable in this build.", auditEvent);
+      return;
+    }
+    const result = await this.deps.actions[action]();
+    await this.audit(auditEvent, { outcome: result.ok ? "ok" : "rejected", message: result.message });
+    await this.send(chatId, result.message, auditEvent);
+  }
+
+  private async handleUse(message: RemoteInboundMessage, prefix: string): Promise<void> {
+    const sessions = await this.deps.sessionsProvider();
+    const matches = sessions.filter((session) => session.id.toLowerCase().startsWith(prefix.toLowerCase()));
+    if (matches.length !== 1) {
+      const outcome = matches.length === 0 ? "unmatched" : "ambiguous";
+      await this.audit("use", { outcome, prefixHash: hashArgs(prefix), matches: matches.map((session) => session.id.slice(0, 8)) });
+      const list = matches.length > 0 ? matches : sessions.slice(0, 5);
+      const intro = matches.length === 0 ? `No session matches ${prefix}.` : `Session prefix ${prefix} is ambiguous.`;
+      await this.send(message.chatId, `${intro}\n${formatSessions(list)}`, "use-rejected");
+      return;
+    }
+    if (!this.deps.actions) {
+      await this.audit("use", { outcome: "unavailable", sessionId: matches[0]?.id });
+      await this.send(message.chatId, "Remote session switching is unavailable in this build.", "use");
+      return;
+    }
+    const target = matches[0] as RemoteSessionSummary;
+    const result = await this.deps.actions.useSession(target.id);
+    await this.audit("use", { outcome: result.ok ? "ok" : "rejected", sessionId: target.id });
+    await this.send(message.chatId, result.message, "use");
+  }
+
+  private async handleStopRequest(message: RemoteInboundMessage): Promise<void> {
+    const nonce = String(randomInt(0, 1000000)).padStart(6, "0");
+    this.stopConfirmation = {
+      nonce,
+      senderId: message.senderId,
+      chatId: message.chatId,
+      expiresAt: this.now() + STOP_CONFIRM_TTL_MS,
+      used: false
+    };
+    await this.audit("stop-request", { outcome: "confirmation-required" });
+    await this.send(
+      message.chatId,
+      `Emergency stop requested. Tap Confirm STOP ${nonce} within 60 seconds to stop the current run.`,
+      "stop-request",
+      { keyboard: [[`Confirm STOP ${nonce}`]], oneTimeKeyboard: true }
+    );
+  }
+
+  private async handleStopConfirm(message: RemoteInboundMessage, nonce: string): Promise<void> {
+    const confirmation = this.stopConfirmation;
+    if (!confirmation || confirmation.used || confirmation.senderId !== message.senderId || confirmation.chatId !== message.chatId || confirmation.nonce !== nonce) {
+      await this.audit("stop-confirm", { outcome: "rejected", reason: "invalid-or-used" });
+      await this.send(message.chatId, "Stop confirmation is invalid or already used. Send /stop to request a fresh confirmation.", "stop-confirm-rejected");
+      return;
+    }
+    if (confirmation.expiresAt <= this.now()) {
+      this.stopConfirmation = undefined;
+      await this.audit("stop-confirm", { outcome: "rejected", reason: "expired" });
+      await this.send(message.chatId, "Stop confirmation expired. Nothing was stopped. Send /stop to request a fresh confirmation.", "stop-confirm-expired");
+      return;
+    }
+    confirmation.used = true;
+    this.stopConfirmation = undefined;
+    if (!this.deps.actions) {
+      await this.audit("stop-confirm", { outcome: "unavailable" });
+      await this.send(message.chatId, "Remote stop is unavailable in this build.", "stop-confirm");
+      return;
+    }
+    const result = await this.deps.actions.stop();
+    await this.audit("stop-confirm", { outcome: result.ok ? "ok" : "rejected", message: result.message });
+    await this.send(message.chatId, result.message, "stop-confirm");
+  }
+
+  private async send(chatId: number, text: string, kind: string, options?: RemoteSendOptions): Promise<void> {
+    await this.transport?.sendMessage(chatId, text, options);
     await this.audit("outbound", { chatId, kind });
   }
 
