@@ -1,0 +1,20 @@
+Round: D147
+
+Commits:
+- 1a90ce97394ec80ee95e22f5549ca5c3a03fb317 - D147-1: clear automation running after completion
+
+Root Cause:
+- app/main/automation-server.ts reported /status running as Boolean(activeRun) OR service.getAutomationState().running. The automation wrapper could set completedAt after its run promise settled while the service still reported the same session as running, creating the contradictory completedAt + running:true state and blocking the next /prompt or scheduled kickstart.
+- The fix records the project/session fingerprint for a wrapper-launched run and clears the wrapper active promise in a guaranteed Promise.finally path, including synchronous throw/rejection paths via Promise.resolve().then(...). Once that wrapper run has completed, a stale service running bit for that same project/session no longer keeps /status or /prompt blocked. A genuine active wrapper run, or a service-active run that does not match the completed wrapper run, still blocks.
+
+Regression:
+- tests/automation-server.test.ts now simulates the incident: service.run resolves while its fake service state deliberately leaves running=true. The test waits for completedAt, asserts /status reports running=false, and confirms a second /prompt is accepted.
+
+Live Evidence:
+- Safe live /status check only, no new prompt injected into the active relay: executor A returned running=false with acceptedAt=2026-07-18T20:13:23.910Z, completedAt=2026-07-18T20:24:39.538Z, lastError=null. Executor B returned running=false.
+
+Checks:
+- npm run typecheck: passed.
+- npm test -- tests/automation-server.test.ts: passed, 3 tests.
+- npm test: passed, 44 files / 445 tests passed, 1 file / 1 test skipped.
+- git diff --check and git diff --cached --check: passed.
