@@ -90,6 +90,31 @@ function Assert-EpicPlanPath([string]$Value, [string]$WishlistId) {
     return $normalized
 }
 
+$explicitControlPath = -not [string]::IsNullOrWhiteSpace($ControlPath)
+
+function Normalize-ControlPath([string]$Value) {
+    return [IO.Path]::GetFullPath($Value).TrimEnd([IO.Path]::DirectorySeparatorChar, [IO.Path]::AltDirectorySeparatorChar).ToLowerInvariant()
+}
+
+function Get-CanonicalControlPaths([string]$Workspace) {
+    $paths = @()
+    if ($Workspace) {
+        $localPath = Join-Path $Workspace ".tandem\shared-control\SHARED_DIRECTION.md"
+        if (Test-Path -LiteralPath (Split-Path $localPath -Parent)) {
+            $paths += [IO.Path]::GetFullPath($localPath)
+        }
+
+        $commonRaw = Get-GitValue @("rev-parse", "--git-common-dir")
+        if ($commonRaw) {
+            $commonDir = if ([IO.Path]::IsPathRooted($commonRaw)) { $commonRaw } else { [IO.Path]::GetFullPath((Join-Path $Workspace $commonRaw)) }
+            $adminRepo = Split-Path $commonDir -Parent
+            $relayRoot = Join-Path (Split-Path $adminRepo -Parent) "Tandem Reciprocal"
+            $paths += (Join-Path $relayRoot "control\SHARED_DIRECTION.md")
+        }
+    }
+    return @($paths | ForEach-Object { Normalize-ControlPath $_ } | Select-Object -Unique)
+}
+
 if (-not $ControlPath) {
     $workspace = Get-GitValue @("rev-parse", "--show-toplevel")
     if (-not $workspace) { throw "Run this command inside the Tandem repository or pass -ControlPath." }
@@ -106,6 +131,16 @@ if (-not $ControlPath) {
 }
 
 $ControlPath = [IO.Path]::GetFullPath($ControlPath)
+$workspaceForControl = Get-GitValue @("rev-parse", "--show-toplevel")
+if ($explicitControlPath -and $workspaceForControl) {
+    $workspaceTandemDir = Normalize-ControlPath (Join-Path $workspaceForControl ".tandem")
+    $requestedControlPath = Normalize-ControlPath $ControlPath
+    $canonicalControlPaths = @(Get-CanonicalControlPaths $workspaceForControl)
+    $insideWorkspaceTandem = $requestedControlPath.StartsWith($workspaceTandemDir + [IO.Path]::DirectorySeparatorChar)
+    if ($insideWorkspaceTandem -and $canonicalControlPaths -notcontains $requestedControlPath) {
+        throw "Explicit -ControlPath inside .tandem must point at the canonical shared board: .tandem\shared-control\SHARED_DIRECTION.md."
+    }
+}
 $controlDir = Split-Path $ControlPath -Parent
 New-Item -ItemType Directory -Path $controlDir -Force | Out-Null
 

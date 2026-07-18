@@ -41,12 +41,57 @@ async function direction(file: string, ...args: string[]) {
   ]);
 }
 
+function boardText(itemLine = ""): string {
+  return [
+    "# Shared Direction",
+    "",
+    "## General Direction",
+    "",
+    "Test safely.",
+    "",
+    "## Human Guardrails",
+    "",
+    "- Preserve history.",
+    "",
+    "## Wishlist And Progress",
+    "",
+    "<!-- wishlist-items -->",
+    itemLine,
+    "",
+    "## Human Notes",
+    "",
+    "None.",
+    "",
+  ].join("\n");
+}
+
 async function acceptedCommit(): Promise<string> {
   try { return (await execa("git", ["rev-parse", "refs/tandem-relay/stable"])).stdout.trim(); }
   catch { return (await execa("git", ["rev-parse", "HEAD"])).stdout.trim(); }
 }
 
 describeWindows("reciprocal direction wishlist removal", () => {
+  it("rejects explicit scratch control paths under a worktree .tandem directory", async () => {
+    const repo = path.join(tmpdir(), `tandem-direction-guard-${Date.now()}-${Math.random().toString(16).slice(2)}`);
+    const canonical = path.join(repo, ".tandem", "shared-control", "SHARED_DIRECTION.md");
+    const wrong = path.join(repo, ".tandem", "direction.txt");
+    await mkdir(path.dirname(canonical), { recursive: true });
+    await writeFile(canonical, boardText("- [ ] W0001 | P1 | Real item | QUEUED added=2026-07-18T00:00:00Z"), "utf8");
+    await writeFile(wrong, boardText("- [ ] W9999 | P1 | Scratch item | QUEUED added=2026-07-18T00:00:00Z"), "utf8");
+    await execa("git", ["init"], { cwd: repo });
+
+    await expect(execa("powershell", [
+      "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", scriptPath,
+      "-Action", "Show", "-ControlPath", wrong,
+    ], { cwd: repo })).rejects.toThrow(/canonical shared board/);
+
+    const shown = await execa("powershell", [
+      "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", scriptPath,
+      "-Action", "Show", "-ControlPath", canonical,
+    ], { cwd: repo });
+    expect(shown.stdout).toContain("Real item");
+  });
+
   it("removes a queued item while preserving its original line and reason", async () => {
     const file = await boardFile();
     const added = JSON.parse((await direction(file, "-Action", "Add", "-Priority", "P2", "-Text", "Scratch request")).stdout);
