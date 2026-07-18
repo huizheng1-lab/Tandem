@@ -1,0 +1,28 @@
+Round: D149
+
+Commits:
+- db192c36d2ac8777f6a6ec49865a15c0903f22e8 D149-1: avoid empty resume relay claims
+
+Root cause:
+- After D148 accepted rollback candidate 3992fdf80cb4f3db9583fd5515bfde7427419900, Approve-Candidate left phase=working and activeRole=A with candidateCommit=null, rollbackCommit=null, and no .tandem/reciprocal-checkpoint.md.
+- The Claim branch for matching activeRole unconditionally returned RESUME and incremented resumeCount. That fed D133's breaker a false signal even though there was no checkpoint, candidate, or rollback to resume.
+- The D133 breaker itself was correct; Claim was classifying stale empty ownership as a resumable turn.
+
+Changes:
+- Claim now treats matching activeRole as RESUME only when existing resumable signals are present: .tandem/reciprocal-checkpoint.md, candidateCommit, or rollbackCommit.
+- If matching activeRole has no resumable signal, Claim clears the stale owner, gives nextRole back to the caller, and falls through to the existing fresh-claim path, returning CLAIMED or VALIDATE as appropriate.
+- The D133 resume-breaker test now creates a real checkpoint before expecting RESUME.
+- Added a D149 regression where an approved candidate leaves activeRole set with no checkpoint/candidate/rollback; the next same-role Claim returns CLAIMED and does not increment resumeCount.
+- Removed the stray copy-b worktree artifact C:\Users\huizh\Apps\Tandem Reciprocal\worktrees\copy-b\.tandem-shared-direction.txt.
+
+Live recovery:
+- Before recovery: phase=paused, pausedFromPhase=working, activeRole=A, stableCommit=3992fdf80cb4f3db9583fd5515bfde7427419900, candidateCommit=null, rollbackCommit=null, resumeCount=3.
+- Ran Resume with summary: D149: recover stale post-accept owner after fixing empty RESUME claims.
+- Subsequent real role A Claim from copy-b returned outcome=CLAIMED, phase=working, activeRole=A, resumeCount=0, candidateCommit=null, rollbackCommit=null.
+- copy-b worktree status was clean after removing the stray artifact.
+
+Verification:
+- npm run typecheck: passed.
+- npm test -- tests/reciprocal-relay.test.ts: passed, 11 tests.
+- npm test: passed, 44 files passed and 1 skipped; 447 tests passed and 1 skipped.
+- git diff --check: passed.
