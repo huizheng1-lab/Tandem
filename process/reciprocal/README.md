@@ -49,7 +49,7 @@ Each app loads its preselected peer worktree:
 If dashboard automation is unavailable, launch executor A without `--hidden` for diagnosis and send this fallback prompt once:
 
 ```text
-Follow the injected TANDEM.md and execute exactly one reciprocal improvement invocation. Begin with the Claim command.
+Follow the injected TANDEM.md and execute one reciprocal improvement invocation. Begin with the Claim command. If a validated fully autonomous epic returns autonomousContinuation.available=true, continue with exactly that one next step in the same invocation, then stop.
 ```
 
 No manual message is normally needed in either app. On completion, A hands the durable turn token to B. The persisted schedules then poll at minute 07 for A and minute 37 for B each hour. A waiting executor exits before planning. If a quota limit interrupts a turn, the owner and `.tandem/reciprocal-checkpoint.md` remain on disk; that same executor resumes on a later hourly trigger after the rolling five-hour limit clears.

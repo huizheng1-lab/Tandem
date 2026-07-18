@@ -470,19 +470,32 @@ try {
         return $metadata
     }
 
+    function New-AutonomousContinuation([string]$Id, [string]$NextStep) {
+        $nextStep = $NextStep.Trim()
+        if ($nextStep -notmatch "^\d+/\d+$") { return $null }
+        return [pscustomobject]@{
+            available = $true
+            reason = "autonomous-epic-next-step"
+            wishlistId = $Id
+            nextStep = $nextStep
+            claimCommand = "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/reciprocal-relay.ps1 -Action Claim -Role $Role"
+            startCommand = "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/reciprocal-direction.ps1 -Action Start -Id $Id -Role $Role"
+        }
+    }
+
     function Complete-AcceptedDirectionCandidate([string]$AcceptedCommit, [string]$AcceptedKind) {
-        if ($AcceptedKind -ne "improvement") { return }
+        if ($AcceptedKind -ne "improvement") { return $null }
         $directionScript = Join-Path $Workspace "scripts\reciprocal-direction.ps1"
-        if (-not (Test-Path -LiteralPath $directionScript)) { return }
+        if (-not (Test-Path -LiteralPath $directionScript)) { return $null }
         $boardPath = Get-SharedDirectionPath
-        if (-not (Test-Path -LiteralPath $boardPath)) { return }
+        if (-not (Test-Path -LiteralPath $boardPath)) { return $null }
 
         $escapedCommit = [regex]::Escape($AcceptedCommit)
         $candidateLine = @(
             Get-Content -LiteralPath $boardPath |
                 Where-Object { $_ -match "^- \[ \] (W\d+) \| .+ \| CANDIDATE\b" -and $_ -match "(^|\s)commit=$escapedCommit(\s|$)" }
         )
-        if ($candidateLine.Count -eq 0) { return }
+        if ($candidateLine.Count -eq 0) { return $null }
         if ($candidateLine.Count -gt 1) { throw "Accepted commit $AcceptedCommit matches multiple shared-direction candidates." }
 
         $line = $candidateLine[0]
@@ -491,23 +504,30 @@ try {
         if ($metadata.epic -eq "true") {
             if ($metadata.candidate -eq "PLAN") {
                 if ($metadata.autonomy -eq "full") {
+                    $completed = if ($metadata.completed) { [int]$metadata.completed } else { 0 }
+                    $total = [int]$metadata.steps
                     & $directionScript -Action AutoApprovePlan -Id $id -Commit $AcceptedCommit -ControlPath $boardPath | Out-Null
+                    return New-AutonomousContinuation $id "$($completed + 1)/$total"
                 }
-                return
+                return $null
             }
             if ($metadata.candidate -eq "STEP") {
                 if ($metadata.step -notmatch "^(\d+)/(\d+)$") { throw "Epic candidate $id has malformed step metadata." }
-                if ([int]$Matches[1] -lt [int]$Matches[2]) {
+                $step = [int]$Matches[1]
+                $total = [int]$Matches[2]
+                if ($step -lt $total) {
                     & $directionScript -Action AcceptStep -Id $id -Commit $AcceptedCommit -ControlPath $boardPath | Out-Null
+                    if ($metadata.autonomy -eq "full") { return New-AutonomousContinuation $id "$($step + 1)/$total" }
                 } else {
                     & $directionScript -Action Complete -Id $id -Commit $AcceptedCommit -ControlPath $boardPath | Out-Null
                 }
-                return
+                return $null
             }
-            return
+            return $null
         }
 
         & $directionScript -Action Complete -Id $id -Commit $AcceptedCommit -ControlPath $boardPath | Out-Null
+        return $null
     }
 
     function Approve-Candidate([string]$AcceptSummary, [object]$Extra) {
@@ -519,8 +539,9 @@ try {
         $previousStableCommit = $state.stableCommit
         $state.stableCommit = $head
         Update-RelayRefs
+        $continuation = $null
         try {
-            Complete-AcceptedDirectionCandidate $head $acceptedKind
+            $continuation = Complete-AcceptedDirectionCandidate $head $acceptedKind
         } catch {
             $state.stableCommit = $previousStableCommit
             Update-RelayRefs
@@ -535,7 +556,16 @@ try {
         Reset-ResumeCounter
         $state.lastSummary = if ($AcceptSummary.Trim()) { $AcceptSummary.Trim() } else { "Candidate baseline accepted after verification." }
         Save-State
-        Write-Result "ACCEPTED" $Extra
+        $resultExtra = if ($Extra) { $Extra } else { [pscustomobject]@{} }
+        if ($continuation) {
+            $continuation | Add-Member -NotePropertyName role -NotePropertyValue $Role -Force
+            $continuation | Add-Member -NotePropertyName requiresHumanGate -NotePropertyValue $false -Force
+            $continuation | Add-Member -NotePropertyName maxExtraLifecycleActions -NotePropertyValue 1 -Force
+            $resultExtra | Add-Member -NotePropertyName autonomousContinuation -NotePropertyValue $continuation -Force
+        } else {
+            $resultExtra | Add-Member -NotePropertyName autonomousContinuation -NotePropertyValue $null -Force
+        }
+        Write-Result "ACCEPTED" $resultExtra
     }
 
     function Reject-Candidate([string]$FailureSummary, [object]$Extra) {

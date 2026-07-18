@@ -34,6 +34,33 @@ describe("reciprocal relay script", () => {
     return JSON.parse(result.stdout);
   }
 
+  async function direction(repo: string, ...args: string[]) {
+    const result = await execa("powershell", ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", path.join(repo, "scripts", "reciprocal-direction.ps1"), ...args], { cwd: repo });
+    return JSON.parse(result.stdout);
+  }
+
+  async function writeSharedBoard(repo: string, line: string) {
+    const boardDir = path.join(repo, ".tandem", "shared-control");
+    await mkdir(boardDir, { recursive: true });
+    const boardPath = path.join(boardDir, "SHARED_DIRECTION.md");
+    await writeFile(
+      boardPath,
+      [
+        "# Tandem Reciprocal: Shared Direction",
+        "",
+        "AutonomyDefault: plan-gated",
+        "",
+        "## Wishlist And Progress",
+        "",
+        "<!-- wishlist-items -->",
+        line,
+        "",
+      ].join("\n"),
+      "utf8",
+    );
+    return boardPath;
+  }
+
   const approveVerdict = JSON.stringify({
     verdict: "approve",
     scores: { correctness: 5, planAdherence: 5, codeQuality: 5 },
@@ -218,6 +245,124 @@ describe("reciprocal relay script", () => {
 
       const board = await readFile(boardPath, "utf8");
       expect(board).toContain(`PLAN_APPROVED epic=true autonomy=full revision=1 completed=0 steps=2 next=1/2 plan=process/reciprocal/epics/W0002-plan.md commit=${candidateCommit}`);
+    } finally {
+      await rm(repo, { recursive: true, force: true });
+    }
+  }, 30_000);
+
+  windowsIt("D144: autonomous plan accept signals and allows one immediate step candidate", async () => {
+    const repo = await mkdtemp(path.join(tmpdir(), "tandem-relay-d144-chain-"));
+    try {
+      await initRepo(repo);
+
+      await relay(repo, "-Action", "Reset", "-Force");
+      await relay(repo, "-Action", "Claim", "-Role", "A");
+      await mkdir(path.join(repo, "process", "reciprocal", "epics"), { recursive: true });
+      await writeFile(path.join(repo, "process", "reciprocal", "epics", "W0003-plan.md"), "# Plan\n\n- Step 1\n- Step 2\n", "utf8");
+      await execa("git", ["add", "process/reciprocal/epics/W0003-plan.md"], { cwd: repo });
+      await execa("git", ["commit", "-m", "plan candidate"], { cwd: repo });
+      const planCompleted = await relay(repo, "-Action", "Complete", "-Role", "A", "-Summary", "plan candidate ready");
+      const planCommit = planCompleted.candidateCommit as string;
+
+      await execa("git", ["switch", "codex/reciprocal-a"], { cwd: repo });
+      await execa("git", ["merge", "--ff-only", planCommit], { cwd: repo });
+      const boardPath = await writeSharedBoard(
+        repo,
+        `- [ ] W0003 | P2 | D144 autonomous chain | CANDIDATE epic=true autonomy=full candidate=PLAN revision=1 completed=0 steps=2 plan=process/reciprocal/epics/W0003-plan.md commit=${planCommit} updated=2026-07-18T00:00:00Z`,
+      );
+
+      await relay(repo, "-Action", "Claim", "-Role", "B");
+      const accepted = await relay(repo, "-Action", "Accept", "-Role", "B", "-Summary", "plan verified");
+      expect(accepted).toMatchObject({
+        outcome: "ACCEPTED",
+        stableCommit: planCommit,
+        phase: "working",
+        activeRole: "B",
+        nextRole: "B",
+        autonomousContinuation: {
+          available: true,
+          wishlistId: "W0003",
+          nextStep: "1/2",
+          role: "B",
+          requiresHumanGate: false,
+          maxExtraLifecycleActions: 1,
+        },
+      });
+
+      await direction(repo, "-Action", "Start", "-Id", "W0003", "-Role", "B");
+      await writeFile(path.join(repo, "README.md"), "initial\nstep 1\n", "utf8");
+      await execa("git", ["add", "README.md"], { cwd: repo });
+      await execa("git", ["commit", "-m", "step 1 candidate"], { cwd: repo });
+      const stepCommit = (await execa("git", ["rev-parse", "HEAD"], { cwd: repo })).stdout.trim();
+      await direction(repo, "-Action", "Candidate", "-Id", "W0003", "-Commit", stepCommit);
+      const stepCompleted = await relay(repo, "-Action", "Complete", "-Role", "B", "-Summary", "step 1 candidate ready");
+
+      expect(stepCompleted).toMatchObject({ outcome: "COMPLETED", candidateCommit: stepCommit, nextRole: "A" });
+      expect((await execa("git", ["rev-list", "--count", "master..HEAD"], { cwd: repo })).stdout.trim()).toBe("2");
+      const board = await readFile(boardPath, "utf8");
+      expect(board).toContain(`CANDIDATE epic=true autonomy=full candidate=STEP revision=1 completed=0 step=1/2 plan=process/reciprocal/epics/W0003-plan.md commit=${stepCommit}`);
+    } finally {
+      await rm(repo, { recursive: true, force: true });
+    }
+  }, 30_000);
+
+  windowsIt("D144: plan-gated epic plan accept does not signal auto-continuation", async () => {
+    const repo = await mkdtemp(path.join(tmpdir(), "tandem-relay-d144-gated-"));
+    try {
+      await initRepo(repo);
+
+      await relay(repo, "-Action", "Reset", "-Force");
+      await relay(repo, "-Action", "Claim", "-Role", "A");
+      await mkdir(path.join(repo, "process", "reciprocal", "epics"), { recursive: true });
+      await writeFile(path.join(repo, "process", "reciprocal", "epics", "W0004-plan.md"), "# Plan\n", "utf8");
+      await execa("git", ["add", "process/reciprocal/epics/W0004-plan.md"], { cwd: repo });
+      await execa("git", ["commit", "-m", "gated plan candidate"], { cwd: repo });
+      const completed = await relay(repo, "-Action", "Complete", "-Role", "A", "-Summary", "plan candidate ready");
+      const planCommit = completed.candidateCommit as string;
+
+      await execa("git", ["switch", "codex/reciprocal-a"], { cwd: repo });
+      await execa("git", ["merge", "--ff-only", planCommit], { cwd: repo });
+      const boardPath = await writeSharedBoard(
+        repo,
+        `- [ ] W0004 | P2 | D144 gated chain | CANDIDATE epic=true autonomy=plan-gated candidate=PLAN revision=1 completed=0 steps=2 plan=process/reciprocal/epics/W0004-plan.md commit=${planCommit} updated=2026-07-18T00:00:00Z`,
+      );
+
+      await relay(repo, "-Action", "Claim", "-Role", "B");
+      const accepted = await relay(repo, "-Action", "Accept", "-Role", "B", "-Summary", "plan verified");
+      expect(accepted).toMatchObject({ outcome: "ACCEPTED", autonomousContinuation: null });
+      const board = await readFile(boardPath, "utf8");
+      expect(board).toContain(`CANDIDATE epic=true autonomy=plan-gated candidate=PLAN revision=1 completed=0 steps=2 plan=process/reciprocal/epics/W0004-plan.md commit=${planCommit}`);
+      expect(board).not.toContain("PLAN_APPROVED");
+    } finally {
+      await rm(repo, { recursive: true, force: true });
+    }
+  }, 30_000);
+
+  windowsIt("D144: final autonomous step accept completes without continuation", async () => {
+    const repo = await mkdtemp(path.join(tmpdir(), "tandem-relay-d144-final-"));
+    try {
+      await initRepo(repo);
+
+      await relay(repo, "-Action", "Reset", "-Force");
+      await relay(repo, "-Action", "Claim", "-Role", "A");
+      await writeFile(path.join(repo, "README.md"), "initial\nfinal step\n", "utf8");
+      await execa("git", ["add", "README.md"], { cwd: repo });
+      await execa("git", ["commit", "-m", "final step candidate"], { cwd: repo });
+      const completed = await relay(repo, "-Action", "Complete", "-Role", "A", "-Summary", "final step ready");
+      const stepCommit = completed.candidateCommit as string;
+
+      await execa("git", ["switch", "codex/reciprocal-a"], { cwd: repo });
+      await execa("git", ["merge", "--ff-only", stepCommit], { cwd: repo });
+      const boardPath = await writeSharedBoard(
+        repo,
+        `- [ ] W0005 | P2 | D144 final step | CANDIDATE epic=true autonomy=full candidate=STEP revision=1 completed=1 step=2/2 plan=process/reciprocal/epics/W0005-plan.md commit=${stepCommit} updated=2026-07-18T00:00:00Z`,
+      );
+
+      await relay(repo, "-Action", "Claim", "-Role", "B");
+      const accepted = await relay(repo, "-Action", "Accept", "-Role", "B", "-Summary", "final step verified");
+      expect(accepted).toMatchObject({ outcome: "ACCEPTED", autonomousContinuation: null });
+      const board = await readFile(boardPath, "utf8");
+      expect(board).toContain(`- [x] W0005 | P2 | D144 final step | DONE stable=${stepCommit}`);
     } finally {
       await rm(repo, { recursive: true, force: true });
     }

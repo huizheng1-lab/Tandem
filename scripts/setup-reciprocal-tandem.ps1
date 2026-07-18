@@ -74,7 +74,7 @@ function Initialize-ExecutorState([string]$Role, [string]$TargetWorktree) {
 }
 
 function Initialize-Schedule([string]$TargetWorktree, [string]$Role, [string]$Cron) {
-    $prompt = "Follow the injected TANDEM.md and execute exactly one reciprocal improvement invocation. Begin with the Claim command."
+    $prompt = "Follow the injected TANDEM.md and execute one reciprocal improvement invocation. Begin with the Claim command. If a validated fully autonomous epic returns autonomousContinuation.available=true, continue with exactly that one next step in the same invocation, then stop."
     $schedule = @([ordered]@{
         id = "relay-$($Role.ToLowerInvariant())"
         cron = $Cron
