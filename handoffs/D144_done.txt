@@ -1,0 +1,26 @@
+Round: D144
+
+Implementation commits:
+- 527ed40 D144-1: allow autonomous epic continuation signal
+
+Summary:
+- Added an autonomousContinuation payload for fully autonomous epic accepts when a next step exists.
+- Kept plan-gated epics, non-epic turns, and final-step accepts stopped with no continuation payload.
+- Updated reciprocal protocol, executor prompts, setup prompt, and README fallback prompt so only one immediate next artifact may be produced in the same invocation.
+- Added regression coverage for full-autonomy plan accept continuation, plan-gated no-continuation behavior, and final-step no-loop behavior.
+
+Verification:
+- PowerShell parser check for scripts/reciprocal-relay.ps1: passed.
+- npm run typecheck: passed.
+- npm test -- tests/reciprocal-relay.test.ts tests/reciprocal-setup-script.test.ts: passed, 12 tests.
+- npm test: passed, 43 files passed, 1 skipped; 421 tests passed, 1 skipped.
+- git diff --check: passed.
+- git diff --cached --check before implementation commit: passed.
+
+Live scratch evidence:
+- Scratch root: C:\Users\huizh\AppData\Local\Temp\d144-live-43ac7e32e92f43d09e2d0504b615b8f4
+- Plan candidate commit: 1473c4f7846136dadbd9841f2e0217c936427c63
+- Step 1 candidate commit: 7489b7d14a7b7ba4d659ec1d517ea89c55715571
+- git rev-list --count master..HEAD returned 2.
+- Board after the chain recorded W9001 as candidate=STEP step=1/2.
+- Relay state after the chain was idle with lastCompletedCommit set to the step 1 candidate commit, showing the continuation stopped after the single extra artifact.
