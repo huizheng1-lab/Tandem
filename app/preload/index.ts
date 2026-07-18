@@ -9,6 +9,7 @@ import type {
   PlanConfirmEvent,
   PlanResponse,
   RemoteControlState,
+  SessionSearchBatchEvent,
   TextEvent,
   ToolActivityEvent
 } from "../shared/ipc.js";
@@ -32,6 +33,8 @@ const api: TandemDesktopApi = {
   setConfig: (patch) => ipcRenderer.invoke(ipcChannels.configSet, patch),
   listModels: () => ipcRenderer.invoke(ipcChannels.modelsList),
   listSessions: () => ipcRenderer.invoke(ipcChannels.sessionsList),
+  startSessionSearch: (request) => ipcRenderer.invoke(ipcChannels.sessionsSearchStart, request),
+  cancelSessionSearch: (request) => ipcRenderer.invoke(ipcChannels.sessionsSearchCancel, request),
   resumeSession: (request) => ipcRenderer.invoke(ipcChannels.sessionResume, request),
   compactSession: () => ipcRenderer.invoke(ipcChannels.sessionCompact),
   renameSession: (request) => ipcRenderer.invoke(ipcChannels.sessionRename, request),
@@ -59,6 +62,7 @@ const api: TandemDesktopApi = {
   onToolEvent: (callback) => on<ToolActivityEvent>(ipcChannels.toolEvent, callback),
   onMemoryEvent: (callback) => on<MemoryEvent>(ipcChannels.memoryEvent, callback),
   onRemoteControlEvent: (callback) => on<RemoteControlState>(ipcChannels.remoteControlEvent, callback),
+  onSessionSearchBatch: (callback) => on<SessionSearchBatchEvent>(ipcChannels.sessionSearchBatch, callback),
   onCostEvent: (callback) => on(ipcChannels.costEvent, callback),
   onDoneEvent: (callback) => on<PipelineDoneEvent>(ipcChannels.doneEvent, callback),
   onPermissionRequest: (callback) => on<PermissionRequestEvent>(ipcChannels.permissionRequest, callback),
