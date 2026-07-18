@@ -1,0 +1,31 @@
+Round: D143
+
+Implementation commit:
+- 7a440d3b2623a3abfd5e2df2c7f4869bf4e6f5a5 D143-1: add leader-only reciprocal validation gate
+
+Summary:
+- Added relay Action=Validate for reciprocal candidate validation.
+- Validate runs mechanical checks in the validating executor worktree, captures their output, and rejects/rolls back on mechanical failure.
+- After mechanical success, Validate invokes exactly one read-only leader review through AgentFns.review(plan, report, diff) via scripts/reciprocal-validate-review.ts.
+- Approve accepts through the relay; revise/takeover or review failure rejects the candidate through the existing rollback lifecycle.
+- Updated the reciprocal protocol and both executor templates so VALIDATE no longer means launching a full peer Tandem session.
+- Made dotenv loading quiet so helper stdout remains machine-readable JSON.
+
+Verification:
+- npm test -- tests/reciprocal-relay.test.ts: passed, 8 tests.
+- PowerShell parser check for scripts/reciprocal-relay.ps1: passed.
+- npm run typecheck: passed.
+- npm test: passed, 43 test files passed and 1 skipped; 418 tests passed and 1 skipped.
+- git diff --check: passed; only Git line-ending warnings were printed.
+- Live paused W0014 candidate proof against 7eebb3f9311225f587aa7e7e5ef6e35d9ae3a0a9 using Validate -DryRun: VALIDATION_APPROVE_DRY_RUN.
+- Live validation artifact: .git/tandem-relay/validations/20260718-164548-role-B-turn-5.json.
+- Live mechanical checks inside validation: npm run typecheck passed; npm test passed, 43 files passed and 1 skipped; candidate git diff --check passed.
+- Live ReviewVerdict source: AgentFns.review; verdict approve; scores correctness=5, planAdherence=5, codeQuality=5.
+- Live new validation cost: leader 5945 input tokens, 250 output tokens, $0.0024085; worker 0 tokens, $0.
+- Comparable old peer-validation session snapshot from executor-b cdb0a080-dd2d-4d20-a8ab-127bb7ab3a95: leader 409093 input / 15729 output tokens, worker 21648 input / 1517 output tokens, recorded $0 with that provider ledger. New gate reduces comparable input tokens from 430741 to 5945 and output tokens from 17246 to 250; dollar comparison is not apples-to-apples because the old ledger recorded $0 while the new Gemini-backed proof recorded actual dollars.
+- Deliberate mechanical failure path is covered by tests/reciprocal-relay.test.ts: "D143: validate rejects and rolls back when a mechanical check fails"; it produced ROLLBACK_CREATED and did not accept the bad candidate.
+
+Relay state:
+- Left the live relay paused.
+- Stable commit remains ce00fe2e11929fe962cdaf7902bf7dad18d9c483.
+- Candidate commit remains 7eebb3f9311225f587aa7e7e5ef6e35d9ae3a0a9.
