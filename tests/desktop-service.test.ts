@@ -10,6 +10,7 @@ import type { AgentFns, RunOptions, RunResult } from "../src/orchestrator/machin
 import type { PermissionBridge } from "../src/tools/permissions.js";
 import { safeDefaultProjectDir } from "../src/tools/protection.js";
 import { SessionStore } from "../src/session/store.js";
+import type { RemoteInboundMessage, RemoteSendOptions, RemoteTransport } from "../src/remote-control/bridge.js";
 
 async function tempDir(): Promise<string> {
   const dir = path.join(tmpdir(), `tandem-desktop-${Date.now()}-${Math.random().toString(16).slice(2)}`);
@@ -936,6 +937,61 @@ describe("TandemService", () => {
     expect(confirmed).toBe(false);
     expect(sent.filter((event) => event.channel === ipcChannels.planConfirm)).toHaveLength(1);
     expect(sent.find((event) => event.channel === ipcChannels.doneEvent)?.payload).toMatchObject({ summary: "rejected" });
+  });
+
+  it("lets Telegram resolve the same pending build plan confirmation", async () => {
+    const cwd = await tempDir();
+    const home = await tempDir();
+    await mkdir(path.join(home, ".tandem"), { recursive: true });
+    await writeFile(path.join(home, ".tandem", ".env"), "TELEGRAM_BOT_TOKEN=test-token\n", "utf8");
+    await writeFile(path.join(home, ".tandem", "config.json"), JSON.stringify({ permissionMode: "ask", remoteControl: { enabled: true, telegramUserId: 101 } }), "utf8");
+    const { window } = fakeWindow();
+    let confirmed: boolean | undefined;
+    let onRemoteMessage: ((message: RemoteInboundMessage) => void | Promise<void>) | undefined;
+    const remoteSent: Array<{ text: string; options?: RemoteSendOptions }> = [];
+    const remoteEdited: string[] = [];
+    const transport: RemoteTransport = {
+      start: (onMessage) => {
+        onRemoteMessage = onMessage;
+      },
+      stop: () => undefined,
+      sendMessage: async (_chatId, text, options) => {
+        remoteSent.push({ text, options });
+        return { messageId: 42 };
+      },
+      editMessage: async (_chatId, _messageId, text) => {
+        remoteEdited.push(text);
+      },
+      answerCallback: async () => undefined
+    };
+    const service = new TandemService(window as never, {
+      registerIpcResponses: false,
+      homeDir: home,
+      baseEnv: {},
+      remoteTransportFactory: () => transport,
+      createSession: async () => ({
+        id: "session-1",
+        append: async () => undefined,
+        read: async () => []
+      }),
+      createAgents: async (): Promise<AgentFns> => fakeAgents(),
+      runOrchestration: async (options: RunOptions): Promise<RunResult> => {
+        confirmed = await options.confirmPlan?.(plan);
+        return { phase: "DONE", summary: confirmed ? "approved" : "rejected", plan, reports: [], verdicts: [], takeover: false };
+      }
+    });
+
+    await service.startSession({ projectDir: cwd });
+    const run = service.run("build");
+    const deadline = Date.now() + 1000;
+    while (remoteSent.length === 0 && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 10));
+    const data = remoteSent.at(-1)?.options?.inlineKeyboard?.[0]?.[0]?.data;
+    expect(data).toMatch(/^approval:/);
+    await onRemoteMessage?.({ updateId: 1, senderId: 101, chatId: 101, text: "", callbackId: "cb-1", callbackData: data });
+    await run;
+
+    expect(confirmed).toBe(true);
+    expect(remoteEdited.at(-1)).toMatch(/Resolved from Telegram: approved/i);
   });
 
   it("auto-approves build plans when session auto-approve-all is active", async () => {

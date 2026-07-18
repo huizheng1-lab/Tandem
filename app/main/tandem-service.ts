@@ -18,7 +18,7 @@ import { commitReciprocalCandidate, prepareReciprocalWorktree } from "../../src/
 import { modelRegistry } from "../../src/providers/registry.js";
 import { withConfiguredCliModel } from "../../src/providers/cli-models.js";
 import { tandemStateDir } from "../../src/paths.js";
-import { RemoteBridge, type RemoteControlState, type RemoteTransport } from "../../src/remote-control/bridge.js";
+import { RemoteBridge, type RemoteApprovalRequest, type RemoteControlState, type RemoteTransport } from "../../src/remote-control/bridge.js";
 import { TelegramLongPollingTransport } from "../../src/remote-control/telegram.js";
 import { CostLedger } from "../../src/session/cost.js";
 import { copyAttachment, formatAttachmentBlock, writeAttachmentData } from "../../src/session/attachments.js";
@@ -55,7 +55,7 @@ import {
   type SessionStartResponse
 } from "../shared/ipc.js";
 
-type PendingResolver = (approved: boolean) => void;
+type PendingResolver = (approved: boolean, source?: "desktop" | "telegram" | "timeout") => void;
 type DesktopWindow = Pick<BrowserWindow, "webContents">;
 type SessionLike = Pick<SessionStore, "id" | "append" | "read"> & Partial<Pick<SessionStore, "readRecent">>;
 const DESKTOP_RESUME_EVENT_LIMIT = 2500;
@@ -687,6 +687,38 @@ export class TandemService {
     return this.ledger.totals();
   }
 
+  private remotePermissionRequest(event: PermissionRequestEvent): RemoteApprovalRequest {
+    return {
+      id: event.id,
+      kind: "permission",
+      title: `${event.action}: ${this.truncateRemoteText(event.target, 120)}`,
+      body: this.truncateRemoteText(event.target, 1200),
+      onResolve: (approved, source) => this.resolvePending(this.pendingPermissions, event.id, approved, source)
+    };
+  }
+
+  private remotePlanRequest(event: PlanConfirmEvent): RemoteApprovalRequest {
+    const tasks = event.plan.tasks.slice(0, 8).map((task) => `- ${task.id}: ${task.description}`).join("\n");
+    const extra = event.plan.tasks.length > 8 ? `\n- ...${event.plan.tasks.length - 8} more task(s)` : "";
+    const body = [
+      `Objective: ${event.plan.objective}`,
+      event.plan.constraints.length > 0 ? `Constraints: ${event.plan.constraints.join("; ")}` : "",
+      `Tasks:\n${tasks}${extra}`
+    ].filter(Boolean).join("\n");
+    return {
+      id: event.id,
+      kind: "plan",
+      title: this.truncateRemoteText(event.plan.title, 120),
+      body: this.truncateRemoteText(body, 1200),
+      onResolve: (approved, source) => this.resolvePending(this.pendingPlans, event.id, approved, source)
+    };
+  }
+
+  private truncateRemoteText(text: string, maxChars: number): string {
+    const normalized = text.replace(/\s+/g, " ").trim();
+    return normalized.length <= maxChars ? normalized : `${normalized.slice(0, maxChars)}... [truncated]`;
+  }
+
   private costEventTotals(currentTotals: CostTotals = this.ledger.totals()): CostTotals {
     const baseline = this.runBaselineTotals ?? {
       leader: { role: "leader" as const, inputTokens: 0, outputTokens: 0, dollars: 0 },
@@ -762,8 +794,12 @@ export class TandemService {
     const id = randomUUID();
     const event: PermissionRequestEvent = { id, ...request };
     return new Promise((resolve) => {
-      this.pendingPermissions.set(id, resolve);
+      this.pendingPermissions.set(id, (approved, source = "desktop") => {
+        resolve(approved);
+        void this.remoteBridge.resolveApproval(id, approved, source);
+      });
       this.window.webContents.send(ipcChannels.permissionRequest, event);
+      void this.remoteBridge.pushApproval(this.remotePermissionRequest(event));
     });
   }
 
@@ -772,16 +808,20 @@ export class TandemService {
     const id = randomUUID();
     const event: PlanConfirmEvent = { id, plan };
     return new Promise((resolve) => {
-      this.pendingPlans.set(id, resolve);
+      this.pendingPlans.set(id, (approved, source = "desktop") => {
+        resolve(approved);
+        void this.remoteBridge.resolveApproval(id, approved, source);
+      });
       this.window.webContents.send(ipcChannels.planConfirm, event);
+      void this.remoteBridge.pushApproval(this.remotePlanRequest(event));
     });
   }
 
-  private resolvePending(map: Map<string, PendingResolver>, id: string, approved: boolean): void {
+  private resolvePending(map: Map<string, PendingResolver>, id: string, approved: boolean, source: "desktop" | "telegram" | "timeout" = "desktop"): void {
     const resolve = map.get(id);
     if (!resolve) return;
     map.delete(id);
-    resolve(approved);
+    resolve(approved, source);
   }
 
   private findLastCheckpoint(payloads: unknown[]): OrchestrationCheckpoint | undefined {

@@ -1,13 +1,15 @@
 import { mkdir, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   RemoteBridge,
+  formatApprovalRequest,
   formatSessions,
   formatStatus,
   parseRemoteCommand,
   parseRemoteMessage,
+  type RemoteSendOptions,
   type RemoteBridgeConfig,
   type RemoteInboundMessage,
   type RemoteTransport
@@ -16,7 +18,10 @@ import {
 class FakeTransport implements RemoteTransport {
   started = false;
   stopped = false;
-  sent: Array<{ chatId: number; text: string }> = [];
+  nextMessageId = 100;
+  sent: Array<{ chatId: number; text: string; options?: RemoteSendOptions; messageId: number }> = [];
+  edited: Array<{ chatId: number; messageId: number; text: string; options?: RemoteSendOptions }> = [];
+  answered: Array<{ callbackId: string; text?: string }> = [];
   onMessage?: (message: RemoteInboundMessage) => void | Promise<void>;
 
   start(onMessage: (message: RemoteInboundMessage) => void | Promise<void>): void {
@@ -29,10 +34,24 @@ class FakeTransport implements RemoteTransport {
     this.started = false;
   }
 
-  async sendMessage(chatId: number, text: string): Promise<void> {
-    this.sent.push({ chatId, text });
+  async sendMessage(chatId: number, text: string, options?: RemoteSendOptions): Promise<{ messageId: number }> {
+    const messageId = this.nextMessageId++;
+    this.sent.push({ chatId, text, options, messageId });
+    return { messageId };
+  }
+
+  async editMessage(chatId: number, messageId: number, text: string, options?: RemoteSendOptions): Promise<void> {
+    this.edited.push({ chatId, messageId, text, options });
+  }
+
+  async answerCallback(callbackId: string, text?: string): Promise<void> {
+    this.answered.push({ callbackId, text });
   }
 }
+
+afterEach(() => {
+  vi.useRealTimers();
+});
 
 async function tempAuditPath(): Promise<string> {
   const dir = path.join(tmpdir(), `tandem-remote-${Date.now()}-${Math.random().toString(16).slice(2)}`);
@@ -42,6 +61,10 @@ async function tempAuditPath(): Promise<string> {
 
 function message(senderId: number, text: string): RemoteInboundMessage {
   return { updateId: senderId, senderId, chatId: senderId + 1000, text };
+}
+
+function callback(senderId: number, data: string, callbackId = "callback-1"): RemoteInboundMessage {
+  return { updateId: senderId + 5000, senderId, chatId: senderId + 1000, text: "", callbackData: data, callbackId, messageId: 100 };
 }
 
 describe("remote control command parser", () => {
@@ -299,6 +322,111 @@ describe("RemoteBridge", () => {
 
     expect(pauses).toBe(10);
     expect(transport.sent.at(-1)?.text).toMatch(/cooling down/i);
+  });
+
+  it("routes approval callbacks and edits the Telegram message when Telegram wins", async () => {
+    const transport = new FakeTransport();
+    let resolved: { approved: boolean; source: string } | undefined;
+    const bridge = new RemoteBridge({
+      auditPath: await tempAuditPath(),
+      transportFactory: () => transport,
+      tokenProvider: () => "token",
+      statusProvider: () => statusFixture(),
+      sessionsProvider: async () => [],
+      saveConfig: async () => {}
+    });
+    await bridge.configure({ enabled: true, telegramUserId: 101 });
+
+    await expect(bridge.pushApproval({
+      id: "req-1",
+      kind: "permission",
+      title: "write: file.txt",
+      body: "Write file.txt",
+      onResolve: (approved, source) => {
+        resolved = { approved, source };
+        void bridge.resolveApproval("req-1", approved, source);
+      }
+    })).resolves.toBe(true);
+    expect(transport.sent.at(-1)?.options?.inlineKeyboard?.[0]?.map((button) => button.text)).toEqual(["Approve", "Deny"]);
+
+    await bridge.handleMessage(callback(101, "approval:req-1:approve"));
+
+    expect(resolved).toEqual({ approved: true, source: "telegram" });
+    expect(transport.answered.at(-1)?.text).toMatch(/Approved/i);
+    expect(transport.edited.at(-1)?.text).toMatch(/Resolved from Telegram: approved/i);
+  });
+
+  it("marks remote approvals resolved when the desktop answers first", async () => {
+    const transport = new FakeTransport();
+    let callbackResolved = false;
+    const bridge = new RemoteBridge({
+      auditPath: await tempAuditPath(),
+      transportFactory: () => transport,
+      tokenProvider: () => "token",
+      statusProvider: () => statusFixture(),
+      sessionsProvider: async () => [],
+      saveConfig: async () => {}
+    });
+    await bridge.configure({ enabled: true, telegramUserId: 101 });
+    await bridge.pushApproval({
+      id: "req-2",
+      kind: "plan",
+      title: "Plan",
+      body: "Build",
+      onResolve: () => {
+        callbackResolved = true;
+      }
+    });
+
+    await bridge.resolveApproval("req-2", false, "desktop");
+    await bridge.handleMessage(callback(101, "approval:req-2:approve"));
+
+    expect(callbackResolved).toBe(false);
+    expect(transport.edited.at(-1)?.text).toMatch(/Resolved on desktop: denied/i);
+    expect(transport.answered.at(-1)?.text).toMatch(/already resolved/i);
+  });
+
+  it("default-denies remote approvals after five minutes", async () => {
+    vi.useFakeTimers();
+    const transport = new FakeTransport();
+    let resolved: { approved: boolean; source: string } | undefined;
+    const bridge = new RemoteBridge({
+      auditPath: await tempAuditPath(),
+      transportFactory: () => transport,
+      tokenProvider: () => "token",
+      statusProvider: () => statusFixture(),
+      sessionsProvider: async () => [],
+      saveConfig: async () => {}
+    });
+    await bridge.configure({ enabled: true, telegramUserId: 101 });
+    await bridge.pushApproval({
+      id: "req-3",
+      kind: "permission",
+      title: "bash: npm test",
+      body: "Run npm test",
+      onResolve: (approved, source) => {
+        resolved = { approved, source };
+        void bridge.resolveApproval("req-3", approved, source);
+      }
+    });
+
+    await vi.advanceTimersByTimeAsync(5 * 60 * 1000 + 1);
+
+    expect(resolved).toEqual({ approved: false, source: "timeout" });
+    expect(transport.edited.at(-1)?.text).toMatch(/denied by default/i);
+  });
+
+  it("truncates long remote approval bodies", () => {
+    const formatted = formatApprovalRequest({
+      id: "req-4",
+      kind: "permission",
+      title: "bash",
+      body: "x".repeat(2000),
+      onResolve: () => {}
+    });
+
+    expect(formatted.length).toBeLessThan(1100);
+    expect(formatted).toContain("[truncated for Telegram]");
   });
 
   it("formats compact status and session summaries", () => {

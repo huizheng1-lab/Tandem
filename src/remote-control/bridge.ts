@@ -15,17 +15,27 @@ export interface RemoteInboundMessage {
   chatId: number;
   username?: string;
   text: string;
+  messageId?: number;
+  callbackId?: string;
+  callbackData?: string;
 }
 
 export interface RemoteTransport {
   start(onMessage: (message: RemoteInboundMessage) => void | Promise<void>, onError?: (error: unknown) => void | Promise<void>): void;
   stop(): void;
-  sendMessage(chatId: number, text: string, options?: RemoteSendOptions): Promise<void>;
+  sendMessage(chatId: number, text: string, options?: RemoteSendOptions): Promise<RemoteSentMessage | undefined>;
+  editMessage?(chatId: number, messageId: number, text: string, options?: RemoteSendOptions): Promise<void>;
+  answerCallback?(callbackId: string, text?: string): Promise<void>;
 }
 
 export interface RemoteSendOptions {
   keyboard?: string[][];
+  inlineKeyboard?: Array<Array<{ text: string; data: string }>>;
   oneTimeKeyboard?: boolean;
+}
+
+export interface RemoteSentMessage {
+  messageId?: number;
 }
 
 export interface RemoteBridgeConfig {
@@ -59,6 +69,14 @@ export interface RemoteControlActions {
   resume: () => Promise<{ ok: boolean; message: string }>;
   stop: () => Promise<{ ok: boolean; message: string }>;
   useSession: (id: string) => Promise<{ ok: boolean; message: string }>;
+}
+
+export interface RemoteApprovalRequest {
+  id: string;
+  kind: "permission" | "plan";
+  title: string;
+  body: string;
+  onResolve: (approved: boolean, source: "telegram" | "timeout") => void;
 }
 
 export interface RemoteBridgeDeps {
@@ -97,10 +115,21 @@ interface StopConfirmation {
   used: boolean;
 }
 
+interface PendingRemoteApproval {
+  request: RemoteApprovalRequest;
+  chatId: number;
+  messageId?: number;
+  timeout: ReturnType<typeof setTimeout>;
+  resolved: boolean;
+}
+
 const PAIRING_TTL_MS = 5 * 60 * 1000;
 const RATE_LIMIT_WINDOW_MS = 60 * 1000;
 const RATE_LIMIT_MAX = 10;
 const STOP_CONFIRM_TTL_MS = 60 * 1000;
+const REMOTE_APPROVAL_TTL_MS = 5 * 60 * 1000;
+const APPROVAL_PREFIX = "approval:";
+const MAX_REMOTE_BODY_CHARS = 900;
 
 export function parseRemoteCommand(text: string): RemoteCommand {
   const trimmed = text.trim();
@@ -141,6 +170,7 @@ export class RemoteBridge {
   private polling = false;
   private lastError: string | undefined;
   private stopConfirmation?: StopConfirmation;
+  private readonly pendingApprovals = new Map<string, PendingRemoteApproval>();
 
   constructor(private readonly deps: RemoteBridgeDeps) {}
 
@@ -184,6 +214,10 @@ export class RemoteBridge {
   }
 
   async handleMessage(message: RemoteInboundMessage): Promise<void> {
+    if (message.callbackData) {
+      await this.handleCallback(message);
+      return;
+    }
     const command = parseRemoteMessage(message.text);
     await this.audit("inbound", {
       senderId: message.senderId,
@@ -252,7 +286,46 @@ export class RemoteBridge {
   }
 
   stop(): void {
+    for (const approval of this.pendingApprovals.values()) clearTimeout(approval.timeout);
+    this.pendingApprovals.clear();
     this.stopTransport();
+  }
+
+  async pushApproval(request: RemoteApprovalRequest): Promise<boolean> {
+    const token = this.deps.tokenProvider();
+    const pairedUserId = this.config.telegramUserId;
+    if (!this.config.enabled || !token || !pairedUserId || !this.transport) return false;
+    const text = formatApprovalRequest(request);
+    const sent = await this.transport.sendMessage(pairedUserId, text, {
+      inlineKeyboard: [[
+        { text: "Approve", data: `${APPROVAL_PREFIX}${request.id}:approve` },
+        { text: "Deny", data: `${APPROVAL_PREFIX}${request.id}:deny` }
+      ]]
+    });
+    const timeout = setTimeout(() => {
+      const pending = this.pendingApprovals.get(request.id);
+      if (!pending || pending.resolved) return;
+      pending.resolved = true;
+      this.pendingApprovals.delete(request.id);
+      void this.audit("approval-timeout", { id: request.id, kind: request.kind });
+      request.onResolve(false, "timeout");
+      void this.editApprovalMessage(pending, "Timed out after 5 minutes: denied by default.");
+    }, REMOTE_APPROVAL_TTL_MS);
+    this.pendingApprovals.set(request.id, { request, chatId: pairedUserId, messageId: sent?.messageId, timeout, resolved: false });
+    await this.audit("approval-push", { id: request.id, kind: request.kind });
+    return true;
+  }
+
+  async resolveApproval(id: string, approved: boolean, source: "desktop" | "telegram" | "timeout"): Promise<void> {
+    const pending = this.pendingApprovals.get(id);
+    if (!pending || pending.resolved) return;
+    pending.resolved = true;
+    this.pendingApprovals.delete(id);
+    clearTimeout(pending.timeout);
+    await this.audit("approval-resolved", { id, kind: pending.request.kind, approved, source });
+    const verdict = approved ? "approved" : "denied";
+    const sourceText = source === "desktop" ? "on desktop" : source === "telegram" ? "from Telegram" : "by timeout";
+    await this.editApprovalMessage(pending, `Resolved ${sourceText}: ${verdict}.`);
   }
 
   private async restart(): Promise<void> {
@@ -306,6 +379,39 @@ export class RemoteBridge {
     await this.audit("paired", { senderId: message.senderId, username: message.username });
     await this.send(message.chatId, "Tandem remote control paired. Try /status.", "paired");
     this.emitState();
+  }
+
+  private async handleCallback(message: RemoteInboundMessage): Promise<void> {
+    await this.audit("callback", {
+      senderId: message.senderId,
+      chatId: message.chatId,
+      dataHash: hashArgs(message.callbackData ?? "")
+    });
+    if (!this.config.telegramUserId || message.senderId !== this.config.telegramUserId) {
+      await this.auditRejectedSender(message);
+      return;
+    }
+    if (!this.consumeRateLimit()) {
+      if (message.callbackId) await this.transport?.answerCallback?.(message.callbackId, "Remote control is cooling down.");
+      return;
+    }
+    const match = new RegExp(`^${APPROVAL_PREFIX}([^:]+):(approve|deny)$`).exec(message.callbackData ?? "");
+    if (!match) {
+      if (message.callbackId) await this.transport?.answerCallback?.(message.callbackId, "Unknown remote action.");
+      await this.audit("approval-callback", { outcome: "invalid" });
+      return;
+    }
+    const id = match[1] ?? "";
+    const approved = match[2] === "approve";
+    const pending = this.pendingApprovals.get(id);
+    if (!pending || pending.resolved) {
+      if (message.callbackId) await this.transport?.answerCallback?.(message.callbackId, "This request is already resolved.");
+      await this.audit("approval-callback", { id, outcome: "stale" });
+      return;
+    }
+    await this.resolveApproval(id, approved, "telegram");
+    pending.request.onResolve(approved, "telegram");
+    if (message.callbackId) await this.transport?.answerCallback?.(message.callbackId, approved ? "Approved." : "Denied.");
   }
 
   private consumeRateLimit(): boolean {
@@ -400,6 +506,12 @@ export class RemoteBridge {
     await this.send(message.chatId, result.message, "stop-confirm");
   }
 
+  private async editApprovalMessage(pending: PendingRemoteApproval, resolution: string): Promise<void> {
+    if (!pending.messageId || !this.transport?.editMessage) return;
+    const text = `${formatApprovalRequest(pending.request)}\n\n${resolution}`;
+    await this.transport.editMessage(pending.chatId, pending.messageId, text, { inlineKeyboard: [] });
+  }
+
   private async send(chatId: number, text: string, kind: string, options?: RemoteSendOptions): Promise<void> {
     await this.transport?.sendMessage(chatId, text, options);
     await this.audit("outbound", { chatId, kind });
@@ -437,4 +549,15 @@ export function formatSessions(sessions: RemoteSessionSummary[]): string {
     const project = session.projectDir ? path.basename(session.projectDir) || session.projectDir : "unknown project";
     return `${session.id.slice(0, 8)} - ${session.title || "Untitled session"} - ${project}`;
   }).join("\n");
+}
+
+export function formatApprovalRequest(request: RemoteApprovalRequest): string {
+  const body = request.body.length <= MAX_REMOTE_BODY_CHARS
+    ? request.body
+    : `${request.body.slice(0, MAX_REMOTE_BODY_CHARS)}\n[truncated for Telegram]`;
+  return [
+    request.kind === "plan" ? "Plan confirmation" : "Permission request",
+    request.title,
+    body
+  ].filter(Boolean).join("\n");
 }
