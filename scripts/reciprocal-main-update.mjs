@@ -64,6 +64,7 @@ function isKnownNonFeaturePath(file) {
   return normalized === "scripts/reciprocal-direction.ps1"
     || normalized === "IMPROVEMENT_SUGGESTIONS.md"
     || normalized === "process/LEADER_WORKER_WORKFLOW.md"
+    || normalized === "process/REMOTE_CONTROL_DESIGN.md"
     || /^\.reviewer-.*\.mjs$/.test(normalized)
     || /^handoffs\/HANDOFF_D\d+\.md$/.test(normalized)
     || /^handoffs\/D\d+_done\.txt$/.test(normalized)
