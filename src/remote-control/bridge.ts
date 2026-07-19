@@ -1,6 +1,8 @@
 import { createHash, randomInt } from "node:crypto";
 import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
+import { TelegramSessionStream } from "./telegram-session-stream.js";
+import type { SessionEventSubscription } from "./streaming-session.js";
 
 export type RemoteCommandVerb = "pair" | "status" | "sessions" | "use" | "pause" | "resume" | "stop" | "confirm-stop" | "revoke" | "unknown";
 
@@ -87,6 +89,7 @@ export interface RemoteBridgeDeps {
   sessionsProvider: () => Promise<RemoteSessionSummary[]>;
   actions?: RemoteControlActions;
   saveConfig: (patch: RemoteBridgeConfig) => Promise<void>;
+  subscribeSessionEvents?: SessionEventSubscription;
   onStateChange?: (state: RemoteControlState) => void;
   now?: () => number;
 }
@@ -171,6 +174,8 @@ export class RemoteBridge {
   private lastError: string | undefined;
   private stopConfirmation?: StopConfirmation;
   private readonly pendingApprovals = new Map<string, PendingRemoteApproval>();
+  private readonly sessionStreamsByMessage = new Map<string, TelegramSessionStream>();
+  private readonly sessionStreamsBySession = new Map<string, TelegramSessionStream>();
 
   constructor(private readonly deps: RemoteBridgeDeps) {}
 
@@ -291,6 +296,37 @@ export class RemoteBridge {
     this.stopTransport();
   }
 
+  startSessionStream(chatId: number, messageId: number, sessionId: string): boolean {
+    const subscribe = this.deps.subscribeSessionEvents;
+    const transport = this.transport;
+    if (!subscribe || !transport?.editMessage) return false;
+
+    const messageKey = this.streamMessageKey(chatId, messageId);
+    this.sessionStreamsByMessage.get(messageKey)?.stop();
+    this.sessionStreamsBySession.get(sessionId)?.stop();
+
+    const stream = new TelegramSessionStream({
+      chatId,
+      messageId,
+      sessionId,
+      telegram: transport,
+      subscribe,
+      now: this.deps.now,
+      onStopped: (stopped) => {
+        if (this.sessionStreamsByMessage.get(messageKey) === stopped) this.sessionStreamsByMessage.delete(messageKey);
+        if (this.sessionStreamsBySession.get(sessionId) === stopped) this.sessionStreamsBySession.delete(sessionId);
+      }
+    });
+    this.sessionStreamsByMessage.set(messageKey, stream);
+    this.sessionStreamsBySession.set(sessionId, stream);
+    stream.start();
+    return true;
+  }
+
+  stopSessionStream(chatId: number, messageId: number): void {
+    this.sessionStreamsByMessage.get(this.streamMessageKey(chatId, messageId))?.stop();
+  }
+
   async pushApproval(request: RemoteApprovalRequest): Promise<boolean> {
     const token = this.deps.tokenProvider();
     const pairedUserId = this.config.telegramUserId;
@@ -354,6 +390,9 @@ export class RemoteBridge {
   }
 
   private stopTransport(): void {
+    for (const stream of [...this.sessionStreamsByMessage.values()]) stream.stop();
+    this.sessionStreamsByMessage.clear();
+    this.sessionStreamsBySession.clear();
     this.transport?.stop();
     this.transport = undefined;
     this.polling = false;
@@ -523,6 +562,10 @@ export class RemoteBridge {
 
   private emitState(): void {
     this.deps.onStateChange?.(this.state());
+  }
+
+  private streamMessageKey(chatId: number, messageId: number): string {
+    return `${chatId}:${messageId}`;
   }
 
   private async audit(event: string, data: Record<string, unknown>): Promise<void> {
