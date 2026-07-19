@@ -1,0 +1,35 @@
+Round: D154
+
+Implementation:
+- Dashboard-only code changed outside this repo:
+  - C:\Users\huizh\Apps\Tandem Reciprocal\dashboard\server.mjs
+  - C:\Users\huizh\Apps\Tandem Reciprocal\dashboard\lib.mjs
+  - C:\Users\huizh\Apps\Tandem Reciprocal\dashboard\lib.nodecheck.mjs
+- Added approvalCompletionRelayAction(interruptedPhase) in dashboard/lib.mjs.
+- resumeApprovalPause now threads flow.interruptedPhase into approvalCompletionRelayAction at the final approval boundary.
+- If interruptedPhase is a-upgrade-pending, the dashboard calls reciprocal-relay.ps1 with Action CompleteAUpgrade, Role A, Force, Summary, and Workspace.
+- For every other interrupted phase, the helper returns the previous plain Resume action, with no Role or Force arguments.
+- relayControl now accepts optional Role and Force arguments so CompleteAUpgrade can use the same relay wrapper without changing the working promotion/restart steps.
+
+Regression:
+- Extended dashboard/lib.nodecheck.mjs to prove:
+  - a-upgrade-pending resolves to CompleteAUpgrade, Role A, Force true, step a-upgrade-completed.
+  - working resolves to plain Resume, no role, Force false, step relay-resumed.
+
+Live proof:
+- Before the scoped fix action, .git\tandem-relay\state.json showed phase a-upgrade-pending with stableCommit 396a18da5e10bf0ca2481c6e3ab1ae2c633e55d6.
+- Ran CompleteAUpgrade directly against the real stuck state:
+  powershell -NoProfile -ExecutionPolicy Bypass -File scripts\reciprocal-relay.ps1 -Action CompleteAUpgrade -Role A -Force -Summary "D154 dashboard approval flow already promoted and restarted both executors from stable 396a18d; close the A-upgrade gate." -Workspace "C:\Users\huizh\Apps\Tandem Reciprocal\worktrees\copy-a"
+- The command returned outcome A_UPGRADE_COMPLETED and phase idle.
+- Dashboard /api/status now reports state.phase idle, stableCommit 396a18da5e10bf0ca2481c6e3ab1ae2c633e55d6, runtimeA 396a18d, and runtimeB 396a18d.
+- Dashboard server on port 4782 was restarted after the code change and reports the same idle state.
+
+Verification:
+- Dashboard checks passed: node --check server.mjs; node --check public/app.js; node --test lib.nodecheck.mjs, 3 tests passed.
+- npm run typecheck passed.
+- npm test passed: 44 files passed, 1 skipped; 443 tests passed, 1 skipped.
+- npm run build passed.
+- git diff --check passed with only pre-existing LF-to-CRLF warnings for scripts/reciprocal-direction.ps1 and scripts/setup-reciprocal-tandem.ps1.
+
+Commit:
+- Pending marker commit.
