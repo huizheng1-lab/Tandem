@@ -28,7 +28,7 @@ If no safe human item exists:
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts/reciprocal-relay.ps1 -Action Pause -Role A -Summary "<why human direction is needed>"
 ```
 
-If a passive candidate is ready, run from copy A:
+If a passive candidate is ready, run from copy A; this checks the candidate and produces the canonical Launch Candidate package:
 
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts/reciprocal-relay.ps1 -Action PassiveTest -Role A

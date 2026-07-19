@@ -24,7 +24,12 @@ describe("reciprocal relay script", () => {
       await readFile(path.resolve("scripts/promote-reciprocal-runtime.ps1"), "utf8"),
       "utf8",
     );
-    await execa("git", ["add", "README.md", ".gitignore", "scripts/reciprocal-direction.ps1", "scripts/promote-reciprocal-runtime.ps1"], { cwd: repo });
+    await writeFile(
+      path.join(repo, "scripts", "package-passive-runtime.ps1"),
+      await readFile(path.resolve("scripts/package-passive-runtime.ps1"), "utf8"),
+      "utf8",
+    );
+    await execa("git", ["add", "README.md", ".gitignore", "scripts/reciprocal-direction.ps1", "scripts/promote-reciprocal-runtime.ps1", "scripts/package-passive-runtime.ps1"], { cwd: repo });
     await execa("git", ["commit", "-m", "initial"], { cwd: repo });
     await execa("git", ["branch", "codex/reciprocal-a"], { cwd: repo });
     await execa("git", ["branch", "codex/reciprocal-b"], { cwd: repo });
@@ -178,18 +183,32 @@ describe("reciprocal relay script", () => {
         repo,
         `- [ ] W0001 | P3 | passive candidate | CANDIDATE commit=${candidateCommit} updated=2026-07-18T00:00:00Z`,
       );
+      const preparedRuntime = path.join(repo, ".tandem", "prepared-runtime", "win-unpacked");
+      await mkdir(preparedRuntime, { recursive: true });
+      await writeFile(path.join(preparedRuntime, "Tandem.exe"), "fake exe\n", "utf8");
 
-      const accepted = await relay(
-        repo,
-        "-Action",
-        "PassiveTest",
-        "-Role",
-        "A",
-        "-Summary",
-        "passive checks green",
-        "-ValidationChecks",
-        "git diff --check refs/tandem-relay/stable refs/tandem-relay/candidate --",
-      );
+      const previousPrepared = process.env.TANDEM_PASSIVE_PACKAGE_PREPARED_WIN_UNPACKED;
+      process.env.TANDEM_PASSIVE_PACKAGE_PREPARED_WIN_UNPACKED = preparedRuntime;
+      let accepted;
+      try {
+        accepted = await relay(
+          repo,
+          "-Action",
+          "PassiveTest",
+          "-Role",
+          "A",
+          "-Summary",
+          "passive checks green",
+          "-ValidationChecks",
+          "git diff --check refs/tandem-relay/stable refs/tandem-relay/candidate --",
+        );
+      } finally {
+        if (previousPrepared === undefined) {
+          delete process.env.TANDEM_PASSIVE_PACKAGE_PREPARED_WIN_UNPACKED;
+        } else {
+          process.env.TANDEM_PASSIVE_PACKAGE_PREPARED_WIN_UNPACKED = previousPrepared;
+        }
+      }
       expect(accepted).toMatchObject({
         outcome: "PASSIVE_ACCEPTED",
         phase: "a-upgrade-pending",
@@ -201,6 +220,9 @@ describe("reciprocal relay script", () => {
 
       const board = await readFile(boardPath, "utf8");
       expect(board).toContain(`- [x] W0001 | P3 | passive candidate | DONE stable=${candidateCommit}`);
+      const buildInfo = JSON.parse(await readFile(path.join(repo, "release", "win-unpacked", "BUILD_INFO.json"), "utf8"));
+      expect(buildInfo.sourceSha).toBe(candidateCommit);
+      expect(await readFile(path.join(repo, "release", "win-unpacked", "Tandem.exe"), "utf8")).toContain("fake exe");
 
       const waitingClaim = await relay(repo, "-Action", "Claim", "-Role", "A");
       expect(waitingClaim).toMatchObject({ outcome: "A_UPGRADE_PENDING" });

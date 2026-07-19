@@ -12,14 +12,14 @@ param(
 $ErrorActionPreference = "Stop"
 
 $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
+$commonRaw = (& git -C $repoRoot rev-parse --git-common-dir).Trim()
+$commonDir = if ([IO.Path]::IsPathRooted($commonRaw)) { $commonRaw } else { [IO.Path]::GetFullPath((Join-Path $repoRoot $commonRaw)) }
+$adminRepo = Split-Path $commonDir -Parent
 if (-not $RelayRoot.Trim()) {
-    $commonRaw = (& git -C $repoRoot rev-parse --git-common-dir).Trim()
-    $commonDir = if ([IO.Path]::IsPathRooted($commonRaw)) { $commonRaw } else { [IO.Path]::GetFullPath((Join-Path $repoRoot $commonRaw)) }
-    $adminRepo = Split-Path $commonDir -Parent
     $RelayRoot = Join-Path (Split-Path $adminRepo -Parent) "Tandem Reciprocal"
 }
 if (-not $Source.Trim()) {
-    $Source = Join-Path $repoRoot "release\win-unpacked"
+    $Source = Join-Path $adminRepo "release\win-unpacked"
 }
 
 function Assert-UnderRoot([string]$Path, [string]$Root) {
@@ -61,6 +61,9 @@ if (-not $SourceSha) {
     } else {
         $SourceSha = (& git -C $repoRoot rev-parse HEAD).Trim()
     }
+}
+if ($sourceBuildInfo -and $sourceBuildInfo.sourceSha -and $SourceSha -and ([string]$sourceBuildInfo.sourceSha -ne $SourceSha)) {
+    throw "Source runtime SHA mismatch: BUILD_INFO has $($sourceBuildInfo.sourceSha), requested $SourceSha."
 }
 $sourceShortSha = if ($SourceSha.Length -ge 7) { $SourceSha.Substring(0, 7) } else { $SourceSha }
 

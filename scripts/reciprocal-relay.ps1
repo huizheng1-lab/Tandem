@@ -1057,6 +1057,40 @@ try {
             exit 0
         }
 
+        $packageScript = Join-Path $Workspace "scripts\package-passive-runtime.ps1"
+        if (-not (Test-Path -LiteralPath $packageScript)) { throw "Passive package helper is missing: $packageScript" }
+        $packageCommand = "powershell -NoProfile -ExecutionPolicy Bypass -File `"$packageScript`" -Workspace `"$Workspace`" -AdminRepo `"$adminRepo`" -SourceSha $head"
+        $preparedPackage = [Environment]::GetEnvironmentVariable("TANDEM_PASSIVE_PACKAGE_PREPARED_WIN_UNPACKED")
+        if ($preparedPackage) {
+            $packageCommand += " -PreparedWinUnpacked `"$preparedPackage`""
+        }
+        $packageCheck = Invoke-ValidationCommand $packageCommand
+        $mechanical += $packageCheck
+        $failed = @($mechanical | Where-Object { -not $_.passed })
+        $checkSummary = @($mechanical | ForEach-Object {
+            [ordered]@{
+                command = $_.command
+                exitCode = [int]$_.exitCode
+                passed = [bool]$_.passed
+                output = (Limit-Text $_.output 6000)
+            }
+        })
+        if ($failed.Count -gt 0) {
+            $state.phase = "paused"
+            $state.pausedFromPhase = "passive-testing"
+            $state.activeRole = $null
+            $state.lastSummary = "Passive package failed for candidate $($state.candidateCommit): $((@($failed | ForEach-Object { $_.command })) -join ', ')"
+            Save-State
+            Write-Result "PASSIVE_FAILED" ([pscustomobject]@{ passiveChecks = $checkSummary })
+            exit 0
+        }
+        $runtimePackage = $null
+        try {
+            $runtimePackage = $packageCheck.output | ConvertFrom-Json
+        } catch {
+            $runtimePackage = [pscustomobject]@{ output = (Limit-Text $packageCheck.output 6000) }
+        }
+
         $acceptedKind = $state.candidateKind
         $previousStableCommit = $state.stableCommit
         $state.stableCommit = $head
@@ -1084,6 +1118,7 @@ try {
         Save-State
         $extra = [pscustomobject]@{
             passiveChecks = $checkSummary
+            runtimePackage = $runtimePackage
             aUpgradeCommand = "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/promote-reciprocal-runtime.ps1 -TargetRole A -SourceSha $head -RelayRoot `"$defaultRelayRoot`""
         }
         if ($continuation) {
@@ -1106,7 +1141,7 @@ try {
         Write-Result "A_UPGRADE_READY" ([pscustomobject]@{
             sourceSha = $state.stableCommit
             promotionCommand = "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/promote-reciprocal-runtime.ps1 -TargetRole A -SourceSha $($state.stableCommit) -RelayRoot `"$defaultRelayRoot`""
-            humanGate = "Confirm passive runtime health manually, then rebuild Executor A from this same commit and run CompleteAUpgrade."
+            humanGate = "Confirm passive runtime health manually, then promote Executor A from this same packaged build and run CompleteAUpgrade."
         })
         exit 0
     }
