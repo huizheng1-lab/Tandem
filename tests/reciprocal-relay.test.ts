@@ -13,7 +13,7 @@ describe("reciprocal relay script", () => {
     await execa("git", ["config", "user.name", "Relay Test"], { cwd: repo });
     await mkdir(path.join(repo, "scripts"), { recursive: true });
     await writeFile(path.join(repo, "README.md"), "initial\n", "utf8");
-    await writeFile(path.join(repo, ".gitignore"), ".tandem/\n", "utf8");
+    await writeFile(path.join(repo, ".gitignore"), ".tandem/\nrelease/\nrelease*/\n", "utf8");
     await writeFile(
       path.join(repo, "scripts", "reciprocal-direction.ps1"),
       await readFile(path.resolve("scripts/reciprocal-direction.ps1"), "utf8"),
@@ -62,6 +62,39 @@ describe("reciprocal relay script", () => {
       "utf8",
     );
     return boardPath;
+  }
+
+  async function withPreparedRuntime<T>(repo: string, run: () => Promise<T>) {
+    const preparedRuntime = path.join(repo, ".tandem", "prepared-runtime", "win-unpacked");
+    await mkdir(preparedRuntime, { recursive: true });
+    await writeFile(path.join(preparedRuntime, "Tandem.exe"), "fake exe\n", "utf8");
+    const previousPrepared = process.env.TANDEM_PASSIVE_PACKAGE_PREPARED_WIN_UNPACKED;
+    process.env.TANDEM_PASSIVE_PACKAGE_PREPARED_WIN_UNPACKED = preparedRuntime;
+    try {
+      return await run();
+    } finally {
+      if (previousPrepared === undefined) {
+        delete process.env.TANDEM_PASSIVE_PACKAGE_PREPARED_WIN_UNPACKED;
+      } else {
+        process.env.TANDEM_PASSIVE_PACKAGE_PREPARED_WIN_UNPACKED = previousPrepared;
+      }
+    }
+  }
+
+  async function passiveAccept(repo: string, summary = "passive checks green") {
+    return withPreparedRuntime(repo, () =>
+      relay(
+        repo,
+        "-Action",
+        "PassiveTest",
+        "-Role",
+        "A",
+        "-Summary",
+        summary,
+        "-ValidationChecks",
+        "git diff --check refs/tandem-relay/stable refs/tandem-relay/candidate --",
+      ),
+    );
   }
 
   async function createCandidate(repo: string, fileText = "initial\ncandidate\n") {
@@ -183,32 +216,7 @@ describe("reciprocal relay script", () => {
         repo,
         `- [ ] W0001 | P3 | passive candidate | CANDIDATE commit=${candidateCommit} updated=2026-07-18T00:00:00Z`,
       );
-      const preparedRuntime = path.join(repo, ".tandem", "prepared-runtime", "win-unpacked");
-      await mkdir(preparedRuntime, { recursive: true });
-      await writeFile(path.join(preparedRuntime, "Tandem.exe"), "fake exe\n", "utf8");
-
-      const previousPrepared = process.env.TANDEM_PASSIVE_PACKAGE_PREPARED_WIN_UNPACKED;
-      process.env.TANDEM_PASSIVE_PACKAGE_PREPARED_WIN_UNPACKED = preparedRuntime;
-      let accepted;
-      try {
-        accepted = await relay(
-          repo,
-          "-Action",
-          "PassiveTest",
-          "-Role",
-          "A",
-          "-Summary",
-          "passive checks green",
-          "-ValidationChecks",
-          "git diff --check refs/tandem-relay/stable refs/tandem-relay/candidate --",
-        );
-      } finally {
-        if (previousPrepared === undefined) {
-          delete process.env.TANDEM_PASSIVE_PACKAGE_PREPARED_WIN_UNPACKED;
-        } else {
-          process.env.TANDEM_PASSIVE_PACKAGE_PREPARED_WIN_UNPACKED = previousPrepared;
-        }
-      }
+      const accepted = await passiveAccept(repo);
       expect(accepted).toMatchObject({
         outcome: "PASSIVE_ACCEPTED",
         phase: "a-upgrade-pending",
@@ -235,6 +243,75 @@ describe("reciprocal relay script", () => {
       expect(completed).toMatchObject({ outcome: "A_UPGRADE_COMPLETED", phase: "idle", nextRole: "A" });
     } finally {
       await rm(repo, { recursive: true, force: true });
+    }
+  }, 30_000);
+
+  windowsIt("D155: intermediate autonomous epic steps return to idle while final steps keep the A-upgrade gate", async () => {
+    const intermediateRepo = await mkdtemp(path.join(tmpdir(), "tandem-relay-d155-intermediate-"));
+    try {
+      await initRepo(intermediateRepo);
+      const step1Commit = await createCandidate(intermediateRepo);
+      await execa("git", ["switch", "codex/reciprocal-a"], { cwd: intermediateRepo });
+      const boardPath = await writeSharedBoard(
+        intermediateRepo,
+        `- [ ] W0001 | P1 | autonomous epic | CANDIDATE epic=true autonomy=full candidate=STEP revision=1 completed=0 step=1/2 plan=process/reciprocal/epics/W0001-plan.md commit=${step1Commit} updated=2026-07-19T00:00:00Z`,
+      );
+
+      const accepted = await passiveAccept(intermediateRepo, "step 1 passive checks green");
+      expect(accepted).toMatchObject({
+        outcome: "PASSIVE_ACCEPTED",
+        phase: "idle",
+        stableCommit: step1Commit,
+        candidateCommit: null,
+        nextRole: "A",
+        activeRole: null,
+      });
+      expect(accepted).not.toHaveProperty("aUpgradeCommand");
+      expect(accepted.autonomousContinuation).toMatchObject({
+        available: true,
+        wishlistId: "W0001",
+        nextStep: "2/2",
+        role: "A",
+        requiresHumanGate: false,
+        maxExtraLifecycleActions: 0,
+      });
+
+      const board = await readFile(boardPath, "utf8");
+      expect(board).toContain("IN_PROGRESS epic=true autonomy=full phase=STEP revision=1 completed=1 step=1/2 next=2/2");
+
+      await execa("git", ["switch", "codex/reciprocal-b"], { cwd: intermediateRepo });
+      const nextClaim = await relay(intermediateRepo, "-Action", "Claim", "-Role", "A");
+      expect(nextClaim).toMatchObject({ outcome: "CLAIMED", phase: "working", activeRole: "A" });
+    } finally {
+      await rm(intermediateRepo, { recursive: true, force: true });
+    }
+
+    const finalRepo = await mkdtemp(path.join(tmpdir(), "tandem-relay-d155-final-"));
+    try {
+      await initRepo(finalRepo);
+      const step2Commit = await createCandidate(finalRepo);
+      await execa("git", ["switch", "codex/reciprocal-a"], { cwd: finalRepo });
+      await writeSharedBoard(
+        finalRepo,
+        `- [ ] W0001 | P1 | autonomous epic | CANDIDATE epic=true autonomy=full candidate=STEP revision=1 completed=1 step=2/2 plan=process/reciprocal/epics/W0001-plan.md commit=${step2Commit} updated=2026-07-19T00:00:00Z`,
+      );
+
+      const acceptedFinal = await passiveAccept(finalRepo, "final step passive checks green");
+      expect(acceptedFinal).toMatchObject({
+        outcome: "PASSIVE_ACCEPTED",
+        phase: "a-upgrade-pending",
+        stableCommit: step2Commit,
+        candidateCommit: null,
+        nextRole: "A",
+        activeRole: null,
+        autonomousContinuation: null,
+      });
+      expect(acceptedFinal.aUpgradeCommand).toContain("-TargetRole A");
+
+      const waitingClaim = await relay(finalRepo, "-Action", "Claim", "-Role", "A");
+      expect(waitingClaim).toMatchObject({ outcome: "A_UPGRADE_PENDING" });
+    } finally {
+      await rm(finalRepo, { recursive: true, force: true });
     }
   }, 30_000);
 

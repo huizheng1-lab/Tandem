@@ -1109,24 +1109,30 @@ try {
         $state.rollbackCommit = $null
         $state.activeRole = $null
         $state.nextRole = "A"
-        $state.phase = "a-upgrade-pending"
+        $state.phase = if ($continuation) { "idle" } else { "a-upgrade-pending" }
         $state.baseCommit = $null
         $state.startedAt = $null
         Reset-ResumeCounter
         $state.lastCompletedCommit = $head
-        $state.lastSummary = if ($Summary.Trim()) { $Summary.Trim() } else { "Passive copy built and verified candidate $head; A runtime upgrade is human-gated." }
+        $state.lastSummary = if ($Summary.Trim()) {
+            $Summary.Trim()
+        } elseif ($continuation) {
+            "Passive copy built and verified intermediate candidate $head; continuing autonomous epic work."
+        } else {
+            "Passive copy built and verified candidate $head; A runtime upgrade is human-gated."
+        }
         Save-State
         $extra = [pscustomobject]@{
             passiveChecks = $checkSummary
             runtimePackage = $runtimePackage
-            aUpgradeCommand = "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/promote-reciprocal-runtime.ps1 -TargetRole A -SourceSha $head -RelayRoot `"$defaultRelayRoot`""
         }
         if ($continuation) {
             $continuation | Add-Member -NotePropertyName role -NotePropertyValue "A" -Force
-            $continuation | Add-Member -NotePropertyName requiresHumanGate -NotePropertyValue $true -Force
+            $continuation | Add-Member -NotePropertyName requiresHumanGate -NotePropertyValue $false -Force
             $continuation | Add-Member -NotePropertyName maxExtraLifecycleActions -NotePropertyValue 0 -Force
             $extra | Add-Member -NotePropertyName autonomousContinuation -NotePropertyValue $continuation -Force
         } else {
+            $extra | Add-Member -NotePropertyName aUpgradeCommand -NotePropertyValue "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/promote-reciprocal-runtime.ps1 -TargetRole A -SourceSha $head -RelayRoot `"$defaultRelayRoot`"" -Force
             $extra | Add-Member -NotePropertyName autonomousContinuation -NotePropertyValue $null -Force
         }
         Write-Result "PASSIVE_ACCEPTED" $extra
