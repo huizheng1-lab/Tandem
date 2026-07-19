@@ -3,7 +3,10 @@ param(
     [string]$Source = (Join-Path (Resolve-Path (Join-Path $PSScriptRoot "..")).Path "release\win-unpacked"),
     [string]$SourceSha = "",
     [string]$BuildRound = "D115",
-    [string]$PromotedRound = "D118"
+    [string]$PromotedRound = "D118",
+    [ValidateSet("A", "B", "Both")]
+    [string]$TargetRole = "Both",
+    [switch]$DryRun
 )
 
 $ErrorActionPreference = "Stop"
@@ -17,9 +20,24 @@ function Assert-UnderRoot([string]$Path, [string]$Root) {
     return $fullPath
 }
 
-$sourceDir = (Resolve-Path -LiteralPath $Source).Path
+$sourceDir = [IO.Path]::GetFullPath($Source)
+if (-not (Test-Path -LiteralPath $sourceDir)) {
+    if ($DryRun) {
+        Write-Host "Dry run: source runtime directory would be required at $sourceDir."
+    } else {
+        throw "Source runtime directory is missing: $sourceDir"
+    }
+} else {
+    $sourceDir = (Resolve-Path -LiteralPath $Source).Path
+}
 $sourceExe = Join-Path $sourceDir "Tandem.exe"
-if (-not (Test-Path -LiteralPath $sourceExe)) { throw "Source runtime is missing Tandem.exe: $sourceExe" }
+if (-not (Test-Path -LiteralPath $sourceExe)) {
+    if ($DryRun) {
+        Write-Host "Dry run: source runtime would need Tandem.exe at $sourceExe."
+    } else {
+        throw "Source runtime is missing Tandem.exe: $sourceExe"
+    }
+}
 $sourceBuildInfoPath = Join-Path $sourceDir "BUILD_INFO.json"
 $sourceBuildInfo = $null
 if (Test-Path -LiteralPath $sourceBuildInfoPath) {
@@ -39,8 +57,14 @@ $sourceShortSha = if ($SourceSha.Length -ge 7) { $SourceSha.Substring(0, 7) } el
 $relayRootFull = [IO.Path]::GetFullPath($RelayRoot)
 $runtimesRoot = Assert-UnderRoot (Join-Path $relayRootFull "runtimes") $relayRootFull
 
-foreach ($role in @("a", "b")) {
+$roles = if ($TargetRole -eq "Both") { @("a", "b") } else { @($TargetRole.ToLowerInvariant()) }
+foreach ($role in $roles) {
     $targetDir = Assert-UnderRoot (Join-Path $runtimesRoot "executor-$role") $runtimesRoot
+    if ($DryRun) {
+        Write-Host "Dry run: would promote executor-$role runtime from $sourceDir to $targetDir at $sourceShortSha."
+        continue
+    }
+
     New-Item -ItemType Directory -Path $targetDir -Force | Out-Null
 
     $running = Get-Process -Name Tandem -ErrorAction SilentlyContinue | Where-Object {

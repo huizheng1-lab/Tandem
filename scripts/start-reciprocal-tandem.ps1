@@ -109,6 +109,7 @@ function Start-Executor([string]$SelectedRole) {
     $userData = Join-Path $RelayRoot "user-data\executor-$slug"
     $targetSlug = if ($SelectedRole -eq "A") { "b" } else { "a" }
     $targetWorktree = Join-Path $RelayRoot "worktrees\copy-$targetSlug"
+    $mode = if ($SelectedRole -eq "A") { "sole producer" } else { "passive build/launch target; no scheduled agentic wishlist work" }
     $automationPort = if ($SelectedRole -eq "A") { $AutomationPortA } else { $AutomationPortB }
     $automationTokenFile = Join-Path $stateHome "automation.json"
     if (-not (Test-Path -LiteralPath $exe)) { throw "Executor $SelectedRole runtime is missing: $exe" }
@@ -162,7 +163,7 @@ function Start-Executor([string]$SelectedRole) {
         $env:TANDEM_PROTECTED_ROOTS = $oldProtectedRoots
         $env:TANDEM_CODEX_WRITABLE_ROOTS = $oldCodexWritableRoots
     }
-    Write-Host "Started executor $SelectedRole hidden as breakaway PID $launchedPid; automation endpoint 127.0.0.1:$automationPort targets $targetWorktree."
+    Write-Host "Started executor $SelectedRole hidden as breakaway PID $launchedPid ($mode); automation endpoint 127.0.0.1:$automationPort targets $targetWorktree."
 }
 
 if ($Role -in @("A", "Both")) { Start-Executor "A" }

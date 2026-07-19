@@ -1,6 +1,6 @@
 param(
     [Parameter(Mandatory = $true)]
-    [ValidateSet("Status", "Claim", "Validate", "Accept", "Complete", "Rollback", "CompleteRollback", "Abandon", "Pause", "Resume", "ReconcileMain", "Reset")]
+    [ValidateSet("Status", "Claim", "Validate", "PassiveTest", "PrepareAUpgrade", "CompleteAUpgrade", "Accept", "Complete", "Rollback", "CompleteRollback", "Abandon", "Pause", "Resume", "ReconcileMain", "Reset")]
     [string]$Action,
 
     [ValidateSet("A", "B")]
@@ -58,7 +58,7 @@ function Test-Git {
 
 function Get-RoleConfig([string]$SelectedRole) {
     if ($SelectedRole -eq "A") {
-        return @{ Target = "codex/reciprocal-b"; Peer = "codex/reciprocal-a"; Next = "B" }
+        return @{ Target = "codex/reciprocal-b"; Peer = "codex/reciprocal-a"; Next = "A" }
     }
     return @{ Target = "codex/reciprocal-a"; Peer = "codex/reciprocal-b"; Next = "A" }
 }
@@ -238,12 +238,14 @@ try {
 
     function Invoke-ValidationCommand([string]$Command) {
         $oldErrorAction = $ErrorActionPreference
+        Push-Location -LiteralPath $Workspace
         try {
             $ErrorActionPreference = "Continue"
             $output = @(& cmd.exe /d /s /c $Command 2>&1)
             $exitCode = $LASTEXITCODE
         } finally {
             $ErrorActionPreference = $oldErrorAction
+            Pop-Location
         }
         $text = ($output | ForEach-Object { $_.ToString() }) -join [Environment]::NewLine
         return [pscustomobject]@{
@@ -921,8 +923,31 @@ try {
 
     if (-not $Role) { throw "$Action requires -Role A or -Role B." }
     $roleConfig = Get-RoleConfig $Role
+    if ($Action -eq "Claim") {
+        if ($Role -eq "B") {
+            Write-Result "WAIT" ([pscustomobject]@{ passiveOnly = $true; reason = "executor-b-no-agentic-turns" })
+            exit 0
+        }
+        if ($state.phase -eq "passive-testing" -or $state.candidateCommit) {
+            Write-Result "PASSIVE_TEST" ([pscustomobject]@{
+                passiveTestCommand = "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/reciprocal-relay.ps1 -Action PassiveTest -Role A"
+            })
+            exit 0
+        }
+        if ($state.phase -eq "a-upgrade-pending") {
+            Write-Result "A_UPGRADE_PENDING" ([pscustomobject]@{
+                prepareCommand = "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/reciprocal-relay.ps1 -Action PrepareAUpgrade -Role A -DryRun"
+                completeCommand = "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/reciprocal-relay.ps1 -Action CompleteAUpgrade -Role A -Force -Summary '<human confirmed A rebuild>'"
+            })
+            exit 0
+        }
+    }
     $branch = (@(Invoke-Git branch --show-current))[0].Trim()
-    if ($branch -ne $roleConfig.Target) {
+    $expectedBranch = if ($Action -in @("PassiveTest", "PrepareAUpgrade", "CompleteAUpgrade")) { "codex/reciprocal-a" } else { $roleConfig.Target }
+    if ($branch -ne $expectedBranch) {
+        if ($Action -in @("PassiveTest", "PrepareAUpgrade", "CompleteAUpgrade")) {
+            throw "$Action must run from passive branch $expectedBranch, but this worktree is on $branch."
+        }
         throw "Role $Role must target branch $($roleConfig.Target), but this worktree is on $branch."
     }
 
@@ -988,6 +1013,117 @@ try {
         exit 0
     }
 
+    if ($Action -eq "PassiveTest") {
+        if ($Role -ne "A") { throw "PassiveTest is driven by Executor A and must use -Role A." }
+        if ($state.phase -ne "passive-testing") { throw "PassiveTest is valid only during passive-testing. Current phase: $($state.phase)." }
+        if (-not $state.candidateCommit) { throw "PassiveTest requires a pending candidate commit." }
+        Assert-Clean "PassiveTest requires a clean passive worktree"
+        Invoke-Git merge --ff-only $state.candidateCommit | Out-Null
+        $head = (@(Invoke-Git rev-parse HEAD))[0].Trim()
+        if ($head -ne $state.candidateCommit) { throw "PassiveTest did not land candidate commit $($state.candidateCommit)." }
+
+        $checks = if ($ValidationChecks -and $ValidationChecks.Count -gt 0) {
+            $ValidationChecks
+        } else {
+            @(
+                "npm run typecheck",
+                "npm test",
+                "npm run build",
+                "git diff --check refs/tandem-relay/stable refs/tandem-relay/candidate --"
+            )
+        }
+        $mechanical = @()
+        foreach ($check in $checks) {
+            $mechanical += Invoke-ValidationCommand $check
+        }
+        $failed = @($mechanical | Where-Object { -not $_.passed })
+        $checkSummary = @($mechanical | ForEach-Object {
+            [ordered]@{
+                command = $_.command
+                exitCode = [int]$_.exitCode
+                passed = [bool]$_.passed
+                output = (Limit-Text $_.output 6000)
+            }
+        })
+        if ($failed.Count -gt 0) {
+            $state.phase = "paused"
+            $state.pausedFromPhase = "passive-testing"
+            $state.activeRole = $null
+            $state.lastSummary = "Passive build/test failed for candidate $($state.candidateCommit): $((@($failed | ForEach-Object { $_.command })) -join ', ')"
+            Save-State
+            Write-Result "PASSIVE_FAILED" ([pscustomobject]@{ passiveChecks = $checkSummary })
+            exit 0
+        }
+
+        $acceptedKind = $state.candidateKind
+        $previousStableCommit = $state.stableCommit
+        $state.stableCommit = $head
+        Update-RelayRefs
+        $continuation = $null
+        try {
+            $continuation = Complete-AcceptedDirectionCandidate $head $acceptedKind
+        } catch {
+            $state.stableCommit = $previousStableCommit
+            Update-RelayRefs
+            throw
+        }
+        $state.stableCommit = $head
+        $state.candidateCommit = $null
+        $state.candidateKind = $null
+        $state.rollbackCommit = $null
+        $state.activeRole = $null
+        $state.nextRole = "A"
+        $state.phase = "a-upgrade-pending"
+        $state.baseCommit = $null
+        $state.startedAt = $null
+        Reset-ResumeCounter
+        $state.lastCompletedCommit = $head
+        $state.lastSummary = if ($Summary.Trim()) { $Summary.Trim() } else { "Passive copy built and verified candidate $head; A runtime upgrade is human-gated." }
+        Save-State
+        $extra = [pscustomobject]@{
+            passiveChecks = $checkSummary
+            aUpgradeCommand = "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/promote-reciprocal-runtime.ps1 -TargetRole A -SourceSha $head"
+        }
+        if ($continuation) {
+            $continuation | Add-Member -NotePropertyName role -NotePropertyValue "A" -Force
+            $continuation | Add-Member -NotePropertyName requiresHumanGate -NotePropertyValue $true -Force
+            $continuation | Add-Member -NotePropertyName maxExtraLifecycleActions -NotePropertyValue 0 -Force
+            $extra | Add-Member -NotePropertyName autonomousContinuation -NotePropertyValue $continuation -Force
+        } else {
+            $extra | Add-Member -NotePropertyName autonomousContinuation -NotePropertyValue $null -Force
+        }
+        Write-Result "PASSIVE_ACCEPTED" $extra
+        exit 0
+    }
+
+    if ($Action -eq "PrepareAUpgrade") {
+        if ($Role -ne "A") { throw "PrepareAUpgrade is driven by Executor A and must use -Role A." }
+        if ($state.phase -ne "a-upgrade-pending") { throw "PrepareAUpgrade is valid only while a-upgrade-pending. Current phase: $($state.phase)." }
+        $promotionScript = Join-Path $Workspace "scripts\promote-reciprocal-runtime.ps1"
+        if (-not (Test-Path -LiteralPath $promotionScript)) { throw "Missing promotion helper: $promotionScript" }
+        Write-Result "A_UPGRADE_READY" ([pscustomobject]@{
+            sourceSha = $state.stableCommit
+            promotionCommand = "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/promote-reciprocal-runtime.ps1 -TargetRole A -SourceSha $($state.stableCommit)"
+            humanGate = "Confirm passive runtime health manually, then rebuild Executor A from this same commit and run CompleteAUpgrade."
+        })
+        exit 0
+    }
+
+    if ($Action -eq "CompleteAUpgrade") {
+        if ($Role -ne "A") { throw "CompleteAUpgrade is driven by Executor A and must use -Role A." }
+        if (-not $Force) { throw "CompleteAUpgrade requires -Force after human confirmation." }
+        if (-not $Summary.Trim()) { throw "CompleteAUpgrade requires a human-readable confirmation summary." }
+        if ($state.phase -ne "a-upgrade-pending") { throw "CompleteAUpgrade is valid only while a-upgrade-pending. Current phase: $($state.phase)." }
+        $state.nextRole = "A"
+        $state.activeRole = $null
+        Set-IdleOrPauseAfterTurn
+        Reset-ResumeCounter
+        $state.lastSummary = $Summary.Trim()
+        Save-State
+        Write-Result "A_UPGRADE_COMPLETED"
+        exit 0
+    }
+
     if ($Action -eq "Validate" -and $DryRun) {
         if ($state.phase -ne "paused" -or $state.activeRole) {
             throw "Validate -DryRun requires a paused relay with no active owner. Current phase: $($state.phase), owner: $($state.activeRole)."
@@ -1024,7 +1160,7 @@ try {
             throw "Rollback tree does not match the last stable commit."
         }
         $state.turn = [int]$state.turn + 1
-        $state.nextRole = $roleConfig.Next
+        $state.nextRole = "A"
         $state.activeRole = $null
         Set-IdleOrPauseAfterTurn
         $state.baseCommit = $null
@@ -1070,6 +1206,7 @@ try {
     }
 
     if ($state.phase -ne "working") { throw "Complete is valid only during the working phase." }
+    if ($Role -ne "A") { throw "Only Executor A can complete reciprocal producer work." }
     if (-not $Summary.Trim()) { throw "Complete requires a verification summary." }
     Assert-Clean "Complete requires a clean worktree"
     $head = (@(Invoke-Git rev-parse HEAD))[0].Trim()
@@ -1083,9 +1220,11 @@ try {
     }
 
     $state.turn = [int]$state.turn + 1
-    $state.nextRole = $roleConfig.Next
+    $state.nextRole = "A"
     $state.activeRole = $null
-    Set-IdleOrPauseAfterTurn
+    $state.phase = if ($state.pauseAfterTurn) { "paused" } else { "passive-testing" }
+    $state.pausedFromPhase = if ($state.pauseAfterTurn) { "passive-testing" } else { $null }
+    $state.pauseAfterTurn = $false
     $state.baseCommit = $null
     $state.candidateCommit = $head
     $state.candidateKind = "improvement"

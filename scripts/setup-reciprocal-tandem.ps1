@@ -74,7 +74,7 @@ function Initialize-ExecutorState([string]$Role, [string]$TargetWorktree) {
 }
 
 function Initialize-Schedule([string]$TargetWorktree, [string]$Role, [string]$Cron) {
-    $prompt = "Follow the injected TANDEM.md and execute one reciprocal improvement invocation. Begin with the Claim command. If a validated fully autonomous epic returns autonomousContinuation.available=true, continue with exactly that one next step in the same invocation, then stop."
+    $prompt = "Follow the injected TANDEM.md and execute one reciprocal improvement invocation as Executor A. Begin with the Claim command. If the relay reports PASSIVE_TEST, run the passive test command instead of starting new work. If it reports A_UPGRADE_PENDING, stop for the human gate."
     $schedule = @([ordered]@{
         id = "relay-$($Role.ToLowerInvariant())"
         cron = $Cron
@@ -118,14 +118,15 @@ New-Item -ItemType Directory -Path (Split-Path $excludePath -Parent) -Force | Ou
 $exclude = if (Test-Path -LiteralPath $excludePath) { Get-Content -LiteralPath $excludePath } else { @() }
 if ($exclude -notcontains "/TANDEM.md") { Add-Content -LiteralPath $excludePath -Value "/TANDEM.md" }
 
-# Executor A edits B, so B receives A's local project instructions; vice versa for executor B.
+# Executor A edits copy-b as the sole producer. Copy-a remains B's passive build/launch
+# target and intentionally receives no scheduled agentic wishlist prompt.
 Copy-Item -LiteralPath $templateA -Destination (Join-Path $worktreeB "TANDEM.md") -Force
 Copy-Item -LiteralPath $templateB -Destination (Join-Path $worktreeA "TANDEM.md") -Force
 Initialize-SharedDirection @($worktreeA, $worktreeB)
 Initialize-ExecutorState "A" $worktreeB
 Initialize-ExecutorState "B" $worktreeA
 Initialize-Schedule $worktreeB "A" "7 * * * *"
-Initialize-Schedule $worktreeA "B" "37 * * * *"
+Write-Json @() (Join-Path $worktreeA ".tandem\schedules.json")
 
 if (-not $SkipInstall) {
     Invoke-Checked npm @("ci") $worktreeA
@@ -150,8 +151,8 @@ if ($ResetRelay -or -not (Test-Path -LiteralPath $relayStatePath)) {
 
 [ordered]@{
     relayRoot = $RelayRoot
-    executorA = [ordered]@{ runtime = (Join-Path $RelayRoot "runtimes\executor-a\Tandem.exe"); target = $worktreeB; branch = $branchB; cron = "7 * * * *" }
-    executorB = [ordered]@{ runtime = (Join-Path $RelayRoot "runtimes\executor-b\Tandem.exe"); target = $worktreeA; branch = $branchA; cron = "37 * * * *" }
+    executorA = [ordered]@{ runtime = (Join-Path $RelayRoot "runtimes\executor-a\Tandem.exe"); target = $worktreeB; branch = $branchB; cron = "7 * * * *"; role = "sole-producer" }
+    executorB = [ordered]@{ runtime = (Join-Path $RelayRoot "runtimes\executor-b\Tandem.exe"); target = $worktreeA; branch = $branchA; cron = $null; role = "passive-build-launch-target" }
     sharedDirection = (Join-Path $RelayRoot "control\SHARED_DIRECTION.md")
     nextRole = "A"
 } | ConvertTo-Json -Depth 5
