@@ -32,4 +32,4 @@ Verification:
 - git diff --check passed with only pre-existing LF-to-CRLF warnings for scripts/reciprocal-direction.ps1 and scripts/setup-reciprocal-tandem.ps1.
 
 Commit:
-- Pending marker commit.
+- 82a3f88 D154-1: mark approval gate completion fix
