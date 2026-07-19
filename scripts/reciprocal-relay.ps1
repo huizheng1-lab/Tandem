@@ -529,7 +529,7 @@ try {
                 $total = [int]$Matches[2]
                 if ($step -lt $total) {
                     & $directionScript -Action AcceptStep -Id $id -Commit $AcceptedCommit -ControlPath $boardPath | Out-Null
-                    if ($metadata.autonomy -eq "full") { return New-AutonomousContinuation $id "$($step + 1)/$total" }
+                    return New-AutonomousContinuation $id "$($step + 1)/$total"
                 } else {
                     & $directionScript -Action Complete -Id $id -Commit $AcceptedCommit -ControlPath $boardPath | Out-Null
                 }
@@ -1058,6 +1058,9 @@ try {
         }
 
         $packageScript = Join-Path $Workspace "scripts\package-passive-runtime.ps1"
+        if (-not (Test-Path -LiteralPath $packageScript)) {
+            $packageScript = Join-Path $PSScriptRoot "package-passive-runtime.ps1"
+        }
         if (-not (Test-Path -LiteralPath $packageScript)) { throw "Passive package helper is missing: $packageScript" }
         $packageCommand = "powershell -NoProfile -ExecutionPolicy Bypass -File `"$packageScript`" -Workspace `"$Workspace`" -AdminRepo `"$adminRepo`" -SourceSha $head"
         $preparedPackage = [Environment]::GetEnvironmentVariable("TANDEM_PASSIVE_PACKAGE_PREPARED_WIN_UNPACKED")

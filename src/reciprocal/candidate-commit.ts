@@ -178,9 +178,28 @@ export async function commitReciprocalCandidate(options: ReciprocalCandidateComm
     options.summary ?? options.report.summary
   ]);
 
+  let continuationNote = "";
+  try {
+    const continuationOutput = await runRaw(runner, options.cwd, "powershell", [
+      "-NoProfile",
+      "-ExecutionPolicy",
+      "Bypass",
+      "-File",
+      path.join(options.cwd, "scripts", "continue-reciprocal-automation.ps1"),
+      "-Workspace",
+      options.cwd,
+      "-MaxTransitions",
+      "3"
+    ]);
+    continuationNote = `\nImmediate reciprocal continuation attempted: ${continuationOutput.trim()}`;
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    continuationNote = `\nImmediate reciprocal continuation unavailable; scheduled tick fallback remains active: ${message}`;
+  }
+
   return {
     ...options.report,
-    summary: `${options.report.summary}\n\nReciprocal relay candidate committed by Tandem app layer: ${commit}`,
+    summary: `${options.report.summary}\n\nReciprocal relay candidate committed by Tandem app layer: ${commit}${continuationNote}`,
     deviationsFromPlan: [...options.report.deviationsFromPlan, `Tandem app layer created reciprocal relay commit ${commit}`]
   };
 }

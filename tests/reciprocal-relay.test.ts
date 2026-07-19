@@ -254,7 +254,7 @@ describe("reciprocal relay script", () => {
       await execa("git", ["switch", "codex/reciprocal-a"], { cwd: intermediateRepo });
       const boardPath = await writeSharedBoard(
         intermediateRepo,
-        `- [ ] W0001 | P1 | autonomous epic | CANDIDATE epic=true autonomy=full candidate=STEP revision=1 completed=0 step=1/2 plan=process/reciprocal/epics/W0001-plan.md commit=${step1Commit} updated=2026-07-19T00:00:00Z`,
+        `- [ ] W0001 | P1 | approved plan-gated epic | CANDIDATE epic=true autonomy=plan-gated candidate=STEP revision=1 completed=0 step=1/2 plan=process/reciprocal/epics/W0001-plan.md commit=${step1Commit} updated=2026-07-19T00:00:00Z`,
       );
 
       const accepted = await passiveAccept(intermediateRepo, "step 1 passive checks green");
@@ -277,7 +277,7 @@ describe("reciprocal relay script", () => {
       });
 
       const board = await readFile(boardPath, "utf8");
-      expect(board).toContain("IN_PROGRESS epic=true autonomy=full phase=STEP revision=1 completed=1 step=1/2 next=2/2");
+      expect(board).toContain("IN_PROGRESS epic=true autonomy=plan-gated phase=STEP revision=1 completed=1 step=1/2 next=2/2");
 
       await execa("git", ["switch", "codex/reciprocal-b"], { cwd: intermediateRepo });
       const nextClaim = await relay(intermediateRepo, "-Action", "Claim", "-Role", "A");
