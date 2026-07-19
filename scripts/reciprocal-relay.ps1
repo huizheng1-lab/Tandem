@@ -92,8 +92,10 @@ $Workspace = $root
 $currentHead = (@(Invoke-Git rev-parse HEAD))[0].Trim()
 $commonRaw = (@(Invoke-Git rev-parse --git-common-dir))[0].Trim()
 $commonDir = if ([IO.Path]::IsPathRooted($commonRaw)) { $commonRaw } else { [IO.Path]::GetFullPath((Join-Path $Workspace $commonRaw)) }
-$relayDir = Join-Path $commonDir "tandem-relay"
-$statePath = Join-Path $relayDir "state.json"
+    $relayDir = Join-Path $commonDir "tandem-relay"
+    $statePath = Join-Path $relayDir "state.json"
+    $adminRepo = Split-Path $commonDir -Parent
+    $defaultRelayRoot = Join-Path (Split-Path $adminRepo -Parent) "Tandem Reciprocal"
 New-Item -ItemType Directory -Path $relayDir -Force | Out-Null
 
 $sha = [Security.Cryptography.SHA256]::Create()
@@ -1082,7 +1084,7 @@ try {
         Save-State
         $extra = [pscustomobject]@{
             passiveChecks = $checkSummary
-            aUpgradeCommand = "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/promote-reciprocal-runtime.ps1 -TargetRole A -SourceSha $head"
+            aUpgradeCommand = "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/promote-reciprocal-runtime.ps1 -TargetRole A -SourceSha $head -RelayRoot `"$defaultRelayRoot`""
         }
         if ($continuation) {
             $continuation | Add-Member -NotePropertyName role -NotePropertyValue "A" -Force
@@ -1103,7 +1105,7 @@ try {
         if (-not (Test-Path -LiteralPath $promotionScript)) { throw "Missing promotion helper: $promotionScript" }
         Write-Result "A_UPGRADE_READY" ([pscustomobject]@{
             sourceSha = $state.stableCommit
-            promotionCommand = "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/promote-reciprocal-runtime.ps1 -TargetRole A -SourceSha $($state.stableCommit)"
+            promotionCommand = "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/promote-reciprocal-runtime.ps1 -TargetRole A -SourceSha $($state.stableCommit) -RelayRoot `"$defaultRelayRoot`""
             humanGate = "Confirm passive runtime health manually, then rebuild Executor A from this same commit and run CompleteAUpgrade."
         })
         exit 0
