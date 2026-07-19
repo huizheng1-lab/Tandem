@@ -1,0 +1,22 @@
+Round: D152
+
+Dashboard-side change:
+- Added a relay-aware review note to C:\Users\huizh\Apps\Tandem Reciprocal\dashboard that reads the real relay state.
+- A new, unreviewed build is detected when .git\tandem-relay\state.json is phase=a-upgrade-pending and stableCommit has no recorded review decision.
+- The release/win-unpacked build is launchable only when BUILD_INFO.json sourceSha matches that stableCommit; the dashboard now warns instead of offering Launch Candidate for a stale release build.
+- Per-SHA reviewed state is persisted in C:\Users\huizh\Apps\Tandem Reciprocal\control\UPDATE_REVIEW_INDEX.json and backfilled from the existing UPDATE_REVIEWS.md audit log. New decisions continue to append to UPDATE_REVIEWS.md and also update the JSON index.
+- The note summary uses wishlist context and avoids code/diff wording. For the current W0014 accepted SHA it reports: "Session search backend work only - nothing new to see yet."
+
+Repo commits:
+- No implementation commit: D152 dashboard files and review state live outside this repo.
+- Marker commit: see the D152 marker commit in git history.
+
+Verification:
+- node --check C:\Users\huizh\Apps\Tandem Reciprocal\dashboard\server.mjs
+- node --check C:\Users\huizh\Apps\Tandem Reciprocal\dashboard\public\app.js
+- node --test C:\Users\huizh\Apps\Tandem Reciprocal\dashboard\lib.nodecheck.mjs
+- Live proof on temporary port 4797: review note appeared for stable 8e92806, summary was backend-only, and message warned release/win-unpacked still contained stale 583fff3.
+- Recorded dismiss review for 8e92806320abc24a9edd6f3d7ee5df7dded5a11d through /api/update/dismiss-review.
+- After the decision, /api/status returned reviewNote.visible=false, reviewNote.reviewed=true, decision=dismiss.
+- Fresh-server proof on temporary port 4798 showed the note stayed cleared after restart.
+- Live dashboard backend on 4782 was gracefully restarted via /api/quit and start-dashboard.ps1 -NoBrowser; restarted /api/status shows visible=false, reviewed=true, decision=dismiss, and the stale release build remains non-launchable.
