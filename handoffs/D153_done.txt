@@ -1,0 +1,41 @@
+Round: D153
+
+Implementation commits:
+- 67f7842 D153-1: package passive runtime candidates
+
+Summary:
+- Added scripts/package-passive-runtime.ps1 so PassiveTest can build the Electron runtime in a fresh package directory, verify Tandem.exe, stamp BUILD_INFO.json, and swap the result into the admin repo canonical release/win-unpacked path.
+- Wired scripts/reciprocal-relay.ps1 PassiveTest to run the package helper after mechanical checks pass and before accepting the candidate as stable.
+- Updated scripts/promote-reciprocal-runtime.ps1 to default to the admin repo release/win-unpacked package and reject source SHA mismatches from BUILD_INFO.json.
+- Updated reciprocal protocol docs and tests to describe and exercise the packaged-build handoff.
+- Kept the dashboard fallback messaging as a safety net for missing/stale automated packaging, not as the normal path.
+
+Lifecycle placement:
+- The app package build now runs inside PassiveTest after type/test/build/diff checks succeed and before the relay advances stable or enters a-upgrade-pending.
+
+Lock safety:
+- The package helper builds into release/.passive-package-builds/<sha>-<timestamp>-<pid>, copies into a temporary staging directory, then swaps staging into release/win-unpacked with bounded retries.
+- If the canonical target cannot be replaced, the helper attempts to restore the prior release/win-unpacked from its backup.
+- Old backups and fresh build roots are cleaned with bounded retries so transient EBUSY locks do not corrupt the canonical artifact.
+
+SHA persistence:
+- release/win-unpacked/BUILD_INFO.json records sourceSha, sourceShortSha, sourceBranch, builtAt, artifact, packagedBy, and passiveWorkspace.
+- The promotion helper validates BUILD_INFO.json sourceSha before promoting a runtime.
+
+Live proof:
+- Ran scripts/package-passive-runtime.ps1 from the admin repo against passive workspace C:\Users\huizh\Apps\Tandem Reciprocal\worktrees\copy-a for source 396a18da5e10bf0ca2481c6e3ab1ae2c633e55d6.
+- Verified C:\Users\huizh\Apps\HZ code\release\win-unpacked\Tandem.exe exists and BUILD_INFO.json records sourceSha 396a18da5e10bf0ca2481c6e3ab1ae2c633e55d6.
+- Dashboard status on port 4782 reported candidateUpdate.sourceSha 396a18da5e10bf0ca2481c6e3ab1ae2c633e55d6 and previewReady true.
+- Launched the dashboard Launch Candidate preview from the canonical package; status reported running true and releaseSha 396a18d, then the candidate preview was stopped.
+- PrepareAUpgrade dry-run exposed the A promotion command for source 396a18da5e10bf0ca2481c6e3ab1ae2c633e55d6.
+- promote-reciprocal-runtime.ps1 -DryRun validated and selected the admin repo release/win-unpacked package as the source for Executor A.
+- CompleteAUpgrade was not run because Executor A is currently running from runtime source 8e92806 while the canonical package is 396a18d. Completing without a human runtime promotion would weaken the gate, and stopping/promoting the live reciprocal runtime was intentionally left for the human gate.
+
+Verification:
+- PowerShell syntax parse: passed for scripts/package-passive-runtime.ps1, scripts/reciprocal-relay.ps1, and scripts/promote-reciprocal-runtime.ps1.
+- Dashboard syntax/node tests: node --check server.mjs, node --check public/app.js, and node --test lib.nodecheck.mjs passed.
+- Focused relay test: npx vitest run tests/reciprocal-relay.test.ts passed, 6 tests.
+- npm run typecheck passed.
+- npm test passed, 44 files passed, 1 skipped, 443 tests passed, 1 skipped.
+- npm run build passed.
+- git diff --check passed with only LF-to-CRLF working-copy warnings.
