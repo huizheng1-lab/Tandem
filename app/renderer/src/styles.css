@@ -292,6 +292,124 @@ select {
   opacity: 0.78;
 }
 
+.srOnly {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+}
+
+.sessionSearchField input {
+  box-sizing: border-box;
+  width: 100%;
+  min-width: 0;
+  border: 1px solid var(--border-strong);
+  border-radius: 6px;
+  color: var(--text);
+  background: var(--surface-inset);
+  padding: 8px 9px;
+  font: inherit;
+  font-size: 12px;
+}
+
+.sessionSearchField input:focus-visible,
+.sessionSearchRow:focus-visible {
+  outline: 2px solid var(--accent-border);
+  outline-offset: 2px;
+}
+
+.sessionSearchResults,
+.sessionSearchList {
+  display: grid;
+  min-width: 0;
+  gap: 6px;
+}
+
+.sessionSearchList {
+  max-height: 420px;
+  overflow-x: hidden;
+  overflow-y: auto;
+}
+
+.sessionSearchHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.sessionSearchHeader .linkButton {
+  flex: 0 0 auto;
+  padding: 4px 6px;
+}
+
+.sessionSearchStatus,
+.sessionSearchSkipped,
+.sessionSearchEmpty {
+  color: var(--text-subtle);
+  font-size: 11px;
+  line-height: 1.35;
+}
+
+.sessionSearchSkipped {
+  border: 1px solid var(--warning-border);
+  border-radius: 5px;
+  color: var(--warning-text);
+  background: var(--warning-bg);
+  padding: 6px;
+}
+
+.sessionSearchRow {
+  display: grid;
+  min-width: 0;
+  gap: 5px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--text-strong);
+  background: var(--surface-raised);
+  padding: 8px;
+  text-align: left;
+}
+
+.sessionSearchRow:hover {
+  border-color: var(--border-strong);
+}
+
+.sessionSearchTitle {
+  overflow-wrap: anywhere;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.sessionSearchMeta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 3px 7px;
+  color: var(--text-subtle);
+  font-size: 10px;
+}
+
+.sessionSearchProject {
+  flex-basis: 100%;
+  overflow-wrap: anywhere;
+}
+
+.sessionSearchSnippet {
+  overflow-wrap: anywhere;
+  color: var(--text-muted);
+  font-size: 11px;
+  line-height: 1.4;
+}
+
+.sessionSearchHighlight {
+  border-radius: 2px;
+  color: var(--warning-text);
+  background: var(--warning-bg);
+  padding: 0 1px;
+}
+
 .sessionTitle {
   display: grid;
   gap: 3px;
