@@ -10,8 +10,8 @@ Normal lifecycle:
 
 1. `idle`, `nextRole=A`: A may `Claim`.
 2. `working`, `activeRole=A`: A claims a human wishlist item, plans, implements, runs its internal Tandem leader/worker/review lifecycle, verifies, and reports the exact changed files. Tandem's unsandboxed app layer stages only those files, creates one `relay:` commit, marks the wishlist item `CANDIDATE`, and runs `Complete`.
-3. `passive-testing`, no active owner: A's candidate is pending. No executor may start new wishlist work. `Claim -Role A` reports `PASSIVE_TEST`; `Claim -Role B` reports passive `WAIT`. Run `PassiveTest -Role A` from copy A (`codex/reciprocal-a`). It fast-forwards the passive copy to the candidate, runs mechanical checks, and refuses to call a model.
-4. `a-upgrade-pending`, no active owner: the passive copy accepted the candidate and the stable ref now points at it, but A's running runtime has not been rebuilt from that same verified commit. `PrepareAUpgrade -Role A -DryRun` exposes the exact `promote-reciprocal-runtime.ps1 -TargetRole A` command and records the human gate. `CompleteAUpgrade -Role A -Force` is valid only after a human confirms the A runtime rebuild.
+3. `passive-testing`, no active owner: A's candidate is pending. No executor may start new wishlist work. `Claim -Role A` reports `PASSIVE_TEST`; `Claim -Role B` reports passive `WAIT`. Run `PassiveTest -Role A` from copy A (`codex/reciprocal-a`). It fast-forwards the passive copy to the candidate, runs mechanical checks, packages the Electron app into the admin repo's canonical `release/win-unpacked`, and refuses to call a model.
+4. `a-upgrade-pending`, no active owner: the passive copy accepted the candidate and the stable ref now points at it, but A's running runtime has not been promoted from that same verified build. `PrepareAUpgrade -Role A -DryRun` exposes the exact `promote-reciprocal-runtime.ps1 -TargetRole A` command and records the human gate. `CompleteAUpgrade -Role A -Force` is valid only after a human confirms the A runtime promotion.
 5. Back to `idle`, `nextRole=A`.
 
 Failure and recovery:
@@ -60,12 +60,13 @@ B has no schedule and no wishlist prompt loop. It may be launched so copy A can 
 - `npm test`
 - `npm run build`
 - `git diff --check refs/tandem-relay/stable refs/tandem-relay/candidate --`
+- `scripts/package-passive-runtime.ps1`, which runs Electron packaging in a fresh output directory, verifies `Tandem.exe`, stamps `BUILD_INFO.json`, and swaps it into the admin repo's `release/win-unpacked`
 
 Passing passive checks advances `refs/tandem-relay/stable`, updates the shared direction item when a matching candidate is found, clears the candidate, and enters `a-upgrade-pending`. Failing checks pause from `passive-testing`.
 
 ## A Runtime Upgrade Gate
 
-Self-modification safety also means A must not rebuild or redeploy its own live runtime. After B's passive copy is built/launched and mechanically healthy from A's candidate, a human must confirm the passive runtime health and then use the existing promotion helper to rebuild A from the same verified commit:
+Self-modification safety also means A must not redeploy its own live runtime. After `PassiveTest` packages the verified candidate and the human confirms the candidate preview's functional behavior, a human uses the existing promotion helper to promote A from that same verified canonical build:
 
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts/promote-reciprocal-runtime.ps1 -TargetRole A -SourceSha <stable-commit>

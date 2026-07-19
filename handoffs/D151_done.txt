@@ -1,0 +1,41 @@
+Round: D151
+
+Implementation commits:
+- 1e0f14662cd36a5a9b48520d0c517ca22b5032bd - D151-1: make reciprocal relay single-producer
+- e94a3d5189e6ab4a7a42bbdc24f560db840173a6 - D151-2: reconcile reciprocal rollback history into master
+- d383514d6e367b432b1251d97f5d3dc64fda81ef - D151-3: resolve A promotion root from worktrees
+
+Live proof commit:
+- b994a7b7849d95fc53905ce828a93c2706f87d17 - relay: D151 live proof single-producer passive gate
+
+State-machine summary:
+- Executor A is the only producer. `Claim -Role A` starts `working` only when the relay is idle, routes pending candidates to `PASSIVE_TEST`, and routes verified commits waiting for runtime delivery to `A_UPGRADE_PENDING`.
+- Executor B has no producer path. `Claim -Role B` returns `WAIT` with `passiveOnly=true` and does not acquire ownership.
+- A `Complete` now moves a one-commit candidate to `phase=passive-testing` with no active owner and `nextRole=A`.
+- `PassiveTest -Role A` must run from copy A. It fast-forwards to the candidate, runs `npm run typecheck`, `npm test`, `npm run build`, and candidate `git diff --check`, then either pauses from `passive-testing` on failure or accepts the commit as stable and enters `phase=a-upgrade-pending`.
+- `PrepareAUpgrade -Role A -DryRun` exposes the human-gated `promote-reciprocal-runtime.ps1 -TargetRole A` command. `CompleteAUpgrade -Role A -Force` releases the relay only after human confirmation that A was rebuilt from the same verified commit.
+
+Verification:
+- `npm run typecheck` passed on the D151 implementation.
+- `npm test` passed on the D151 implementation: 443 passed, 1 skipped.
+- `npm run build` passed on the D151 implementation.
+- `git diff --check` passed.
+- Focused relay regression passed: `npm test -- tests/reciprocal-relay.test.ts` with 6 tests passed.
+- Dashboard syntax checks passed for `C:\Users\huizh\Apps\Tandem Reciprocal\dashboard\server.mjs` and `public\app.js`.
+- Promotion dry run passed from the admin repo and resolved the real runtime target: executor-a at `C:\Users\huizh\Apps\Tandem Reciprocal\runtimes\executor-a`.
+
+Live evidence:
+- Pre-promotion relay was idle with no candidate after stale empty A ownership was paused and resumed.
+- Both reciprocal branches fast-forwarded to D151 at `e94a3d5`.
+- Added real queued wishlist item `W0015`.
+- `Claim -Role A` from copy B returned `CLAIMED`, `activeRole=A`, `phase=working`, base/stable `e94a3d5`.
+- A produced candidate `b994a7b` on copy B for W0015 after `npm run typecheck`, `npm test`, and `git diff --check` passed there.
+- Relay `Complete -Role A` returned `COMPLETED`, `phase=passive-testing`, `nextRole=A`, `activeRole=null`, `candidateCommit=b994a7b`.
+- `Claim -Role B` from copy A returned `WAIT`, `passiveOnly=true`, `reason=executor-b-no-agentic-turns`.
+- `PassiveTest -Role A` from copy A returned `PASSIVE_ACCEPTED`; its recorded passive checks all passed: `npm run typecheck`, `npm test`, `npm run build`, and `git diff --check refs/tandem-relay/stable refs/tandem-relay/candidate --`.
+- Relay is intentionally parked at `phase=a-upgrade-pending`, `stableCommit=b994a7b`, `candidateCommit=null`, with the human gate command prepared:
+  `powershell -NoProfile -ExecutionPolicy Bypass -File scripts/promote-reciprocal-runtime.ps1 -TargetRole A -SourceSha b994a7b7849d95fc53905ce828a93c2706f87d17 -RelayRoot "C:\Users\huizh\Apps\Tandem Reciprocal"`
+
+Notes:
+- Dashboard files under `C:\Users\huizh\Apps\Tandem Reciprocal\dashboard` were updated in place to show A as sole producer and B as passive target. They are outside this repository and are not part of the git commit.
+- The pre-existing unstaged edit to `scripts/reciprocal-direction.ps1` was left untouched and unstaged.
