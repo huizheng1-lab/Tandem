@@ -3,6 +3,10 @@ import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { TelegramSessionStream } from "./telegram-session-stream.js";
 import type { SessionEventSubscription } from "./streaming-session.js";
+import {
+  submitRemotePrompt,
+  type SessionPromptSubmission
+} from "./prompt-submission.js";
 
 export type RemoteCommandVerb = "pair" | "status" | "sessions" | "use" | "pause" | "resume" | "stop" | "confirm-stop" | "revoke" | "unknown";
 
@@ -20,6 +24,7 @@ export interface RemoteInboundMessage {
   messageId?: number;
   callbackId?: string;
   callbackData?: string;
+  replyToMessageId?: number;
 }
 
 export interface RemoteTransport {
@@ -90,6 +95,7 @@ export interface RemoteBridgeDeps {
   actions?: RemoteControlActions;
   saveConfig: (patch: RemoteBridgeConfig) => Promise<void>;
   subscribeSessionEvents?: SessionEventSubscription;
+  submitPrompt?: SessionPromptSubmission;
   onStateChange?: (state: RemoteControlState) => void;
   now?: () => number;
 }
@@ -176,6 +182,7 @@ export class RemoteBridge {
   private readonly pendingApprovals = new Map<string, PendingRemoteApproval>();
   private readonly sessionStreamsByMessage = new Map<string, TelegramSessionStream>();
   private readonly sessionStreamsBySession = new Map<string, TelegramSessionStream>();
+  private readonly selectedSessionsByChat = new Map<number, string>();
 
   constructor(private readonly deps: RemoteBridgeDeps) {}
 
@@ -281,13 +288,24 @@ export class RemoteBridge {
       await this.audit("revoke", { source: "telegram", senderId: message.senderId });
       this.pairing = undefined;
       this.config = { ...this.config, enabled: false, telegramUserId: undefined };
+      this.selectedSessionsByChat.clear();
       await this.deps.saveConfig({ enabled: false, telegramUserId: undefined });
       this.stopTransport();
       this.emitState();
       return;
     }
 
-    await this.send(message.chatId, "Supported commands: /status, /sessions, /use <id>, /pause, /resume, /stop, /revoke", "unknown");
+    if (/^\/cancel\s*$/i.test(message.text)) {
+      await this.handleCancel(message);
+      return;
+    }
+    const promptText = parsePromptText(message.text);
+    if (promptText !== undefined || message.replyToMessageId !== undefined) {
+      await this.handlePrompt(message, promptText ?? message.text);
+      return;
+    }
+
+    await this.send(message.chatId, "Supported commands: /status, /sessions, /use <id>, /prompt <text>, /cancel, /pause, /resume, /stop, /revoke", "unknown");
   }
 
   stop(): void {
@@ -498,8 +516,62 @@ export class RemoteBridge {
     }
     const target = matches[0] as RemoteSessionSummary;
     const result = await this.deps.actions.useSession(target.id);
+    if (result.ok) this.selectedSessionsByChat.set(message.chatId, target.id);
     await this.audit("use", { outcome: result.ok ? "ok" : "rejected", sessionId: target.id });
     await this.send(message.chatId, result.message, "use");
+  }
+
+  private async handlePrompt(message: RemoteInboundMessage, text: string): Promise<void> {
+    const repliedStream = message.replyToMessageId === undefined
+      ? undefined
+      : this.sessionStreamsByMessage.get(this.streamMessageKey(message.chatId, message.replyToMessageId));
+    const sessionId = repliedStream?.sessionId ?? this.selectedSessionsByChat.get(message.chatId);
+    if (!sessionId) {
+      await this.send(message.chatId, noActiveSessionMessage(), "prompt-no-session");
+      return;
+    }
+    if (!this.deps.submitPrompt) {
+      await this.send(message.chatId, "Prompt submission is unavailable in this build.", "prompt-unavailable");
+      return;
+    }
+
+    const result = await submitRemotePrompt({ chatId: message.chatId, sessionId, text }, this.deps.submitPrompt);
+    await this.audit("prompt", { sessionId, outcome: result.status, argsHash: hashArgs(text) });
+    const stream = repliedStream ?? this.sessionStreamsBySession.get(sessionId);
+    if (result.status === "submitted") {
+      if (stream) {
+        await stream.resetForSubmission();
+        return;
+      }
+      const sent = await this.transport?.sendMessage(message.chatId, "user / submitting / 0s\nhealthy\nSubmitting prompt...");
+      await this.audit("outbound", { chatId: message.chatId, kind: "prompt-submitted" });
+      if (sent?.messageId !== undefined && this.startSessionStream(message.chatId, sent.messageId, sessionId)) {
+        await this.sessionStreamsByMessage.get(this.streamMessageKey(message.chatId, sent.messageId))?.resetForSubmission();
+      }
+      return;
+    }
+
+    const failure = result.status === "requires-approval"
+      ? "Prompt requires approval; approval routing is not enabled for this stream yet."
+      : result.message;
+    if (stream) await stream.showSubmissionError(failure);
+    else await this.send(message.chatId, `Submission failed: ${failure}`, "prompt-failed");
+  }
+
+  private async handleCancel(message: RemoteInboundMessage): Promise<void> {
+    const repliedStream = message.replyToMessageId === undefined
+      ? undefined
+      : this.sessionStreamsByMessage.get(this.streamMessageKey(message.chatId, message.replyToMessageId));
+    const selectedSession = this.selectedSessionsByChat.get(message.chatId);
+    const stream = repliedStream ?? (selectedSession ? this.sessionStreamsBySession.get(selectedSession) : undefined);
+    if (!stream) {
+      await this.send(message.chatId, noActiveSessionMessage(), "cancel-no-session");
+      return;
+    }
+    const summary = stream.cancellationSummary();
+    stream.stop();
+    await this.audit("cancel", { sessionId: stream.sessionId, outcome: "stopped" });
+    await this.send(message.chatId, summary, "cancel");
   }
 
   private async handleStopRequest(message: RemoteInboundMessage): Promise<void> {
@@ -573,6 +645,15 @@ export class RemoteBridge {
     const line = JSON.stringify({ at: new Date(this.now()).toISOString(), event, ...data });
     await writeFile(this.deps.auditPath, `${line}\n`, { flag: "a" });
   }
+}
+
+function parsePromptText(text: string): string | undefined {
+  const match = /^\/prompt(?:\s+([\s\S]*))?\s*$/i.exec(text.trim());
+  return match ? (match[1] ?? "") : undefined;
+}
+
+function noActiveSessionMessage(): string {
+  return "No active session. Use /sessions, then /use <id>.";
 }
 
 export function formatStatus(status: RemoteStatusSnapshot): string {

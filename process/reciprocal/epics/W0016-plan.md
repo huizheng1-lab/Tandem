@@ -25,7 +25,7 @@ This epic is `autonomy=plan-gated` and touches the pairing / remote-control surf
 ## Ordered steps
 
 - [ ] Step 1: build the streaming session gateway that subscribes to a session's events, formats a short live message, and edits one Telegram message at most once per throttle window.
-- [ ] Step 2: add prompt submission into a selected session, with the live message becoming the streaming response; replies on a live message route to that session.
+- [x] Step 2: add prompt submission into a selected session, with the live message becoming the streaming response; replies on a live message route to that session.
 - [ ] Step 3: integrate with the existing Round C approval flow so any prompt that requires approval pauses the stream, renders the approval card, and resumes or aborts based on the callback.
 
 ## Step 1 — Streaming session gateway
