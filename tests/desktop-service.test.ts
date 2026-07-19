@@ -11,6 +11,7 @@ import type { PermissionBridge } from "../src/tools/permissions.js";
 import { safeDefaultProjectDir } from "../src/tools/protection.js";
 import { SessionStore } from "../src/session/store.js";
 import type { RemoteInboundMessage, RemoteSendOptions, RemoteTransport } from "../src/remote-control/bridge.js";
+import type { SessionSearchBatch } from "../src/session/search.js";
 
 async function tempDir(): Promise<string> {
   const dir = path.join(tmpdir(), `tandem-desktop-${Date.now()}-${Math.random().toString(16).slice(2)}`);
@@ -66,6 +67,10 @@ function respondToPlan(service: TandemService, id: string, approved: boolean): v
     resolvePending(map: Map<string, (approved: boolean) => void>, id: string, approved: boolean): void;
   };
   internals.resolvePending(internals.pendingPlans, id, approved);
+}
+
+async function* searchBatches(batches: SessionSearchBatch[]): AsyncGenerator<SessionSearchBatch> {
+  for (const batch of batches) yield batch;
 }
 
 describe("TandemService", () => {
@@ -1020,6 +1025,106 @@ describe("TandemService", () => {
 
     expect(confirmed).toBe(true);
     expect(sent.some((event) => event.channel === ipcChannels.planConfirm)).toBe(false);
+  });
+
+  it("streams replacement search batches in order and terminates empty queries cleanly", async () => {
+    const { window } = fakeWindow();
+    const rankedHit = {
+      id: "ranked",
+      title: "Ranked result",
+      lastActiveAt: "2026-07-18T18:00:00.000Z",
+      matchCount: 3,
+      sourceRole: "leader" as const,
+      snippet: { text: "matching text", start: 0, end: 8 }
+    };
+    const service = new TandemService(window as never, {
+      registerIpcResponses: false,
+      searchSessionsStream: async ({ query }) => searchBatches(query.trim() ? [
+        { hits: [], scannedCount: 1, skippedCount: 0, done: false },
+        { hits: [rankedHit], scannedCount: 2, skippedCount: 0, done: true }
+      ] : [{ hits: [], scannedCount: 0, skippedCount: 0, done: true }])
+    });
+    const streamed: Array<{ searchId: string } & SessionSearchBatch> = [];
+
+    await service.startSessionSearch({ searchId: "search-1", query: "match" }, (batch) => streamed.push(batch));
+    expect(streamed).toEqual([
+      { searchId: "search-1", hits: [], scannedCount: 1, skippedCount: 0, done: false },
+      { searchId: "search-1", hits: [rankedHit], scannedCount: 2, skippedCount: 0, done: true }
+    ]);
+
+    const empty: Array<{ searchId: string } & SessionSearchBatch> = [];
+    await service.startSessionSearch({ searchId: "empty", query: "   " }, (batch) => empty.push(batch));
+    expect(empty).toEqual([{ searchId: "empty", hits: [], scannedCount: 0, skippedCount: 0, done: true }]);
+  });
+
+  it("cancels a search without emitting later batches", async () => {
+    const { window } = fakeWindow();
+    const service = new TandemService(window as never, {
+      registerIpcResponses: false,
+      searchSessionsStream: async (_options, signal) => (async function* () {
+        yield { hits: [], scannedCount: 1, skippedCount: 0, done: false };
+        await new Promise<void>((resolve) => signal?.addEventListener("abort", () => resolve(), { once: true }));
+        yield { hits: [], scannedCount: 2, skippedCount: 0, done: true };
+      })()
+    });
+    const streamed: Array<{ searchId: string } & SessionSearchBatch> = [];
+    const run = service.startSessionSearch({ searchId: "cancel-me", query: "match" }, (batch) => streamed.push(batch));
+    while (streamed.length === 0) await Promise.resolve();
+
+    service.cancelSessionSearch("cancel-me");
+    await run;
+    expect(streamed).toHaveLength(1);
+    expect(streamed[0]?.done).toBe(false);
+  });
+
+  it("replaces duplicate search IDs and keeps the replacement controller", async () => {
+    const { window } = fakeWindow();
+    const service = new TandemService(window as never, {
+      registerIpcResponses: false,
+      searchSessionsStream: async ({ query }, signal) => (async function* () {
+        if (query === "first") {
+          yield { hits: [], scannedCount: 1, skippedCount: 0, done: false };
+          await new Promise<void>((resolve) => signal?.addEventListener("abort", () => resolve(), { once: true }));
+          yield { hits: [], scannedCount: 2, skippedCount: 0, done: true };
+          return;
+        }
+        yield { hits: [], scannedCount: 4, skippedCount: 0, done: true };
+      })()
+    });
+    const streamed: Array<{ searchId: string } & SessionSearchBatch> = [];
+    const first = service.startSessionSearch({ searchId: "same", query: "first" }, (batch) => streamed.push(batch));
+    while (streamed.length === 0) await Promise.resolve();
+    const replacement = service.startSessionSearch({ searchId: "same", query: "replacement" }, (batch) => streamed.push(batch));
+
+    await Promise.all([first, replacement]);
+    expect(streamed.map((batch) => batch.scannedCount)).toEqual([1, 4]);
+  });
+
+  it("cleans search controllers after success, failure, and cancellation", async () => {
+    const { window } = fakeWindow();
+    const service = new TandemService(window as never, {
+      registerIpcResponses: false,
+      searchSessionsStream: async ({ query }, signal) => {
+        if (query === "failure") throw new Error("search failed");
+        if (query === "cancel") return (async function* () {
+          if (signal?.aborted) return;
+          await new Promise<void>((resolve) => signal?.addEventListener("abort", () => resolve(), { once: true }));
+          yield { hits: [], scannedCount: 1, skippedCount: 0, done: true };
+        })();
+        return searchBatches([{ hits: [], scannedCount: 0, skippedCount: 0, done: true }]);
+      }
+    });
+    const controllers = (service as unknown as { sessionSearchControllers: Map<string, AbortController> }).sessionSearchControllers;
+
+    await service.startSessionSearch({ searchId: "success", query: "success" }, () => undefined);
+    expect(controllers.size).toBe(0);
+    await expect(service.startSessionSearch({ searchId: "failure", query: "failure" }, () => undefined)).rejects.toThrow("search failed");
+    expect(controllers.size).toBe(0);
+    const cancelled = service.startSessionSearch({ searchId: "cancel", query: "cancel" }, () => undefined);
+    while (controllers.size === 0) await Promise.resolve();
+    service.cancelSessionSearch("cancel");
+    await cancelled;
+    expect(controllers.size).toBe(0);
   });
 
   it("deletes the active session by rotating to a fresh session", async () => {
