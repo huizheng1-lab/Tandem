@@ -41,8 +41,8 @@ Follow the injected TANDEM.md and execute one reciprocal improvement invocation 
 2. A implements one narrow candidate on copy B and Tandem's app layer commits it.
 3. The relay enters `passive-testing`.
 4. The passive copy A is fast-forwarded to the candidate and checked with `PassiveTest -Role A`.
-5. Passing passive checks advance stable and enter `a-upgrade-pending`.
-6. A's runtime is rebuilt from that same verified commit only after human confirmation, using `promote-reciprocal-runtime.ps1 -TargetRole A`.
+5. Passing passive checks also package the Electron app into the admin repo's canonical `release/win-unpacked`, advance stable, and enter `a-upgrade-pending`.
+6. A's runtime is promoted from that same verified packaged build only after human confirmation, using `promote-reciprocal-runtime.ps1 -TargetRole A`.
 7. `CompleteAUpgrade -Role A -Force` releases the relay back to `idle`.
 
 ## Shared Human Direction
@@ -71,6 +71,6 @@ git log --all --graph --decorate --oneline -20
 
 ## Backup, Promotion, And Master
 
-Branch backup remains separate from relay sequencing and must never force-push. Runtime promotion is human-gated. Use `scripts/promote-reciprocal-runtime.ps1 -TargetRole A -DryRun` to inspect the A promotion target before replacing runtime files.
+Branch backup remains separate from relay sequencing and must never force-push. Runtime promotion is human-gated, but the candidate package is produced mechanically by `PassiveTest`. Use `scripts/promote-reciprocal-runtime.ps1 -TargetRole A -DryRun` to inspect the A promotion target before replacing runtime files.
 
 `master` remains trunk. Pause or finish the reciprocal state before integrating stable work into `master`, then fast-forward both reciprocal branches to the reconciled master before A claims more work.

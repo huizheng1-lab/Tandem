@@ -92,8 +92,10 @@ $Workspace = $root
 $currentHead = (@(Invoke-Git rev-parse HEAD))[0].Trim()
 $commonRaw = (@(Invoke-Git rev-parse --git-common-dir))[0].Trim()
 $commonDir = if ([IO.Path]::IsPathRooted($commonRaw)) { $commonRaw } else { [IO.Path]::GetFullPath((Join-Path $Workspace $commonRaw)) }
-$relayDir = Join-Path $commonDir "tandem-relay"
-$statePath = Join-Path $relayDir "state.json"
+    $relayDir = Join-Path $commonDir "tandem-relay"
+    $statePath = Join-Path $relayDir "state.json"
+    $adminRepo = Split-Path $commonDir -Parent
+    $defaultRelayRoot = Join-Path (Split-Path $adminRepo -Parent) "Tandem Reciprocal"
 New-Item -ItemType Directory -Path $relayDir -Force | Out-Null
 
 $sha = [Security.Cryptography.SHA256]::Create()
@@ -527,7 +529,7 @@ try {
                 $total = [int]$Matches[2]
                 if ($step -lt $total) {
                     & $directionScript -Action AcceptStep -Id $id -Commit $AcceptedCommit -ControlPath $boardPath | Out-Null
-                    if ($metadata.autonomy -eq "full") { return New-AutonomousContinuation $id "$($step + 1)/$total" }
+                    return New-AutonomousContinuation $id "$($step + 1)/$total"
                 } else {
                     & $directionScript -Action Complete -Id $id -Commit $AcceptedCommit -ControlPath $boardPath | Out-Null
                 }
@@ -1055,6 +1057,43 @@ try {
             exit 0
         }
 
+        $packageScript = Join-Path $Workspace "scripts\package-passive-runtime.ps1"
+        if (-not (Test-Path -LiteralPath $packageScript)) {
+            $packageScript = Join-Path $PSScriptRoot "package-passive-runtime.ps1"
+        }
+        if (-not (Test-Path -LiteralPath $packageScript)) { throw "Passive package helper is missing: $packageScript" }
+        $packageCommand = "powershell -NoProfile -ExecutionPolicy Bypass -File `"$packageScript`" -Workspace `"$Workspace`" -AdminRepo `"$adminRepo`" -SourceSha $head"
+        $preparedPackage = [Environment]::GetEnvironmentVariable("TANDEM_PASSIVE_PACKAGE_PREPARED_WIN_UNPACKED")
+        if ($preparedPackage) {
+            $packageCommand += " -PreparedWinUnpacked `"$preparedPackage`""
+        }
+        $packageCheck = Invoke-ValidationCommand $packageCommand
+        $mechanical += $packageCheck
+        $failed = @($mechanical | Where-Object { -not $_.passed })
+        $checkSummary = @($mechanical | ForEach-Object {
+            [ordered]@{
+                command = $_.command
+                exitCode = [int]$_.exitCode
+                passed = [bool]$_.passed
+                output = (Limit-Text $_.output 6000)
+            }
+        })
+        if ($failed.Count -gt 0) {
+            $state.phase = "paused"
+            $state.pausedFromPhase = "passive-testing"
+            $state.activeRole = $null
+            $state.lastSummary = "Passive package failed for candidate $($state.candidateCommit): $((@($failed | ForEach-Object { $_.command })) -join ', ')"
+            Save-State
+            Write-Result "PASSIVE_FAILED" ([pscustomobject]@{ passiveChecks = $checkSummary })
+            exit 0
+        }
+        $runtimePackage = $null
+        try {
+            $runtimePackage = $packageCheck.output | ConvertFrom-Json
+        } catch {
+            $runtimePackage = [pscustomobject]@{ output = (Limit-Text $packageCheck.output 6000) }
+        }
+
         $acceptedKind = $state.candidateKind
         $previousStableCommit = $state.stableCommit
         $state.stableCommit = $head
@@ -1073,23 +1112,30 @@ try {
         $state.rollbackCommit = $null
         $state.activeRole = $null
         $state.nextRole = "A"
-        $state.phase = "a-upgrade-pending"
+        $state.phase = if ($continuation) { "idle" } else { "a-upgrade-pending" }
         $state.baseCommit = $null
         $state.startedAt = $null
         Reset-ResumeCounter
         $state.lastCompletedCommit = $head
-        $state.lastSummary = if ($Summary.Trim()) { $Summary.Trim() } else { "Passive copy built and verified candidate $head; A runtime upgrade is human-gated." }
+        $state.lastSummary = if ($Summary.Trim()) {
+            $Summary.Trim()
+        } elseif ($continuation) {
+            "Passive copy built and verified intermediate candidate $head; continuing autonomous epic work."
+        } else {
+            "Passive copy built and verified candidate $head; A runtime upgrade is human-gated."
+        }
         Save-State
         $extra = [pscustomobject]@{
             passiveChecks = $checkSummary
-            aUpgradeCommand = "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/promote-reciprocal-runtime.ps1 -TargetRole A -SourceSha $head"
+            runtimePackage = $runtimePackage
         }
         if ($continuation) {
             $continuation | Add-Member -NotePropertyName role -NotePropertyValue "A" -Force
-            $continuation | Add-Member -NotePropertyName requiresHumanGate -NotePropertyValue $true -Force
+            $continuation | Add-Member -NotePropertyName requiresHumanGate -NotePropertyValue $false -Force
             $continuation | Add-Member -NotePropertyName maxExtraLifecycleActions -NotePropertyValue 0 -Force
             $extra | Add-Member -NotePropertyName autonomousContinuation -NotePropertyValue $continuation -Force
         } else {
+            $extra | Add-Member -NotePropertyName aUpgradeCommand -NotePropertyValue "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/promote-reciprocal-runtime.ps1 -TargetRole A -SourceSha $head -RelayRoot `"$defaultRelayRoot`"" -Force
             $extra | Add-Member -NotePropertyName autonomousContinuation -NotePropertyValue $null -Force
         }
         Write-Result "PASSIVE_ACCEPTED" $extra
@@ -1103,8 +1149,8 @@ try {
         if (-not (Test-Path -LiteralPath $promotionScript)) { throw "Missing promotion helper: $promotionScript" }
         Write-Result "A_UPGRADE_READY" ([pscustomobject]@{
             sourceSha = $state.stableCommit
-            promotionCommand = "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/promote-reciprocal-runtime.ps1 -TargetRole A -SourceSha $($state.stableCommit)"
-            humanGate = "Confirm passive runtime health manually, then rebuild Executor A from this same commit and run CompleteAUpgrade."
+            promotionCommand = "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/promote-reciprocal-runtime.ps1 -TargetRole A -SourceSha $($state.stableCommit) -RelayRoot `"$defaultRelayRoot`""
+            humanGate = "Confirm passive runtime health manually, then promote Executor A from this same packaged build and run CompleteAUpgrade."
         })
         exit 0
     }

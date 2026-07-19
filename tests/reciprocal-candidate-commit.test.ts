@@ -83,7 +83,9 @@ describe("reciprocal candidate commit", () => {
     expect(calls.some((call) => call.file === "git" && call.args[0] === "commit" && call.args.includes("relay: update scratch docs"))).toBe(true);
     expect(calls.some((call) => call.file === "powershell" && call.args.includes("Candidate") && call.args.includes("W1234") && call.args.includes("abc123"))).toBe(true);
     expect(calls.some((call) => call.file === "powershell" && call.args.includes("Complete") && call.args.includes("B"))).toBe(true);
+    expect(calls.some((call) => call.file === "powershell" && call.args.some((arg) => arg.endsWith("scripts\\continue-reciprocal-automation.ps1")) && call.args.includes("-MaxTransitions") && call.args.includes("3"))).toBe(true);
     expect(result.summary).toContain("abc123");
+    expect(result.summary).toContain("Immediate reciprocal continuation attempted");
   });
 
   it("pre-fast-forwards a clean reciprocal worktree from its peer branch", async () => {

@@ -1,0 +1,42 @@
+Round: D156
+
+Implementation commits:
+- 8842886 D156-1: continue automatic reciprocal transitions
+
+Summary:
+- Added scripts/continue-reciprocal-automation.ps1 as the bounded fast path for no-human reciprocal transitions.
+- Wired src/reciprocal/candidate-commit.ts to invoke that helper immediately after the app layer commits a reciprocal candidate and runs relay Complete.
+- Updated reciprocal-relay.ps1 so accepted non-final epic steps return an autonomous continuation after the plan has been approved, including plan-gated epics. Plan approval remains human-gated; only already-approved implementation slices auto-continue.
+- Updated PassiveTest packaging to fall back to the admin repo package helper when an older reciprocal worktree does not yet contain scripts/package-passive-runtime.ps1.
+
+Immediate continuation triggers:
+- Gap 1: when the helper sees relay phase passive-testing or a candidateCommit, it runs PassiveTest immediately from the passive copy. This preserves typecheck/test/build/diff-check/package exactly as before.
+- Gap 2: when PassiveTest accepts an intermediate step and returns autonomousContinuation.available=true with requiresHumanGate=false, the helper posts an immediate prompt to Executor A's automation endpoint for the next approved step.
+- Idle continuation: if the relay is already idle and the shared board records an accepted intermediate epic step with next=N/M matching the stable commit, the helper prompts Executor A immediately instead of waiting for cron.
+- Compatibility repair: if an older rule left an intermediate epic step stuck in a-upgrade-pending, the helper releases only that intermediate gate when the board proves the stable commit is a non-final accepted step. Final steps still remain a-upgrade-pending.
+
+Bound:
+- MaxTransitions defaults to 3.
+- This caps one invocation to a small chain such as PassiveTest -> prompt next step, with one spare transition for a repaired intermediate state. It is enough for the current 3-step W0016 cadence without creating an unbounded loop across unrelated wishlist items.
+- The helper stops once it has prompted Executor A because implementation is a fresh model/work boundary, not a mechanical transition.
+
+Fallback:
+- If the helper is missing, the automation endpoint is busy, PassiveTest fails, or any prompt attempt is unavailable, the relay remains in the same durable state the scheduled cron tick already understands.
+- Prompt conflicts are recorded as unavailable instead of being retried in a tight loop.
+- Existing D133/D149 resume protections are untouched; this helper never retries a failed implementation turn.
+
+Live proof:
+- Real W0016 step 1 was already in passive-testing at candidate 7824f5c4f0674e9b78b266ff5df8c7558eeb6de3.
+- Ran the D156 helper at 2026-07-19T22:08:04Z; PassiveTest completed at 2026-07-19T22:09:07Z and accepted candidate 7824f5c4f0674e9b78b266ff5df8c7558eeb6de3.
+- That first live run exposed that plan-gated W0016 needed intermediate continuations after human plan approval, so the relay continuation rule was corrected and the helper repaired the intermediate gate.
+- The helper accepted the immediate W0016 step 2 prompt at 2026-07-19T22:12:26Z.
+- Executor A claimed W0016 step 2 at 2026-07-19T22:13:59Z, and the board recorded step=2/3 role=A started=2026-07-19T22:14:02Z.
+- The observed step accepted -> next step claimed gap was under 5 minutes, not the next 30-minute cron tick.
+
+Verification:
+- PowerShell syntax parse passed for scripts/continue-reciprocal-automation.ps1 and scripts/reciprocal-relay.ps1.
+- npx vitest run tests/reciprocal-candidate-commit.test.ts tests/reciprocal-relay.test.ts passed: 11 tests.
+- npm run typecheck passed.
+- npm test passed: 44 files passed, 1 skipped; 444 tests passed, 1 skipped.
+- npm run build passed.
+- git diff --check and git diff --cached --check passed with only LF-to-CRLF working-copy warnings.

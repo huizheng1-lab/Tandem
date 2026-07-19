@@ -1,0 +1,35 @@
+Round: D155
+
+Implementation commits:
+- 5c512ff D155-1: skip A upgrade gate for intermediate epic steps
+
+Summary:
+- Changed scripts/reciprocal-relay.ps1 PassiveTest acceptance so the final phase depends on the existing Complete-AcceptedDirectionCandidate continuation result.
+- If Complete-AcceptedDirectionCandidate returns a continuation, PassiveTest now clears the candidate and returns the relay to idle with nextRole A, activeRole null, baseCommit null, and startedAt null.
+- If there is no continuation, PassiveTest keeps the existing a-upgrade-pending behavior and still returns the A promotion command.
+- The D153 mechanical PassiveTest checks and package step remain unchanged and still run before any trust advancement.
+
+Autonomous continuation payload:
+- Intermediate continuations now set requiresHumanGate to false because no human A-upgrade confirmation is required between non-final epic steps.
+- maxExtraLifecycleActions remains 0 by design: the next step is automatic on the next scheduled Claim, but this does not re-enable same-invocation multi-step chaining.
+- aUpgradeCommand is only included when the accepted commit is final and the relay actually enters a-upgrade-pending.
+
+Regression:
+- Extended tests/reciprocal-relay.test.ts with D155 coverage.
+- Intermediate autonomous epic step acceptance returns PASSIVE_ACCEPTED with phase idle, no aUpgradeCommand, autonomousContinuation nextStep 2/2, requiresHumanGate false, and maxExtraLifecycleActions 0.
+- The same test switches back to the producer branch and proves a subsequent Claim by Executor A succeeds immediately as CLAimed working state without CompleteAUpgrade.
+- Final epic step acceptance still returns phase a-upgrade-pending with autonomousContinuation null and an A promotion command, and a subsequent Claim reports A_UPGRADE_PENDING.
+- Existing non-epic passive acceptance test still proves single-commit items stop at the A-upgrade human gate.
+
+Live state:
+- W0016 is currently PLAN_APPROVED with revision 1, completed 0, steps 3, next 1/3, and no step-1 candidate yet.
+- The real relay is idle with stableCommit 396a18da5e10bf0ca2481c6e3ab1ae2c633e55d6 and nextRole A.
+- Because W0016 has not naturally produced a step-1 candidate yet, the requested live proof of "step 1 accepted -> idle -> step 2 claimed" is not available in the real relay without manufacturing W0016 implementation work inside this handoff. The safe regression fixture exercises exactly that transition.
+
+Verification:
+- PowerShell syntax parse for scripts/reciprocal-relay.ps1 passed.
+- npx vitest run tests/reciprocal-relay.test.ts passed: 7 tests.
+- npm run typecheck passed.
+- npm test passed: 44 files passed, 1 skipped; 444 tests passed, 1 skipped.
+- npm run build passed.
+- git diff --check passed with only LF-to-CRLF working-copy warnings, including pre-existing warnings for unrelated scripts/reciprocal-direction.ps1 and scripts/setup-reciprocal-tandem.ps1.
