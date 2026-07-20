@@ -9,7 +9,7 @@ import {
 } from "../src/remote-control/bridge.js";
 import type { SessionPromptSubmissionResult } from "../src/remote-control/prompt-submission.js";
 import type { StreamingSessionEvent } from "../src/remote-control/streaming-session.js";
-import { TelegramLongPollingTransport } from "../src/remote-control/telegram.js";
+import { TelegramLongPollingTransport, type TelegramOffsetStore } from "../src/remote-control/telegram.js";
 
 class PromptTransport implements RemoteTransport {
   nextMessageId = 100;
@@ -132,7 +132,74 @@ describe("Telegram prompt reply metadata", () => {
     });
     expect(fetchImpl).toHaveBeenCalledOnce();
   });
+
+  it("persists getUpdates offset so a new transport starts after processed updates", async () => {
+    const offsetStore = new MemoryOffsetStore();
+    const firstFetch = vi.fn(async () => new Response(JSON.stringify({
+      ok: true,
+      result: [
+        { update_id: 41, message: { message_id: 1, chat: { id: 77 }, from: { id: 42 }, text: "/status" } },
+        { update_id: 42, message: { message_id: 2, chat: { id: 77 }, from: { id: 42 }, text: "/sessions" } }
+      ]
+    }), { status: 200, headers: { "Content-Type": "application/json" } }));
+    const first = new TelegramLongPollingTransport("token", firstFetch as typeof fetch, offsetStore);
+    const firstUpdates: number[] = [];
+    await new Promise<void>((resolve, reject) => {
+      first.start((inbound) => {
+        firstUpdates.push(inbound.updateId);
+        if (firstUpdates.length === 2) {
+          first.stop();
+          setTimeout(resolve, 0);
+        }
+      }, reject);
+    });
+    expect(firstUpdates).toEqual([41, 42]);
+    expect(offsetStore.writes).toEqual([42, 43]);
+
+    let second: TelegramLongPollingTransport | undefined;
+    let secondReceived = false;
+    const secondFetch = vi.fn(async (input) => {
+      const offset = Number(new URL(String(input)).searchParams.get("offset"));
+      expect(offset).toBeGreaterThanOrEqual(43);
+      second?.stop();
+      return new Response(JSON.stringify({
+        ok: true,
+        result: offset >= 43
+          ? []
+          : [{ update_id: 42, message: { message_id: 2, chat: { id: 77 }, from: { id: 42 }, text: "/sessions" } }]
+      }), { status: 200, headers: { "Content-Type": "application/json" } });
+    });
+    second = new TelegramLongPollingTransport("token", secondFetch as typeof fetch, offsetStore);
+    await new Promise<void>((resolve, reject) => {
+      second?.start(() => {
+        secondReceived = true;
+        reject(new Error("Reprocessed an already persisted Telegram update."));
+      }, reject);
+      const deadline = Date.now() + 1000;
+      const wait = () => {
+        if (secondFetch.mock.calls.length > 0) resolve();
+        else if (Date.now() > deadline) reject(new Error("Timed out waiting for second poll."));
+        else setTimeout(wait, 10);
+      };
+      wait();
+    });
+    expect(secondReceived).toBe(false);
+  });
 });
+
+class MemoryOffsetStore implements TelegramOffsetStore {
+  value = 0;
+  writes: number[] = [];
+
+  async read(): Promise<number> {
+    return this.value;
+  }
+
+  async write(offset: number): Promise<void> {
+    this.value = offset;
+    this.writes.push(offset);
+  }
+}
 
 function message(text: string, replyToMessageId?: number): RemoteInboundMessage {
   return { updateId: Math.floor(Math.random() * 100_000), senderId: 42, chatId: 77, text, replyToMessageId };

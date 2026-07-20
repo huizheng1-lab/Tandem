@@ -1,3 +1,5 @@
+import { mkdir, readFile, writeFile } from "node:fs/promises";
+import path from "node:path";
 import type { RemoteInboundMessage, RemoteSendOptions, RemoteSentMessage, RemoteTransport } from "./bridge.js";
 
 interface TelegramUpdate {
@@ -31,11 +33,40 @@ interface TelegramSendMessageResponse {
   result?: { message_id?: number };
 }
 
+export interface TelegramOffsetStore {
+  read(): Promise<number>;
+  write(offset: number): Promise<void>;
+}
+
+export class FileTelegramOffsetStore implements TelegramOffsetStore {
+  constructor(private readonly filePath: string) {}
+
+  async read(): Promise<number> {
+    try {
+      const parsed = JSON.parse(await readFile(this.filePath, "utf8")) as { offset?: unknown } | number;
+      const offset = typeof parsed === "number" ? parsed : parsed.offset;
+      return normalizeOffset(offset);
+    } catch {
+      return 0;
+    }
+  }
+
+  async write(offset: number): Promise<void> {
+    await mkdir(path.dirname(this.filePath), { recursive: true });
+    await writeFile(this.filePath, `${JSON.stringify({ offset: normalizeOffset(offset) })}\n`, "utf8");
+  }
+}
+
 export class TelegramLongPollingTransport implements RemoteTransport {
   private stopped = true;
   private offset = 0;
+  private loadedOffset = false;
 
-  constructor(private readonly token: string, private readonly fetchImpl: typeof fetch = fetch) {}
+  constructor(
+    private readonly token: string,
+    private readonly fetchImpl: typeof fetch = fetch,
+    private readonly offsetStore?: TelegramOffsetStore
+  ) {}
 
   start(onMessage: (message: RemoteInboundMessage) => void | Promise<void>, onError?: (error: unknown) => void | Promise<void>): void {
     this.stopped = false;
@@ -77,6 +108,7 @@ export class TelegramLongPollingTransport implements RemoteTransport {
   }
 
   private async loop(onMessage: (message: RemoteInboundMessage) => void | Promise<void>, onError?: (error: unknown) => void | Promise<void>): Promise<void> {
+    await this.loadOffset(onError);
     while (!this.stopped) {
       try {
         const response = await this.fetchImpl(this.url("getUpdates", `timeout=25&offset=${this.offset}`));
@@ -102,12 +134,16 @@ export class TelegramLongPollingTransport implements RemoteTransport {
                 callbackData: data
               });
             }
+            await this.persistOffset(onError);
             continue;
           }
           const senderId = update.message?.from?.id;
           const chatId = update.message?.chat?.id;
           const text = update.message?.text;
-          if (typeof senderId !== "number" || typeof chatId !== "number" || typeof text !== "string") continue;
+          if (typeof senderId !== "number" || typeof chatId !== "number" || typeof text !== "string") {
+            await this.persistOffset(onError);
+            continue;
+          }
           await onMessage({
             updateId: update.update_id,
             senderId,
@@ -117,11 +153,31 @@ export class TelegramLongPollingTransport implements RemoteTransport {
             messageId: update.message?.message_id,
             replyToMessageId: update.message?.reply_to_message?.message_id
           });
+          await this.persistOffset(onError);
         }
       } catch (error) {
         await onError?.(error);
         await new Promise((resolve) => setTimeout(resolve, 5000));
       }
+    }
+  }
+
+  private async loadOffset(onError?: (error: unknown) => void | Promise<void>): Promise<void> {
+    if (this.loadedOffset || !this.offsetStore) return;
+    this.loadedOffset = true;
+    try {
+      this.offset = Math.max(this.offset, normalizeOffset(await this.offsetStore.read()));
+    } catch (error) {
+      await onError?.(error);
+    }
+  }
+
+  private async persistOffset(onError?: (error: unknown) => void | Promise<void>): Promise<void> {
+    if (!this.offsetStore) return;
+    try {
+      await this.offsetStore.write(this.offset);
+    } catch (error) {
+      await onError?.(error);
     }
   }
 
@@ -138,4 +194,8 @@ export class TelegramLongPollingTransport implements RemoteTransport {
     }
     return undefined;
   }
+}
+
+function normalizeOffset(value: unknown): number {
+  return typeof value === "number" && Number.isSafeInteger(value) && value > 0 ? value : 0;
 }

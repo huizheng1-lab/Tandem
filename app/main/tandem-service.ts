@@ -19,7 +19,7 @@ import { modelRegistry } from "../../src/providers/registry.js";
 import { withConfiguredCliModel } from "../../src/providers/cli-models.js";
 import { tandemStateDir } from "../../src/paths.js";
 import { RemoteBridge, type RemoteApprovalRequest, type RemoteControlState, type RemoteTransport } from "../../src/remote-control/bridge.js";
-import { TelegramLongPollingTransport } from "../../src/remote-control/telegram.js";
+import { FileTelegramOffsetStore, TelegramLongPollingTransport } from "../../src/remote-control/telegram.js";
 import { CostLedger } from "../../src/session/cost.js";
 import { copyAttachment, formatAttachmentBlock, writeAttachmentData } from "../../src/session/attachments.js";
 import type { AttachmentRef } from "../../src/session/attachments.js";
@@ -147,9 +147,14 @@ export class TandemService {
     this.projectDir = this.lastProjectDir ?? safeDefaultProjectDir(this.homeDir);
     this.env = this.loadProjectEnv(this.projectDir);
     this.config = loadConfig({ cwd: this.projectDir, homeDir: this.homeDir, env: this.env });
+    const remoteStateDir = tandemStateDir(this.homeDir);
     this.remoteBridge = new RemoteBridge({
-      auditPath: path.join(tandemStateDir(this.homeDir), "remote-control-audit.jsonl"),
-      transportFactory: this.deps.remoteTransportFactory ?? ((token) => new TelegramLongPollingTransport(token)),
+      auditPath: path.join(remoteStateDir, "remote-control-audit.jsonl"),
+      transportFactory: this.deps.remoteTransportFactory ?? ((token) => new TelegramLongPollingTransport(
+        token,
+        undefined,
+        new FileTelegramOffsetStore(path.join(remoteStateDir, "remote-control-telegram-offset.json"))
+      )),
       tokenProvider: () => this.env.TELEGRAM_BOT_TOKEN,
       statusProvider: () => this.remoteStatusSnapshot(),
       sessionsProvider: async () => (await this.listSessions()).map((session) => ({ id: session.id, title: session.title, projectDir: session.projectDir })),
