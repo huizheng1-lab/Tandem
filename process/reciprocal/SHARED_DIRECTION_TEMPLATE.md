@@ -1,6 +1,6 @@
 # Tandem Reciprocal: Shared Direction
 
-This file is the human-owned direction and shared progress board for both reciprocal executors. Humans may edit the General Direction and Guardrails directly. Add feature requests with `scripts/reciprocal-direction.ps1` so item IDs and concurrent writes remain safe.
+This file is the durable human-owned direction for both reciprocal executors. Humans may edit the General Direction and Guardrails directly. Live wishlist/progress items are stored separately in `control/WISHLIST.md` and should be edited with `scripts/reciprocal-direction.ps1` so item IDs and concurrent writes remain safe.
 
 ## General Direction
 
@@ -17,14 +17,6 @@ AutonomyDefault: plan-gated
 - Do not weaken tests, safety controls, rollback behavior, or audit history to make progress appear faster.
 - Large features should be split into stable increments. Feature-flagged and scaffolding-only increments are acceptable when they keep the suite green and follow an approved epic plan.
 - `AutonomyDefault` controls only epic plan approval. Runtime promotion, master integration, authentication, credentials, pairing, remote-control work, and all protocol safety boundaries remain human-gated.
-
-## Wishlist And Progress
-
-Statuses are `QUEUED`, `IN_PROGRESS`, `CANDIDATE`, `PLAN_APPROVED`, `BLOCKED`, and `DONE`. Only independently accepted candidates become `DONE`.
-
-<!-- wishlist-items -->
-- [x] W0001 | P1 | Establish isolated reciprocal worktrees and pinned executors | DONE stable=55bb194
-- [x] W0002 | P1 | Add candidate validation, stable refs, rollback commits, and abandoned-work stashes | DONE stable=55bb194
 
 ## Human Notes
 

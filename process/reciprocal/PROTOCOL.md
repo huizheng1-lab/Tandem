@@ -37,7 +37,7 @@ Interpret the result:
 - `A_UPGRADE_PENDING`: stop for the human A-runtime promotion gate.
 - `WAIT` or `PAUSED`: stop with a short status.
 
-Do not begin implementation until the relay is in `working`. Read `.tandem/shared-control/SHARED_DIRECTION.md` with `scripts/reciprocal-direction.ps1 -Action Show`, then claim the highest-priority safe human item with `Start -Id <id> -Role A`. If no safe human item exists, use `Pause -Role A` with a concise reason. Do not self-select `[AUTO]` work unless a human later changes this rule.
+Do not begin implementation until the relay is in `working`. Read live work state from `.tandem/shared-control/WISHLIST.md` with `scripts/reciprocal-direction.ps1 -Action Show`, then claim the highest-priority safe human item with `Start -Id <id> -Role A`. Durable human direction lives in `.tandem/shared-control/SHARED_DIRECTION.md`. If no safe human item exists, use `Pause -Role A` with a concise reason. Do not self-select `[AUTO]` work unless a human later changes this rule.
 
 Maintain `.tandem/reciprocal-checkpoint.md` with the objective, wishlist ID, intended files, evidence, checks already run, current phase, and next action. Update it after each major phase.
 

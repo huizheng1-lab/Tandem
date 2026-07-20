@@ -11,7 +11,7 @@ async function relayWorktree(): Promise<string> {
   await mkdir(cwd, { recursive: true });
   await mkdir(path.join(root, "control"), { recursive: true });
   await writeFile(
-    path.join(root, "control", "SHARED_DIRECTION.md"),
+    path.join(root, "control", "WISHLIST.md"),
     "# Board\n\n<!-- wishlist-items -->\n- [ ] W1234 | P3 | scratch | IN_PROGRESS role=B started=now\n",
     "utf8"
   );
@@ -53,7 +53,7 @@ async function writeArtifactEvidence(root: string, sourceSha = "bbbbbbbbbbbbbbbb
 async function writeQueuedArtifactItem(cwd: string, sourceSha = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", detail = `QUEUED artifact=candidate-preview source=${sourceSha} declared=now`): Promise<void> {
   const relayRoot = path.dirname(path.dirname(cwd));
   await writeFile(
-    path.join(relayRoot, "control", "SHARED_DIRECTION.md"),
+    path.join(relayRoot, "control", "WISHLIST.md"),
     `# Board\n\n<!-- wishlist-items -->\n- [ ] W1234 | P0 | Build candidate preview | ${detail}\n`,
     "utf8"
   );

@@ -56,7 +56,7 @@ Implement only wishlist $($Continuation.wishlistId) step $($Continuation.nextSte
 }
 
 function Get-SharedDirectionPath([string]$RelayRootPath) {
-    return (Join-Path $RelayRootPath "control\SHARED_DIRECTION.md")
+    return (Join-Path $RelayRootPath "control\WISHLIST.md")
 }
 
 function Get-IntermediateContinuationFromBoard([string]$BoardPath, [string]$StableCommit) {

@@ -295,7 +295,7 @@ export async function commitReciprocalCandidate(options: ReciprocalCandidateComm
 
   const relayRoot = relayRootForWorktree(options.cwd);
   if (!relayRoot) throw new Error(`Reciprocal candidate cwd is not under a relay worktrees directory: ${options.cwd}`);
-  const boardPath = path.join(relayRoot, "control", "SHARED_DIRECTION.md");
+  const boardPath = path.join(relayRoot, "control", "WISHLIST.md");
   const id = activeWishlistId(await readFile(boardPath, "utf8"), options.role);
   if (id) {
     await run(runner, options.cwd, "powershell", [
@@ -367,7 +367,7 @@ async function completeReciprocalArtifact(
 
   const relayRoot = relayRootForWorktree(options.cwd);
   if (!relayRoot) throw new Error(`Reciprocal artifact cwd is not under a relay worktrees directory: ${options.cwd}`);
-  const boardPath = path.join(relayRoot, "control", "SHARED_DIRECTION.md");
+  const boardPath = path.join(relayRoot, "control", "WISHLIST.md");
   const item = wishlistItem(await readFile(boardPath, "utf8"), artifact.wishlistId);
   if (!item) throw new Error(`Reciprocal artifact wishlist item was not found: ${artifact.wishlistId}`);
   let relayStatus: RelayStatus | undefined;

@@ -51,7 +51,7 @@ describe("reciprocal relay script", () => {
   async function writeSharedBoard(repo: string, line: string) {
     const boardDir = path.join(repo, ".tandem", "shared-control");
     await mkdir(boardDir, { recursive: true });
-    const boardPath = path.join(boardDir, "SHARED_DIRECTION.md");
+    const boardPath = path.join(boardDir, "WISHLIST.md");
     await writeFile(
       boardPath,
       [
@@ -291,7 +291,7 @@ describe("reciprocal relay script", () => {
         },
       });
       expect(blocked.artifactWork).toBeUndefined();
-      const board = await readFile(path.join(repo, ".tandem", "shared-control", "SHARED_DIRECTION.md"), "utf8");
+      const board = await readFile(path.join(repo, ".tandem", "shared-control", "WISHLIST.md"), "utf8");
       expect(board).toContain("W0100 | P0 | Build preview | QUEUED");
     } finally {
       await rm(repo, { recursive: true, force: true });

@@ -484,9 +484,9 @@ try {
 
     function Get-SharedDirectionPath {
         if ($env:TANDEM_RECIPROCAL_ROOT) {
-            return (Join-Path $env:TANDEM_RECIPROCAL_ROOT "control\SHARED_DIRECTION.md")
+            return (Join-Path $env:TANDEM_RECIPROCAL_ROOT "control\WISHLIST.md")
         }
-        $localPath = Join-Path $Workspace ".tandem\shared-control\SHARED_DIRECTION.md"
+        $localPath = Join-Path $Workspace ".tandem\shared-control\WISHLIST.md"
         if (Test-Path -LiteralPath (Split-Path $localPath -Parent)) {
             return $localPath
         }
@@ -494,7 +494,7 @@ try {
         $commonDir = if ([IO.Path]::IsPathRooted($commonRaw)) { $commonRaw } else { [IO.Path]::GetFullPath((Join-Path $Workspace $commonRaw)) }
         $adminRepo = Split-Path $commonDir -Parent
         $relayRoot = Join-Path (Split-Path $adminRepo -Parent) "Tandem Reciprocal"
-        return (Join-Path $relayRoot "control\SHARED_DIRECTION.md")
+        return (Join-Path $relayRoot "control\WISHLIST.md")
     }
 
     function Get-Metadata([string]$Value) {
