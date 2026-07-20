@@ -103,6 +103,9 @@ function Normalize-ControlPath([string]$Value) {
 
 function Get-CanonicalControlPaths([string]$Workspace) {
     $paths = @()
+    if ($env:TANDEM_RECIPROCAL_ROOT) {
+        $paths += (Join-Path $env:TANDEM_RECIPROCAL_ROOT "control\SHARED_DIRECTION.md")
+    }
     if ($Workspace) {
         $localPath = Join-Path $Workspace ".tandem\shared-control\SHARED_DIRECTION.md"
         if (Test-Path -LiteralPath (Split-Path $localPath -Parent)) {
@@ -124,7 +127,9 @@ if (-not $ControlPath) {
     $workspace = Get-GitValue @("rev-parse", "--show-toplevel")
     if (-not $workspace) { throw "Run this command inside the Tandem repository or pass -ControlPath." }
     $localPath = Join-Path $workspace ".tandem\shared-control\SHARED_DIRECTION.md"
-    if (Test-Path -LiteralPath (Split-Path $localPath -Parent)) {
+    if ($env:TANDEM_RECIPROCAL_ROOT) {
+        $ControlPath = Join-Path $env:TANDEM_RECIPROCAL_ROOT "control\SHARED_DIRECTION.md"
+    } elseif (Test-Path -LiteralPath (Split-Path $localPath -Parent)) {
         $ControlPath = $localPath
     } else {
         $commonRaw = Get-GitValue @("rev-parse", "--git-common-dir")
@@ -180,6 +185,10 @@ try {
     if ($Action -eq "Add") {
         $cleanText = if ($null -eq $Text) { "" } else { ($Text -replace "\s+", " ").Trim().Replace("|", "/") }
         if (-not $cleanText) { throw "Add requires -Text." }
+        if ($ArtifactKind -and -not $Commit) { throw "Artifact wishlist creation requires the trusted artifact source -Commit." }
+        if ($Commit -and -not $ArtifactKind) { throw "Add accepts -Commit only with -ArtifactKind." }
+        if ($ArtifactKind -and $Epic) { throw "Artifact wishlist creation is only valid for non-epic items." }
+        if ($ArtifactKind -and $Commit -notmatch '^[0-9a-fA-F]{7,40}$') { throw "Artifact wishlist creation requires a source commit SHA." }
         if (-not $Epic -and $Autonomy -ne "inherit") { throw "Autonomy applies only to epic wishlist items." }
         $securitySurface = Test-SecuritySurface $cleanText
         if ($Epic -and $Autonomy -eq "full" -and $securitySurface) {
@@ -195,7 +204,13 @@ try {
         $marker = [Array]::IndexOf($lines, "<!-- wishlist-items -->")
         if ($marker -lt 0) { throw "Shared direction file is missing the wishlist marker." }
         $autonomyMetadata = if ($securitySurface) { " autonomy=plan-gated safety=security-surface" } elseif ($Autonomy -ne "inherit") { " autonomy=$Autonomy" } else { "" }
-        $suffix = if ($Epic) { "QUEUED epic=true$autonomyMetadata phase=PLAN revision=1 completed=0 added=$now" } else { "QUEUED added=$now" }
+        $suffix = if ($ArtifactKind) {
+            "QUEUED artifact=$ArtifactKind source=$Commit declared=$now"
+        } elseif ($Epic) {
+            "QUEUED epic=true$autonomyMetadata phase=PLAN revision=1 completed=0 added=$now"
+        } else {
+            "QUEUED added=$now"
+        }
         $item = "- [ ] $Id | $Priority | $cleanText | $suffix"
         $before = if ($marker -ge 0) { @($lines[0..$marker]) } else { @() }
         $after = if ($marker + 1 -lt $lines.Count) { @($lines[($marker + 1)..($lines.Count - 1)]) } else { @() }
@@ -316,6 +331,7 @@ try {
                 $lines[$index] = ($base + "CANDIDATE epic=true$autonomySuffix$safetySuffix candidate=STEP revision=$revision completed=$completed step=$step/$total plan=$planPath commit=$Commit updated=$now") -join " | "
             }
             "DeclareArtifact" {
+                if ($env:TANDEM_ALLOW_MANUAL_DECLARE_ARTIFACT -ne "1") { throw "DeclareArtifact is reserved for trusted control-plane compatibility only; create artifact items with Add -ArtifactKind -Commit." }
                 if (-not $Commit) { throw "DeclareArtifact requires the trusted artifact source -Commit." }
                 if (-not $ArtifactKind) { throw "DeclareArtifact requires -ArtifactKind." }
                 if ($isEpic) { throw "DeclareArtifact is only valid for non-epic wishlist items." }

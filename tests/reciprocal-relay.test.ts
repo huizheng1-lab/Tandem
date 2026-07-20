@@ -212,6 +212,43 @@ describe("reciprocal relay script", () => {
     }
   }, 30_000);
 
+  windowsIt("D164: Claim exposes deterministic artifact-only instructions for declared preview work", async () => {
+    const repo = await mkdtemp(path.join(tmpdir(), "tandem-relay-d164-artifact-claim-"));
+    try {
+      await initRepo(repo);
+      await writeSharedBoard(
+        repo,
+        "- [ ] W0099 | P0 | Build preview | QUEUED artifact=candidate-preview source=feed4343ec17e79cb8398c069120c100c7b2f1be declared=2026-07-20T00:00:00Z",
+      );
+      await relay(repo, "-Action", "Reset", "-Force");
+
+      const claimed = await relay(repo, "-Action", "Claim", "-Role", "A");
+      expect(claimed).toMatchObject({
+        outcome: "CLAIMED",
+        phase: "working",
+        activeRole: "A",
+        artifactWork: {
+          kind: "candidate-preview",
+          wishlistId: "W0099",
+          sourceSha: "feed4343ec17e79cb8398c069120c100c7b2f1be",
+          completionReportShape: {
+            status: "complete",
+            filesChanged: [],
+            reciprocalArtifact: {
+              kind: "candidate-preview",
+              wishlistId: "W0099",
+              sourceSha: "feed4343ec17e79cb8398c069120c100c7b2f1be",
+            },
+          },
+        },
+      });
+      expect(claimed.artifactWork.startCommand).toContain("-Action Start -Id W0099 -Role A");
+      expect(claimed.artifactWork.instruction).toContain("filesChanged=[]");
+    } finally {
+      await rm(repo, { recursive: true, force: true });
+    }
+  }, 30_000);
+
   windowsIt("D162: refuses artifact completion when the clean turn has a source commit", async () => {
     const repo = await mkdtemp(path.join(tmpdir(), "tandem-relay-d162-commit-"));
     try {

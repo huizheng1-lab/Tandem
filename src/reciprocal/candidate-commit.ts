@@ -14,7 +14,7 @@ export interface ReciprocalCandidateCommitOptions {
   summary?: string;
   artifactRoot?: string;
   commandRunner?: (file: string, args: string[], cwd: string) => Promise<{ stdout: string; stderr: string }>;
-  artifactSmokeRunner?: (executablePath: string, cwd: string) => Promise<{ exitCode: number; stdout: string; stderr: string }>;
+  artifactSmokeRunner?: (executablePath: string, cwd: string, context: ArtifactSmokeContext) => Promise<{ exitCode: number; stdout: string; stderr: string }>;
 }
 
 const roleBranch: Record<"A" | "B", string> = {
@@ -87,6 +87,12 @@ function activeWishlistId(board: string, role: "A" | "B"): string | undefined {
 }
 
 type ReciprocalArtifact = NonNullable<CompletionReport["reciprocalArtifact"]>;
+
+interface ArtifactSmokeContext {
+  stateRoot: string;
+  scriptPath: string;
+  timeoutSeconds: number;
+}
 
 interface WishlistItem {
   id: string;
@@ -168,13 +174,46 @@ function alreadyClosedArtifactRelay(state: RelayStatus, head: string): boolean {
   return Boolean(state.phase === "idle" && !state.activeRole && state.lastCompletedCommit === head);
 }
 
+async function readRelayStatus(
+  runner: NonNullable<ReciprocalCandidateCommitOptions["commandRunner"]>,
+  cwd: string
+): Promise<RelayStatus> {
+  return JSON.parse(
+    await run(runner, cwd, "powershell", [
+      "-NoProfile",
+      "-ExecutionPolicy",
+      "Bypass",
+      "-File",
+      path.join(cwd, "scripts", "reciprocal-relay.ps1"),
+      "-Action",
+      "Status"
+    ])
+  ) as RelayStatus;
+}
+
 async function defaultRunner(file: string, args: string[], cwd: string): Promise<{ stdout: string; stderr: string }> {
   return execFileAsync(file, args, { cwd, windowsHide: true, maxBuffer: 10 * 1024 * 1024 });
 }
 
-async function defaultArtifactSmokeRunner(executablePath: string, cwd: string): Promise<{ exitCode: number; stdout: string; stderr: string }> {
+async function defaultArtifactSmokeRunner(executablePath: string, cwd: string, context: ArtifactSmokeContext): Promise<{ exitCode: number; stdout: string; stderr: string }> {
   try {
-    const result = await execFileAsync(executablePath, ["--smoke"], { cwd, windowsHide: true, timeout: 15_000, maxBuffer: 1024 * 1024 });
+    const result = await execFileAsync(
+      "powershell",
+      [
+        "-NoProfile",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-File",
+        context.scriptPath,
+        "-ExecutablePath",
+        executablePath,
+        "-StateRoot",
+        context.stateRoot,
+        "-TimeoutSeconds",
+        String(context.timeoutSeconds)
+      ],
+      { cwd, windowsHide: true, timeout: (context.timeoutSeconds + 10) * 1000, maxBuffer: 1024 * 1024 }
+    );
     return { exitCode: 0, stdout: result.stdout, stderr: result.stderr };
   } catch (error) {
     const failure = error as Error & { code?: unknown; stdout?: unknown; stderr?: unknown; killed?: boolean; signal?: unknown };
@@ -331,8 +370,16 @@ async function completeReciprocalArtifact(
   const boardPath = path.join(relayRoot, "control", "SHARED_DIRECTION.md");
   const item = wishlistItem(await readFile(boardPath, "utf8"), artifact.wishlistId);
   if (!item) throw new Error(`Reciprocal artifact wishlist item was not found: ${artifact.wishlistId}`);
+  let relayStatus: RelayStatus | undefined;
   if (item.status === "DONE") {
     if (item.metadata.artifact === artifact.kind && item.metadata.source && (!artifact.sourceSha || shaPrefixEqual(item.metadata.source, artifact.sourceSha))) {
+      relayStatus = await readRelayStatus(runner, options.cwd);
+      if (!alreadyClosedArtifactRelay(relayStatus, head)) {
+        if (canCloseArtifactRelay(relayStatus, head)) {
+          throw new Error(`Legacy reciprocal artifact recovery required: ${artifact.wishlistId} is DONE but relay phase is ${relayStatus.phase}; run reciprocal-relay CompleteArtifact for role A before treating it as terminal.`);
+        }
+        throw new Error(`Reciprocal artifact item ${artifact.wishlistId} is DONE but relay is not closed: phase=${relayStatus.phase ?? "unknown"} activeRole=${relayStatus.activeRole ?? "none"}.`);
+      }
       return {
         ...options.report,
         summary: `${options.report.summary}\n\nReciprocal artifact item ${artifact.wishlistId} was already terminal for source ${item.metadata.source}.`,
@@ -358,17 +405,7 @@ async function completeReciprocalArtifact(
     throw new Error(`Reciprocal artifact wishlist item ${artifact.wishlistId} is owned by ${item.metadata.role}; expected ${options.role}.`);
   }
 
-  const relayStatus = JSON.parse(
-    await run(runner, options.cwd, "powershell", [
-      "-NoProfile",
-      "-ExecutionPolicy",
-      "Bypass",
-      "-File",
-      path.join(options.cwd, "scripts", "reciprocal-relay.ps1"),
-      "-Action",
-      "Status"
-    ])
-  ) as RelayStatus;
+  relayStatus ??= await readRelayStatus(runner, options.cwd);
   const relayCanClose = canCloseArtifactRelay(relayStatus, head);
   const relayAlreadyClosed = alreadyClosedArtifactRelay(relayStatus, head);
   if (!relayCanClose && !relayAlreadyClosed) {
@@ -382,14 +419,19 @@ async function completeReciprocalArtifact(
   const releaseDir = path.join(artifactRoot, "release", "win-unpacked");
   const buildInfoPath = assertUnderRoot(path.join(releaseDir, "BUILD_INFO.json"), releaseDir);
   const executablePath = assertUnderRoot(path.join(releaseDir, "Tandem.exe"), releaseDir);
-  const buildInfo = JSON.parse(await readFile(buildInfoPath, "utf8")) as { sourceSha?: unknown };
+  const buildInfo = JSON.parse((await readFile(buildInfoPath, "utf8")).replace(/^\uFEFF/, "")) as { sourceSha?: unknown };
   if (typeof buildInfo.sourceSha !== "string" || !shaPrefixEqual(buildInfo.sourceSha, artifactSource)) {
     throw new Error(`Candidate preview BUILD_INFO sourceSha ${String(buildInfo.sourceSha)} does not match trusted source ${artifactSource}.`);
   }
   const executable = await stat(executablePath);
   if (!executable.isFile()) throw new Error(`Candidate preview executable is missing: ${executablePath}`);
   const smokeRunner = options.artifactSmokeRunner ?? defaultArtifactSmokeRunner;
-  const smoke = await smokeRunner(executablePath, releaseDir);
+  const smokeContext = {
+    stateRoot: path.join(relayRoot, "state", "candidate-preview-smoke"),
+    scriptPath: path.join(options.cwd, "scripts", "candidate-preview-smoke.ps1"),
+    timeoutSeconds: Number(process.env.TANDEM_CANDIDATE_PREVIEW_SMOKE_TIMEOUT_SECONDS || 20)
+  };
+  const smoke = await smokeRunner(executablePath, releaseDir, smokeContext);
   if (smoke.exitCode !== 0) {
     throw new Error(`Candidate preview smoke failed with exit code ${smoke.exitCode}: ${(smoke.stderr || smoke.stdout).trim()}`);
   }

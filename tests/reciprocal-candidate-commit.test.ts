@@ -161,9 +161,11 @@ describe("reciprocal candidate commit", () => {
       artifactRoot: adminRoot,
       report: { ...artifactReport, reciprocalArtifact: { ...artifactReport.reciprocalArtifact!, sourceSha: artifactSha } },
       commandRunner: artifactCommandRunner(calls),
-      artifactSmokeRunner: async (executablePath, releaseDir) => {
+      artifactSmokeRunner: async (executablePath, releaseDir, context) => {
         expect(executablePath).toBe(path.join(adminRoot, "release", "win-unpacked", "Tandem.exe"));
         expect(releaseDir).toBe(path.join(adminRoot, "release", "win-unpacked"));
+        expect(context.stateRoot).toBe(path.join(path.dirname(path.dirname(cwd)), "state", "candidate-preview-smoke"));
+        expect(context.scriptPath).toBe(path.join(cwd, "scripts", "candidate-preview-smoke.ps1"));
         return { exitCode: 0, stdout: "launched and exited", stderr: "" };
       }
     });
@@ -255,6 +257,37 @@ describe("reciprocal candidate commit", () => {
     expect(calls.some((call) => call.file === "powershell" && call.args.includes("CompleteArtifact"))).toBe(false);
     expect(calls.filter((call) => call.file === "powershell" && call.args.includes("ArtifactComplete"))).toHaveLength(1);
     expect(result.summary).toContain(artifactSha);
+  });
+
+  it("D164: refuses legacy board-DONE relay-working split-brain with explicit recovery guidance", async () => {
+    const cwd = await relayWorktree();
+    await writeQueuedArtifactItem(cwd, artifactSha, `DONE artifact=candidate-preview source=${artifactSha} evidence=abc123 role=A completed=now`);
+    const calls: Array<{ file: string; args: string[] }> = [];
+
+    await expect(
+      commitReciprocalCandidate({
+        cwd,
+        role: "A",
+        report: { ...artifactReport, reciprocalArtifact: { ...artifactReport.reciprocalArtifact!, sourceSha: artifactSha } },
+        commandRunner: artifactCommandRunner(calls),
+      })
+    ).rejects.toThrow(/Legacy reciprocal artifact recovery required/);
+  });
+
+  it("D164: treats board-DONE and relay-idle as an idempotent artifact completion retry", async () => {
+    const cwd = await relayWorktree();
+    await writeQueuedArtifactItem(cwd, artifactSha, `DONE artifact=candidate-preview source=${artifactSha} evidence=abc123 role=A completed=now`);
+    const calls: Array<{ file: string; args: string[] }> = [];
+
+    const result = await commitReciprocalCandidate({
+      cwd,
+      role: "A",
+      report: { ...artifactReport, reciprocalArtifact: { ...artifactReport.reciprocalArtifact!, sourceSha: artifactSha } },
+      commandRunner: artifactCommandRunner(calls, { relayStatus: { phase: "idle", activeRole: null, lastCompletedCommit: producerSha } }),
+    });
+
+    expect(result.summary).toContain("already terminal");
+    expect(calls.some((call) => call.file === "powershell" && call.args.includes("ArtifactComplete"))).toBe(false);
   });
 
   it("pre-fast-forwards a clean reciprocal worktree from its peer branch", async () => {

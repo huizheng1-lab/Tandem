@@ -236,8 +236,7 @@ describeWindows("reciprocal direction epics", () => {
 describeWindows("reciprocal direction artifact completion", () => {
   it("D162: marks queued artifact-only work done with explicit source and evidence metadata", async () => {
     const file = await boardFile();
-    const added = JSON.parse((await direction(file, "-Action", "Add", "-Priority", "P0", "-Text", "Build candidate preview")).stdout);
-    await direction(file, "-Action", "DeclareArtifact", "-Id", added.id, "-Commit", "feed4343ec17e79cb8398c069120c100c7b2f1be", "-ArtifactKind", "candidate-preview");
+    const added = JSON.parse((await direction(file, "-Action", "Add", "-Priority", "P0", "-Text", "Build candidate preview", "-Commit", "feed4343ec17e79cb8398c069120c100c7b2f1be", "-ArtifactKind", "candidate-preview")).stdout);
 
     await direction(
       file,
@@ -255,8 +254,7 @@ describeWindows("reciprocal direction artifact completion", () => {
 
   it("D162: refuses artifact completion for work owned by another role", async () => {
     const file = await boardFile();
-    const added = JSON.parse((await direction(file, "-Action", "Add", "-Text", "Owned preview")).stdout);
-    await direction(file, "-Action", "DeclareArtifact", "-Id", added.id, "-Commit", "abc1234", "-ArtifactKind", "candidate-preview");
+    const added = JSON.parse((await direction(file, "-Action", "Add", "-Text", "Owned preview", "-Commit", "abc1234", "-ArtifactKind", "candidate-preview")).stdout);
     await direction(file, "-Action", "Start", "-Id", added.id, "-Role", "B");
 
     await expect(direction(
@@ -286,8 +284,7 @@ describeWindows("reciprocal direction artifact completion", () => {
 
   it("D162: refuses to retire already terminal artifact work", async () => {
     const file = await boardFile();
-    const added = JSON.parse((await direction(file, "-Action", "Add", "-Text", "Done preview")).stdout);
-    await direction(file, "-Action", "DeclareArtifact", "-Id", added.id, "-Commit", "abc1234", "-ArtifactKind", "candidate-preview");
+    const added = JSON.parse((await direction(file, "-Action", "Add", "-Text", "Done preview", "-Commit", "abc1234", "-ArtifactKind", "candidate-preview")).stdout);
     await direction(file, "-Action", "ArtifactComplete", "-Id", added.id, "-Role", "A", "-Commit", "abc1234", "-ArtifactKind", "candidate-preview", "-Evidence", "sha256:abcdef123456");
 
     await expect(direction(file, "-Action", "Retire", "-Id", added.id, "-Note", "do-not-retire"))
@@ -313,5 +310,37 @@ describeWindows("reciprocal direction artifact completion", () => {
 
     const board = await readFile(file, "utf8");
     expect(board).toContain("- [ ] W0016 | P1 | Telegram remote control | PLAN_APPROVED epic=true autonomy=plan-gated revision=1 completed=2 steps=3 next=3/3 plan=process/reciprocal/epics/W0016-plan.md commit=abc123 approved=2026-07-20T00:00:00Z");
+  });
+
+  it("D164: creates declared artifact work atomically and refuses manual conversion by default", async () => {
+    const file = await boardFile();
+    const normal = JSON.parse((await direction(file, "-Action", "Add", "-Text", "Normal source work")).stdout);
+    await expect(direction(file, "-Action", "DeclareArtifact", "-Id", normal.id, "-Commit", "abc1234", "-ArtifactKind", "candidate-preview"))
+      .rejects.toThrow(/reserved for trusted control-plane/);
+
+    const artifact = JSON.parse((await direction(file, "-Action", "Add", "-Text", "Build preview", "-Commit", "feed434", "-ArtifactKind", "candidate-preview")).stdout);
+    const board = await readFile(file, "utf8");
+    expect(board).toContain(`${artifact.id} | P1 | Build preview | QUEUED artifact=candidate-preview source=feed434 declared=`);
+  });
+
+  it("D164: uses TANDEM_RECIPROCAL_ROOT as the default board for isolated relay worktrees", async () => {
+    const repo = path.join(tmpdir(), `tandem-direction-env-${Date.now()}-${Math.random().toString(16).slice(2)}`);
+    const relayRoot = path.join(tmpdir(), `tandem-direction-relay-${Date.now()}-${Math.random().toString(16).slice(2)}`);
+    const file = path.join(relayRoot, "control", "SHARED_DIRECTION.md");
+    await mkdir(repo, { recursive: true });
+    await mkdir(path.dirname(file), { recursive: true });
+    await writeFile(path.join(repo, "README.md"), "test\n", "utf8");
+    await writeFile(file, boardText(), "utf8");
+    await execa("git", ["init"], { cwd: repo });
+
+    const result = await execa("powershell", [
+      "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", scriptPath,
+      "-Action", "Add", "-Text", "Env routed artifact", "-Commit", "feed434", "-ArtifactKind", "candidate-preview",
+    ], { cwd: repo, env: { TANDEM_RECIPROCAL_ROOT: relayRoot } });
+
+    const added = JSON.parse(result.stdout);
+    const board = await readFile(file, "utf8");
+    expect(added.path).toBe(file);
+    expect(board).toContain(`${added.id} | P1 | Env routed artifact | QUEUED artifact=candidate-preview source=feed434 declared=`);
   });
 });

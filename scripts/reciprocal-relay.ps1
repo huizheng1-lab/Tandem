@@ -463,6 +463,9 @@ try {
     }
 
     function Get-SharedDirectionPath {
+        if ($env:TANDEM_RECIPROCAL_ROOT) {
+            return (Join-Path $env:TANDEM_RECIPROCAL_ROOT "control\SHARED_DIRECTION.md")
+        }
         $localPath = Join-Path $Workspace ".tandem\shared-control\SHARED_DIRECTION.md"
         if (Test-Path -LiteralPath (Split-Path $localPath -Parent)) {
             return $localPath
@@ -944,6 +947,36 @@ try {
             exit 0
         }
     }
+
+    function Get-NextArtifactInstruction {
+        if ($Role -ne "A") { return $null }
+        $boardPath = Get-SharedDirectionPath
+        if (-not (Test-Path -LiteralPath $boardPath)) { return $null }
+        $line = @(
+            Get-Content -LiteralPath $boardPath |
+                Where-Object { $_ -match "^- \[ \] (W\d{4}) \| (P[0-3]) \| (.*?) \| QUEUED\b" -and $_ -match "(^|\s)artifact=candidate-preview(\s|$)" -and $_ -match "(^|\s)source=([0-9a-fA-F]{7,40})(\s|$)" } |
+                Select-Object -First 1
+        )
+        if ($line.Count -eq 0) { return $null }
+        $id = ([regex]::Match($line[0], "^- \[ \] (W\d{4}) \|")).Groups[1].Value
+        $metadata = Get-Metadata $line[0]
+        return [pscustomobject]@{
+            kind = "candidate-preview"
+            wishlistId = $id
+            sourceSha = $metadata.source
+            startCommand = "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/reciprocal-direction.ps1 -Action Start -Id $id -Role A"
+            completionReportShape = [ordered]@{
+                status = "complete"
+                filesChanged = @()
+                reciprocalArtifact = [ordered]@{
+                    kind = "candidate-preview"
+                    wishlistId = $id
+                    sourceSha = $metadata.source
+                }
+            }
+            instruction = "Build or verify the trusted candidate preview artifact without source edits. Submit a CompletionReport with filesChanged=[] and reciprocalArtifact exactly matching this kind, wishlistId, and sourceSha; the app layer will validate BUILD_INFO, run GUI smoke, close the relay, and mark the board terminal."
+        }
+    }
     $branch = (@(Invoke-Git branch --show-current))[0].Trim()
     $expectedBranch = if ($Action -in @("PassiveTest", "PrepareAUpgrade", "CompleteAUpgrade")) { "codex/reciprocal-a" } else { $roleConfig.Target }
     if ($branch -ne $expectedBranch) {
@@ -1011,7 +1044,14 @@ try {
             $state.phase = "working"
         }
         Save-State
-        Write-Result $outcome
+        $extra = [pscustomobject]@{}
+        if ($outcome -eq "CLAIMED" -and $state.phase -eq "working") {
+            $artifactInstruction = Get-NextArtifactInstruction
+            if ($artifactInstruction) {
+                $extra | Add-Member -NotePropertyName artifactWork -NotePropertyValue $artifactInstruction
+            }
+        }
+        Write-Result $outcome $extra
         exit 0
     }
 
