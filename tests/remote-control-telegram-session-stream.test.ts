@@ -1,4 +1,4 @@
-import { mkdir } from "node:fs/promises";
+import { mkdir, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -59,37 +59,48 @@ describe("TelegramSessionStream", () => {
     expect(source.unsubscribe).toHaveBeenCalledOnce();
   });
 
-  it("stops cleanly on session end and transport failure", async () => {
+  it("edits the terminal snapshot before stopping on session end", async () => {
     vi.useFakeTimers();
-    const ended = subscription();
-    const endedStop = vi.fn();
-    const endedStream = new TelegramSessionStream({
+    const source = subscription();
+    const editMessage = vi.fn(async (_chatId: number, _messageId: number, _text: string) => {});
+    const stopped = vi.fn();
+    const stream = new TelegramSessionStream({
       chatId: 10,
       messageId: 20,
       sessionId: "ended",
-      telegram: { editMessage: vi.fn(async () => {}) },
-      subscribe: ended.subscribe,
-      onStopped: endedStop
+      telegram: { editMessage },
+      subscribe: source.subscribe,
+      onStopped: stopped
     });
-    endedStream.start();
-    ended.emit({ ended: true, phase: "completed" });
-    expect(endedStop).toHaveBeenCalledOnce();
-    expect(ended.unsubscribe).toHaveBeenCalledOnce();
+    stream.start();
+    source.emit({ role: "leader", phase: "completed", lastEventKind: "done", text: "final answer", ended: true });
+    await Promise.resolve();
+    expect(editMessage).toHaveBeenCalledOnce();
+    expect(editMessage.mock.calls[0]?.[2]).toContain("final answer");
+    expect(stopped).toHaveBeenCalledOnce();
+    expect(source.unsubscribe).toHaveBeenCalledOnce();
+  });
 
+  it("stops cleanly and surfaces transport failure", async () => {
+    vi.useFakeTimers();
     const failed = subscription();
     const failedStop = vi.fn();
+    const failedError = vi.fn();
+    const error = new Error("transport unavailable");
     const failedStream = new TelegramSessionStream({
       chatId: 10,
       messageId: 21,
       sessionId: "failed",
-      telegram: { editMessage: vi.fn(async () => { throw new Error("transport unavailable"); }) },
+      telegram: { editMessage: vi.fn(async () => { throw error; }) },
       subscribe: failed.subscribe,
+      onError: failedError,
       onStopped: failedStop
     });
     failedStream.start();
     failed.emit({ text: "update" });
     await vi.advanceTimersByTimeAsync(1_500);
     await Promise.resolve();
+    expect(failedError).toHaveBeenCalledWith(failedStream, error);
     expect(failedStop).toHaveBeenCalledOnce();
     expect(failed.unsubscribe).toHaveBeenCalledOnce();
   });
@@ -138,5 +149,46 @@ describe("RemoteBridge stream registry", () => {
     sources[1]?.emit({ text: "after stop" });
     await vi.advanceTimersByTimeAsync(1_500);
     expect(transport.editMessage).toHaveBeenCalledTimes(1);
+  });
+
+  it("audits successful stream edits and edit failures", async () => {
+    vi.useFakeTimers();
+    const sources: ReturnType<typeof subscription>[] = [];
+    const transport = new StreamTransport();
+    transport.editMessage.mockRejectedValueOnce(new Error("Bad Request: message is not modified"));
+    const auditDir = path.join(tmpdir(), `tandem-stream-audit-${Date.now()}-${Math.random().toString(16).slice(2)}`);
+    const auditPath = path.join(auditDir, "audit.jsonl");
+    await mkdir(auditDir, { recursive: true });
+    const bridge = new RemoteBridge({
+      auditPath,
+      transportFactory: () => transport,
+      tokenProvider: () => "token",
+      statusProvider: () => ({ phase: "working", cost: { leader: { inputTokens: 0, outputTokens: 0, dollars: 0 }, worker: { inputTokens: 0, outputTokens: 0, dollars: 0 } } }),
+      sessionsProvider: async () => [],
+      saveConfig: async () => {},
+      subscribeSessionEvents: (_sessionId, onEvent) => {
+        const source = subscription();
+        source.subscribe(_sessionId, onEvent);
+        sources.push(source);
+        return source.unsubscribe;
+      }
+    });
+    await bridge.configure({ enabled: true, telegramUserId: 42 });
+
+    expect(bridge.startSessionStream(42, 200, "session-1")).toBe(true);
+    sources[0]?.emit({ text: "first update" });
+    await vi.advanceTimersByTimeAsync(1_500);
+    await vi.waitFor(async () => {
+      expect(await readFile(auditPath, "utf8")).toContain("stream-edit-error");
+    });
+
+    expect(bridge.startSessionStream(42, 201, "session-2")).toBe(true);
+    sources[1]?.emit({ text: "second update" });
+    await vi.advanceTimersByTimeAsync(1_500);
+    await vi.waitFor(async () => {
+      const audit = await readFile(auditPath, "utf8");
+      expect(audit).toContain("Bad Request: message is not modified");
+      expect(audit).toContain("stream-edit");
+    });
   });
 });

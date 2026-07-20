@@ -335,6 +335,12 @@ export class RemoteBridge {
       telegram: transport,
       subscribe,
       now: this.deps.now,
+      onEdited: (edited) => {
+        void this.audit("stream-edit", { chatId, messageId, sessionId: edited.sessionId });
+      },
+      onError: (failed, error) => {
+        void this.audit("stream-edit-error", { chatId, messageId, sessionId: failed.sessionId, message: errorMessage(error) });
+      },
       onStopped: (stopped) => {
         if (this.sessionStreamsByMessage.get(messageKey) === stopped) this.sessionStreamsByMessage.delete(messageKey);
         if (this.sessionStreamsBySession.get(sessionId) === stopped) this.sessionStreamsBySession.delete(sessionId);
@@ -655,6 +661,10 @@ export class RemoteBridge {
 
 function noActiveSessionMessage(): string {
   return "No active session. Use /sessions, then /use <id>.";
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }
 
 export function formatStatus(status: RemoteStatusSnapshot): string {

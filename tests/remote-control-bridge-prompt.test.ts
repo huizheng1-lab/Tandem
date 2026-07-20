@@ -134,6 +134,16 @@ describe("Telegram prompt reply metadata", () => {
     expect(fetchImpl).toHaveBeenCalledOnce();
   });
 
+  it("includes Telegram error descriptions when message edits fail", async () => {
+    const fetchImpl = vi.fn(async () => new Response(JSON.stringify({
+      ok: false,
+      description: "Bad Request: message is not modified"
+    }), { status: 400, headers: { "Content-Type": "application/json" } }));
+    const transport = new TelegramLongPollingTransport("token", fetchImpl as typeof fetch);
+
+    await expect(transport.editMessage(77, 55, "unchanged")).rejects.toThrow("Bad Request: message is not modified");
+  });
+
   it("persists getUpdates offset so a new transport starts after processed updates", async () => {
     const offsetStore = new MemoryOffsetStore();
     const firstFetch = vi.fn(async () => new Response(JSON.stringify({

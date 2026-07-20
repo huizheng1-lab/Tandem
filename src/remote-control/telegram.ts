@@ -84,7 +84,7 @@ export class TelegramLongPollingTransport implements RemoteTransport {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ chat_id: chatId, text, reply_markup: replyMarkup })
     });
-    if (!response.ok) throw new Error(`Telegram sendMessage failed: HTTP ${response.status}`);
+    if (!response.ok) throw await telegramHttpError(response, "sendMessage");
     const payload = await response.json() as TelegramSendMessageResponse;
     return { messageId: payload.result?.message_id };
   }
@@ -95,7 +95,7 @@ export class TelegramLongPollingTransport implements RemoteTransport {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ chat_id: chatId, message_id: messageId, text, reply_markup: this.replyMarkup(options) })
     });
-    if (!response.ok) throw new Error(`Telegram editMessageText failed: HTTP ${response.status}`);
+    if (!response.ok) throw await telegramHttpError(response, "editMessageText");
   }
 
   async answerCallback(callbackId: string, text?: string): Promise<void> {
@@ -104,7 +104,7 @@ export class TelegramLongPollingTransport implements RemoteTransport {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ callback_query_id: callbackId, text })
     });
-    if (!response.ok) throw new Error(`Telegram answerCallbackQuery failed: HTTP ${response.status}`);
+    if (!response.ok) throw await telegramHttpError(response, "answerCallbackQuery");
   }
 
   private async loop(onMessage: (message: RemoteInboundMessage) => void | Promise<void>, onError?: (error: unknown) => void | Promise<void>): Promise<void> {
@@ -112,7 +112,7 @@ export class TelegramLongPollingTransport implements RemoteTransport {
     while (!this.stopped) {
       try {
         const response = await this.fetchImpl(this.url("getUpdates", `timeout=25&offset=${this.offset}`));
-        if (!response.ok) throw new Error(`Telegram getUpdates failed: HTTP ${response.status}`);
+        if (!response.ok) throw await telegramHttpError(response, "getUpdates");
         const payload = await response.json() as TelegramUpdatesResponse;
         if (!payload.ok) throw new Error(payload.description ?? "Telegram getUpdates failed");
         for (const update of payload.result ?? []) {
@@ -198,4 +198,16 @@ export class TelegramLongPollingTransport implements RemoteTransport {
 
 function normalizeOffset(value: unknown): number {
   return typeof value === "number" && Number.isSafeInteger(value) && value > 0 ? value : 0;
+}
+
+async function telegramHttpError(response: Response, method: string): Promise<Error> {
+  let description = "";
+  try {
+    const payload = await response.json() as { description?: unknown };
+    description = typeof payload.description === "string" ? payload.description.trim() : "";
+  } catch {
+    description = "";
+  }
+  const suffix = description ? `: ${description}` : "";
+  return new Error(`Telegram ${method} failed: HTTP ${response.status}${suffix}`);
 }
