@@ -1,0 +1,42 @@
+Round: D167
+
+Implementation commit:
+- f14b632 D167-1: split reciprocal wishlist state
+
+Oversized relay state repair:
+- Backup path: C:\Users\huizh\AppData\Local\Temp\tandem-relay-state-backups\D167-20260720-131306\state.json.oversized.backup
+- Before size: 1,481,039,955 bytes
+- After size: 853 bytes
+- Repaired state is parseable JSON, schemaVersion=2, phase=idle, nextRole=A, stableCommit=1fcc4cc8ff9fdd697c9472802f4569c4cf68668d, lastCompletedCommit=1fcc4cc8ff9fdd697c9472802f4569c4cf68668d.
+
+Wishlist/progress store:
+- New store: C:\Users\huizh\Apps\Tandem Reciprocal\control\WISHLIST.md
+- Format: bounded markdown work-state board using the existing `<!-- wishlist-items -->` item-line format, plus retained removed history outside shared direction.
+- Durable direction remains in C:\Users\huizh\Apps\Tandem Reciprocal\control\SHARED_DIRECTION.md.
+
+Required proofs:
+- SHARED_DIRECTION issue/progress scan matched 0 occurrences for W0022, W0021, W0016, wishlist-items, `## Wishlist`, and `## Removed`.
+- WISHLIST contains W0022 as QUEUED and W0016 as QUEUED.
+- First open item is W0022, so W0022 remains next for pickup.
+- `scripts/reciprocal-direction.ps1 -Action Add` writes live/rejection-style follow-up items to WISHLIST.md and leaves SHARED_DIRECTION.md issue-free; focused test `D167: keeps live wishlist items out of the human shared direction file` covers this boundary.
+- Dashboard reject/review helpers now parse WISHLIST.md for candidate rejection follow-ups and do not use SHARED_DIRECTION.md as the work-state board.
+
+Dashboard/status proof:
+- Updated live dashboard server at C:\Users\huizh\Apps\Tandem Reciprocal\dashboard\server.mjs for bounded JSON/text reads, capped dashboard log entries, WISHLIST.md routing, and `direction.nextQueuedItem`.
+- Restarted the dashboard backend; live `GET http://127.0.0.1:4782/api/status` returned in 1864 ms.
+- Status summary: phase=idle, stableCommit=1fcc4cc8ff9fdd697c9472802f4569c4cf68668d, shortStable=1fcc4cc, nextQueuedId=W0022, nextQueuedStatus=QUEUED, relayHealth=idle, stableHealth=1fcc4cc.
+- Oversized/corrupt fixture proof using an isolated temporary dashboard instance:
+  - Oversized state response in 657 ms with warning: `Unavailable: JSON file is too large (307247 bytes; max 262144)`.
+  - Corrupt state response in 475 ms with warning: `Unavailable: Expected property name or '}' in JSON at position 2 (line 1 column 3)`.
+
+Verification:
+- `npm test -- tests/reciprocal-direction.test.ts tests/reciprocal-relay.test.ts tests/reciprocal-candidate-commit.test.ts` PASS, 42 tests.
+- `node --test C:\Users\huizh\Apps\Tandem Reciprocal\dashboard\lib.nodecheck.mjs` PASS, 7 tests.
+- `node --check C:\Users\huizh\Apps\Tandem Reciprocal\dashboard\server.mjs` PASS.
+- `npm run typecheck` PASS.
+- `npm test` PASS, 49 files passed, 1 skipped; 492 tests passed, 1 skipped.
+- `git diff --check` PASS.
+
+Non-goals confirmed:
+- Did not implement, build, launch, approve, promote, integrate, push, or mark done the Telegram product fix in W0022.
+- W0022 remains QUEUED and first; W0016 remains QUEUED behind it.
