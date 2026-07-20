@@ -1,0 +1,42 @@
+Round: D163
+
+Implementation commit:
+- 38edc40591086ba11ad01110dabf6adb51aee465 D163-1 repair reciprocal artifact authority
+
+Summary:
+- Repaired reciprocal artifact completion so artifact authority comes from board/app-owned metadata, not model-supplied report fields.
+- Added DeclareArtifact board action and required artifact/source metadata preservation through Start and ArtifactComplete.
+- Split producer relay HEAD/stable validation from artifact source validation. Producer HEAD may remain at relay stable while the trusted admin artifact source differs.
+- Resolved BUILD_INFO.json and Tandem.exe only from the trusted artifact root release/win-unpacked directory.
+- Added app-layer smoke execution via artifactSmokeRunner/default Tandem.exe --smoke and refused model-asserted smoke-only success.
+- Changed artifact terminal ordering so relay CompleteArtifact runs before board ArtifactComplete; retry after relay close is idempotent.
+- Updated the external active dashboard at C:\Users\huizh\Apps\Tandem Reciprocal\dashboard for explicit origin mapping, safe CompleteArtifact release on rejected previews, origin retirement only when appropriate, and repeated reject idempotence. That dashboard directory is not a git repository.
+
+Distinct topology proof details:
+- Unit fixture producer/stable SHA: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.
+- Unit fixture artifact/admin source SHA: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb.
+- Unit fixture roots: producer worktree under scratch relay worktrees/copy-b; artifact root under scratch relay admin-root/release/win-unpacked.
+- Live dashboard proof root: C:\Users\huizh\AppData\Local\Temp\d163-live-1784553101695.
+- Live producer/stable SHA: 1801d3a72c45550164b68d3a1aeb633043d4bfd4.
+- Live artifact/admin source SHA: bbbbbbb163bbbbbbbbbbbbbbbbbbbbbbbbbbbbb.
+- Live dashboard port: 5799.
+- First /api/update/reject response: ok=true, wishlistId=W0100, wishlistCreated=true, relayReleased=true, relayPhase=idle.
+- Second /api/update/reject response: ok=true, wishlistId=W0100, wishlistCreated=false, relayReleased=false, relayPhase=idle, alreadyReviewed=true.
+- Live final state: relay phase idle, activeRole null, lastCompletedCommit 1801d3a72c45550164b68d3a1aeb633043d4bfd4.
+- Live board evidence: one [review-rejection:bbbbbbb163bbbbbbbbbbbbbbbbbbbbbbbbbbbbb] follow-up, matching W0099 origin retired with note rejected-review-followup-W0100.
+- Live review/audit evidence: UPDATE_REVIEW_INDEX decision=reject, two update.rejectQueued audit entries (initial plus idempotent retry).
+
+Verification:
+- node --check C:\Users\huizh\Apps\Tandem Reciprocal\dashboard\lib.mjs
+- node --check C:\Users\huizh\Apps\Tandem Reciprocal\dashboard\server.mjs
+- node --test C:\Users\huizh\Apps\Tandem Reciprocal\dashboard\lib.nodecheck.mjs
+- npm test -- --run tests/reciprocal-candidate-commit.test.ts tests/reciprocal-direction.test.ts tests/reciprocal-relay.test.ts
+- npm run typecheck
+- git diff --check
+- npm test
+- Isolated dashboard live proof on port 5799 with first and repeated /api/update/reject requests.
+
+Notes:
+- W0021 and W0016 real board entries were not mutated.
+- Existing untracked handoff documents and unrelated moved/done files were left untouched.
+- Pre-existing local edits remained unstaged: scripts/reciprocal-direction.ps1 UpdateDirection hunk and scripts/setup-reciprocal-tandem.ps1 cron hunk.
