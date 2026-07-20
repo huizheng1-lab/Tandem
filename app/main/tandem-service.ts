@@ -19,6 +19,8 @@ import { modelRegistry } from "../../src/providers/registry.js";
 import { withConfiguredCliModel } from "../../src/providers/cli-models.js";
 import { tandemStateDir } from "../../src/paths.js";
 import { RemoteBridge, type RemoteApprovalRequest, type RemoteControlState, type RemoteTransport } from "../../src/remote-control/bridge.js";
+import type { PromptSubmissionInput, SessionPromptSubmissionResult } from "../../src/remote-control/prompt-submission.js";
+import type { SessionEventSubscription, StreamingSessionEvent } from "../../src/remote-control/streaming-session.js";
 import { FileTelegramOffsetStore, TelegramLongPollingTransport } from "../../src/remote-control/telegram.js";
 import { CostLedger } from "../../src/session/cost.js";
 import { copyAttachment, formatAttachmentBlock, writeAttachmentData } from "../../src/session/attachments.js";
@@ -138,6 +140,7 @@ export class TandemService {
   private runBaselineTotals?: CostTotals;
   private currentPhase = "IDLE";
   private remoteBridge: RemoteBridge;
+  private readonly remoteSessionSubscribers = new Map<string, Set<(event: StreamingSessionEvent) => void>>();
   constructor(
     private readonly window: DesktopWindow,
     private readonly deps: TandemServiceDeps = {}
@@ -164,6 +167,8 @@ export class TandemService {
         stop: () => this.stopRemoteRun(),
         useSession: (id) => this.useRemoteSession(id)
       },
+      submitPrompt: (input) => this.submitRemotePrompt(input),
+      subscribeSessionEvents: (sessionId, onEvent) => this.subscribeRemoteSessionEvents(sessionId, onEvent),
       saveConfig: (patch) => this.saveRemoteControlConfig(patch),
       onStateChange: (state) => this.window.webContents.send(ipcChannels.remoteControlEvent, state)
     });
@@ -298,6 +303,7 @@ export class TandemService {
       await session.append("done", done);
       this.lastCheckpoint = undefined;
     } finally {
+      this.emitRemoteSessionEvent({ phase: this.currentPhase === "IDLE" ? "completed" : this.currentPhase.toLowerCase(), health: "healthy", lastEventKind: "done", ended: true });
       this.controller = undefined;
       this.paused = false;
       this.releasePauseWaiters();
@@ -564,6 +570,41 @@ export class TandemService {
     return { ok: true, message: `Using session ${resumed.id.slice(0, 8)}.` };
   }
 
+  private async submitRemotePrompt(input: PromptSubmissionInput): Promise<SessionPromptSubmissionResult> {
+    if (this.controller) return { status: "rejected", message: "Cannot submit a remote prompt while a Tandem run is already active." };
+    try {
+      if (this.session?.id !== input.sessionId) await this.resumeSession(input.sessionId);
+      if (this.controller) return { status: "rejected", message: "Cannot submit a remote prompt while a Tandem run is already active." };
+      void this.run(input.text).catch((error) => {
+        void this.emitMachine({ type: "error", message: String(error) });
+      });
+      return { status: "submitted" };
+    } catch (error) {
+      return { status: "rejected", message: error instanceof Error ? error.message : String(error) };
+    }
+  }
+
+  private subscribeRemoteSessionEvents(sessionId: string, onEvent: (event: StreamingSessionEvent) => void): ReturnType<SessionEventSubscription> {
+    let subscribers = this.remoteSessionSubscribers.get(sessionId);
+    if (!subscribers) {
+      subscribers = new Set();
+      this.remoteSessionSubscribers.set(sessionId, subscribers);
+    }
+    subscribers.add(onEvent);
+    return () => {
+      subscribers?.delete(onEvent);
+      if (subscribers?.size === 0) this.remoteSessionSubscribers.delete(sessionId);
+    };
+  }
+
+  private emitRemoteSessionEvent(event: StreamingSessionEvent): void {
+    const sessionId = this.session?.id;
+    if (!sessionId) return;
+    const subscribers = this.remoteSessionSubscribers.get(sessionId);
+    if (!subscribers) return;
+    for (const subscriber of subscribers) subscriber(event);
+  }
+
   private waitIfPaused(): Promise<void> {
     if (!this.paused) return Promise.resolve();
     const signal = this.controller?.signal;
@@ -592,6 +633,13 @@ export class TandemService {
   private async emitText(role: "leader" | "worker", delta: string, thinking = false): Promise<void> {
     const event = { role, delta, thinking };
     this.window.webContents.send(ipcChannels.textEvent, event);
+    this.emitRemoteSessionEvent({
+      role,
+      phase: this.currentPhase.toLowerCase(),
+      health: "healthy",
+      lastEventKind: thinking ? "thinking" : "text",
+      text: delta
+    });
     const totals = this.costTotals();
     this.window.webContents.send(ipcChannels.costEvent, this.costEventTotals(totals));
     await this.session?.append(thinking ? "thinking" : "text", event);
@@ -603,6 +651,13 @@ export class TandemService {
     if (event.type === "checkpoint") this.currentPhase = event.checkpoint.phase;
     if (event.type === "transition") this.currentPhase = event.phase;
     this.window.webContents.send(ipcChannels.machineEvent, event);
+    this.emitRemoteSessionEvent({
+      phase: this.currentPhase.toLowerCase(),
+      health: event.type === "error" ? "likely stalled" : "healthy",
+      lastEventKind: event.type,
+      text: event.type === "notice" || event.type === "error" || event.type === "transition" ? event.message : undefined,
+      ended: event.type === "checkpoint" && event.checkpoint.phase === "DONE"
+    });
     const totals = this.costTotals();
     this.window.webContents.send(ipcChannels.costEvent, this.costEventTotals(totals));
     await this.session?.append("machine", event);

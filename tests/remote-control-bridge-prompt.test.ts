@@ -80,7 +80,8 @@ describe("RemoteBridge prompt routing", () => {
     expect(transport.sent.at(-1)?.text).toMatch(/No active session/i);
     await bridge.handleMessage(message("/use session"));
     await bridge.handleMessage(message("fallback reply", 999));
-    expect(submissions).toEqual(["fallback reply"]);
+    await bridge.handleMessage(message("plain selected prompt"));
+    expect(submissions).toEqual(["fallback reply", "plain selected prompt"]);
   });
 
   it("keeps the live binding retryable when submission fails", async () => {

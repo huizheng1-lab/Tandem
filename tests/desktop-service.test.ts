@@ -994,6 +994,59 @@ describe("TandemService", () => {
     expect(remoteEdited.at(-1)).toMatch(/Resolved from Telegram: approved/i);
   });
 
+  it("lets Telegram submit plain selected-session prompts through the real service run path", async () => {
+    const cwd = await tempDir();
+    const home = await tempDir();
+    await mkdir(path.join(home, ".tandem"), { recursive: true });
+    await writeFile(path.join(home, ".tandem", ".env"), "TELEGRAM_BOT_TOKEN=test-token\n", "utf8");
+    await writeFile(path.join(home, ".tandem", "config.json"), JSON.stringify({ remoteControl: { enabled: true, telegramUserId: 101 } }), "utf8");
+    const { window, sent } = fakeWindow();
+    let onRemoteMessage: ((message: RemoteInboundMessage) => void | Promise<void>) | undefined;
+    const remoteSent: Array<{ text: string; messageId: number }> = [];
+    const remoteEdited: string[] = [];
+    const transport: RemoteTransport = {
+      start: (onMessage) => {
+        onRemoteMessage = onMessage;
+      },
+      stop: () => undefined,
+      sendMessage: async (_chatId, text) => {
+        const messageId = 200 + remoteSent.length;
+        remoteSent.push({ text, messageId });
+        return { messageId };
+      },
+      editMessage: async (_chatId, _messageId, text) => {
+        remoteEdited.push(text);
+      },
+      answerCallback: async () => undefined
+    };
+    const requests: string[] = [];
+    const service = new TandemService(window as never, {
+      registerIpcResponses: false,
+      homeDir: home,
+      baseEnv: {},
+      remoteTransportFactory: () => transport,
+      createAgents: async (): Promise<AgentFns> => fakeAgents(),
+      runOrchestration: async (options: RunOptions): Promise<RunResult> => {
+        requests.push(options.request);
+        options.emit?.({ type: "notice", message: `remote saw ${options.request}` });
+        return { phase: "DONE", summary: "remote done", plan, reports: [], verdicts: [], takeover: false };
+      }
+    });
+
+    const started = await service.startSession({ projectDir: cwd });
+    await onRemoteMessage?.({ updateId: 1, senderId: 101, chatId: 101, text: `/use ${started.sessionId.slice(0, 8)}` });
+    await onRemoteMessage?.({ updateId: 2, senderId: 101, chatId: 101, text: "plain remote prompt" });
+
+    const deadline = Date.now() + 2000;
+    while (requests.length === 0 && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(requests).toEqual(["plain remote prompt"]);
+    while (!sent.some((event) => event.channel === ipcChannels.doneEvent) && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 10));
+    await new Promise((resolve) => setTimeout(resolve, 1600));
+
+    expect(remoteSent.some((message) => message.text.includes("Submitting prompt"))).toBe(true);
+    expect(remoteEdited.some((text) => text.includes("remote saw plain remote prompt"))).toBe(true);
+  });
+
   it("auto-approves build plans when session auto-approve-all is active", async () => {
     const cwd = await tempDir();
     const home = await tempDir();

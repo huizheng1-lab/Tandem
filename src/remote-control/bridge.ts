@@ -305,7 +305,7 @@ export class RemoteBridge {
       return;
     }
 
-    if (message.replyToMessageId !== undefined) {
+    if (message.replyToMessageId !== undefined || this.selectedSessionsByChat.has(message.chatId)) {
       await this.handlePrompt(message, message.text);
       return;
     }
@@ -540,19 +540,20 @@ export class RemoteBridge {
       return;
     }
 
-    const result = await submitRemotePrompt({ chatId: message.chatId, sessionId, text }, this.deps.submitPrompt);
-    await this.audit("prompt", { sessionId, outcome: result.status, argsHash: hashArgs(text) });
-    const stream = repliedStream ?? this.sessionStreamsBySession.get(sessionId);
-    if (result.status === "submitted") {
-      if (stream) {
-        await stream.resetForSubmission();
-        return;
-      }
+    let stream = repliedStream ?? this.sessionStreamsBySession.get(sessionId);
+    if (stream) {
+      await stream.resetForSubmission();
+    } else {
       const sent = await this.transport?.sendMessage(message.chatId, "user / submitting / 0s\nhealthy\nSubmitting prompt...");
       await this.audit("outbound", { chatId: message.chatId, kind: "prompt-submitted" });
       if (sent?.messageId !== undefined && this.startSessionStream(message.chatId, sent.messageId, sessionId)) {
-        await this.sessionStreamsByMessage.get(this.streamMessageKey(message.chatId, sent.messageId))?.resetForSubmission();
+        stream = this.sessionStreamsByMessage.get(this.streamMessageKey(message.chatId, sent.messageId));
       }
+    }
+
+    const result = await submitRemotePrompt({ chatId: message.chatId, sessionId, text }, this.deps.submitPrompt);
+    await this.audit("prompt", { sessionId, outcome: result.status, argsHash: hashArgs(text) });
+    if (result.status === "submitted") {
       return;
     }
 
