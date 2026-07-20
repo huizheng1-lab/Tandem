@@ -1,0 +1,42 @@
+D164 done
+
+Round: D164
+
+Commits:
+- 883de83 D164 app-owned candidate preview artifacts
+
+Verification:
+- npm test -- --run tests/candidate-preview-smoke.test.ts tests/reciprocal-candidate-commit.test.ts tests/reciprocal-direction.test.ts tests/reciprocal-relay.test.ts
+  - 4 files passed, 42 tests passed.
+- npm run typecheck
+  - Passed.
+- npm test
+  - 49 files passed, 1 skipped; 488 tests passed, 1 skipped.
+- git diff --check
+  - Passed with CRLF normalization warnings only.
+- git diff --cached --check
+  - Passed.
+- node --check on dashboard/lib.mjs, dashboard/server.mjs, and dashboard/public/app.js
+  - Passed.
+- node --test dashboard/lib.nodecheck.mjs
+  - Passed, 6 tests.
+
+Live GUI smoke:
+- scripts/candidate-preview-smoke.ps1 passed against release\win-unpacked\Tandem.exe.
+- Evidence showed readiness=input-idle, exit code 0, launched PID 16964, and stopped PIDs 16964, 36584, 37236, 37476.
+- The launched canonical executable process was gone after cleanup.
+
+Isolated app-owned artifact proof:
+- Temp proof root: C:\Users\huizh\AppData\Local\Temp\d164-e2e-proof-1784556000083
+- Human/dashboard-created artifact item W0001 bound to trusted source 7ad804f28978a4e461abed3ade97a4873a35a768.
+- Producer/stable SHA remained 23d60c9c848fffb48d5dbecd1a656f9a595a00d4.
+- Claim exposed deterministic artifactWork for candidate-preview with zero-source-file completion instructions.
+- Completion report triggered app-owned BUILD_INFO validation and real GUI smoke, closed relay to idle, and marked W0001 DONE with artifact/source/evidence metadata.
+- No source candidate ref was promoted; relay lastCompletedCommit stayed at producer SHA.
+- Dashboard rejection created exactly one follow-up W0002 for the exact artifact source; repeated rejection was idempotent with wishlistCreated=false.
+- Normal wishlist API rejected artifact metadata and required /api/wishlist/artifact.
+
+Notes:
+- External dashboard changes in C:\Users\huizh\Apps\Tandem Reciprocal\dashboard are active in that external directory but are not part of this git repository.
+- Pre-existing unrelated local changes in scripts\setup-reciprocal-tandem.ps1 and the unstaged UpdateDirection hunk in scripts\reciprocal-direction.ps1 were left unstaged.
+- Untracked handoff documents and unrelated untracked files were left untouched.
