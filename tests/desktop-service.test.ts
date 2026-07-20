@@ -999,7 +999,7 @@ describe("TandemService", () => {
     expect(remoteEdited.at(-1)).toMatch(/Resolved from Telegram: approved/i);
   });
 
-  it("sends a direct leader answer from the real orchestration path to Telegram", async () => {
+  it("sends a direct leader answer after command churn from the real orchestration path to Telegram", async () => {
     const cwd = await tempDir();
     const home = await tempDir();
     await mkdir(path.join(home, ".tandem"), { recursive: true });
@@ -1036,13 +1036,17 @@ describe("TandemService", () => {
 
     const started = await service.startSession({ projectDir: cwd });
     await onRemoteMessage?.({ updateId: 1, senderId: 101, chatId: 101, text: "/sessions" });
-    await onRemoteMessage?.({ updateId: 2, senderId: 101, chatId: 101, text: "Hi" });
+    for (let updateId = 2; updateId <= 10; updateId += 1) {
+      await onRemoteMessage?.({ updateId, senderId: 101, chatId: 101, text: "/status" });
+    }
+    await onRemoteMessage?.({ updateId: 11, senderId: 101, chatId: 101, text: "Hi" });
 
     const deadline = Date.now() + 2_000;
     expect(started.sessionId).toBeTruthy();
     while (!sent.some((event) => event.channel === ipcChannels.doneEvent) && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 10));
 
     expect(remoteSent.some((message) => message.text.includes("Submitting prompt"))).toBe(true);
+    expect(remoteSent.some((message) => /cooling down/i.test(message.text))).toBe(false);
     expect(remoteEdited.at(-1)).toContain("leader: Hi! How can I help?");
   });
 

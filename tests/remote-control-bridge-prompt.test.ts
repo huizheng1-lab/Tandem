@@ -72,6 +72,42 @@ describe("RemoteBridge prompt routing", () => {
     expect(submissions).toEqual(["plain prompt without /prompt"]);
   });
 
+  it("delivers a selected-session Hi after command churn without removing prompt rate limits", async () => {
+    const transport = new PromptTransport();
+    const submissions: string[] = [];
+    let receive: ((event: StreamingSessionEvent) => void) | undefined;
+    const bridge = await createBridge(transport, async (prompt) => {
+      submissions.push(prompt.text);
+      receive?.({
+        role: "leader",
+        phase: "answering",
+        lastEventKind: "done",
+        text: "Hi! How can I help?",
+        ended: true
+      });
+      return { status: "submitted" };
+    }, (_sessionId, onEvent) => {
+      receive = onEvent;
+      return () => {};
+    });
+
+    await bridge.handleMessage(message("/sessions"));
+    const buttonData = transport.sent.at(-1)?.options?.inlineKeyboard?.[0]?.[0]?.data ?? "";
+    await bridge.handleMessage(callback(buttonData));
+    for (let index = 0; index < 8; index += 1) await bridge.handleMessage(message("/status"));
+    await bridge.handleMessage(message("/status"));
+    expect(transport.sent.at(-1)?.text).toMatch(/cooling down/i);
+
+    await bridge.handleMessage(message("Hi"));
+    expect(submissions).toEqual(["Hi"]);
+    expect(transport.edited.at(-1)?.text).toContain("leader: Hi! How can I help?");
+
+    for (let index = 0; index < 9; index += 1) await bridge.handleMessage(message(`prompt ${index}`));
+    await bridge.handleMessage(message("one prompt too many"));
+    expect(submissions).toHaveLength(10);
+    expect(transport.sent.at(-1)?.text).toMatch(/cooling down/i);
+  });
+
   it("routes /prompt and live-message replies to the /use session, reuses one stream, and cancels with a summary", async () => {
     vi.useFakeTimers();
     const transport = new PromptTransport();

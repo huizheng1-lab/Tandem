@@ -178,6 +178,7 @@ export class RemoteBridge {
   private transport?: RemoteTransport;
   private pairing?: PairingCode;
   private readonly commandTimes: number[] = [];
+  private readonly promptTimes: number[] = [];
   private readonly rejectedAuditAt = new Map<number, number>();
   private polling = false;
   private lastError: string | undefined;
@@ -251,7 +252,16 @@ export class RemoteBridge {
       return;
     }
 
-    if (!this.consumeRateLimit()) {
+    // Keep content submissions in their own rate-limit bucket. Session browsing
+    // and status checks must not consume the capacity needed for the selected
+    // session's next prompt, while prompts still retain the same abuse cap.
+    const routesAsContentPrompt =
+      command.verb === "prompt" ||
+      (command.verb === "unknown" &&
+        (message.replyToMessageId !== undefined || this.selectedSessionsByChat.has(message.chatId)));
+    const rateLimitTimes = routesAsContentPrompt ? this.promptTimes : this.commandTimes;
+
+    if (!this.consumeRateLimit(rateLimitTimes)) {
       await this.send(message.chatId, "Remote control is cooling down; try again in a minute.", "rate-limit");
       return;
     }
@@ -520,11 +530,11 @@ export class RemoteBridge {
     await this.send(message.chatId, result.ok ? `${result.message} Send any message to prompt it.` : result.message, "session-select");
   }
 
-  private consumeRateLimit(): boolean {
+  private consumeRateLimit(times = this.commandTimes): boolean {
     const now = this.now();
-    while (this.commandTimes.length > 0 && now - (this.commandTimes[0] ?? 0) > RATE_LIMIT_WINDOW_MS) this.commandTimes.shift();
-    if (this.commandTimes.length >= RATE_LIMIT_MAX) return false;
-    this.commandTimes.push(now);
+    while (times.length > 0 && now - (times[0] ?? 0) > RATE_LIMIT_WINDOW_MS) times.shift();
+    if (times.length >= RATE_LIMIT_MAX) return false;
+    times.push(now);
     return true;
   }
 
