@@ -1,0 +1,81 @@
+Round: D160
+
+Commits:
+- f624141f553c4d52712a2b3c3d82ff78e225d4e9 D160-1: wire remote prompts into service sessions
+
+What was missing:
+- The production RemoteBridge in app/main/tandem-service.ts did not pass submitPrompt or subscribeSessionEvents.
+- Live candidate-preview evidence showed /prompt reached bridge dispatch but returned prompt-unavailable:
+  - {"at":"2026-07-20T02:17:00.926Z","event":"inbound","senderId":7573544565,"chatId":7573544565,"verb":"prompt","argsHash":"8f434346648f6b96"}
+  - {"at":"2026-07-20T02:17:01.176Z","event":"outbound","chatId":7573544565,"kind":"prompt-unavailable"}
+
+Production wiring:
+- submitPrompt now calls TandemService.submitRemotePrompt(input).
+- submitRemotePrompt reuses the existing desktop send path by resuming the selected session with resumeSession(input.sessionId) when necessary and starting the same run(input.text) method used by the renderer's pipelineRun IPC handler.
+- subscribeSessionEvents now calls TandemService.subscribeRemoteSessionEvents(sessionId, onEvent).
+- subscribeRemoteSessionEvents registers callbacks in remoteSessionSubscribers.
+- emitText and emitMachine now fan out the same live text/machine events sent to the desktop renderer to those session subscribers, which TelegramSessionStream consumes and edits into the live Telegram message.
+- The bridge fallback now routes plain text to handlePrompt when a chat already has a selected session from /use, while keeping /prompt and reply-to-live-message routing valid.
+- RemoteBridge now creates/resets the stream before invoking submitPrompt, so service run events are available to the Telegram stream from the start of the submitted run.
+
+Wiring diff context:
+```
+this.remoteBridge = new RemoteBridge({
+  auditPath: path.join(remoteStateDir, "remote-control-audit.jsonl"),
+  transportFactory: ...,
+  tokenProvider: () => this.env.TELEGRAM_BOT_TOKEN,
+  statusProvider: () => this.remoteStatusSnapshot(),
+  sessionsProvider: async () => ...,
+  actions: {
+    pause: () => this.pauseRemoteRun(),
+    resume: () => this.resumeRemoteRun(),
+    stop: () => this.stopRemoteRun(),
+    useSession: (id) => this.useRemoteSession(id)
+  },
+  submitPrompt: (input) => this.submitRemotePrompt(input),
+  subscribeSessionEvents: (sessionId, onEvent) => this.subscribeRemoteSessionEvents(sessionId, onEvent),
+  saveConfig: (patch) => this.saveRemoteControlConfig(patch),
+  onStateChange: ...
+});
+```
+
+```
+private async submitRemotePrompt(input: PromptSubmissionInput): Promise<SessionPromptSubmissionResult> {
+  if (this.controller) return { status: "rejected", message: "Cannot submit a remote prompt while a Tandem run is already active." };
+  try {
+    if (this.session?.id !== input.sessionId) await this.resumeSession(input.sessionId);
+    if (this.controller) return { status: "rejected", message: "Cannot submit a remote prompt while a Tandem run is already active." };
+    void this.run(input.text).catch((error) => {
+      void this.emitMachine({ type: "error", message: String(error) });
+    });
+    return { status: "submitted" };
+  } catch (error) {
+    return { status: "rejected", message: error instanceof Error ? error.message : String(error) };
+  }
+}
+```
+
+Regression proof:
+- tests/remote-control-bridge-prompt.test.ts proves a plain selected-chat message after /use routes through handlePrompt instead of the unknown-command fallback.
+- tests/desktop-service.test.ts proves a Telegram plain message with no /prompt prefix and no reply context goes through the real TandemService RemoteBridge construction, calls the real run path with "plain remote prompt", and streams the run's emitted machine notice back through editMessage.
+
+Placeholder sweep:
+- Command: rg -n "unavailable in this build|if \(!this\.deps|submitPrompt|subscribeSessionEvents" app/main src/remote-control -S
+- submitPrompt and subscribeSessionEvents are now present in app/main/tandem-service.ts.
+- Remaining unavailable-in-this-build guards are action guards for pause/resume/use/stop in bridge.ts; TandemService already passes those actions in production.
+
+Live proof status:
+- I could not complete the mandatory live Telegram round-trip from this environment because I cannot send messages as the user's Telegram account or safely rebuild/relaunch the human's paired candidate-preview without taking over the running app processes. I did inspect the real candidate-preview audit log and captured the pre-fix prompt-unavailable evidence above.
+- Manual proof still needed after relaunching a build that contains f624141f553c4d52712a2b3c3d82ff78e225d4e9:
+  1. Relaunch candidate-preview with the D160 build.
+  2. In the paired Telegram bot, run /use <real session prefix>.
+  3. Send plain text with no /prompt prefix and no reply. Confirm the assistant response edits/streams into the Telegram live message and audit shows event "prompt" with outcome "submitted".
+  4. Send /prompt <text>. Confirm it submits and streams.
+  5. Reply to a live stream message. Confirm that reply submits to the bound session and streams.
+  6. Save the corresponding remote-control-audit.jsonl entries.
+
+Verification:
+- npx vitest run tests/remote-control-bridge-prompt.test.ts tests/desktop-service.test.ts: passed, 2 files / 41 tests.
+- npm run typecheck: passed.
+- npm test: passed, 48 files passed / 1 skipped, 463 tests passed / 1 skipped.
+- git diff --check: passed.
