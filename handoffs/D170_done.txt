@@ -15,7 +15,7 @@ Files changed:
 
 Commit hashes:
 - W0024 implementation candidate commit: ace6dd9f0b17fe0dcd2e7bb7b37ad2391357c3c4
-- D170 marker commit: pending
+- D170 marker commit: 28291cb
 
 Relay recovery:
 - Command:
