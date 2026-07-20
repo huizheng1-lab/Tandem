@@ -106,10 +106,11 @@ foreach ($role in $roles) {
         promotedRound = $PromotedRound
         builtAt = if ($sourceBuildInfo -and $sourceBuildInfo.builtAt) { [string]$sourceBuildInfo.builtAt } else { $null }
         sourceBuildInfo = if ($sourceBuildInfo) { $sourceBuildInfo } else { $null }
+        reciprocalCapabilities = if ($sourceBuildInfo -and $sourceBuildInfo.reciprocalCapabilities) { $sourceBuildInfo.reciprocalCapabilities } else { $null }
         promotedAt = (Get-Date).ToString("o")
         artifact = "release/win-unpacked"
     }
-    $buildInfoJson = $buildInfo | ConvertTo-Json
+    $buildInfoJson = $buildInfo | ConvertTo-Json -Depth 8
     [IO.File]::WriteAllText((Join-Path $targetDir "BUILD_INFO.json"), $buildInfoJson + [Environment]::NewLine, [Text.UTF8Encoding]::new($false))
 
     if (-not (Test-Path -LiteralPath (Join-Path $targetDir "Tandem.exe"))) {

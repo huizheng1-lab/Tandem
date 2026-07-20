@@ -59,7 +59,12 @@ describe("desktop automation", () => {
       const accepted = await fetch(`${base}/prompt`, { method: "POST", headers, body: JSON.stringify({ projectDir, prompt: "claim one turn" }) });
       expect(accepted.status).toBe(202);
       expect(prompts).toEqual(["claim one turn"]);
-      await expect(fetch(`${base}/status`, { headers }).then((response) => response.json())).resolves.toMatchObject({ ok: true, instanceId: "A", allowedProjectDir: projectDir });
+      await expect(fetch(`${base}/status`, { headers }).then((response) => response.json())).resolves.toMatchObject({
+        ok: true,
+        instanceId: "A",
+        allowedProjectDir: projectDir,
+        capabilities: { candidatePreviewArtifactLifecycle: 1 },
+      });
     } finally {
       await server.close();
     }

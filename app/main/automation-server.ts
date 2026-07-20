@@ -90,6 +90,7 @@ export async function startAutomationServer(options: AutomationServerOptions): P
           instanceId: options.instanceId || null,
           allowedProjectDir,
           ...state.serviceState,
+          capabilities: { candidatePreviewArtifactLifecycle: 1 },
           running: state.running,
           acceptedAt,
           completedAt,

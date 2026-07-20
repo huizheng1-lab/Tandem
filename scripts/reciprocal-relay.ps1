@@ -27,6 +27,25 @@ param(
 
 $ErrorActionPreference = "Stop"
 $ResumePauseThreshold = 3
+$CandidatePreviewArtifactCapability = 1
+
+function Get-ReciprocalCapabilities {
+    if ($env:TANDEM_DISABLE_CANDIDATE_PREVIEW_ARTIFACT_CAPABILITY -eq "1") {
+        return [ordered]@{}
+    }
+    return [ordered]@{
+        candidatePreviewArtifactLifecycle = $CandidatePreviewArtifactCapability
+    }
+}
+
+function Test-CandidatePreviewArtifactCapability {
+    $capabilities = Get-ReciprocalCapabilities
+    $version = 0
+    if ($capabilities -and $capabilities["candidatePreviewArtifactLifecycle"]) {
+        $version = [int]$capabilities["candidatePreviewArtifactLifecycle"]
+    }
+    return $version -ge $CandidatePreviewArtifactCapability
+}
 
 function Invoke-Git {
     param([Parameter(ValueFromRemainingArguments = $true)][string[]]$Arguments)
@@ -203,6 +222,7 @@ try {
             lastCompletedCommit = $state.lastCompletedCommit
             lastSummary = $state.lastSummary
             lastRecoveryStash = $state.lastRecoveryStash
+            capabilities = Get-ReciprocalCapabilities
             statePath = $statePath
         }
         if ($Extra) {
@@ -948,7 +968,7 @@ try {
         }
     }
 
-    function Get-NextArtifactInstruction {
+    function Get-NextArtifactItem {
         if ($Role -ne "A") { return $null }
         $boardPath = Get-SharedDirectionPath
         if (-not (Test-Path -LiteralPath $boardPath)) { return $null }
@@ -964,14 +984,37 @@ try {
             kind = "candidate-preview"
             wishlistId = $id
             sourceSha = $metadata.source
-            startCommand = "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/reciprocal-direction.ps1 -Action Start -Id $id -Role A"
+        }
+    }
+
+    function New-ArtifactCapabilityBlocked([object]$ArtifactItem) {
+        return [pscustomobject]@{
+            kind = $ArtifactItem.kind
+            wishlistId = $ArtifactItem.wishlistId
+            sourceSha = $ArtifactItem.sourceSha
+            requiredCapability = [ordered]@{
+                candidatePreviewArtifactLifecycle = $CandidatePreviewArtifactCapability
+            }
+            capabilities = Get-ReciprocalCapabilities
+            reason = "Artifact build workflow requires Reciprocal executor upgrade."
+        }
+    }
+
+    function Get-NextArtifactInstruction {
+        $artifactItem = Get-NextArtifactItem
+        if (-not $artifactItem -or -not (Test-CandidatePreviewArtifactCapability)) { return $null }
+        return [pscustomobject]@{
+            kind = $artifactItem.kind
+            wishlistId = $artifactItem.wishlistId
+            sourceSha = $artifactItem.sourceSha
+            startCommand = "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/reciprocal-direction.ps1 -Action Start -Id $($artifactItem.wishlistId) -Role A"
             completionReportShape = [ordered]@{
                 status = "complete"
                 filesChanged = @()
                 reciprocalArtifact = [ordered]@{
-                    kind = "candidate-preview"
-                    wishlistId = $id
-                    sourceSha = $metadata.source
+                    kind = $artifactItem.kind
+                    wishlistId = $artifactItem.wishlistId
+                    sourceSha = $artifactItem.sourceSha
                 }
             }
             instruction = "Build or verify the trusted candidate preview artifact without source edits. Submit a CompletionReport with filesChanged=[] and reciprocalArtifact exactly matching this kind, wishlistId, and sourceSha; the app layer will validate BUILD_INFO, run GUI smoke, close the relay, and mark the board terminal."
@@ -1020,6 +1063,14 @@ try {
         }
         if ($state.nextRole -ne $Role) {
             Write-Result "WAIT"
+            exit 0
+        }
+
+        $artifactItem = Get-NextArtifactItem
+        if ($artifactItem -and -not (Test-CandidatePreviewArtifactCapability)) {
+            Write-Result "CAPABILITY_BLOCKED" ([pscustomobject]@{
+                artifactBlocked = New-ArtifactCapabilityBlocked $artifactItem
+            })
             exit 0
         }
 

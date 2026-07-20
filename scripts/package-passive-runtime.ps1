@@ -105,6 +105,9 @@ $buildInfo = [ordered]@{
     artifact = "release/win-unpacked"
     packagedBy = "scripts/package-passive-runtime.ps1"
     passiveWorkspace = $Workspace
+    reciprocalCapabilities = [ordered]@{
+        candidatePreviewArtifactLifecycle = 1
+    }
 }
 $buildInfoJson = $buildInfo | ConvertTo-Json -Depth 5
 [IO.File]::WriteAllText((Join-Path $stagingDir "BUILD_INFO.json"), $buildInfoJson + [Environment]::NewLine, [Text.UTF8Encoding]::new($false))

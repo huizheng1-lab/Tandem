@@ -806,6 +806,7 @@ export class TandemService {
       phase: this.controller ? this.currentPhase : this.lastCheckpoint?.phase ?? "IDLE",
       activeRole: this.controller ? (this.currentPhase === "BUILDING" ? "worker" : "leader") : undefined,
       runHealth: this.paused ? "paused" : this.controller ? "running" : "idle",
+      capabilities: { candidatePreviewArtifactLifecycle: 1 },
       cost: this.costEventTotals()
     };
   }

@@ -42,6 +42,12 @@ describe("reciprocal relay script", () => {
     return JSON.parse(result.stdout);
   }
 
+  async function relayWithEnv(repo: string, env: NodeJS.ProcessEnv, ...args: string[]) {
+    const script = path.resolve("scripts/reciprocal-relay.ps1");
+    const result = await execa("powershell", ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", script, ...args], { cwd: repo, env });
+    return JSON.parse(result.stdout);
+  }
+
   async function writeSharedBoard(repo: string, line: string) {
     const boardDir = path.join(repo, ".tandem", "shared-control");
     await mkdir(boardDir, { recursive: true });
@@ -244,6 +250,64 @@ describe("reciprocal relay script", () => {
       });
       expect(claimed.artifactWork.startCommand).toContain("-Action Start -Id W0099 -Role A");
       expect(claimed.artifactWork.instruction).toContain("filesChanged=[]");
+    } finally {
+      await rm(repo, { recursive: true, force: true });
+    }
+  }, 30_000);
+
+  windowsIt("D165: Status advertises candidate preview artifact lifecycle capability", async () => {
+    const repo = await mkdtemp(path.join(tmpdir(), "tandem-relay-d165-status-"));
+    try {
+      await initRepo(repo);
+      await relay(repo, "-Action", "Reset", "-Force");
+
+      const status = await relay(repo, "-Action", "Status");
+      expect(status.capabilities).toMatchObject({ candidatePreviewArtifactLifecycle: 1 });
+    } finally {
+      await rm(repo, { recursive: true, force: true });
+    }
+  }, 30_000);
+
+  windowsIt("D165: blocks declared preview artifact claims when capability is disabled", async () => {
+    const repo = await mkdtemp(path.join(tmpdir(), "tandem-relay-d165-artifact-block-"));
+    try {
+      await initRepo(repo);
+      await writeSharedBoard(
+        repo,
+        "- [ ] W0100 | P0 | Build preview | QUEUED artifact=candidate-preview source=feed4343ec17e79cb8398c069120c100c7b2f1be declared=2026-07-20T00:00:00Z",
+      );
+      await relay(repo, "-Action", "Reset", "-Force");
+
+      const blocked = await relayWithEnv(repo, { TANDEM_DISABLE_CANDIDATE_PREVIEW_ARTIFACT_CAPABILITY: "1" }, "-Action", "Claim", "-Role", "A");
+      expect(blocked).toMatchObject({
+        outcome: "CAPABILITY_BLOCKED",
+        phase: "idle",
+        activeRole: null,
+        artifactBlocked: {
+          kind: "candidate-preview",
+          wishlistId: "W0100",
+          requiredCapability: { candidatePreviewArtifactLifecycle: 1 },
+          reason: "Artifact build workflow requires Reciprocal executor upgrade.",
+        },
+      });
+      expect(blocked.artifactWork).toBeUndefined();
+      const board = await readFile(path.join(repo, ".tandem", "shared-control", "SHARED_DIRECTION.md"), "utf8");
+      expect(board).toContain("W0100 | P0 | Build preview | QUEUED");
+    } finally {
+      await rm(repo, { recursive: true, force: true });
+    }
+  }, 30_000);
+
+  windowsIt("D165: disabled artifact capability does not block ordinary source work", async () => {
+    const repo = await mkdtemp(path.join(tmpdir(), "tandem-relay-d165-source-"));
+    try {
+      await initRepo(repo);
+      await writeSharedBoard(repo, "- [ ] W0101 | P1 | Implement normal work | QUEUED added=2026-07-20T00:00:00Z");
+      await relay(repo, "-Action", "Reset", "-Force");
+
+      const claimed = await relayWithEnv(repo, { TANDEM_DISABLE_CANDIDATE_PREVIEW_ARTIFACT_CAPABILITY: "1" }, "-Action", "Claim", "-Role", "A");
+      expect(claimed).toMatchObject({ outcome: "CLAIMED", phase: "working", activeRole: "A" });
+      expect(claimed.artifactBlocked).toBeUndefined();
     } finally {
       await rm(repo, { recursive: true, force: true });
     }

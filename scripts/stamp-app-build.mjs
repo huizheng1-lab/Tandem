@@ -21,6 +21,9 @@ const buildInfo = {
   sourceBranch,
   builtAt: new Date().toISOString(),
   artifact: "release/win-unpacked",
+  reciprocalCapabilities: {
+    candidatePreviewArtifactLifecycle: 1,
+  },
 };
 
 await mkdir(releaseDir, { recursive: true });
