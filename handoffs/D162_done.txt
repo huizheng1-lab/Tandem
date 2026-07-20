@@ -1,0 +1,31 @@
+Round: D162
+
+Commits:
+- 8e1ff0fa4a7b566cbfce2a20ee3ff76dcd6c1735 (D162-1: complete reciprocal artifact lifecycle)
+
+Root cause:
+- `src/reciprocal/candidate-commit.ts` returned before doing any reciprocal lifecycle work when a completed report had `filesChanged.length === 0`, so a review-only Candidate Preview could be successfully built and still leave the wishlist item QUEUED and the relay turn working/paused.
+- `scripts/reciprocal-relay.ps1 -Action Complete` required exactly one source commit, so there was no supported no-commit terminal path for a clean, verified artifact turn.
+- Dashboard rejection release logic only recognized the A-upgrade gate. It could create the rejection follow-up, but it did not recognize explicit artifact origins or safe working/paused no-commit states.
+
+Implemented lifecycle:
+- Added explicit `CompletionReport.reciprocalArtifact` metadata for `candidate-preview` work: wishlist id, source SHA, BUILD_INFO path, executable path, and smoke result.
+- Added app-layer artifact completion that is gated to Executor A on the producer branch, requires a complete zero-file report, clean worktree, HEAD matching the artifact source SHA, BUILD_INFO sourceSha matching, executable existence, passing terminating smoke, and an exact QUEUED/IN_PROGRESS wishlist item owned by A.
+- Added `reciprocal-direction.ps1 -Action ArtifactComplete` to mark the exact non-epic item DONE with `artifact=`, `source=`, `evidence=`, `role=`, and `completed=` metadata.
+- Added `reciprocal-relay.ps1 -Action CompleteArtifact` to close clean working or paused-from-working A turns to idle without creating a commit, moving stable, setting candidate refs, or promoting runtime.
+- Added `reciprocal-direction.ps1 -Action Retire` as an explicit audited cleanup path for exact nonterminal rejected origins.
+- Updated the external dashboard runtime at `C:\Users\huizh\Apps\Tandem Reciprocal\dashboard` so rejection helpers locate origins by explicit metadata and release matching artifact working/paused states through `CompleteArtifact`. These dashboard files are outside this git repository, consistent with earlier dashboard handoffs, so they are applied in place and verified but not part of the git commit.
+
+Verification:
+- `node --check C:\Users\huizh\Apps\Tandem Reciprocal\dashboard\lib.mjs`: passed
+- `node --check C:\Users\huizh\Apps\Tandem Reciprocal\dashboard\server.mjs`: passed
+- `node --test C:\Users\huizh\Apps\Tandem Reciprocal\dashboard\lib.nodecheck.mjs`: passed (6 tests)
+- `npm test -- --run tests/reciprocal-candidate-commit.test.ts tests/reciprocal-direction.test.ts tests/reciprocal-relay.test.ts`: passed (30 tests)
+- `npm run typecheck`: passed
+- `npm test`: passed (48 files passed, 1 skipped; 476 tests passed, 1 skipped)
+- `git diff --check`: passed; only CRLF normalization warnings were printed for existing working-copy files
+- `git diff --cached --check`: passed before commit
+
+Live proof:
+- Destructive proof was not run against the real shared board because W0021 is actively IN_PROGRESS and W0016 must remain untouched.
+- The relay and direction tests use scratch boards/repos and prove the core live semantics: artifact-only completion leaves stable unchanged and candidate absent, source-commit turns are refused, auto-paused working turns can be safely closed, exact rejected origins can be retired, and W0016-style plan-approved metadata remains unchanged by unrelated artifact cleanup.
