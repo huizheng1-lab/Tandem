@@ -1,6 +1,6 @@
 param(
     [Parameter(Mandatory = $true)]
-    [ValidateSet("Show", "Add", "Remove", "Start", "Candidate", "ApprovePlan", "AutoApprovePlan", "RejectPlan", "AcceptStep", "Complete", "Block", "Requeue")]
+    [ValidateSet("Show", "Add", "Remove", "Retire", "Start", "Candidate", "ArtifactComplete", "ApprovePlan", "AutoApprovePlan", "RejectPlan", "AcceptStep", "Complete", "Block", "Requeue")]
     [string]$Action,
 
     [string]$Text,
@@ -14,6 +14,11 @@ param(
     [string]$Role,
 
     [string]$Commit,
+
+    [ValidateSet("candidate-preview")]
+    [string]$ArtifactKind,
+
+    [string]$Evidence,
 
     [string]$Note,
 
@@ -214,6 +219,25 @@ try {
         $safetySuffix = if ($metadata.safety) { " safety=$($metadata.safety)" } else { "" }
 
         switch ($Action) {
+            "Retire" {
+                $cleanNote = if ($null -eq $Note) { "" } else { ($Note -replace "\s+", " ").Trim().Replace("|", "/") }
+                if (-not $cleanNote) { throw "Retire requires -Note." }
+                if ($base[0] -match '\[x\]' -or $status -eq "DONE") { throw "$Id is already terminal and should not be retired." }
+                if ($status -notin @("QUEUED", "IN_PROGRESS", "CANDIDATE", "BLOCKED")) { throw "$Id cannot be retired from status $status." }
+
+                $before = if ($index -gt 0) { @($lines[0..($index - 1)]) } else { @() }
+                $after = if ($index + 1 -lt $lines.Count) { @($lines[($index + 1)..($lines.Count - 1)]) } else { @() }
+                $lines = @($before + $after)
+                $retiredHeader = [Array]::IndexOf($lines, "## Retired")
+                if ($retiredHeader -lt 0) {
+                    $lines = @($lines + "" + "## Retired" + "")
+                }
+                $lines = @(
+                    $lines +
+                    "- id=$Id | retired=$now | note=$cleanNote" +
+                    "  original: $originalLine"
+                )
+            }
             "Remove" {
                 $cleanNote = if ($null -eq $Note) { "" } else { ($Note -replace "\s+", " ").Trim().Replace("|", "/") }
                 if (-not $cleanNote) { throw "Remove requires -Note." }
@@ -289,6 +313,19 @@ try {
                 $total = [int]$Matches[2]
                 $planPath = Assert-EpicPlanPath $metadata.plan $Id
                 $lines[$index] = ($base + "CANDIDATE epic=true$autonomySuffix$safetySuffix candidate=STEP revision=$revision completed=$completed step=$step/$total plan=$planPath commit=$Commit updated=$now") -join " | "
+            }
+            "ArtifactComplete" {
+                if (-not $Commit) { throw "ArtifactComplete requires -Commit." }
+                if (-not $Role) { throw "ArtifactComplete requires -Role." }
+                if (-not $ArtifactKind) { throw "ArtifactComplete requires -ArtifactKind." }
+                if (-not $Evidence -or $Evidence -notmatch '^[A-Za-z0-9._:-]{6,128}$') { throw "ArtifactComplete requires machine-checkable -Evidence metadata." }
+                if ($isEpic) { throw "ArtifactComplete is only valid for non-epic wishlist items." }
+                if ($status -notin @("QUEUED", "IN_PROGRESS")) { throw "$Id cannot complete an artifact from status $status." }
+                if ($status -eq "IN_PROGRESS" -and $metadata.role -and $metadata.role -ne $Role) {
+                    throw "$Id is owned by role $($metadata.role), not $Role."
+                }
+                $base[0] = $base[0] -replace '^- \[ \]', '- [x]'
+                $lines[$index] = ($base + "DONE artifact=$ArtifactKind source=$Commit evidence=$Evidence role=$Role completed=$now") -join " | "
             }
             "ApprovePlan" {
                 if (-not $isEpic -or $status -ne "CANDIDATE" -or $metadata.candidate -ne "PLAN") {

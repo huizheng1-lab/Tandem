@@ -27,6 +27,38 @@ const report: CompletionReport = {
   deviationsFromPlan: []
 };
 
+const artifactReport: CompletionReport = {
+  status: "complete",
+  summary: "candidate preview built for human review",
+  taskResults: [{ id: "T1", status: "done" }],
+  filesChanged: [],
+  verificationResults: [{ command: "npm run typecheck", passed: true, output: "ok" }],
+  deviationsFromPlan: [],
+  reciprocalArtifact: {
+    kind: "candidate-preview",
+    wishlistId: "W1234",
+    sourceSha: "abc123",
+    buildInfoPath: "release/win-unpacked/BUILD_INFO.json",
+    executablePath: "release/win-unpacked/Tandem.exe",
+    smoke: { command: "Tandem.exe --smoke", passed: true, exitCode: 0, output: "started and terminated" }
+  }
+};
+
+async function writeArtifactEvidence(cwd: string, sourceSha = "abc123"): Promise<void> {
+  await mkdir(path.join(cwd, "release", "win-unpacked"), { recursive: true });
+  await writeFile(path.join(cwd, "release", "win-unpacked", "BUILD_INFO.json"), JSON.stringify({ sourceSha }), "utf8");
+  await writeFile(path.join(cwd, "release", "win-unpacked", "Tandem.exe"), "fake exe", "utf8");
+}
+
+async function writeQueuedArtifactItem(cwd: string): Promise<void> {
+  const relayRoot = path.dirname(path.dirname(cwd));
+  await writeFile(
+    path.join(relayRoot, "control", "SHARED_DIRECTION.md"),
+    "# Board\n\n<!-- wishlist-items -->\n- [ ] W1234 | P0 | Build candidate preview | QUEUED added=now\n",
+    "utf8"
+  );
+}
+
 describe("reciprocal candidate commit", () => {
   it("D133: no-ops outside a git repository instead of failing desktop sessions", async () => {
     const cwd = await relayWorktree();
@@ -86,6 +118,51 @@ describe("reciprocal candidate commit", () => {
     expect(calls.some((call) => call.file === "powershell" && call.args.some((arg) => arg.endsWith("scripts\\continue-reciprocal-automation.ps1")) && call.args.includes("-MaxTransitions") && call.args.includes("3"))).toBe(true);
     expect(result.summary).toContain("abc123");
     expect(result.summary).toContain("Immediate reciprocal continuation attempted");
+  });
+
+  it("D162: completes verified artifact-only work without creating a source candidate commit", async () => {
+    const cwd = await relayWorktree();
+    await writeArtifactEvidence(cwd);
+    await writeQueuedArtifactItem(cwd);
+    const calls: Array<{ file: string; args: string[] }> = [];
+    const result = await commitReciprocalCandidate({
+      cwd,
+      role: "A",
+      report: artifactReport,
+      commandRunner: async (file, args) => {
+        calls.push({ file, args });
+        if (file === "git" && args.join(" ") === "branch --show-current") return { stdout: "codex/reciprocal-b\n", stderr: "" };
+        if (file === "git" && args[0] === "status") return { stdout: "", stderr: "" };
+        if (file === "git" && args[0] === "rev-parse") return { stdout: "abc123\n", stderr: "" };
+        return { stdout: "", stderr: "" };
+      }
+    });
+
+    expect(calls.some((call) => call.file === "git" && call.args[0] === "commit")).toBe(false);
+    expect(calls.some((call) => call.file === "powershell" && call.args.includes("Start") && call.args.includes("W1234") && call.args.includes("A"))).toBe(true);
+    expect(calls.some((call) => call.file === "powershell" && call.args.includes("ArtifactComplete") && call.args.includes("candidate-preview"))).toBe(true);
+    expect(calls.some((call) => call.file === "powershell" && call.args.includes("CompleteArtifact") && call.args.includes("A"))).toBe(true);
+    expect(result.summary).toContain("Reciprocal artifact completed for human review");
+  });
+
+  it("D162: refuses artifact-only work with mismatched BUILD_INFO provenance", async () => {
+    const cwd = await relayWorktree();
+    await writeArtifactEvidence(cwd, "different");
+    await writeQueuedArtifactItem(cwd);
+
+    await expect(
+      commitReciprocalCandidate({
+        cwd,
+        role: "A",
+        report: artifactReport,
+        commandRunner: async (file, args) => {
+          if (file === "git" && args.join(" ") === "branch --show-current") return { stdout: "codex/reciprocal-b\n", stderr: "" };
+          if (file === "git" && args[0] === "status") return { stdout: "", stderr: "" };
+          if (file === "git" && args[0] === "rev-parse") return { stdout: "abc123\n", stderr: "" };
+          return { stdout: "", stderr: "" };
+        }
+      })
+    ).rejects.toThrow(/BUILD_INFO sourceSha/);
   });
 
   it("pre-fast-forwards a clean reciprocal worktree from its peer branch", async () => {

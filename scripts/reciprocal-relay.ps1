@@ -1,6 +1,6 @@
 param(
     [Parameter(Mandatory = $true)]
-    [ValidateSet("Status", "Claim", "Validate", "PassiveTest", "PrepareAUpgrade", "CompleteAUpgrade", "Accept", "Complete", "Rollback", "CompleteRollback", "Abandon", "Pause", "Resume", "ReconcileMain", "Reset")]
+    [ValidateSet("Status", "Claim", "Validate", "PassiveTest", "PrepareAUpgrade", "CompleteAUpgrade", "Accept", "Complete", "CompleteArtifact", "Rollback", "CompleteRollback", "Abandon", "Pause", "Resume", "ReconcileMain", "Reset")]
     [string]$Action,
 
     [ValidateSet("A", "B")]
@@ -1179,6 +1179,41 @@ try {
 
     if ($state.activeRole -ne $Role) {
         throw "Role $Role does not own the active turn. Current owner: $($state.activeRole)."
+    }
+
+    if ($Action -eq "CompleteArtifact") {
+        if ($Role -ne "A") { throw "Only Executor A can complete reciprocal artifact work." }
+        if (-not $Summary.Trim()) { throw "CompleteArtifact requires a verification summary." }
+        if ($state.candidateCommit -or $state.rollbackCommit) {
+            throw "CompleteArtifact refuses while a source candidate or rollback is pending."
+        }
+        $fromWorkingPause = $state.phase -eq "paused" -and $state.pausedFromPhase -eq "working"
+        if ($state.phase -ne "working" -and -not $fromWorkingPause) {
+            throw "CompleteArtifact is valid only during working or paused-from-working. Current phase: $($state.phase)."
+        }
+        Assert-Clean "CompleteArtifact requires a clean worktree"
+        $head = (@(Invoke-Git rev-parse HEAD))[0].Trim()
+        if ($state.baseCommit -ne $state.stableCommit) { throw "Artifact working base no longer matches the stable commit." }
+        if ($head -ne $state.baseCommit) { throw "Artifact turn HEAD changed from base $($state.baseCommit) to $head." }
+        $commits = @(Invoke-Git rev-list "$($state.baseCommit)..$head")
+        if ($commits.Count -ne 0) { throw "CompleteArtifact requires no source commits; found $($commits.Count)." }
+
+        $state.turn = [int]$state.turn + 1
+        $state.nextRole = "A"
+        $state.activeRole = $null
+        Set-IdleOrPauseAfterTurn
+        $state.baseCommit = $null
+        $state.candidateCommit = $null
+        $state.candidateKind = $null
+        $state.rollbackCommit = $null
+        $state.startedAt = $null
+        Reset-ResumeCounter
+        $state.lastCompletedCommit = $head
+        $state.lastSummary = $Summary.Trim()
+        Save-State
+        Remove-Item -LiteralPath (Join-Path $Workspace ".tandem\reciprocal-checkpoint.md") -Force -ErrorAction SilentlyContinue
+        Write-Result "ARTIFACT_COMPLETED"
+        exit 0
     }
 
     if ($Action -eq "Validate") {

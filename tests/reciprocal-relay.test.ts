@@ -187,6 +187,67 @@ describe("reciprocal relay script", () => {
     }
   }, 30_000);
 
+  windowsIt("D162: completes a clean artifact-only A turn without changing stable or creating a candidate", async () => {
+    const repo = await mkdtemp(path.join(tmpdir(), "tandem-relay-d162-artifact-"));
+    try {
+      await initRepo(repo);
+      await relay(repo, "-Action", "Reset", "-Force");
+      const claimed = await relay(repo, "-Action", "Claim", "-Role", "A");
+      const stableBefore = claimed.stableCommit;
+      const completed = await relay(repo, "-Action", "CompleteArtifact", "-Role", "A", "-Summary", "candidate preview built; BUILD_INFO and smoke verified");
+
+      expect(completed).toMatchObject({
+        outcome: "ARTIFACT_COMPLETED",
+        phase: "idle",
+        activeRole: null,
+        candidateCommit: null,
+        stableCommit: stableBefore,
+        lastCompletedCommit: stableBefore,
+      });
+      const stableAfter = (await execa("git", ["rev-parse", "refs/tandem-relay/stable"], { cwd: repo })).stdout.trim();
+      await expect(execa("git", ["rev-parse", "--verify", "refs/tandem-relay/candidate"], { cwd: repo })).rejects.toThrow();
+      expect(stableAfter).toBe(stableBefore);
+    } finally {
+      await rm(repo, { recursive: true, force: true });
+    }
+  }, 30_000);
+
+  windowsIt("D162: refuses artifact completion when the clean turn has a source commit", async () => {
+    const repo = await mkdtemp(path.join(tmpdir(), "tandem-relay-d162-commit-"));
+    try {
+      await initRepo(repo);
+      await relay(repo, "-Action", "Reset", "-Force");
+      await relay(repo, "-Action", "Claim", "-Role", "A");
+      await writeFile(path.join(repo, "README.md"), "initial\nunexpected source\n", "utf8");
+      await execa("git", ["add", "README.md"], { cwd: repo });
+      await execa("git", ["commit", "-m", "unexpected source"], { cwd: repo });
+
+      await expect(relay(repo, "-Action", "CompleteArtifact", "-Role", "A", "-Summary", "must fail")).rejects.toThrow(/HEAD changed from base|requires no source commits/);
+    } finally {
+      await rm(repo, { recursive: true, force: true });
+    }
+  }, 30_000);
+
+  windowsIt("D162: completes an auto-paused artifact-only working turn", async () => {
+    const repo = await mkdtemp(path.join(tmpdir(), "tandem-relay-d162-paused-"));
+    try {
+      await initRepo(repo);
+      await relay(repo, "-Action", "Reset", "-Force");
+      await relay(repo, "-Action", "Claim", "-Role", "A");
+      await mkdir(path.join(repo, ".tandem"), { recursive: true });
+      await writeFile(path.join(repo, ".tandem", "reciprocal-checkpoint.md"), "resume checkpoint\n", "utf8");
+      await relay(repo, "-Action", "Claim", "-Role", "A");
+      await relay(repo, "-Action", "Claim", "-Role", "A");
+      const paused = await relay(repo, "-Action", "Claim", "-Role", "A");
+      expect(paused).toMatchObject({ phase: "paused", pausedFromPhase: "working", activeRole: "A" });
+
+      const completed = await relay(repo, "-Action", "CompleteArtifact", "-Role", "A", "-Summary", "candidate preview completed after human review of paused turn");
+      expect(completed).toMatchObject({ outcome: "ARTIFACT_COMPLETED", phase: "idle", activeRole: null, resumeCount: 0 });
+    } finally {
+      await rm(repo, { recursive: true, force: true });
+    }
+  }, 30_000);
+
   windowsIt("D151: B never receives an agentic claim and A routes candidates to passive testing", async () => {
     const repo = await mkdtemp(path.join(tmpdir(), "tandem-relay-d151-claim-"));
     try {

@@ -232,3 +232,83 @@ describeWindows("reciprocal direction epics", () => {
     expect(await readFile(file, "utf8")).toContain(`QUEUED epic=true autonomy=full phase=PLAN revision=2 completed=0 plan=${plan} note=change the second step`);
   });
 });
+
+describeWindows("reciprocal direction artifact completion", () => {
+  it("D162: marks queued artifact-only work done with explicit source and evidence metadata", async () => {
+    const file = await boardFile();
+    const added = JSON.parse((await direction(file, "-Action", "Add", "-Priority", "P0", "-Text", "Build candidate preview")).stdout);
+
+    await direction(
+      file,
+      "-Action", "ArtifactComplete",
+      "-Id", added.id,
+      "-Role", "A",
+      "-Commit", "feed4343ec17e79cb8398c069120c100c7b2f1be",
+      "-ArtifactKind", "candidate-preview",
+      "-Evidence", "sha256:abcdef123456",
+    );
+
+    const board = await readFile(file, "utf8");
+    expect(board).toContain(`- [x] ${added.id} | P0 | Build candidate preview | DONE artifact=candidate-preview source=feed4343ec17e79cb8398c069120c100c7b2f1be evidence=sha256:abcdef123456 role=A completed=`);
+  });
+
+  it("D162: refuses artifact completion for work owned by another role", async () => {
+    const file = await boardFile();
+    const added = JSON.parse((await direction(file, "-Action", "Add", "-Text", "Owned preview")).stdout);
+    await direction(file, "-Action", "Start", "-Id", added.id, "-Role", "B");
+
+    await expect(direction(
+      file,
+      "-Action", "ArtifactComplete",
+      "-Id", added.id,
+      "-Role", "A",
+      "-Commit", "abc123",
+      "-ArtifactKind", "candidate-preview",
+      "-Evidence", "sha256:abcdef123456",
+    )).rejects.toThrow(/owned by role B/);
+  });
+
+  it("D162: retires an exact nonterminal rejected origin with an audit note", async () => {
+    const file = await boardFile();
+    const added = JSON.parse((await direction(file, "-Action", "Add", "-Text", "Preview origin")).stdout);
+    await direction(file, "-Action", "Start", "-Id", added.id, "-Role", "A");
+
+    await direction(file, "-Action", "Retire", "-Id", added.id, "-Note", "rejected-review-followup-W0002");
+
+    const board = await readFile(file, "utf8");
+    expect(board).toContain("## Retired");
+    expect(board).toContain(`- id=${added.id} | retired=`);
+    expect(board).toContain("note=rejected-review-followup-W0002");
+    expect(board).toContain(`original: - [ ] ${added.id} | P1 | Preview origin | IN_PROGRESS role=A`);
+  });
+
+  it("D162: refuses to retire already terminal artifact work", async () => {
+    const file = await boardFile();
+    const added = JSON.parse((await direction(file, "-Action", "Add", "-Text", "Done preview")).stdout);
+    await direction(file, "-Action", "ArtifactComplete", "-Id", added.id, "-Role", "A", "-Commit", "abc123", "-ArtifactKind", "candidate-preview", "-Evidence", "sha256:abcdef123456");
+
+    await expect(direction(file, "-Action", "Retire", "-Id", added.id, "-Note", "do-not-retire"))
+      .rejects.toThrow(/already terminal/);
+  });
+
+  it("D162: leaves W0016-style plan-approved metadata unchanged during unrelated artifact cleanup", async () => {
+    const file = await boardFile();
+    await writeFile(file, boardText([
+      "- [ ] W0016 | P1 | Telegram remote control | PLAN_APPROVED epic=true autonomy=plan-gated revision=1 completed=2 steps=3 next=3/3 plan=process/reciprocal/epics/W0016-plan.md commit=abc123 approved=2026-07-20T00:00:00Z",
+      "- [ ] W0099 | P0 | Build candidate preview | QUEUED added=2026-07-20T00:00:00Z",
+    ].join("\n")), "utf8");
+
+    await direction(
+      file,
+      "-Action", "ArtifactComplete",
+      "-Id", "W0099",
+      "-Role", "A",
+      "-Commit", "feed434",
+      "-ArtifactKind", "candidate-preview",
+      "-Evidence", "sha256:abcdef123456",
+    );
+
+    const board = await readFile(file, "utf8");
+    expect(board).toContain("- [ ] W0016 | P1 | Telegram remote control | PLAN_APPROVED epic=true autonomy=plan-gated revision=1 completed=2 steps=3 next=3/3 plan=process/reciprocal/epics/W0016-plan.md commit=abc123 approved=2026-07-20T00:00:00Z");
+  });
+});

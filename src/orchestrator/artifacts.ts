@@ -126,7 +126,22 @@ export const CompletionReportSchema = z.object({
       output: z.string()
     })
   ),
-  deviationsFromPlan: z.array(z.string())
+  deviationsFromPlan: z.array(z.string()),
+  reciprocalArtifact: z
+    .object({
+      kind: z.enum(["candidate-preview"]),
+      wishlistId: z.string().regex(/^W\d{4}$/),
+      sourceSha: z.string().regex(/^[0-9a-f]{7,40}$/i),
+      buildInfoPath: z.string().optional(),
+      executablePath: z.string().optional(),
+      smoke: z.object({
+        command: z.string(),
+        passed: z.boolean(),
+        exitCode: z.number().int(),
+        output: z.string().optional()
+      })
+    })
+    .optional()
 });
 export type CompletionReport = z.infer<typeof CompletionReportSchema>;
 
