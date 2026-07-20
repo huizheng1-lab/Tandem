@@ -42,10 +42,16 @@ describe("reciprocal relay script", () => {
     return JSON.parse(result.stdout);
   }
 
+  async function relayWithEnv(repo: string, env: NodeJS.ProcessEnv, ...args: string[]) {
+    const script = path.resolve("scripts/reciprocal-relay.ps1");
+    const result = await execa("powershell", ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", script, ...args], { cwd: repo, env });
+    return JSON.parse(result.stdout);
+  }
+
   async function writeSharedBoard(repo: string, line: string) {
     const boardDir = path.join(repo, ".tandem", "shared-control");
     await mkdir(boardDir, { recursive: true });
-    const boardPath = path.join(boardDir, "SHARED_DIRECTION.md");
+    const boardPath = path.join(boardDir, "WISHLIST.md");
     await writeFile(
       boardPath,
       [
@@ -152,6 +158,35 @@ describe("reciprocal relay script", () => {
     }
   });
 
+  windowsIt("D168: claim refuses stale pre-D167 wishlist tooling", async () => {
+    const repo = await mkdtemp(path.join(tmpdir(), "tandem-relay-d168-stale-tooling-"));
+    try {
+      await initRepo(repo);
+      await writeSharedBoard(repo, "- [ ] W0022 | P0 | real work | QUEUED added=now");
+      await writeFile(
+        path.join(repo, ".tandem", "shared-control", "SHARED_DIRECTION.md"),
+        "# Shared Direction\n\n## General Direction\n\nDurable only.\n",
+        "utf8",
+      );
+      await writeFile(
+        path.join(repo, "scripts", "reciprocal-direction.ps1"),
+        [
+          "param([Parameter(Mandatory = $true)][ValidateSet(\"Show\")][string]$Action)",
+          "$path = Join-Path (Get-Location).Path \".tandem\\shared-control\\SHARED_DIRECTION.md\"",
+          "if ($Action -eq \"Show\" -and (Test-Path -LiteralPath $path)) { Get-Content -LiteralPath $path -Raw }",
+        ].join("\n"),
+        "utf8",
+      );
+      await execa("git", ["add", "scripts/reciprocal-direction.ps1"], { cwd: repo });
+      await execa("git", ["commit", "-m", "stale direction tooling"], { cwd: repo });
+      await relay(repo, "-Action", "Reset", "-Force");
+
+      await expect(relay(repo, "-Action", "Claim", "-Role", "A")).rejects.toThrow(/stale pre-D167 wishlist tooling/);
+    } finally {
+      await rm(repo, { recursive: true, force: true });
+    }
+  }, 30_000);
+
   windowsIt("D133: repeated RESUME claims still auto-pause A recovery loops", async () => {
     const repo = await mkdtemp(path.join(tmpdir(), "tandem-relay-d133-resume-"));
     try {
@@ -182,6 +217,162 @@ describe("reciprocal relay script", () => {
 
       const abandoned = await relay(repo, "-Action", "Abandon", "-Role", "A", "-Summary", "reset stalled no-work turn");
       expect(abandoned).toMatchObject({ outcome: "ABANDONED", resumeCount: 0, activeRole: null });
+    } finally {
+      await rm(repo, { recursive: true, force: true });
+    }
+  }, 30_000);
+
+  windowsIt("D162: completes a clean artifact-only A turn without changing stable or creating a candidate", async () => {
+    const repo = await mkdtemp(path.join(tmpdir(), "tandem-relay-d162-artifact-"));
+    try {
+      await initRepo(repo);
+      await relay(repo, "-Action", "Reset", "-Force");
+      const claimed = await relay(repo, "-Action", "Claim", "-Role", "A");
+      const stableBefore = claimed.stableCommit;
+      const completed = await relay(repo, "-Action", "CompleteArtifact", "-Role", "A", "-Summary", "candidate preview built; BUILD_INFO and smoke verified");
+
+      expect(completed).toMatchObject({
+        outcome: "ARTIFACT_COMPLETED",
+        phase: "idle",
+        activeRole: null,
+        candidateCommit: null,
+        stableCommit: stableBefore,
+        lastCompletedCommit: stableBefore,
+      });
+      const stableAfter = (await execa("git", ["rev-parse", "refs/tandem-relay/stable"], { cwd: repo })).stdout.trim();
+      await expect(execa("git", ["rev-parse", "--verify", "refs/tandem-relay/candidate"], { cwd: repo })).rejects.toThrow();
+      expect(stableAfter).toBe(stableBefore);
+    } finally {
+      await rm(repo, { recursive: true, force: true });
+    }
+  }, 30_000);
+
+  windowsIt("D164: Claim exposes deterministic artifact-only instructions for declared preview work", async () => {
+    const repo = await mkdtemp(path.join(tmpdir(), "tandem-relay-d164-artifact-claim-"));
+    try {
+      await initRepo(repo);
+      await writeSharedBoard(
+        repo,
+        "- [ ] W0099 | P0 | Build preview | QUEUED artifact=candidate-preview source=feed4343ec17e79cb8398c069120c100c7b2f1be declared=2026-07-20T00:00:00Z",
+      );
+      await relay(repo, "-Action", "Reset", "-Force");
+
+      const claimed = await relay(repo, "-Action", "Claim", "-Role", "A");
+      expect(claimed).toMatchObject({
+        outcome: "CLAIMED",
+        phase: "working",
+        activeRole: "A",
+        artifactWork: {
+          kind: "candidate-preview",
+          wishlistId: "W0099",
+          sourceSha: "feed4343ec17e79cb8398c069120c100c7b2f1be",
+          completionReportShape: {
+            status: "complete",
+            filesChanged: [],
+            reciprocalArtifact: {
+              kind: "candidate-preview",
+              wishlistId: "W0099",
+              sourceSha: "feed4343ec17e79cb8398c069120c100c7b2f1be",
+            },
+          },
+        },
+      });
+      expect(claimed.artifactWork.startCommand).toContain("-Action Start -Id W0099 -Role A");
+      expect(claimed.artifactWork.instruction).toContain("filesChanged=[]");
+    } finally {
+      await rm(repo, { recursive: true, force: true });
+    }
+  }, 30_000);
+
+  windowsIt("D165: Status advertises candidate preview artifact lifecycle capability", async () => {
+    const repo = await mkdtemp(path.join(tmpdir(), "tandem-relay-d165-status-"));
+    try {
+      await initRepo(repo);
+      await relay(repo, "-Action", "Reset", "-Force");
+
+      const status = await relay(repo, "-Action", "Status");
+      expect(status.capabilities).toMatchObject({ candidatePreviewArtifactLifecycle: 1 });
+    } finally {
+      await rm(repo, { recursive: true, force: true });
+    }
+  }, 30_000);
+
+  windowsIt("D165: blocks declared preview artifact claims when capability is disabled", async () => {
+    const repo = await mkdtemp(path.join(tmpdir(), "tandem-relay-d165-artifact-block-"));
+    try {
+      await initRepo(repo);
+      await writeSharedBoard(
+        repo,
+        "- [ ] W0100 | P0 | Build preview | QUEUED artifact=candidate-preview source=feed4343ec17e79cb8398c069120c100c7b2f1be declared=2026-07-20T00:00:00Z",
+      );
+      await relay(repo, "-Action", "Reset", "-Force");
+
+      const blocked = await relayWithEnv(repo, { TANDEM_DISABLE_CANDIDATE_PREVIEW_ARTIFACT_CAPABILITY: "1" }, "-Action", "Claim", "-Role", "A");
+      expect(blocked).toMatchObject({
+        outcome: "CAPABILITY_BLOCKED",
+        phase: "idle",
+        activeRole: null,
+        artifactBlocked: {
+          kind: "candidate-preview",
+          wishlistId: "W0100",
+          requiredCapability: { candidatePreviewArtifactLifecycle: 1 },
+          reason: "Artifact build workflow requires Reciprocal executor upgrade.",
+        },
+      });
+      expect(blocked.artifactWork).toBeUndefined();
+      const board = await readFile(path.join(repo, ".tandem", "shared-control", "WISHLIST.md"), "utf8");
+      expect(board).toContain("W0100 | P0 | Build preview | QUEUED");
+    } finally {
+      await rm(repo, { recursive: true, force: true });
+    }
+  }, 30_000);
+
+  windowsIt("D165: disabled artifact capability does not block ordinary source work", async () => {
+    const repo = await mkdtemp(path.join(tmpdir(), "tandem-relay-d165-source-"));
+    try {
+      await initRepo(repo);
+      await writeSharedBoard(repo, "- [ ] W0101 | P1 | Implement normal work | QUEUED added=2026-07-20T00:00:00Z");
+      await relay(repo, "-Action", "Reset", "-Force");
+
+      const claimed = await relayWithEnv(repo, { TANDEM_DISABLE_CANDIDATE_PREVIEW_ARTIFACT_CAPABILITY: "1" }, "-Action", "Claim", "-Role", "A");
+      expect(claimed).toMatchObject({ outcome: "CLAIMED", phase: "working", activeRole: "A" });
+      expect(claimed.artifactBlocked).toBeUndefined();
+    } finally {
+      await rm(repo, { recursive: true, force: true });
+    }
+  }, 30_000);
+
+  windowsIt("D162: refuses artifact completion when the clean turn has a source commit", async () => {
+    const repo = await mkdtemp(path.join(tmpdir(), "tandem-relay-d162-commit-"));
+    try {
+      await initRepo(repo);
+      await relay(repo, "-Action", "Reset", "-Force");
+      await relay(repo, "-Action", "Claim", "-Role", "A");
+      await writeFile(path.join(repo, "README.md"), "initial\nunexpected source\n", "utf8");
+      await execa("git", ["add", "README.md"], { cwd: repo });
+      await execa("git", ["commit", "-m", "unexpected source"], { cwd: repo });
+
+      await expect(relay(repo, "-Action", "CompleteArtifact", "-Role", "A", "-Summary", "must fail")).rejects.toThrow(/HEAD changed from base|requires no source commits/);
+    } finally {
+      await rm(repo, { recursive: true, force: true });
+    }
+  }, 30_000);
+
+  windowsIt("D162: completes an auto-paused artifact-only working turn", async () => {
+    const repo = await mkdtemp(path.join(tmpdir(), "tandem-relay-d162-paused-"));
+    try {
+      await initRepo(repo);
+      await relay(repo, "-Action", "Reset", "-Force");
+      await relay(repo, "-Action", "Claim", "-Role", "A");
+      await mkdir(path.join(repo, ".tandem"), { recursive: true });
+      await writeFile(path.join(repo, ".tandem", "reciprocal-checkpoint.md"), "resume checkpoint\n", "utf8");
+      await relay(repo, "-Action", "Claim", "-Role", "A");
+      await relay(repo, "-Action", "Claim", "-Role", "A");
+      const paused = await relay(repo, "-Action", "Claim", "-Role", "A");
+      expect(paused).toMatchObject({ phase: "paused", pausedFromPhase: "working", activeRole: "A" });
+
+      const completed = await relay(repo, "-Action", "CompleteArtifact", "-Role", "A", "-Summary", "candidate preview completed after human review of paused turn");
+      expect(completed).toMatchObject({ outcome: "ARTIFACT_COMPLETED", phase: "idle", activeRole: null, resumeCount: 0 });
     } finally {
       await rm(repo, { recursive: true, force: true });
     }

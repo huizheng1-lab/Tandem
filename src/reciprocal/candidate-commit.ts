@@ -1,5 +1,6 @@
 import { execFile } from "node:child_process";
-import { readFile } from "node:fs/promises";
+import { createHash } from "node:crypto";
+import { readFile, stat } from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
 import type { CompletionReport } from "../orchestrator/artifacts.js";
@@ -11,7 +12,9 @@ export interface ReciprocalCandidateCommitOptions {
   role?: string;
   report: CompletionReport;
   summary?: string;
+  artifactRoot?: string;
   commandRunner?: (file: string, args: string[], cwd: string) => Promise<{ stdout: string; stderr: string }>;
+  artifactSmokeRunner?: (executablePath: string, cwd: string, context: ArtifactSmokeContext) => Promise<{ exitCode: number; stdout: string; stderr: string }>;
 }
 
 const roleBranch: Record<"A" | "B", string> = {
@@ -83,8 +86,146 @@ function activeWishlistId(board: string, role: "A" | "B"): string | undefined {
   return undefined;
 }
 
+type ReciprocalArtifact = NonNullable<CompletionReport["reciprocalArtifact"]>;
+
+interface ArtifactSmokeContext {
+  stateRoot: string;
+  scriptPath: string;
+  timeoutSeconds: number;
+}
+
+interface WishlistItem {
+  id: string;
+  status: string;
+  detail: string;
+  metadata: Record<string, string>;
+}
+
+function metadata(value: string): Record<string, string> {
+  return Object.fromEntries([...value.matchAll(/(?:^|\s)([A-Za-z][A-Za-z0-9]*)=([^\s]+)/g)].map((match) => [match[1], match[2]]));
+}
+
+function wishlistItem(board: string, id: string): WishlistItem | undefined {
+  for (const line of board.split(/\r?\n/)) {
+    const match = /^- \[(?: |x)\] (W\d{4}) \| P[0-3] \| .*? \| ([A-Z_]+)(?:\s+(.*))?$/.exec(line);
+    if (!match || match[1] !== id) continue;
+    const detail = match[3] ?? "";
+    return { id: match[1], status: match[2], detail, metadata: metadata(detail) };
+  }
+  return undefined;
+}
+
+function shaPrefixEqual(left: string, right: string): boolean {
+  const a = left.toLowerCase();
+  const b = right.toLowerCase();
+  return a === b || a.startsWith(b) || b.startsWith(a);
+}
+
+function canonicalArtifactRoot(relayRoot: string, configuredRoot: string | undefined): string {
+  return path.resolve(
+    configuredRoot ??
+      process.env.TANDEM_RECIPROCAL_ARTIFACT_ROOT ??
+      process.env.TANDEM_SOURCE_REPO ??
+      path.join(path.dirname(relayRoot), "HZ code")
+  );
+}
+
+function assertUnderRoot(value: string, root: string): string {
+  const resolved = path.resolve(value);
+  const relative = path.relative(path.resolve(root), resolved);
+  if (relative.startsWith("..") || path.isAbsolute(relative)) {
+    throw new Error(`Artifact evidence path escapes trusted release directory: ${resolved}`);
+  }
+  return resolved;
+}
+
+function artifactEvidenceId(values: { kind: string; wishlistId: string; sourceSha: string; smokeOutput: string }): string {
+  return createHash("sha256")
+    .update(JSON.stringify(values))
+    .digest("hex")
+    .slice(0, 16);
+}
+
+interface RelayStatus {
+  phase?: string | null;
+  pausedFromPhase?: string | null;
+  activeRole?: string | null;
+  baseCommit?: string | null;
+  stableCommit?: string | null;
+  candidateCommit?: string | null;
+  rollbackCommit?: string | null;
+  lastCompletedCommit?: string | null;
+}
+
+function canCloseArtifactRelay(state: RelayStatus, head: string): boolean {
+  const working = state.phase === "working" || (state.phase === "paused" && state.pausedFromPhase === "working");
+  return Boolean(
+    working &&
+      state.activeRole === "A" &&
+      state.baseCommit &&
+      state.baseCommit === state.stableCommit &&
+      state.baseCommit === head &&
+      !state.candidateCommit &&
+      !state.rollbackCommit
+  );
+}
+
+function alreadyClosedArtifactRelay(state: RelayStatus, head: string): boolean {
+  return Boolean(state.phase === "idle" && !state.activeRole && state.lastCompletedCommit === head);
+}
+
+async function readRelayStatus(
+  runner: NonNullable<ReciprocalCandidateCommitOptions["commandRunner"]>,
+  cwd: string
+): Promise<RelayStatus> {
+  return JSON.parse(
+    await run(runner, cwd, "powershell", [
+      "-NoProfile",
+      "-ExecutionPolicy",
+      "Bypass",
+      "-File",
+      path.join(cwd, "scripts", "reciprocal-relay.ps1"),
+      "-Action",
+      "Status"
+    ])
+  ) as RelayStatus;
+}
+
 async function defaultRunner(file: string, args: string[], cwd: string): Promise<{ stdout: string; stderr: string }> {
   return execFileAsync(file, args, { cwd, windowsHide: true, maxBuffer: 10 * 1024 * 1024 });
+}
+
+async function defaultArtifactSmokeRunner(executablePath: string, cwd: string, context: ArtifactSmokeContext): Promise<{ exitCode: number; stdout: string; stderr: string }> {
+  try {
+    const result = await execFileAsync(
+      "powershell",
+      [
+        "-NoProfile",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-File",
+        context.scriptPath,
+        "-ExecutablePath",
+        executablePath,
+        "-StateRoot",
+        context.stateRoot,
+        "-TimeoutSeconds",
+        String(context.timeoutSeconds)
+      ],
+      { cwd, windowsHide: true, timeout: (context.timeoutSeconds + 10) * 1000, maxBuffer: 1024 * 1024 }
+    );
+    return { exitCode: 0, stdout: result.stdout, stderr: result.stderr };
+  } catch (error) {
+    const failure = error as Error & { code?: unknown; stdout?: unknown; stderr?: unknown; killed?: boolean; signal?: unknown };
+    if (failure.killed) {
+      throw new Error(`Candidate preview smoke timed out: ${failure.message}`);
+    }
+    return {
+      exitCode: typeof failure.code === "number" ? failure.code : 1,
+      stdout: typeof failure.stdout === "string" ? failure.stdout : "",
+      stderr: typeof failure.stderr === "string" ? failure.stderr : failure.message
+    };
+  }
 }
 
 async function run(runner: NonNullable<ReciprocalCandidateCommitOptions["commandRunner"]>, cwd: string, file: string, args: string[]): Promise<string> {
@@ -115,11 +256,18 @@ async function currentBranchOrUndefined(
 }
 
 export async function commitReciprocalCandidate(options: ReciprocalCandidateCommitOptions): Promise<CompletionReport> {
-  if (!isRole(options.role) || options.report.status !== "complete" || options.report.filesChanged.length === 0) return options.report;
+  if (!isRole(options.role) || options.report.status !== "complete") return options.report;
   const expectedBranch = roleBranch[options.role];
   const runner = options.commandRunner ?? defaultRunner;
   const branch = await currentBranchOrUndefined(runner, options.cwd);
   if (branch !== expectedBranch) return options.report;
+  if (options.report.filesChanged.length === 0) {
+    if (options.report.reciprocalArtifact) return completeReciprocalArtifact(options, options.report.reciprocalArtifact, runner);
+    return options.report;
+  }
+  if (options.report.reciprocalArtifact) {
+    throw new Error("Reciprocal artifact completion must not report source filesChanged.");
+  }
 
   const files = [...new Set(options.report.filesChanged.map(normalizeReportedPath))];
   for (const file of files) assertAllowedCandidatePath(file);
@@ -147,7 +295,7 @@ export async function commitReciprocalCandidate(options: ReciprocalCandidateComm
 
   const relayRoot = relayRootForWorktree(options.cwd);
   if (!relayRoot) throw new Error(`Reciprocal candidate cwd is not under a relay worktrees directory: ${options.cwd}`);
-  const boardPath = path.join(relayRoot, "control", "SHARED_DIRECTION.md");
+  const boardPath = path.join(relayRoot, "control", "WISHLIST.md");
   const id = activeWishlistId(await readFile(boardPath, "utf8"), options.role);
   if (id) {
     await run(runner, options.cwd, "powershell", [
@@ -201,6 +349,148 @@ export async function commitReciprocalCandidate(options: ReciprocalCandidateComm
     ...options.report,
     summary: `${options.report.summary}\n\nReciprocal relay candidate committed by Tandem app layer: ${commit}${continuationNote}`,
     deviationsFromPlan: [...options.report.deviationsFromPlan, `Tandem app layer created reciprocal relay commit ${commit}`]
+  };
+}
+
+async function completeReciprocalArtifact(
+  options: ReciprocalCandidateCommitOptions,
+  artifact: ReciprocalArtifact,
+  runner: NonNullable<ReciprocalCandidateCommitOptions["commandRunner"]>
+): Promise<CompletionReport> {
+  if (options.role !== "A") throw new Error("Artifact-only reciprocal completion is reserved for Executor A.");
+  if (artifact.kind !== "candidate-preview") throw new Error(`Unsupported reciprocal artifact kind: ${artifact.kind}`);
+  if (options.report.filesChanged.length !== 0) throw new Error("Artifact-only reciprocal completion requires zero source filesChanged.");
+
+  const statusLines = (await runRaw(runner, options.cwd, "git", ["status", "--porcelain", "--untracked-files=all"])).trim();
+  if (statusLines) throw new Error(`Artifact-only reciprocal completion requires a clean worktree: ${statusLines.replace(/\r?\n/g, "; ")}`);
+  const head = await run(runner, options.cwd, "git", ["rev-parse", "HEAD"]);
+
+  const relayRoot = relayRootForWorktree(options.cwd);
+  if (!relayRoot) throw new Error(`Reciprocal artifact cwd is not under a relay worktrees directory: ${options.cwd}`);
+  const boardPath = path.join(relayRoot, "control", "WISHLIST.md");
+  const item = wishlistItem(await readFile(boardPath, "utf8"), artifact.wishlistId);
+  if (!item) throw new Error(`Reciprocal artifact wishlist item was not found: ${artifact.wishlistId}`);
+  let relayStatus: RelayStatus | undefined;
+  if (item.status === "DONE") {
+    if (item.metadata.artifact === artifact.kind && item.metadata.source && (!artifact.sourceSha || shaPrefixEqual(item.metadata.source, artifact.sourceSha))) {
+      relayStatus = await readRelayStatus(runner, options.cwd);
+      if (!alreadyClosedArtifactRelay(relayStatus, head)) {
+        if (canCloseArtifactRelay(relayStatus, head)) {
+          throw new Error(`Legacy reciprocal artifact recovery required: ${artifact.wishlistId} is DONE but relay phase is ${relayStatus.phase}; run reciprocal-relay CompleteArtifact for role A before treating it as terminal.`);
+        }
+        throw new Error(`Reciprocal artifact item ${artifact.wishlistId} is DONE but relay is not closed: phase=${relayStatus.phase ?? "unknown"} activeRole=${relayStatus.activeRole ?? "none"}.`);
+      }
+      return {
+        ...options.report,
+        summary: `${options.report.summary}\n\nReciprocal artifact item ${artifact.wishlistId} was already terminal for source ${item.metadata.source}.`,
+        deviationsFromPlan: [...options.report.deviationsFromPlan, `Tandem app layer observed already-completed reciprocal artifact item ${artifact.wishlistId}`]
+      };
+    }
+    throw new Error(`Reciprocal artifact wishlist item ${artifact.wishlistId} is already DONE with incompatible metadata.`);
+  }
+  if (item.status !== "QUEUED" && item.status !== "IN_PROGRESS") {
+    throw new Error(`Reciprocal artifact wishlist item ${artifact.wishlistId} is ${item.status}; expected QUEUED or IN_PROGRESS.`);
+  }
+  if (item.metadata.artifact !== artifact.kind) {
+    throw new Error(`Wishlist item ${artifact.wishlistId} is not declared for artifact kind ${artifact.kind}.`);
+  }
+  const artifactSource = item.metadata.source;
+  if (!artifactSource || !/^[0-9a-f]{7,40}$/i.test(artifactSource)) {
+    throw new Error(`Wishlist item ${artifact.wishlistId} is missing trusted artifact source metadata.`);
+  }
+  if (artifact.sourceSha && !shaPrefixEqual(artifactSource, artifact.sourceSha)) {
+    throw new Error(`Report artifact source ${artifact.sourceSha} does not match trusted wishlist source ${artifactSource}.`);
+  }
+  if (item.status === "IN_PROGRESS" && item.metadata.role !== options.role) {
+    throw new Error(`Reciprocal artifact wishlist item ${artifact.wishlistId} is owned by ${item.metadata.role}; expected ${options.role}.`);
+  }
+
+  relayStatus ??= await readRelayStatus(runner, options.cwd);
+  const relayCanClose = canCloseArtifactRelay(relayStatus, head);
+  const relayAlreadyClosed = alreadyClosedArtifactRelay(relayStatus, head);
+  if (!relayCanClose && !relayAlreadyClosed) {
+    throw new Error(`Artifact relay is not in a safe no-commit close state: phase=${relayStatus.phase ?? "unknown"} activeRole=${relayStatus.activeRole ?? "none"}.`);
+  }
+  if (relayAlreadyClosed && item.status === "QUEUED") {
+    throw new Error(`Artifact relay is already idle but wishlist item ${artifact.wishlistId} was never started.`);
+  }
+
+  const artifactRoot = canonicalArtifactRoot(relayRoot, options.artifactRoot);
+  const releaseDir = path.join(artifactRoot, "release", "win-unpacked");
+  const buildInfoPath = assertUnderRoot(path.join(releaseDir, "BUILD_INFO.json"), releaseDir);
+  const executablePath = assertUnderRoot(path.join(releaseDir, "Tandem.exe"), releaseDir);
+  const buildInfo = JSON.parse((await readFile(buildInfoPath, "utf8")).replace(/^\uFEFF/, "")) as { sourceSha?: unknown };
+  if (typeof buildInfo.sourceSha !== "string" || !shaPrefixEqual(buildInfo.sourceSha, artifactSource)) {
+    throw new Error(`Candidate preview BUILD_INFO sourceSha ${String(buildInfo.sourceSha)} does not match trusted source ${artifactSource}.`);
+  }
+  const executable = await stat(executablePath);
+  if (!executable.isFile()) throw new Error(`Candidate preview executable is missing: ${executablePath}`);
+  const smokeRunner = options.artifactSmokeRunner ?? defaultArtifactSmokeRunner;
+  const smokeContext = {
+    stateRoot: path.join(relayRoot, "state", "candidate-preview-smoke"),
+    scriptPath: path.join(options.cwd, "scripts", "candidate-preview-smoke.ps1"),
+    timeoutSeconds: Number(process.env.TANDEM_CANDIDATE_PREVIEW_SMOKE_TIMEOUT_SECONDS || 20)
+  };
+  const smoke = await smokeRunner(executablePath, releaseDir, smokeContext);
+  if (smoke.exitCode !== 0) {
+    throw new Error(`Candidate preview smoke failed with exit code ${smoke.exitCode}: ${(smoke.stderr || smoke.stdout).trim()}`);
+  }
+
+  const directionScript = path.join(options.cwd, "scripts", "reciprocal-direction.ps1");
+  if (item.status === "QUEUED") {
+    await run(runner, options.cwd, "powershell", [
+      "-NoProfile",
+      "-ExecutionPolicy",
+      "Bypass",
+      "-File",
+      directionScript,
+      "-Action",
+      "Start",
+      "-Id",
+      artifact.wishlistId,
+      "-Role",
+      options.role
+    ]);
+  }
+  if (relayCanClose) {
+    await run(runner, options.cwd, "powershell", [
+      "-NoProfile",
+      "-ExecutionPolicy",
+      "Bypass",
+      "-File",
+      path.join(options.cwd, "scripts", "reciprocal-relay.ps1"),
+      "-Action",
+      "CompleteArtifact",
+      "-Role",
+      options.role,
+      "-Summary",
+      options.summary ?? options.report.summary
+    ]);
+  }
+  await run(runner, options.cwd, "powershell", [
+    "-NoProfile",
+    "-ExecutionPolicy",
+    "Bypass",
+    "-File",
+    directionScript,
+    "-Action",
+    "ArtifactComplete",
+    "-Id",
+    artifact.wishlistId,
+    "-Role",
+    options.role,
+    "-Commit",
+    artifactSource,
+    "-ArtifactKind",
+    artifact.kind,
+    "-Evidence",
+    artifactEvidenceId({ kind: artifact.kind, wishlistId: artifact.wishlistId, sourceSha: artifactSource, smokeOutput: `${smoke.stdout}\n${smoke.stderr}` })
+  ]);
+
+  return {
+    ...options.report,
+    summary: `${options.report.summary}\n\nReciprocal artifact completed for human review: ${artifact.kind} ${artifactSource} (${artifact.wishlistId}); relay producer stayed at ${head}.`,
+    deviationsFromPlan: [...options.report.deviationsFromPlan, `Tandem app layer completed artifact-only reciprocal item ${artifact.wishlistId} without a source commit`]
   };
 }
 

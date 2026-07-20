@@ -1,6 +1,6 @@
 param(
     [Parameter(Mandatory = $true)]
-    [ValidateSet("Show", "Add", "Remove", "Start", "Candidate", "ApprovePlan", "AutoApprovePlan", "RejectPlan", "AcceptStep", "Complete", "Block", "Requeue")]
+    [ValidateSet("Show", "UpdateDirection", "Add", "Remove", "Retire", "Start", "Candidate", "DeclareArtifact", "ArtifactComplete", "ApprovePlan", "AutoApprovePlan", "RejectPlan", "AcceptStep", "Complete", "Block", "Requeue")]
     [string]$Action,
 
     [string]$Text,
@@ -14,6 +14,11 @@ param(
     [string]$Role,
 
     [string]$Commit,
+
+    [ValidateSet("candidate-preview")]
+    [string]$ArtifactKind,
+
+    [string]$Evidence,
 
     [string]$Note,
 
@@ -96,8 +101,19 @@ function Normalize-ControlPath([string]$Value) {
     return [IO.Path]::GetFullPath($Value).TrimEnd([IO.Path]::DirectorySeparatorChar, [IO.Path]::AltDirectorySeparatorChar).ToLowerInvariant()
 }
 
+function Read-Utf8Lines([string]$Path) {
+    return @([IO.File]::ReadAllLines($Path, [Text.UTF8Encoding]::new($false)))
+}
+
+function Read-Utf8Text([string]$Path) {
+    return [IO.File]::ReadAllText($Path, [Text.UTF8Encoding]::new($false))
+}
+
 function Get-CanonicalControlPaths([string]$Workspace) {
     $paths = @()
+    if ($env:TANDEM_RECIPROCAL_ROOT) {
+        $paths += (Join-Path $env:TANDEM_RECIPROCAL_ROOT "control\SHARED_DIRECTION.md")
+    }
     if ($Workspace) {
         $localPath = Join-Path $Workspace ".tandem\shared-control\SHARED_DIRECTION.md"
         if (Test-Path -LiteralPath (Split-Path $localPath -Parent)) {
@@ -115,11 +131,69 @@ function Get-CanonicalControlPaths([string]$Workspace) {
     return @($paths | ForEach-Object { Normalize-ControlPath $_ } | Select-Object -Unique)
 }
 
+function Get-WishlistPath([string]$SharedDirectionPath) {
+    return (Join-Path (Split-Path $SharedDirectionPath -Parent) "WISHLIST.md")
+}
+
+function Initialize-WishlistFile([string]$WishlistPath, [string]$SharedDirectionPath) {
+    if (Test-Path -LiteralPath $WishlistPath) { return }
+    $items = @()
+    if (Test-Path -LiteralPath $SharedDirectionPath) {
+        $sourceLines = Read-Utf8Lines $SharedDirectionPath
+        $wishlistHeader = [Array]::IndexOf($sourceLines, "## Wishlist And Progress")
+        if ($wishlistHeader -ge 0) {
+            $notesHeader = [Array]::IndexOf($sourceLines, "## Human Notes")
+            $removedHeader = [Array]::IndexOf($sourceLines, "## Removed")
+            $wishlistEnd = if ($notesHeader -gt $wishlistHeader) { $notesHeader - 1 } elseif ($removedHeader -gt $wishlistHeader) { $removedHeader - 1 } else { $sourceLines.Count - 1 }
+            $items = @($sourceLines[$wishlistHeader..$wishlistEnd])
+            if ($removedHeader -gt $wishlistHeader) {
+                $items += ""
+                $items += $sourceLines[$removedHeader..($sourceLines.Count - 1)]
+            }
+        }
+    }
+    if ($items.Count -eq 0) {
+        $items = @(
+            "# Tandem Reciprocal: Wishlist And Progress",
+            "",
+            "Statuses are `QUEUED`, `IN_PROGRESS`, `CANDIDATE`, `PLAN_APPROVED`, `BLOCKED`, and `DONE`. Only independently accepted candidates become `DONE`.",
+            "",
+            "<!-- wishlist-items -->"
+        )
+    } elseif ($items[0] -eq "## Wishlist And Progress") {
+        $items[0] = "# Tandem Reciprocal: Wishlist And Progress"
+    }
+    [IO.File]::WriteAllLines($WishlistPath, [string[]]$items, [Text.UTF8Encoding]::new($false))
+}
+
+function Normalize-SharedDirectionFile([string]$SharedDirectionPath) {
+    if (-not (Test-Path -LiteralPath $SharedDirectionPath)) { return }
+    $sourceLines = Read-Utf8Lines $SharedDirectionPath
+    $wishlistHeader = [Array]::IndexOf($sourceLines, "## Wishlist And Progress")
+    if ($wishlistHeader -lt 0) { return }
+    $notesHeader = [Array]::IndexOf($sourceLines, "## Human Notes")
+    $removedHeader = [Array]::IndexOf($sourceLines, "## Removed")
+    $prefixEnd = [Math]::Max(0, $wishlistHeader - 1)
+    $result = @($sourceLines[0..$prefixEnd])
+    while ($result.Count -gt 0 -and [string]::IsNullOrWhiteSpace($result[-1])) {
+        if ($result.Count -eq 1) { $result = @(); break }
+        $result = @($result[0..($result.Count - 2)])
+    }
+    if ($notesHeader -gt $wishlistHeader) {
+        $notesEnd = if ($removedHeader -gt $notesHeader) { $removedHeader - 1 } else { $sourceLines.Count - 1 }
+        $result += ""
+        $result += $sourceLines[$notesHeader..$notesEnd]
+    }
+    [IO.File]::WriteAllLines($SharedDirectionPath, [string[]]$result, [Text.UTF8Encoding]::new($false))
+}
+
 if (-not $ControlPath) {
     $workspace = Get-GitValue @("rev-parse", "--show-toplevel")
     if (-not $workspace) { throw "Run this command inside the Tandem repository or pass -ControlPath." }
     $localPath = Join-Path $workspace ".tandem\shared-control\SHARED_DIRECTION.md"
-    if (Test-Path -LiteralPath (Split-Path $localPath -Parent)) {
+    if ($env:TANDEM_RECIPROCAL_ROOT) {
+        $ControlPath = Join-Path $env:TANDEM_RECIPROCAL_ROOT "control\SHARED_DIRECTION.md"
+    } elseif (Test-Path -LiteralPath (Split-Path $localPath -Parent)) {
         $ControlPath = $localPath
     } else {
         $commonRaw = Get-GitValue @("rev-parse", "--git-common-dir")
@@ -131,6 +205,9 @@ if (-not $ControlPath) {
 }
 
 $ControlPath = [IO.Path]::GetFullPath($ControlPath)
+if ([IO.Path]::GetFileName($ControlPath) -ieq "WISHLIST.md") {
+    $ControlPath = Join-Path (Split-Path $ControlPath -Parent) "SHARED_DIRECTION.md"
+}
 $workspaceForControl = Get-GitValue @("rev-parse", "--show-toplevel")
 if ($explicitControlPath -and $workspaceForControl) {
     $workspaceTandemDir = Normalize-ControlPath (Join-Path $workspaceForControl ".tandem")
@@ -143,15 +220,39 @@ if ($explicitControlPath -and $workspaceForControl) {
 }
 $controlDir = Split-Path $ControlPath -Parent
 New-Item -ItemType Directory -Path $controlDir -Force | Out-Null
+$WishlistPath = Get-WishlistPath $ControlPath
 
 if (-not (Test-Path -LiteralPath $ControlPath)) {
     $workspace = Get-GitValue @("rev-parse", "--show-toplevel")
     $template = if ($workspace) { Join-Path $workspace "process\reciprocal\SHARED_DIRECTION_TEMPLATE.md" } else { $null }
     if (-not $template -or -not (Test-Path -LiteralPath $template)) {
-        throw "Shared direction file is missing and its template could not be found."
+        $fallbackDirection = @(
+            "# Tandem Reciprocal: Shared Direction",
+            "",
+            "This file is the durable human-owned direction for both reciprocal executors. Live wishlist/progress items are stored separately in control/WISHLIST.md.",
+            "",
+            "## General Direction",
+            "",
+            "Improve Tandem's reliability, usefulness, autonomy, cost discipline, and recovery behavior while preserving user control and backward compatibility.",
+            "",
+            "AutonomyDefault: plan-gated",
+            "",
+            "## Human Guardrails",
+            "",
+            "- Human wishlist items take priority over self-selected improvements.",
+            "- Do not weaken tests, safety controls, rollback behavior, or audit history to make progress appear faster.",
+            "",
+            "## Human Notes",
+            "",
+            "Add broader context, product principles, or constraints here."
+        )
+        [IO.File]::WriteAllLines($ControlPath, [string[]]$fallbackDirection, [Text.UTF8Encoding]::new($false))
+    } else {
+        Copy-Item -LiteralPath $template -Destination $ControlPath
     }
-    Copy-Item -LiteralPath $template -Destination $ControlPath
 }
+Initialize-WishlistFile $WishlistPath $ControlPath
+Normalize-SharedDirectionFile $ControlPath
 
 $sha = [Security.Cryptography.SHA256]::Create()
 try {
@@ -165,16 +266,35 @@ if (-not $mutex.WaitOne(5000)) { throw "Timed out waiting for the shared directi
 
 try {
     if ($Action -eq "Show") {
-        Get-Content -LiteralPath $ControlPath -Raw
+        Read-Utf8Text $WishlistPath
         exit 0
     }
 
-    $lines = @(Get-Content -LiteralPath $ControlPath)
+    $directionLines = Read-Utf8Lines $ControlPath
+    $targetPath = if ($Action -eq "UpdateDirection") { $ControlPath } else { $WishlistPath }
+    $lines = if ($Action -eq "UpdateDirection") { $directionLines } else { Read-Utf8Lines $WishlistPath }
     $now = (Get-Date).ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ")
 
-    if ($Action -eq "Add") {
+    if ($Action -eq "UpdateDirection") {
+        $cleanText = if ($null -eq $Text) { "" } else { $Text.Trim() }
+        if (-not $cleanText) { throw "UpdateDirection requires -Text." }
+        if ($cleanText -match '(?m)^##\s') { throw "General Direction cannot contain level-two Markdown headings." }
+        $directionHeader = [Array]::IndexOf($lines, "## General Direction")
+        $guardrailsHeader = [Array]::IndexOf($lines, "## Human Guardrails")
+        if ($directionHeader -lt 0 -or $guardrailsHeader -le $directionHeader) {
+            throw "Shared direction file has malformed General Direction or Human Guardrails sections."
+        }
+        $before = @($lines[0..$directionHeader])
+        $directionLines = @($cleanText -split '\r?\n')
+        $after = @($lines[$guardrailsHeader..($lines.Count - 1)])
+        $lines = @($before + "" + $directionLines + "" + $after)
+    } elseif ($Action -eq "Add") {
         $cleanText = if ($null -eq $Text) { "" } else { ($Text -replace "\s+", " ").Trim().Replace("|", "/") }
         if (-not $cleanText) { throw "Add requires -Text." }
+        if ($ArtifactKind -and -not $Commit) { throw "Artifact wishlist creation requires the trusted artifact source -Commit." }
+        if ($Commit -and -not $ArtifactKind) { throw "Add accepts -Commit only with -ArtifactKind." }
+        if ($ArtifactKind -and $Epic) { throw "Artifact wishlist creation is only valid for non-epic items." }
+        if ($ArtifactKind -and $Commit -notmatch '^[0-9a-fA-F]{7,40}$') { throw "Artifact wishlist creation requires a source commit SHA." }
         if (-not $Epic -and $Autonomy -ne "inherit") { throw "Autonomy applies only to epic wishlist items." }
         $securitySurface = Test-SecuritySurface $cleanText
         if ($Epic -and $Autonomy -eq "full" -and $securitySurface) {
@@ -190,7 +310,13 @@ try {
         $marker = [Array]::IndexOf($lines, "<!-- wishlist-items -->")
         if ($marker -lt 0) { throw "Shared direction file is missing the wishlist marker." }
         $autonomyMetadata = if ($securitySurface) { " autonomy=plan-gated safety=security-surface" } elseif ($Autonomy -ne "inherit") { " autonomy=$Autonomy" } else { "" }
-        $suffix = if ($Epic) { "QUEUED epic=true$autonomyMetadata phase=PLAN revision=1 completed=0 added=$now" } else { "QUEUED added=$now" }
+        $suffix = if ($ArtifactKind) {
+            "QUEUED artifact=$ArtifactKind source=$Commit declared=$now"
+        } elseif ($Epic) {
+            "QUEUED epic=true$autonomyMetadata phase=PLAN revision=1 completed=0 added=$now"
+        } else {
+            "QUEUED added=$now"
+        }
         $item = "- [ ] $Id | $Priority | $cleanText | $suffix"
         $before = if ($marker -ge 0) { @($lines[0..$marker]) } else { @() }
         $after = if ($marker + 1 -lt $lines.Count) { @($lines[($marker + 1)..($lines.Count - 1)]) } else { @() }
@@ -209,11 +335,30 @@ try {
         $status = ($statusAndDetail -split '\s+')[0]
         $metadata = Get-Metadata $statusAndDetail
         $isEpic = $metadata.epic -eq "true"
-        $effectiveAutonomy = if ($isEpic) { Get-EffectiveAutonomy $metadata $lines $base[2] } else { "plan-gated" }
+        $effectiveAutonomy = if ($isEpic) { Get-EffectiveAutonomy $metadata $directionLines $base[2] } else { "plan-gated" }
         $autonomySuffix = if ($metadata.autonomy) { " autonomy=$($metadata.autonomy)" } else { "" }
         $safetySuffix = if ($metadata.safety) { " safety=$($metadata.safety)" } else { "" }
 
         switch ($Action) {
+            "Retire" {
+                $cleanNote = if ($null -eq $Note) { "" } else { ($Note -replace "\s+", " ").Trim().Replace("|", "/") }
+                if (-not $cleanNote) { throw "Retire requires -Note." }
+                if ($base[0] -match '\[x\]' -or $status -eq "DONE") { throw "$Id is already terminal and should not be retired." }
+                if ($status -notin @("QUEUED", "IN_PROGRESS", "CANDIDATE", "BLOCKED")) { throw "$Id cannot be retired from status $status." }
+
+                $before = if ($index -gt 0) { @($lines[0..($index - 1)]) } else { @() }
+                $after = if ($index + 1 -lt $lines.Count) { @($lines[($index + 1)..($lines.Count - 1)]) } else { @() }
+                $lines = @($before + $after)
+                $retiredHeader = [Array]::IndexOf($lines, "## Retired")
+                if ($retiredHeader -lt 0) {
+                    $lines = @($lines + "" + "## Retired" + "")
+                }
+                $lines = @(
+                    $lines +
+                    "- id=$Id | retired=$now | note=$cleanNote" +
+                    "  original: $originalLine"
+                )
+            }
             "Remove" {
                 $cleanNote = if ($null -eq $Note) { "" } else { ($Note -replace "\s+", " ").Trim().Replace("|", "/") }
                 if (-not $cleanNote) { throw "Remove requires -Note." }
@@ -239,7 +384,8 @@ try {
                 if (-not $Role) { throw "Start requires -Role." }
                 if ($base[0] -match '\[x\]') { throw "$Id is already complete." }
                 if (-not $isEpic) {
-                    $lines[$index] = ($base + "IN_PROGRESS role=$Role started=$now") -join " | "
+                    $artifactSuffix = if ($metadata.artifact) { " artifact=$($metadata.artifact) source=$($metadata.source)" } else { "" }
+                    $lines[$index] = ($base + "IN_PROGRESS$artifactSuffix role=$Role started=$now") -join " | "
                     break
                 }
                 $revision = if ($metadata.revision) { [int]$metadata.revision } else { 1 }
@@ -289,6 +435,30 @@ try {
                 $total = [int]$Matches[2]
                 $planPath = Assert-EpicPlanPath $metadata.plan $Id
                 $lines[$index] = ($base + "CANDIDATE epic=true$autonomySuffix$safetySuffix candidate=STEP revision=$revision completed=$completed step=$step/$total plan=$planPath commit=$Commit updated=$now") -join " | "
+            }
+            "DeclareArtifact" {
+                if ($env:TANDEM_ALLOW_MANUAL_DECLARE_ARTIFACT -ne "1") { throw "DeclareArtifact is reserved for trusted control-plane compatibility only; create artifact items with Add -ArtifactKind -Commit." }
+                if (-not $Commit) { throw "DeclareArtifact requires the trusted artifact source -Commit." }
+                if (-not $ArtifactKind) { throw "DeclareArtifact requires -ArtifactKind." }
+                if ($isEpic) { throw "DeclareArtifact is only valid for non-epic wishlist items." }
+                if ($status -ne "QUEUED") { throw "$Id must be QUEUED before declaring artifact mode." }
+                if ($Commit -notmatch '^[0-9a-fA-F]{7,40}$') { throw "DeclareArtifact requires a source commit SHA." }
+                $lines[$index] = ($base + "QUEUED artifact=$ArtifactKind source=$Commit declared=$now") -join " | "
+            }
+            "ArtifactComplete" {
+                if (-not $Commit) { throw "ArtifactComplete requires -Commit." }
+                if (-not $Role) { throw "ArtifactComplete requires -Role." }
+                if (-not $ArtifactKind) { throw "ArtifactComplete requires -ArtifactKind." }
+                if (-not $Evidence -or $Evidence -notmatch '^[A-Za-z0-9._:-]{6,128}$') { throw "ArtifactComplete requires machine-checkable -Evidence metadata." }
+                if ($isEpic) { throw "ArtifactComplete is only valid for non-epic wishlist items." }
+                if ($status -notin @("QUEUED", "IN_PROGRESS")) { throw "$Id cannot complete an artifact from status $status." }
+                if (-not $metadata.artifact -or $metadata.artifact -ne $ArtifactKind) { throw "$Id is not declared for artifact $ArtifactKind." }
+                if (-not $metadata.source -or $metadata.source -ne $Commit) { throw "$Id is not declared for source $Commit." }
+                if ($status -eq "IN_PROGRESS" -and $metadata.role -and $metadata.role -ne $Role) {
+                    throw "$Id is owned by role $($metadata.role), not $Role."
+                }
+                $base[0] = $base[0] -replace '^- \[ \]', '- [x]'
+                $lines[$index] = ($base + "DONE artifact=$ArtifactKind source=$Commit evidence=$Evidence role=$Role completed=$now") -join " | "
             }
             "ApprovePlan" {
                 if (-not $isEpic -or $status -ne "CANDIDATE" -or $metadata.candidate -ne "PLAN") {
@@ -385,10 +555,10 @@ try {
         }
     }
 
-    $tempPath = "$ControlPath.tmp-$PID"
+    $tempPath = "$targetPath.tmp-$PID"
     [IO.File]::WriteAllLines($tempPath, [string[]]$lines, [Text.UTF8Encoding]::new($false))
-    Move-Item -LiteralPath $tempPath -Destination $ControlPath -Force
-    [ordered]@{ action = $Action; id = $Id; path = $ControlPath } | ConvertTo-Json
+    Move-Item -LiteralPath $tempPath -Destination $targetPath -Force
+    [ordered]@{ action = $Action; id = $Id; path = $targetPath; directionPath = $ControlPath; wishlistPath = $WishlistPath } | ConvertTo-Json
 } finally {
     $mutex.ReleaseMutex()
     $mutex.Dispose()

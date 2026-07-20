@@ -16,6 +16,7 @@ $runtimeSource = Join-Path $SourceRepo "release\win-unpacked"
 $templateA = Join-Path $SourceRepo "process\reciprocal\TANDEM_EXECUTOR_A.md"
 $templateB = Join-Path $SourceRepo "process\reciprocal\TANDEM_EXECUTOR_B.md"
 $directionTemplate = Join-Path $SourceRepo "process\reciprocal\SHARED_DIRECTION_TEMPLATE.md"
+$wishlistTemplate = Join-Path $SourceRepo "process\reciprocal\WISHLIST_TEMPLATE.md"
 $reciprocalMaxStepsPerAgentTurn = 250
 
 function Invoke-Checked {
@@ -88,9 +89,13 @@ function Initialize-Schedule([string]$TargetWorktree, [string]$Role, [string]$Cr
 function Initialize-SharedDirection([string[]]$Worktrees) {
     $controlDir = Join-Path $RelayRoot "control"
     $directionPath = Join-Path $controlDir "SHARED_DIRECTION.md"
+    $wishlistPath = Join-Path $controlDir "WISHLIST.md"
     New-Item -ItemType Directory -Path $controlDir -Force | Out-Null
     if (-not (Test-Path -LiteralPath $directionPath)) {
         Copy-Item -LiteralPath $directionTemplate -Destination $directionPath
+    }
+    if (-not (Test-Path -LiteralPath $wishlistPath)) {
+        Copy-Item -LiteralPath $wishlistTemplate -Destination $wishlistPath
     }
     foreach ($worktree in $Worktrees) {
         $linkPath = Join-Path $worktree ".tandem\shared-control"
@@ -154,5 +159,6 @@ if ($ResetRelay -or -not (Test-Path -LiteralPath $relayStatePath)) {
     executorA = [ordered]@{ runtime = (Join-Path $RelayRoot "runtimes\executor-a\Tandem.exe"); target = $worktreeB; branch = $branchB; cron = "7 * * * *"; role = "sole-producer" }
     executorB = [ordered]@{ runtime = (Join-Path $RelayRoot "runtimes\executor-b\Tandem.exe"); target = $worktreeA; branch = $branchA; cron = $null; role = "passive-build-launch-target" }
     sharedDirection = (Join-Path $RelayRoot "control\SHARED_DIRECTION.md")
+    wishlist = (Join-Path $RelayRoot "control\WISHLIST.md")
     nextRole = "A"
 } | ConvertTo-Json -Depth 5

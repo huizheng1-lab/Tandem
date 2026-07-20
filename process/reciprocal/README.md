@@ -47,7 +47,7 @@ Follow the injected TANDEM.md and execute one reciprocal improvement invocation 
 
 ## Shared Human Direction
 
-Both copies see the shared board through `.tandem/shared-control/SHARED_DIRECTION.md`. Add human work with:
+Both copies see durable human direction through `.tandem/shared-control/SHARED_DIRECTION.md` and live work state through `.tandem/shared-control/WISHLIST.md`. Add human work with:
 
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts/reciprocal-direction.ps1 -Action Add -Priority P1 -Text "Add Feature A with requirements X, Y, and Z"

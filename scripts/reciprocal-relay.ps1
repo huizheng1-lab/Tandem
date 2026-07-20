@@ -1,6 +1,6 @@
 param(
     [Parameter(Mandatory = $true)]
-    [ValidateSet("Status", "Claim", "Validate", "PassiveTest", "PrepareAUpgrade", "CompleteAUpgrade", "Accept", "Complete", "Rollback", "CompleteRollback", "Abandon", "Pause", "Resume", "ReconcileMain", "Reset")]
+    [ValidateSet("Status", "Claim", "Validate", "PassiveTest", "PrepareAUpgrade", "CompleteAUpgrade", "Accept", "Complete", "CompleteArtifact", "Rollback", "CompleteRollback", "Abandon", "Pause", "Resume", "ReconcileMain", "Reset")]
     [string]$Action,
 
     [ValidateSet("A", "B")]
@@ -27,16 +27,32 @@ param(
 
 $ErrorActionPreference = "Stop"
 $ResumePauseThreshold = 3
+$CandidatePreviewArtifactCapability = 1
+
+function Get-ReciprocalCapabilities {
+    if ($env:TANDEM_DISABLE_CANDIDATE_PREVIEW_ARTIFACT_CAPABILITY -eq "1") {
+        return [ordered]@{}
+    }
+    return [ordered]@{
+        candidatePreviewArtifactLifecycle = $CandidatePreviewArtifactCapability
+    }
+}
+
+function Test-CandidatePreviewArtifactCapability {
+    $capabilities = Get-ReciprocalCapabilities
+    $version = 0
+    if ($capabilities -and $capabilities["candidatePreviewArtifactLifecycle"]) {
+        $version = [int]$capabilities["candidatePreviewArtifactLifecycle"]
+    }
+    return $version -ge $CandidatePreviewArtifactCapability
+}
 
 function Invoke-Git {
     param([Parameter(ValueFromRemainingArguments = $true)][string[]]$Arguments)
     $oldErrorAction = $ErrorActionPreference
     try {
         $ErrorActionPreference = "Continue"
-        # An unreadable per-user excludes file can emit warnings on successful Git commands.
-        # Relay cleanliness must be based only on porcelain output, so disable the optional
-        # global excludes file while retaining repository .gitignore handling.
-        $output = @(& git -c core.excludesFile= -C $Workspace @Arguments 2>&1)
+        $output = @(& git -C $Workspace @Arguments 2>&1)
         $exitCode = $LASTEXITCODE
     } finally {
         $ErrorActionPreference = $oldErrorAction
@@ -52,7 +68,7 @@ function Test-Git {
     $oldErrorAction = $ErrorActionPreference
     try {
         $ErrorActionPreference = "Continue"
-        & git -c core.excludesFile= -C $Workspace @Arguments *> $null
+        & git -C $Workspace @Arguments *> $null
         return $LASTEXITCODE -eq 0
     } finally {
         $ErrorActionPreference = $oldErrorAction
@@ -206,6 +222,7 @@ try {
             lastCompletedCommit = $state.lastCompletedCommit
             lastSummary = $state.lastSummary
             lastRecoveryStash = $state.lastRecoveryStash
+            capabilities = Get-ReciprocalCapabilities
             statePath = $statePath
         }
         if ($Extra) {
@@ -466,7 +483,10 @@ try {
     }
 
     function Get-SharedDirectionPath {
-        $localPath = Join-Path $Workspace ".tandem\shared-control\SHARED_DIRECTION.md"
+        if ($env:TANDEM_RECIPROCAL_ROOT) {
+            return (Join-Path $env:TANDEM_RECIPROCAL_ROOT "control\WISHLIST.md")
+        }
+        $localPath = Join-Path $Workspace ".tandem\shared-control\WISHLIST.md"
         if (Test-Path -LiteralPath (Split-Path $localPath -Parent)) {
             return $localPath
         }
@@ -474,7 +494,7 @@ try {
         $commonDir = if ([IO.Path]::IsPathRooted($commonRaw)) { $commonRaw } else { [IO.Path]::GetFullPath((Join-Path $Workspace $commonRaw)) }
         $adminRepo = Split-Path $commonDir -Parent
         $relayRoot = Join-Path (Split-Path $adminRepo -Parent) "Tandem Reciprocal"
-        return (Join-Path $relayRoot "control\SHARED_DIRECTION.md")
+        return (Join-Path $relayRoot "control\WISHLIST.md")
     }
 
     function Get-Metadata([string]$Value) {
@@ -483,6 +503,30 @@ try {
             $metadata[$match.Groups[1].Value] = $match.Groups[2].Value
         }
         return $metadata
+    }
+
+    function Read-Utf8Lines([string]$Path) {
+        return @([IO.File]::ReadAllLines($Path, [Text.UTF8Encoding]::new($false)))
+    }
+
+    function Assert-WishlistToolingCompatible {
+        $directionScript = Join-Path $Workspace "scripts\reciprocal-direction.ps1"
+        if (-not (Test-Path -LiteralPath $directionScript)) {
+            throw "Cannot claim: reciprocal-direction.ps1 is missing from this executor worktree."
+        }
+        $scriptText = [IO.File]::ReadAllText($directionScript, [Text.UTF8Encoding]::new($false))
+        if ($scriptText -notmatch "Get-WishlistPath" -or $scriptText -notmatch "WISHLIST\.md") {
+            throw "Cannot claim: executor worktree has stale pre-D167 wishlist tooling. Reconcile reciprocal infrastructure before starting work."
+        }
+
+        $showOutput = @(& $directionScript -Action Show 2>&1)
+        if (-not $?) {
+            throw "Cannot claim: D167 wishlist tooling check failed: $($showOutput -join ' ')"
+        }
+        $shownBoard = $showOutput -join [Environment]::NewLine
+        if ($shownBoard -notmatch "<!-- wishlist-items -->") {
+            throw "Cannot claim: executor direction script did not return the WISHLIST.md work-state board."
+        }
     }
 
     function New-AutonomousContinuation([string]$Id, [string]$NextStep) {
@@ -507,7 +551,7 @@ try {
 
         $escapedCommit = [regex]::Escape($AcceptedCommit)
         $candidateLine = @(
-            Get-Content -LiteralPath $boardPath |
+            Read-Utf8Lines $boardPath |
                 Where-Object { $_ -match "^- \[ \] (W\d+) \| .+ \| CANDIDATE\b" -and $_ -match "(^|\s)commit=$escapedCommit(\s|$)" }
         )
         if ($candidateLine.Count -eq 0) { return $null }
@@ -947,6 +991,59 @@ try {
             exit 0
         }
     }
+
+    function Get-NextArtifactItem {
+        if ($Role -ne "A") { return $null }
+        $boardPath = Get-SharedDirectionPath
+        if (-not (Test-Path -LiteralPath $boardPath)) { return $null }
+        $line = @(
+            Read-Utf8Lines $boardPath |
+                Where-Object { $_ -match "^- \[ \] (W\d{4}) \| (P[0-3]) \| (.*?) \| QUEUED\b" -and $_ -match "(^|\s)artifact=candidate-preview(\s|$)" -and $_ -match "(^|\s)source=([0-9a-fA-F]{7,40})(\s|$)" } |
+                Select-Object -First 1
+        )
+        if ($line.Count -eq 0) { return $null }
+        $id = ([regex]::Match($line[0], "^- \[ \] (W\d{4}) \|")).Groups[1].Value
+        $metadata = Get-Metadata $line[0]
+        return [pscustomobject]@{
+            kind = "candidate-preview"
+            wishlistId = $id
+            sourceSha = $metadata.source
+        }
+    }
+
+    function New-ArtifactCapabilityBlocked([object]$ArtifactItem) {
+        return [pscustomobject]@{
+            kind = $ArtifactItem.kind
+            wishlistId = $ArtifactItem.wishlistId
+            sourceSha = $ArtifactItem.sourceSha
+            requiredCapability = [ordered]@{
+                candidatePreviewArtifactLifecycle = $CandidatePreviewArtifactCapability
+            }
+            capabilities = Get-ReciprocalCapabilities
+            reason = "Artifact build workflow requires Reciprocal executor upgrade."
+        }
+    }
+
+    function Get-NextArtifactInstruction {
+        $artifactItem = Get-NextArtifactItem
+        if (-not $artifactItem -or -not (Test-CandidatePreviewArtifactCapability)) { return $null }
+        return [pscustomobject]@{
+            kind = $artifactItem.kind
+            wishlistId = $artifactItem.wishlistId
+            sourceSha = $artifactItem.sourceSha
+            startCommand = "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/reciprocal-direction.ps1 -Action Start -Id $($artifactItem.wishlistId) -Role A"
+            completionReportShape = [ordered]@{
+                status = "complete"
+                filesChanged = @()
+                reciprocalArtifact = [ordered]@{
+                    kind = $artifactItem.kind
+                    wishlistId = $artifactItem.wishlistId
+                    sourceSha = $artifactItem.sourceSha
+                }
+            }
+            instruction = "Build or verify the trusted candidate preview artifact without source edits. Submit a CompletionReport with filesChanged=[] and reciprocalArtifact exactly matching this kind, wishlistId, and sourceSha; the app layer will validate BUILD_INFO, run GUI smoke, close the relay, and mark the board terminal."
+        }
+    }
     $branch = (@(Invoke-Git branch --show-current))[0].Trim()
     $expectedBranch = if ($Action -in @("PassiveTest", "PrepareAUpgrade", "CompleteAUpgrade")) { "codex/reciprocal-a" } else { $roleConfig.Target }
     if ($branch -ne $expectedBranch) {
@@ -992,6 +1089,15 @@ try {
             Write-Result "WAIT"
             exit 0
         }
+        Assert-WishlistToolingCompatible
+
+        $artifactItem = Get-NextArtifactItem
+        if ($artifactItem -and -not (Test-CandidatePreviewArtifactCapability)) {
+            Write-Result "CAPABILITY_BLOCKED" ([pscustomobject]@{
+                artifactBlocked = New-ArtifactCapabilityBlocked $artifactItem
+            })
+            exit 0
+        }
 
         Assert-Clean "Cannot claim a new turn with pre-existing worktree changes"
         Invoke-Git merge --ff-only $roleConfig.Peer | Out-Null
@@ -1014,7 +1120,14 @@ try {
             $state.phase = "working"
         }
         Save-State
-        Write-Result $outcome
+        $extra = [pscustomobject]@{}
+        if ($outcome -eq "CLAIMED" -and $state.phase -eq "working") {
+            $artifactInstruction = Get-NextArtifactInstruction
+            if ($artifactInstruction) {
+                $extra | Add-Member -NotePropertyName artifactWork -NotePropertyValue $artifactInstruction
+            }
+        }
+        Write-Result $outcome $extra
         exit 0
     }
 
@@ -1182,6 +1295,41 @@ try {
 
     if ($state.activeRole -ne $Role) {
         throw "Role $Role does not own the active turn. Current owner: $($state.activeRole)."
+    }
+
+    if ($Action -eq "CompleteArtifact") {
+        if ($Role -ne "A") { throw "Only Executor A can complete reciprocal artifact work." }
+        if (-not $Summary.Trim()) { throw "CompleteArtifact requires a verification summary." }
+        if ($state.candidateCommit -or $state.rollbackCommit) {
+            throw "CompleteArtifact refuses while a source candidate or rollback is pending."
+        }
+        $fromWorkingPause = $state.phase -eq "paused" -and $state.pausedFromPhase -eq "working"
+        if ($state.phase -ne "working" -and -not $fromWorkingPause) {
+            throw "CompleteArtifact is valid only during working or paused-from-working. Current phase: $($state.phase)."
+        }
+        Assert-Clean "CompleteArtifact requires a clean worktree"
+        $head = (@(Invoke-Git rev-parse HEAD))[0].Trim()
+        if ($state.baseCommit -ne $state.stableCommit) { throw "Artifact working base no longer matches the stable commit." }
+        if ($head -ne $state.baseCommit) { throw "Artifact turn HEAD changed from base $($state.baseCommit) to $head." }
+        $commits = @(Invoke-Git rev-list "$($state.baseCommit)..$head")
+        if ($commits.Count -ne 0) { throw "CompleteArtifact requires no source commits; found $($commits.Count)." }
+
+        $state.turn = [int]$state.turn + 1
+        $state.nextRole = "A"
+        $state.activeRole = $null
+        Set-IdleOrPauseAfterTurn
+        $state.baseCommit = $null
+        $state.candidateCommit = $null
+        $state.candidateKind = $null
+        $state.rollbackCommit = $null
+        $state.startedAt = $null
+        Reset-ResumeCounter
+        $state.lastCompletedCommit = $head
+        $state.lastSummary = $Summary.Trim()
+        Save-State
+        Remove-Item -LiteralPath (Join-Path $Workspace ".tandem\reciprocal-checkpoint.md") -Force -ErrorAction SilentlyContinue
+        Write-Result "ARTIFACT_COMPLETED"
+        exit 0
     }
 
     if ($Action -eq "Validate") {
