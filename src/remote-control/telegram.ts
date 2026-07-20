@@ -7,6 +7,7 @@ interface TelegramUpdate {
     chat?: { id?: number };
     from?: { id?: number; username?: string };
     text?: string;
+    reply_to_message?: { message_id?: number };
   };
   callback_query?: {
     id?: string;
@@ -107,7 +108,15 @@ export class TelegramLongPollingTransport implements RemoteTransport {
           const chatId = update.message?.chat?.id;
           const text = update.message?.text;
           if (typeof senderId !== "number" || typeof chatId !== "number" || typeof text !== "string") continue;
-          await onMessage({ updateId: update.update_id, senderId, chatId, username: update.message?.from?.username, text, messageId: update.message?.message_id });
+          await onMessage({
+            updateId: update.update_id,
+            senderId,
+            chatId,
+            username: update.message?.from?.username,
+            text,
+            messageId: update.message?.message_id,
+            replyToMessageId: update.message?.reply_to_message?.message_id
+          });
         }
       } catch (error) {
         await onError?.(error);

@@ -76,11 +76,14 @@ describe("remote control command parser", () => {
     expect(parseRemoteCommand("/resume")).toEqual({ verb: "resume", args: "" });
     expect(parseRemoteCommand("/stop")).toEqual({ verb: "stop", args: "" });
     expect(parseRemoteCommand("/revoke")).toEqual({ verb: "revoke", args: "" });
+    expect(parseRemoteCommand("/prompt build something")).toEqual({ verb: "prompt", args: "build something" });
+    expect(parseRemoteCommand("/prompt")).toEqual({ verb: "prompt", args: "" });
+    expect(parseRemoteCommand("/cancel")).toEqual({ verb: "cancel", args: "" });
     expect(parseRemoteCommand("/pair 12345678")).toEqual({ verb: "pair", args: "12345678" });
     expect(parseRemoteMessage("Confirm STOP 123456")).toEqual({ verb: "confirm-stop", args: "123456" });
     expect(parseRemoteCommand("/status now").verb).toBe("unknown");
     expect(parseRemoteCommand("/pair abc").verb).toBe("unknown");
-    expect(parseRemoteCommand("/prompt build something").verb).toBe("unknown");
+    expect(parseRemoteCommand("/cancel please").verb).toBe("unknown");
     expect(parseRemoteCommand("hello").verb).toBe("unknown");
   });
 });
