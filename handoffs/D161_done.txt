@@ -1,0 +1,24 @@
+Round: D161
+
+Commits:
+- 4fd61feb578d18966d5d1eb52f0158b378fcee43 (D161-1: surface Telegram stream edit failures)
+
+Root cause and fix:
+- The stream end path had a real lifecycle gap: `StreamingSessionGateway.finish()` flushed the terminal snapshot and then invoked `TelegramSessionStream`'s `onEnd`, which immediately stopped the stream. `TelegramSessionStream.stop()` clears pending edit state, so terminal delivery and teardown were coupled too tightly for the fast remote-prompt path. A focused regression now proves terminal snapshots are edited into the Telegram message before the stream is stopped.
+- The diagnosability gap was also real: any `editMessage` rejection inside `TelegramSessionStream.drain()` was swallowed by a bare catch, so a Telegram API rejection or transport failure killed the stream without a bridge audit entry.
+- I did not find evidence of a session id mismatch in the code path: `RemoteBridge.handlePrompt()` starts the stream for the selected session before `submitRemotePrompt()`, and `TandemService.submitRemotePrompt()` resumes that same session before `run()` emits remote session events.
+
+Error visibility improvement:
+- `TelegramSessionStream` now exposes `onEdited` and `onError` callbacks.
+- `RemoteBridge` writes `stream-edit` and `stream-edit-error` audit entries, including chat id, message id, session id, and the error message.
+- `TelegramLongPollingTransport` now preserves Telegram Bot API error descriptions on failed HTTP responses, so errors such as `Bad Request: message is not modified` are visible instead of being reduced to only `HTTP 400`.
+
+Verification:
+- `npm test -- tests/remote-control-telegram-session-stream.test.ts`: passed (6 tests)
+- `npm test -- tests/remote-control-telegram-session-stream.test.ts tests/remote-control-bridge-prompt.test.ts`: passed (12 tests)
+- `npm run typecheck`: passed
+- `npm test`: passed (48 files passed, 1 skipped; 466 tests passed, 1 skipped)
+- `git diff --check`: passed; only CRLF normalization warnings were printed for existing working-copy files.
+
+Live proof:
+- Not completed in this automation round. I could not access or safely drive the user's real paired Telegram chat from this heartbeat, and this checkout does not expose a dedicated candidate-preview relaunch helper. Manual live proof should rebuild/relaunch candidate-preview, `/use` a real session, send a plain Telegram prompt, and confirm the live message receives `stream-edit` audit entries or, on failure, a `stream-edit-error` entry with the Telegram API description.
