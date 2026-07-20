@@ -1,0 +1,91 @@
+Round: D166
+Status: completed
+
+Commits:
+- D166 repo code commits: none. Product/repo source was not changed for W0021 or W0016.
+- D166 marker commit: created after this marker was written.
+- External dashboard runtime file changed outside this git repo: C:\Users\huizh\Apps\Tandem Reciprocal\dashboard\server.mjs
+
+Code/proof scope:
+- This round was mostly proof/deployment-readiness.
+- No W0021 or W0016 implementation was attempted.
+- No candidate preview was overwritten or promoted.
+- No reciprocal source branch reconciliation, runtime promotion, main integration, force push, or GitHub mutation was performed.
+- One external dashboard defect was fixed after proof exposed it: incompatible /api/wishlist/artifact capability refusals now return their intended 409 and are marked nonMutating so the refusal does not append request.error audit entries. The same external file also exposes the D166 activation plan in /api/status.
+
+Compatible live proof:
+- Command: node --import tsx release\d166-compatible-proof.ts
+- Proof output: C:\Users\huizh\AppData\Local\Temp\d166-compatible-proof-e3bwmo\proof-output.json
+- Scratch root: C:\Users\huizh\AppData\Local\Temp\d166-compatible-proof-e3bwmo
+- Scratch dashboard port: 12069
+- Scratch producer/stable AAA: 72f9d3c4568839420f9ca7b556347771b23f4a32
+- Trusted artifact source BBB: a8844e7c5437c3fe542b7face81537d0d5f42d9f
+- Status before creation: compatible=true, message="Artifact build workflow ready."; producer/runtimeA/runtimeB all reported candidatePreviewArtifactLifecycle v1 with required v1.
+- /api/wishlist/artifact result: W0001, kind=candidate-preview, sourceSha=a8844e7c5437c3fe542b7face81537d0d5f42d9f, text="Build candidate preview for review a8844e7".
+- Relay claim result: CLAIMED, phase=working, activeRole=A, artifactWork.kind=candidate-preview, wishlistId=W0001, sourceSha=a8844e7c5437c3fe542b7face81537d0d5f42d9f, filesChanged=[] completion shape.
+- Completion path: app-layer commitReciprocalCandidate artifact path ran reciprocal-relay Status, D164 provenance validation, scratch candidate-preview-smoke.ps1 using the real Tandem.exe path, reciprocal-direction Start, reciprocal-relay CompleteArtifact, and reciprocal-direction ArtifactComplete.
+- GUI smoke evidence: ok=true, outcome=ready, executable=C:\Users\huizh\Apps\HZ code\release\win-unpacked\Tandem.exe, timeoutSeconds=20.
+- Relay after completion: phase=idle, activeRole=null, stableCommit=72f9d3c4568839420f9ca7b556347771b23f4a32, lastCompletedCommit=72f9d3c4568839420f9ca7b556347771b23f4a32, candidateCommit=null.
+- refs/tandem-relay/candidate in scratch source: absent.
+- Board after create had exactly W0001 queued as app-owned P0 artifact=candidate-preview source=a8844e7c5437c3fe542b7face81537d0d5f42d9f.
+- Board after completion marked W0001 DONE with artifact=candidate-preview source=a8844e7c5437c3fe542b7face81537d0d5f42d9f evidence=bc03780e35fccc62 role=A.
+- Reject result 1: wishlistId=W0002, wishlistCreated=true, relayReleased=false, relayPhase=idle.
+- Reject result 2: wishlistId=W0002, wishlistCreated=false, alreadyReviewed=true, relayReleased=false, relayPhase=idle.
+- Final scratch board had one queued follow-up W0002: "Fix rejected candidate a8844e7 for W0001. Human review: D166 scratch human rejection proof [review-rejection:a8844e7c5437c3fe542b7face81537d0d5f42d9f]" and W0001 remained DONE.
+- Audit entries: wishlist.artifactCreate(W0001, source BBB); update.review(source BBB); update.rejectQueued(W0002, source BBB, wishlistCreated=true, relayReleased=false); update.rejectQueued(W0002, source BBB, wishlistCreated=false, relayReleased=false).
+- No manual DeclareArtifact, Resume, Abandon, source candidate ref, runtime promotion, main integration, real board mutation, or real worktree mutation was used by the proof.
+
+Incompatible endpoint proof:
+- Command: node release\d166-incompatible-proof.mjs
+- Proof output: C:\Users\huizh\AppData\Local\Temp\d166-incompatible-proof-output.json
+- Scratch root: C:\Users\huizh\AppData\Local\Temp\d166-incompatible-proof-yA4n8d
+- Scratch stable/source: ea717d7847aa72256f32e3a3d176dbae0d792195
+- Status: compatible=false; producer v1, runtimeA v0, runtimeB v0, required v1.
+- /api/wishlist/artifact result: HTTP 409, ok=false, error="Artifact build workflow requires Reciprocal executor upgrade: Executor A runtime has v0; Executor B runtime has v0; required v1."
+- Board unchanged: true.
+- Audit unchanged: true.
+- This proof exposed and verified the non-mutating error-path fix described above.
+
+Active dashboard upgrade status:
+- Active dashboard was restarted by its watchdog so port 4782 served the patched status shape.
+- /api/status reciprocalCapabilities.candidatePreviewArtifactLifecycle:
+  - compatible=false.
+  - message="Artifact build workflow requires Reciprocal executor upgrade: Producer relay has v0; Executor A runtime has v0; Executor B runtime has v0; required v1. Next safe action: Finish the current W0021 preview review first; keep it separate from the protocol upgrade. Approving or promoting current preview 1fcc4cc alone will not enable candidatePreviewArtifactLifecycle v1."
+  - requiredCapability: candidatePreviewArtifactLifecycle=1.
+  - sourceCommit: 0e9db7b14332b6e84851e774f8df42ea282e7761.
+  - currentStable/currentCandidatePreview: 1fcc4cc8ff9fdd697c9472802f4569c4cf68668d.
+  - currentRuntimeBuilds A/B: sourceSha=396a18da5e10bf0ca2481c6e3ab1ae2c633e55d6, capabilityVersion=0.
+  - atomicRuntimePromotionRequired=true.
+  - operational=false.
+  - nextSafeHumanAction="Finish the current W0021 preview review first; keep it separate from the protocol upgrade."
+  - warning="Approving or promoting current preview 1fcc4cc alone will not enable candidatePreviewArtifactLifecycle v1."
+  - steps: finish current W0021 review; reconcile a D162-D165-capable source commit through the human main/protocol gate into both reciprocal worktrees; package/passive-test that exact source and verify BUILD_INFO advertises v1; promote Executor A and B atomically through the existing human runtime promotion/restart gate; treat artifact creation as operational only after producer and both pinned runtimes report v1.
+  - refusedActions: force push; automatic branch reconciliation; automatic runtime promotion; overwriting release/win-unpacked while W0021 remains under review; claiming v1 is operational while any capability check is below v1.
+
+Real state preservation:
+- W0021 real board item is still DONE with stable=1fcc4cc8ff9fdd697c9472802f4569c4cf68668d.
+- Real producer/copy-b HEAD and refs/tandem-relay/stable are still 1fcc4cc8ff9fdd697c9472802f4569c4cf68668d.
+- Real relay semantic state is still phase=a-upgrade-pending, activeRole=null, candidateCommit=null, stableCommit=1fcc4cc8ff9fdd697c9472802f4569c4cf68668d, lastCompletedCommit=1fcc4cc8ff9fdd697c9472802f4569c4cf68668d. Dashboard status/restart refreshed relay diagnostic timestamps only.
+- Real pinned Executor A BUILD_INFO sourceSha remains 396a18da5e10bf0ca2481c6e3ab1ae2c633e55d6 and capability absent/v0.
+- Real pinned Executor B BUILD_INFO sourceSha remains 396a18da5e10bf0ca2481c6e3ab1ae2c633e55d6 and capability absent/v0.
+- Real release\win-unpacked BUILD_INFO sourceSha remains 1fcc4cc8ff9fdd697c9472802f4569c4cf68668d and capability absent/v0.
+- Local admin master remains 0e9db7b14332b6e84851e774f8df42ea282e7761.
+- Remote origin/master was read only and remains e3258320f2070d621201819da647a97b239f3de6; no push was performed.
+- GitHub was not mutated.
+
+Verification:
+- node --check C:\Users\huizh\Apps\Tandem Reciprocal\dashboard\server.mjs: passed.
+- node --check C:\Users\huizh\Apps\Tandem Reciprocal\dashboard\lib.mjs: passed.
+- node --check C:\Users\huizh\Apps\Tandem Reciprocal\dashboard\public\app.js: passed.
+- node --test C:\Users\huizh\Apps\Tandem Reciprocal\dashboard\lib.nodecheck.mjs: passed, 7 tests.
+- Focused tests: npm test -- tests/reciprocal-relay.test.ts tests/reciprocal-direction.test.ts tests/reciprocal-candidate-commit.test.ts tests/automation-server.test.ts: passed, 44 tests.
+- npm run typecheck: passed.
+- npm test: passed, 49 files passed, 1 skipped; 491 tests passed, 1 skipped. Node printed existing DEP0190 warnings from child-process shell usage.
+- git diff --check: passed with only pre-existing CRLF conversion warnings on scripts/reciprocal-direction.ps1 and scripts/setup-reciprocal-tandem.ps1.
+
+Files intentionally staged for this repo:
+- handoffs/D166_done.txt
+
+Files intentionally not staged/touched:
+- Pre-existing dirty scripts/reciprocal-direction.ps1 and scripts/setup-reciprocal-tandem.ps1.
+- Pre-existing untracked handoff docs and unrelated helper docs/scripts.
