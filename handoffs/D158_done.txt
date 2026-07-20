@@ -1,0 +1,49 @@
+Round: D158
+
+Commits:
+- 0ff07bae337a9d96395a135483f22f17c6131837 D158-1: wire remote prompt routing
+
+What was missing:
+- The live candidate-preview build recorded explicit /prompt attempts as inbound verb "unknown", so the real Telegram bridge never dispatched them as prompt submissions.
+- The main admin repo also lacked the W0016 Step 1/2 prompt and streaming helper modules that the accepted reciprocal candidate used.
+
+What changed:
+- Added the W0016 prompt submission and session streaming helpers to the admin repo.
+- Forwarded Telegram reply_to_message.message_id into RemoteInboundMessage.
+- Wired RemoteBridge to recognize /prompt and /cancel as first-class verbs, dispatch /prompt through submitRemotePrompt, dispatch /cancel to the active stream, and route non-command replies by replyToMessageId to the bound live stream/session.
+- Kept pairing, sender authorization, and rate limiting on the same path as the existing commands.
+
+Regression proof:
+- tests/remote-control.test.ts now asserts /prompt and /cancel parse as prompt/cancel instead of unknown.
+- tests/remote-control-bridge-prompt.test.ts drives real RemoteBridge.handleMessage with fake inbound Telegram messages. It proves:
+  - /prompt explicit proof submits to session-proof.
+  - a reply to the live message ID submits reply proof to the same session.
+  - /cancel reaches the stream cancellation path.
+  - the audit log for explicit /prompt contains inbound verb "prompt", and /cancel contains inbound verb "cancel".
+- tests/remote-control-bridge-prompt.test.ts also verifies TelegramLongPollingTransport forwards reply_to_message.message_id to the bridge.
+
+Local bridge proof run:
+- Command: npx tsx - <inline D158 proof script>
+- Audit path: C:\Users\huizh\AppData\Local\Temp\d158-proof-1784510034040\remote-control-audit.jsonl
+- Session proof entries:
+  - {"chatId":77,"sessionId":"session-proof","text":"explicit proof"}
+  - {"chatId":77,"sessionId":"session-proof","text":"reply proof"}
+- Audit proof entries:
+  - {"event":"inbound","verb":"prompt","argsHash":"be76591527ec39e4"}
+  - {"event":"prompt","sessionId":"session-proof","outcome":"submitted","argsHash":"be76591527ec39e4"}
+  - {"event":"inbound","verb":"unknown"} for the plain text reply, followed by {"event":"prompt","sessionId":"session-proof","outcome":"submitted","argsHash":"1e85feed2480d8cb"}
+  - {"event":"inbound","verb":"cancel"}
+  - {"event":"cancel","sessionId":"session-proof","outcome":"stopped"}
+
+Existing real candidate-preview evidence:
+- C:\Users\huizh\Apps\Tandem Reciprocal\state\candidate-preview\remote-control-audit.jsonl showed the pre-fix failure:
+  - 2026-07-20T00:54:55.274Z inbound verb "unknown" with /prompt args hash, followed by prompt-no-session.
+  - 2026-07-20T00:55:27.904Z inbound verb "unknown" with the same /prompt args hash, followed by prompt-no-session.
+  - later replies/plain prompt attempts also landed as verb "unknown" or rate-limit.
+- I could not produce a new real Telegram proof against the running candidate-preview because the running preview is still the old 4a563d7-era build, and the audit log also showed Telegram HTTP 409 transport contention. The local proof above uses the real RemoteBridge dispatch path in this admin build.
+
+Verification:
+- npx vitest run tests/remote-control.test.ts tests/remote-control-bridge-prompt.test.ts tests/remote-control-prompt-submission.test.ts tests/remote-control-streaming-session.test.ts tests/remote-control-telegram-session-stream.test.ts: passed, 5 files / 30 tests.
+- npm run typecheck: passed.
+- npm test: passed, 48 files passed / 1 skipped, 461 tests passed / 1 skipped.
+- git diff --check: passed.
