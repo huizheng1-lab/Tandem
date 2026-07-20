@@ -1,0 +1,74 @@
+Round: D169
+Status: DONE
+
+Root cause:
+- The dashboard approval completion helper correctly selected CompleteAUpgrade for an interrupted a-upgrade-pending relay phase, but did not carry a workspace.
+- The dashboard server then called relayControl without a workspace override, and relayControl defaulted to copy-b.
+- reciprocal-relay.ps1 correctly rejected CompleteAUpgrade from copy-b because that command must run from passive copy-a on branch codex/reciprocal-a.
+
+Files changed:
+- C:\Users\huizh\Apps\Tandem Reciprocal\dashboard\lib.mjs
+- C:\Users\huizh\Apps\Tandem Reciprocal\dashboard\server.mjs
+- C:\Users\huizh\Apps\Tandem Reciprocal\dashboard\lib.nodecheck.mjs
+- handoffs/D169_done.txt
+
+Git commits:
+- D169 marker commit: fbae586
+- Dashboard implementation files are live external operational files under C:\Users\huizh\Apps\Tandem Reciprocal\dashboard, which is not a git repository.
+
+Implementation summary:
+- approvalCompletionRelayAction("a-upgrade-pending") now returns workspace: "a" with CompleteAUpgrade, role A, force true, and step a-upgrade-completed.
+- resumeApprovalPause forwards completion.workspace to relayControl.
+- relayControl accepts workspace keys and resolves workspace "a" to C:\Users\huizh\Apps\Tandem Reciprocal\worktrees\copy-a.
+- approval failure reporting now records remaining recovery actions, including the passive copy-a/codex/reciprocal-a requirement for CompleteAUpgrade.
+- Post-promotion failures now say which steps completed before the failure, so the dashboard does not imply the candidate itself failed after review, runtime promotion, and executor restart have already succeeded.
+- The live dashboard backend was restarted on port 4782 after patching.
+
+Proof that CompleteAUpgrade routes through passive copy-a:
+- Focused Node proof imported the patched helper and returned:
+  action=CompleteAUpgrade, role=A, force=true, workspace=a, step=a-upgrade-completed.
+- The same proof asserted the remaining recovery action:
+  run CompleteAUpgrade from passive copy-a (codex/reciprocal-a) to close the already-promoted A-upgrade gate.
+- server.mjs now resolves workspace key "a" through worktrees.a.path before invoking reciprocal-relay.ps1.
+
+Proof that normal resume approval behavior still works:
+- node --test C:\Users\huizh\Apps\Tandem Reciprocal\dashboard\lib.nodecheck.mjs passed.
+- The existing approval completion test still proves approvalCompletionRelayAction("working") returns Resume, role null, force false, and step relay-resumed.
+
+Simulated post-promotion failure proof:
+- Focused Node proof with review recorded, executors stopped, runtime promoted, executors restarted, pausedByFlow true, relayResumed false, and interruptedPhase a-upgrade-pending produced:
+  simulated failure. Completed before the failure: review was recorded; runtime promotion succeeded; executors restarted. Remaining recovery action: run CompleteAUpgrade from passive copy-a (codex/reciprocal-a) to close the already-promoted A-upgrade gate.
+
+Live /api/status summary:
+- GET http://127.0.0.1:4782/api/status succeeded after the dashboard restart.
+- phase: idle
+- stableCommit: 0bf22a4bbb537c28e03ecd5d25508a7d453db345
+- nextQueuedItem: W0024
+- nextQueuedStatus: QUEUED
+
+Wishlist status proof:
+- C:\Users\huizh\Apps\Tandem Reciprocal\control\WISHLIST.md:
+  - W0022: DONE
+  - W0023: QUEUED
+  - W0024: QUEUED
+
+Shared direction proof:
+- C:\Users\huizh\Apps\Tandem Reciprocal\control\SHARED_DIRECTION.md contains none of:
+  W0022, W0023, W0024, wishlist-items, ## Wishlist, ## Removed.
+
+Verification:
+- node --check C:\Users\huizh\Apps\Tandem Reciprocal\dashboard\server.mjs: PASS
+- node --check C:\Users\huizh\Apps\Tandem Reciprocal\dashboard\lib.mjs: PASS
+- node --test C:\Users\huizh\Apps\Tandem Reciprocal\dashboard\lib.nodecheck.mjs: PASS, 8 tests
+- focused Node proof for CompleteAUpgrade workspace and post-promotion failure detail: PASS
+- live GET http://127.0.0.1:4782/api/status: PASS
+- W0022/W0023/W0024 WISHLIST.md status check: PASS
+- SHARED_DIRECTION.md forbidden-token check: PASS
+- npm run typecheck: PASS
+- npm test: PASS, 49 files passed, 1 skipped; 494 tests passed, 1 skipped
+- git diff --check: PASS
+
+Explicit non-goals:
+- W0023 was not implemented.
+- W0024 was not implemented.
+- No Telegram product feature was implemented in this infrastructure round.
