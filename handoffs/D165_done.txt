@@ -1,0 +1,35 @@
+D165 done
+
+Round: D165
+
+Commits:
+- 85ff9c9 D165-1: gate candidate preview artifact protocol
+
+Summary:
+- Added a versioned `candidatePreviewArtifactLifecycle: 1` capability to the relay Status/automation response/runtime build metadata path.
+- Blocked candidate-preview artifact claims when the active relay capability is absent, preserving the queued artifact item and returning `CAPABILITY_BLOCKED` instead of treating it as ordinary work.
+- Propagated capability metadata into packaged/promoted runtime BUILD_INFO files without granting it to old promoted builds that lack source capability metadata.
+- Updated the live external dashboard at `C:\Users\huizh\Apps\Tandem Reciprocal\dashboard` to gate `/api/wishlist/artifact` and the "Build latest for review" button on the producer relay plus both pinned runtimes.
+
+External dashboard files updated outside this repo:
+- `C:\Users\huizh\Apps\Tandem Reciprocal\dashboard\lib.mjs`
+- `C:\Users\huizh\Apps\Tandem Reciprocal\dashboard\lib.nodecheck.mjs`
+- `C:\Users\huizh\Apps\Tandem Reciprocal\dashboard\server.mjs`
+- `C:\Users\huizh\Apps\Tandem Reciprocal\dashboard\public\index.html`
+- `C:\Users\huizh\Apps\Tandem Reciprocal\dashboard\public\app.js`
+
+Verification:
+- `node --check C:\Users\huizh\Apps\Tandem Reciprocal\dashboard\server.mjs`
+- `node --check C:\Users\huizh\Apps\Tandem Reciprocal\dashboard\lib.mjs`
+- `node --check C:\Users\huizh\Apps\Tandem Reciprocal\dashboard\public\app.js`
+- `node --test C:\Users\huizh\Apps\Tandem Reciprocal\dashboard\lib.nodecheck.mjs` (7 passed)
+- `npm test -- tests/reciprocal-relay.test.ts tests/automation-server.test.ts` (17 passed)
+- `npm run typecheck`
+- `npm test` (49 passed, 1 skipped; 491 passed, 1 skipped)
+- `git diff --check`
+- Temporary dashboard endpoint proof: unsupported producer/runtime topology returned HTTP 400 with "Artifact build workflow requires Reciprocal executor upgrade", did not write a wishlist item, and did not emit `wishlist.artifactCreate`.
+- Read-only current runtime capability decision: incompatible; producer v0, Executor A runtime v0, Executor B runtime v0, required v1.
+
+Notes:
+- Did not implement W0021/W0016 and did not promote or integrate any runtime.
+- Left unrelated dirty tracked files (`scripts/reciprocal-direction.ps1`, `scripts/setup-reciprocal-tandem.ps1`) and untracked handoff/docs untouched.
