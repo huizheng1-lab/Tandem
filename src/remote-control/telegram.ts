@@ -1,3 +1,5 @@
+import { mkdir, readFile, writeFile } from "node:fs/promises";
+import path from "node:path";
 import type { RemoteInboundMessage, RemoteSendOptions, RemoteSentMessage, RemoteTransport } from "./bridge.js";
 
 interface TelegramUpdate {
@@ -31,11 +33,39 @@ interface TelegramSendMessageResponse {
   result?: { message_id?: number };
 }
 
+export interface TelegramOffsetStore {
+  read(): Promise<number>;
+  write(offset: number): Promise<void>;
+}
+
+export class FileTelegramOffsetStore implements TelegramOffsetStore {
+  constructor(private readonly filePath: string) {}
+
+  async read(): Promise<number> {
+    try {
+      const parsed = JSON.parse(await readFile(this.filePath, "utf8")) as { offset?: unknown } | number;
+      return normalizeOffset(typeof parsed === "number" ? parsed : parsed.offset);
+    } catch {
+      return 0;
+    }
+  }
+
+  async write(offset: number): Promise<void> {
+    await mkdir(path.dirname(this.filePath), { recursive: true });
+    await writeFile(this.filePath, `${JSON.stringify({ offset: normalizeOffset(offset) })}\n`, "utf8");
+  }
+}
+
 export class TelegramLongPollingTransport implements RemoteTransport {
   private stopped = true;
   private offset = 0;
+  private loadedOffset = false;
 
-  constructor(private readonly token: string, private readonly fetchImpl: typeof fetch = fetch) {}
+  constructor(
+    private readonly token: string,
+    private readonly fetchImpl: typeof fetch = fetch,
+    private readonly offsetStore?: TelegramOffsetStore
+  ) {}
 
   start(onMessage: (message: RemoteInboundMessage) => void | Promise<void>, onError?: (error: unknown) => void | Promise<void>): void {
     this.stopped = false;
@@ -53,7 +83,7 @@ export class TelegramLongPollingTransport implements RemoteTransport {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ chat_id: chatId, text, reply_markup: replyMarkup })
     });
-    if (!response.ok) throw new Error(`Telegram sendMessage failed: HTTP ${response.status}`);
+    if (!response.ok) throw await telegramHttpError(response, "sendMessage");
     const payload = await response.json() as TelegramSendMessageResponse;
     return { messageId: payload.result?.message_id };
   }
@@ -64,7 +94,7 @@ export class TelegramLongPollingTransport implements RemoteTransport {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ chat_id: chatId, message_id: messageId, text, reply_markup: this.replyMarkup(options) })
     });
-    if (!response.ok) throw new Error(`Telegram editMessageText failed: HTTP ${response.status}`);
+    if (!response.ok) throw await telegramHttpError(response, "editMessageText");
   }
 
   async answerCallback(callbackId: string, text?: string): Promise<void> {
@@ -73,14 +103,15 @@ export class TelegramLongPollingTransport implements RemoteTransport {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ callback_query_id: callbackId, text })
     });
-    if (!response.ok) throw new Error(`Telegram answerCallbackQuery failed: HTTP ${response.status}`);
+    if (!response.ok) throw await telegramHttpError(response, "answerCallbackQuery");
   }
 
   private async loop(onMessage: (message: RemoteInboundMessage) => void | Promise<void>, onError?: (error: unknown) => void | Promise<void>): Promise<void> {
+    await this.loadOffset(onError);
     while (!this.stopped) {
       try {
         const response = await this.fetchImpl(this.url("getUpdates", `timeout=25&offset=${this.offset}`));
-        if (!response.ok) throw new Error(`Telegram getUpdates failed: HTTP ${response.status}`);
+        if (!response.ok) throw await telegramHttpError(response, "getUpdates");
         const payload = await response.json() as TelegramUpdatesResponse;
         if (!payload.ok) throw new Error(payload.description ?? "Telegram getUpdates failed");
         for (const update of payload.result ?? []) {
@@ -102,12 +133,16 @@ export class TelegramLongPollingTransport implements RemoteTransport {
                 callbackData: data
               });
             }
+            await this.persistOffset(onError);
             continue;
           }
           const senderId = update.message?.from?.id;
           const chatId = update.message?.chat?.id;
           const text = update.message?.text;
-          if (typeof senderId !== "number" || typeof chatId !== "number" || typeof text !== "string") continue;
+          if (typeof senderId !== "number" || typeof chatId !== "number" || typeof text !== "string") {
+            await this.persistOffset(onError);
+            continue;
+          }
           await onMessage({
             updateId: update.update_id,
             senderId,
@@ -117,11 +152,31 @@ export class TelegramLongPollingTransport implements RemoteTransport {
             messageId: update.message?.message_id,
             replyToMessageId: update.message?.reply_to_message?.message_id
           });
+          await this.persistOffset(onError);
         }
       } catch (error) {
         await onError?.(error);
         await new Promise((resolve) => setTimeout(resolve, 5000));
       }
+    }
+  }
+
+  private async loadOffset(onError?: (error: unknown) => void | Promise<void>): Promise<void> {
+    if (this.loadedOffset || !this.offsetStore) return;
+    this.loadedOffset = true;
+    try {
+      this.offset = Math.max(this.offset, normalizeOffset(await this.offsetStore.read()));
+    } catch (error) {
+      await onError?.(error);
+    }
+  }
+
+  private async persistOffset(onError?: (error: unknown) => void | Promise<void>): Promise<void> {
+    if (!this.offsetStore) return;
+    try {
+      await this.offsetStore.write(this.offset);
+    } catch (error) {
+      await onError?.(error);
     }
   }
 
@@ -138,4 +193,19 @@ export class TelegramLongPollingTransport implements RemoteTransport {
     }
     return undefined;
   }
+}
+
+function normalizeOffset(value: unknown): number {
+  return typeof value === "number" && Number.isSafeInteger(value) && value > 0 ? value : 0;
+}
+
+async function telegramHttpError(response: Response, method: string): Promise<Error> {
+  let description = "";
+  try {
+    const payload = await response.json() as { description?: unknown };
+    description = typeof payload.description === "string" ? payload.description.trim() : "";
+  } catch {
+    description = "";
+  }
+  return new Error(`Telegram ${method} failed: HTTP ${response.status}${description ? `: ${description}` : ""}`);
 }

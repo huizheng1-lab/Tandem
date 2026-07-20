@@ -8,7 +8,7 @@ import {
   type SessionPromptSubmission
 } from "./prompt-submission.js";
 
-export type RemoteCommandVerb = "pair" | "status" | "sessions" | "use" | "pause" | "resume" | "stop" | "confirm-stop" | "revoke" | "unknown";
+export type RemoteCommandVerb = "pair" | "status" | "sessions" | "use" | "prompt" | "cancel" | "pause" | "resume" | "stop" | "confirm-stop" | "revoke" | "unknown";
 
 export interface RemoteCommand {
   verb: RemoteCommandVerb;
@@ -148,6 +148,8 @@ export function parseRemoteCommand(text: string): RemoteCommand {
   const args = (match[2] ?? "").trim();
   if (verb === "pair") return /^\d{8}$/.test(args) ? { verb, args } : { verb: "unknown", args };
   if (verb === "use") return /^[A-Za-z0-9-]{1,64}$/.test(args) ? { verb, args } : { verb: "unknown", args };
+  if (verb === "prompt") return { verb, args };
+  if (verb === "cancel" && !args) return { verb, args };
   if ((verb === "status" || verb === "sessions" || verb === "pause" || verb === "resume" || verb === "stop" || verb === "revoke") && !args) return { verb, args };
   return { verb: "unknown", args };
 }
@@ -260,11 +262,19 @@ export class RemoteBridge {
       return;
     }
     if (command.verb === "sessions") {
-      await this.send(message.chatId, formatSessions(await this.deps.sessionsProvider()), "sessions");
+      await this.handleSessions(message);
       return;
     }
     if (command.verb === "use") {
       await this.handleUse(message, command.args);
+      return;
+    }
+    if (command.verb === "prompt") {
+      await this.handlePrompt(message, command.args);
+      return;
+    }
+    if (command.verb === "cancel") {
+      await this.handleCancel(message);
       return;
     }
     if (command.verb === "pause") {
@@ -295,13 +305,8 @@ export class RemoteBridge {
       return;
     }
 
-    if (/^\/cancel\s*$/i.test(message.text)) {
-      await this.handleCancel(message);
-      return;
-    }
-    const promptText = parsePromptText(message.text);
-    if (promptText !== undefined || message.replyToMessageId !== undefined) {
-      await this.handlePrompt(message, promptText ?? message.text);
+    if (message.replyToMessageId !== undefined || this.selectedSessionsByChat.has(message.chatId)) {
+      await this.handlePrompt(message, message.text);
       return;
     }
 
@@ -330,6 +335,12 @@ export class RemoteBridge {
       telegram: transport,
       subscribe,
       now: this.deps.now,
+      onEdited: (edited) => {
+        void this.audit("stream-edit", { chatId, messageId, sessionId: edited.sessionId });
+      },
+      onError: (failed, error) => {
+        void this.audit("stream-edit-error", { chatId, messageId, sessionId: failed.sessionId, message: errorMessage(error) });
+      },
       onStopped: (stopped) => {
         if (this.sessionStreamsByMessage.get(messageKey) === stopped) this.sessionStreamsByMessage.delete(messageKey);
         if (this.sessionStreamsBySession.get(sessionId) === stopped) this.sessionStreamsBySession.delete(sessionId);
@@ -498,6 +509,20 @@ export class RemoteBridge {
     await this.send(chatId, result.message, auditEvent);
   }
 
+  private async handleSessions(message: RemoteInboundMessage): Promise<void> {
+    const sessions = await this.deps.sessionsProvider();
+    const currentId = this.deps.statusProvider().sessionId;
+    const selected = sessions.find((session) => session.id === currentId) ?? (sessions.length === 1 ? sessions[0] : undefined);
+    if (selected) this.selectedSessionsByChat.set(message.chatId, selected.id);
+    const intro = selected
+      ? `Selected ${selected.id.slice(0, 8)} (${selected.title || "Untitled session"}). Send any message to prompt it.`
+      : "Tap a session button to select it; you do not need to type the session ID.";
+    await this.send(message.chatId, `${intro}\n\n${formatSessions(sessions)}`, "sessions", {
+      keyboard: sessionSelectionKeyboard(sessions),
+      oneTimeKeyboard: true
+    });
+  }
+
   private async handleUse(message: RemoteInboundMessage, prefix: string): Promise<void> {
     const sessions = await this.deps.sessionsProvider();
     const matches = sessions.filter((session) => session.id.toLowerCase().startsWith(prefix.toLowerCase()));
@@ -518,7 +543,7 @@ export class RemoteBridge {
     const result = await this.deps.actions.useSession(target.id);
     if (result.ok) this.selectedSessionsByChat.set(message.chatId, target.id);
     await this.audit("use", { outcome: result.ok ? "ok" : "rejected", sessionId: target.id });
-    await this.send(message.chatId, result.message, "use");
+    await this.send(message.chatId, result.ok ? `${result.message} Send any message to prompt it.` : result.message, "use");
   }
 
   private async handlePrompt(message: RemoteInboundMessage, text: string): Promise<void> {
@@ -535,19 +560,20 @@ export class RemoteBridge {
       return;
     }
 
-    const result = await submitRemotePrompt({ chatId: message.chatId, sessionId, text }, this.deps.submitPrompt);
-    await this.audit("prompt", { sessionId, outcome: result.status, argsHash: hashArgs(text) });
-    const stream = repliedStream ?? this.sessionStreamsBySession.get(sessionId);
-    if (result.status === "submitted") {
-      if (stream) {
-        await stream.resetForSubmission();
-        return;
-      }
+    let stream = repliedStream ?? this.sessionStreamsBySession.get(sessionId);
+    if (stream) {
+      await stream.resetForSubmission();
+    } else {
       const sent = await this.transport?.sendMessage(message.chatId, "user / submitting / 0s\nhealthy\nSubmitting prompt...");
       await this.audit("outbound", { chatId: message.chatId, kind: "prompt-submitted" });
       if (sent?.messageId !== undefined && this.startSessionStream(message.chatId, sent.messageId, sessionId)) {
-        await this.sessionStreamsByMessage.get(this.streamMessageKey(message.chatId, sent.messageId))?.resetForSubmission();
+        stream = this.sessionStreamsByMessage.get(this.streamMessageKey(message.chatId, sent.messageId));
       }
+    }
+
+    const result = await submitRemotePrompt({ chatId: message.chatId, sessionId, text }, this.deps.submitPrompt);
+    await this.audit("prompt", { sessionId, outcome: result.status, argsHash: hashArgs(text) });
+    if (result.status === "submitted") {
       return;
     }
 
@@ -647,13 +673,17 @@ export class RemoteBridge {
   }
 }
 
-function parsePromptText(text: string): string | undefined {
-  const match = /^\/prompt(?:\s+([\s\S]*))?\s*$/i.exec(text.trim());
-  return match ? (match[1] ?? "") : undefined;
+function noActiveSessionMessage(): string {
+  return "No active session. Send /sessions, then tap a session button.";
 }
 
-function noActiveSessionMessage(): string {
-  return "No active session. Use /sessions, then /use <id>.";
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+function sessionSelectionKeyboard(sessions: RemoteSessionSummary[]): string[][] | undefined {
+  const buttons = sessions.slice(0, 8).map((session) => `/use ${session.id.slice(0, 8)}`);
+  return buttons.length > 0 ? buttons.map((button) => [button]) : undefined;
 }
 
 export function formatStatus(status: RemoteStatusSnapshot): string {
@@ -669,9 +699,9 @@ export function formatStatus(status: RemoteStatusSnapshot): string {
 
 export function formatSessions(sessions: RemoteSessionSummary[]): string {
   if (sessions.length === 0) return "No saved sessions.";
-  return sessions.slice(0, 8).map((session) => {
+  return sessions.slice(0, 8).map((session, index) => {
     const project = session.projectDir ? path.basename(session.projectDir) || session.projectDir : "unknown project";
-    return `${session.id.slice(0, 8)} - ${session.title || "Untitled session"} - ${project}`;
+    return `${index + 1}. ${session.title || "Untitled session"} - ${project} (${session.id.slice(0, 8)})`;
   }).join("\n");
 }
 

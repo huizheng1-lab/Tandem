@@ -5,21 +5,22 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   RemoteBridge,
   type RemoteInboundMessage,
+  type RemoteSendOptions,
   type RemoteTransport
 } from "../src/remote-control/bridge.js";
 import type { SessionPromptSubmissionResult } from "../src/remote-control/prompt-submission.js";
 import type { StreamingSessionEvent } from "../src/remote-control/streaming-session.js";
-import { TelegramLongPollingTransport } from "../src/remote-control/telegram.js";
+import { TelegramLongPollingTransport, type TelegramOffsetStore } from "../src/remote-control/telegram.js";
 
 class PromptTransport implements RemoteTransport {
   nextMessageId = 100;
-  sent: Array<{ chatId: number; messageId: number; text: string }> = [];
+  sent: Array<{ chatId: number; messageId: number; text: string; options?: RemoteSendOptions }> = [];
   edited: Array<{ chatId: number; messageId: number; text: string }> = [];
   start(): void {}
   stop(): void {}
-  async sendMessage(chatId: number, text: string): Promise<{ messageId: number }> {
+  async sendMessage(chatId: number, text: string, options?: RemoteSendOptions): Promise<{ messageId: number }> {
     const messageId = this.nextMessageId++;
-    this.sent.push({ chatId, messageId, text });
+    this.sent.push({ chatId, messageId, text, options });
     return { messageId };
   }
   async editMessage(chatId: number, messageId: number, text: string): Promise<void> {
@@ -30,6 +31,38 @@ class PromptTransport implements RemoteTransport {
 afterEach(() => vi.useRealTimers());
 
 describe("RemoteBridge prompt routing", () => {
+  it("subscribes before submission so synchronous leader output reaches Telegram", async () => {
+    const transport = new PromptTransport();
+    let receive: ((event: StreamingSessionEvent) => void) | undefined;
+    const bridge = await createBridge(transport, async () => {
+      receive?.({ role: "leader", phase: "answering", lastEventKind: "text", text: "Visible answer", ended: true });
+      return { status: "submitted" };
+    }, (_sessionId, onEvent) => {
+      receive = onEvent;
+      return () => {};
+    });
+
+    await bridge.handleMessage(message("/use session"));
+    await bridge.handleMessage(message("/prompt explain this"));
+
+    expect(transport.edited.at(-1)?.text).toContain("leader: Visible answer");
+  });
+
+  it("selects the only current session with tap-to-use controls so plain messages work", async () => {
+    const transport = new PromptTransport();
+    const submissions: string[] = [];
+    const bridge = await createBridge(transport, async (prompt) => {
+      submissions.push(prompt.text);
+      return { status: "submitted" };
+    });
+
+    await bridge.handleMessage(message("/sessions"));
+    expect(transport.sent.at(-1)?.text).toContain("Send any message to prompt it.");
+    expect(transport.sent.at(-1)?.options?.keyboard).toEqual([["/use session-"]]);
+    await bridge.handleMessage(message("plain prompt without /prompt"));
+    expect(submissions).toEqual(["plain prompt without /prompt"]);
+  });
+
   it("routes /prompt and live-message replies to the /use session, reuses one stream, and cancels with a summary", async () => {
     vi.useFakeTimers();
     const transport = new PromptTransport();
@@ -128,7 +161,47 @@ describe("Telegram prompt reply metadata", () => {
     });
     expect(fetchImpl).toHaveBeenCalledOnce();
   });
+
+  it("includes Telegram error descriptions when message edits fail", async () => {
+    const fetchImpl = vi.fn(async () => new Response(JSON.stringify({
+      ok: false,
+      description: "Bad Request: message is not modified"
+    }), { status: 400, headers: { "Content-Type": "application/json" } }));
+    const transport = new TelegramLongPollingTransport("token", fetchImpl as typeof fetch);
+
+    await expect(transport.editMessage(77, 55, "unchanged")).rejects.toThrow("Bad Request: message is not modified");
+  });
+
+  it("loads and persists the polling offset around processed updates", async () => {
+    const offsetStore = new MemoryOffsetStore(40);
+    const fetchImpl = vi.fn(async (input) => {
+      expect(new URL(String(input)).searchParams.get("offset")).toBe("40");
+      return new Response(JSON.stringify({
+        ok: true,
+        result: [{ update_id: 41, message: { message_id: 1, chat: { id: 77 }, from: { id: 42 }, text: "/status" } }]
+      }), { status: 200, headers: { "Content-Type": "application/json" } });
+    });
+    const transport = new TelegramLongPollingTransport("token", fetchImpl as typeof fetch, offsetStore);
+    await new Promise<void>((resolve, reject) => {
+      transport.start(() => {
+        transport.stop();
+        setTimeout(resolve, 0);
+      }, reject);
+    });
+
+    expect(offsetStore.writes).toEqual([42]);
+  });
 });
+
+class MemoryOffsetStore implements TelegramOffsetStore {
+  writes: number[] = [];
+  constructor(private value: number) {}
+  async read(): Promise<number> { return this.value; }
+  async write(offset: number): Promise<void> {
+    this.value = offset;
+    this.writes.push(offset);
+  }
+}
 
 function message(text: string, replyToMessageId?: number): RemoteInboundMessage {
   return { updateId: Math.floor(Math.random() * 100_000), senderId: 42, chatId: 77, text, replyToMessageId };

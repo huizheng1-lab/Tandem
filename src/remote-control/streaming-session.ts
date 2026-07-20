@@ -47,6 +47,7 @@ export class StreamingSessionGateway {
   private readonly maxRecentLines: number;
   private readonly startedAt: number;
   private readonly recentText: string[] = [];
+  private lastTextRole?: string;
   private timer?: ReturnType<typeof setTimeout>;
   private unsubscribe?: () => void;
   private started = false;
@@ -94,7 +95,14 @@ export class StreamingSessionGateway {
     if (event.health !== undefined) this.health = event.health;
     if (event.lastEventKind !== undefined) this.lastEventKind = event.lastEventKind;
     if (event.text) {
-      this.recentText.push(...event.text.split(/\r?\n/));
+      const textRole = event.role ? `${event.role}${event.lastEventKind === "thinking" ? " thinking" : ""}` : "system";
+      const canCoalesce = textRole !== "system" && this.lastTextRole === textRole && this.recentText.length > 0;
+      if (canCoalesce) {
+        this.recentText[this.recentText.length - 1] += event.text;
+      } else {
+        this.recentText.push(`${textRole}: ${event.text}`);
+      }
+      this.lastTextRole = textRole;
       if (this.recentText.length > this.maxRecentLines) {
         this.recentText.splice(0, this.recentText.length - this.maxRecentLines);
       }
@@ -158,8 +166,8 @@ export function formatStreamingSnapshot(snapshot: StreamingSnapshot, maxChars = 
   const health = snapshot.health === "healthy"
     ? "healthy"
     : snapshot.health === "quiet"
-      ? `quiet ${Math.floor(snapshot.elapsedMs / 1_000)}s — last event: ${snapshot.lastEventKind}`
-      : `likely stalled — last event: ${snapshot.lastEventKind}`;
+      ? `quiet ${Math.floor(snapshot.elapsedMs / 1_000)}s - last event: ${snapshot.lastEventKind}`
+      : `likely stalled - last event: ${snapshot.lastEventKind}`;
   const lines = [header, health, ...snapshot.recentText];
   let result = lines.join("\n");
   if (result.length <= maxChars) return result;

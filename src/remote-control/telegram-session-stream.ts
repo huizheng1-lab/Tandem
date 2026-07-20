@@ -12,6 +12,8 @@ export interface TelegramSessionStreamOptions {
   sessionId: string;
   telegram: Pick<RemoteTransport, "editMessage">;
   subscribe: SessionEventSubscription;
+  onEdited?: (stream: TelegramSessionStream) => void;
+  onError?: (stream: TelegramSessionStream, error: unknown) => void;
   onStopped?: (stream: TelegramSessionStream) => void;
   now?: () => number;
   throttleMs?: number;
@@ -25,6 +27,7 @@ export class TelegramSessionStream {
   private pendingText?: string;
   private appliedVersion = 0;
   private lastSnapshot?: StreamingSnapshot;
+  private finishing = false;
 
   constructor(private readonly options: TelegramSessionStreamOptions) {
     this.gateway = new StreamingSessionGateway({
@@ -33,7 +36,7 @@ export class TelegramSessionStream {
       now: options.now,
       throttleMs: options.throttleMs,
       onSnapshot: (snapshot) => this.enqueue(snapshot),
-      onEnd: () => this.stop()
+      onEnd: () => this.finishAfterDrain()
     });
   }
 
@@ -45,6 +48,7 @@ export class TelegramSessionStream {
   stop(): void {
     if (this.stopped) return;
     this.stopped = true;
+    this.finishing = false;
     this.pending = undefined;
     this.pendingText = undefined;
     this.gateway.stop();
@@ -92,6 +96,12 @@ export class TelegramSessionStream {
     void this.drain();
   }
 
+  private finishAfterDrain(): void {
+    if (this.stopped) return;
+    this.finishing = true;
+    void this.drain();
+  }
+
   private async drain(): Promise<void> {
     if (this.editing || this.stopped) return;
     this.editing = true;
@@ -104,6 +114,7 @@ export class TelegramSessionStream {
         if (snapshot && snapshot.version <= this.appliedVersion) continue;
         const edit = this.options.telegram.editMessage;
         if (!edit) {
+          this.options.onError?.(this, new Error("Telegram transport does not support message edits."));
           this.stop();
           return;
         }
@@ -115,13 +126,16 @@ export class TelegramSessionStream {
             text ?? formatStreamingSnapshot(snapshot as StreamingSnapshot)
           );
           if (snapshot) this.appliedVersion = snapshot.version;
-        } catch {
+          this.options.onEdited?.(this);
+        } catch (error) {
+          this.options.onError?.(this, error);
           this.stop();
           return;
         }
       }
     } finally {
       this.editing = false;
+      if (this.finishing && !this.stopped && this.pendingText === undefined && !this.pending) this.stop();
     }
   }
 }

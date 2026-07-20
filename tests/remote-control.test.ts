@@ -72,6 +72,8 @@ describe("remote control command parser", () => {
     expect(parseRemoteCommand("/status")).toEqual({ verb: "status", args: "" });
     expect(parseRemoteCommand("/sessions")).toEqual({ verb: "sessions", args: "" });
     expect(parseRemoteCommand("/use abc123")).toEqual({ verb: "use", args: "abc123" });
+    expect(parseRemoteCommand("/prompt build something")).toEqual({ verb: "prompt", args: "build something" });
+    expect(parseRemoteCommand("/cancel")).toEqual({ verb: "cancel", args: "" });
     expect(parseRemoteCommand("/pause")).toEqual({ verb: "pause", args: "" });
     expect(parseRemoteCommand("/resume")).toEqual({ verb: "resume", args: "" });
     expect(parseRemoteCommand("/stop")).toEqual({ verb: "stop", args: "" });
@@ -80,7 +82,7 @@ describe("remote control command parser", () => {
     expect(parseRemoteMessage("Confirm STOP 123456")).toEqual({ verb: "confirm-stop", args: "123456" });
     expect(parseRemoteCommand("/status now").verb).toBe("unknown");
     expect(parseRemoteCommand("/pair abc").verb).toBe("unknown");
-    expect(parseRemoteCommand("/prompt build something").verb).toBe("unknown");
+    expect(parseRemoteCommand("/cancel now").verb).toBe("unknown");
     expect(parseRemoteCommand("hello").verb).toBe("unknown");
   });
 });
@@ -173,7 +175,8 @@ describe("RemoteBridge", () => {
     await bridge.handleMessage(message(101, "/status"));
     expect(transport.sent.at(-1)?.text).toContain("Session: session-1");
     await bridge.handleMessage(message(101, "/sessions"));
-    expect(transport.sent.at(-1)?.text).toContain("abcdef12 - Build feature - repo");
+    expect(transport.sent.at(-1)?.text).toContain("1. Build feature - repo (abcdef12)");
+    expect(transport.sent.at(-1)?.options?.keyboard).toEqual([["/use abcdef12"]]);
 
     const sentBeforeReject = transport.sent.length;
     await bridge.handleMessage(message(202, "/status"));
@@ -292,7 +295,7 @@ describe("RemoteBridge", () => {
     expect(used).toEqual([]);
 
     await bridge.handleMessage(message(101, "/use abcdef12"));
-    expect(transport.sent.at(-1)?.text).toBe("Using abcdef12");
+    expect(transport.sent.at(-1)?.text).toBe("Using abcdef12 Send any message to prompt it.");
     expect(used).toEqual(["abcdef123456"]);
   });
 
@@ -431,7 +434,7 @@ describe("RemoteBridge", () => {
 
   it("formats compact status and session summaries", () => {
     expect(formatStatus(statusFixture())).toContain("Run health: unknown");
-    expect(formatSessions([{ id: "1234567890", title: "", projectDir: undefined }])).toBe("12345678 - Untitled session - unknown project");
+    expect(formatSessions([{ id: "1234567890", title: "", projectDir: undefined }])).toBe("1. Untitled session - unknown project (12345678)");
   });
 });
 

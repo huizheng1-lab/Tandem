@@ -33,7 +33,10 @@ function Invoke-Git {
     $oldErrorAction = $ErrorActionPreference
     try {
         $ErrorActionPreference = "Continue"
-        $output = @(& git -C $Workspace @Arguments 2>&1)
+        # An unreadable per-user excludes file can emit warnings on successful Git commands.
+        # Relay cleanliness must be based only on porcelain output, so disable the optional
+        # global excludes file while retaining repository .gitignore handling.
+        $output = @(& git -c core.excludesFile= -C $Workspace @Arguments 2>&1)
         $exitCode = $LASTEXITCODE
     } finally {
         $ErrorActionPreference = $oldErrorAction
@@ -49,7 +52,7 @@ function Test-Git {
     $oldErrorAction = $ErrorActionPreference
     try {
         $ErrorActionPreference = "Continue"
-        & git -C $Workspace @Arguments *> $null
+        & git -c core.excludesFile= -C $Workspace @Arguments *> $null
         return $LASTEXITCODE -eq 0
     } finally {
         $ErrorActionPreference = $oldErrorAction

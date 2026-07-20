@@ -27,7 +27,7 @@ describe("TelegramSessionStream", () => {
   it("throttles a three-second burst of twenty events to at most two edits", async () => {
     vi.useFakeTimers();
     const source = subscription();
-    const editMessage = vi.fn(async () => {});
+    const editMessage = vi.fn(async (_chatId: number, _messageId: number, _text: string) => {});
     const stream = new TelegramSessionStream({
       chatId: 10,
       messageId: 20,
@@ -59,37 +59,48 @@ describe("TelegramSessionStream", () => {
     expect(source.unsubscribe).toHaveBeenCalledOnce();
   });
 
-  it("stops cleanly on session end and transport failure", async () => {
+  it("edits the terminal response before stopping on session end", async () => {
     vi.useFakeTimers();
     const ended = subscription();
     const endedStop = vi.fn();
+    const editMessage = vi.fn(async (_chatId: number, _messageId: number, _text: string) => {});
     const endedStream = new TelegramSessionStream({
       chatId: 10,
       messageId: 20,
       sessionId: "ended",
-      telegram: { editMessage: vi.fn(async () => {}) },
+      telegram: { editMessage },
       subscribe: ended.subscribe,
       onStopped: endedStop
     });
     endedStream.start();
-    ended.emit({ ended: true, phase: "completed" });
+    ended.emit({ role: "leader", ended: true, phase: "completed", lastEventKind: "done", text: "Final answer" });
+    await Promise.resolve();
+    expect(editMessage).toHaveBeenCalledOnce();
+    expect(editMessage.mock.calls[0]?.[2]).toContain("leader: Final answer");
     expect(endedStop).toHaveBeenCalledOnce();
     expect(ended.unsubscribe).toHaveBeenCalledOnce();
+  });
 
+  it("stops cleanly and reports transport failure", async () => {
+    vi.useFakeTimers();
     const failed = subscription();
     const failedStop = vi.fn();
+    const failedError = vi.fn();
+    const error = new Error("transport unavailable");
     const failedStream = new TelegramSessionStream({
       chatId: 10,
       messageId: 21,
       sessionId: "failed",
-      telegram: { editMessage: vi.fn(async () => { throw new Error("transport unavailable"); }) },
+      telegram: { editMessage: vi.fn(async () => { throw error; }) },
       subscribe: failed.subscribe,
+      onError: failedError,
       onStopped: failedStop
     });
     failedStream.start();
     failed.emit({ text: "update" });
     await vi.advanceTimersByTimeAsync(1_500);
     await Promise.resolve();
+    expect(failedError).toHaveBeenCalledWith(failedStream, error);
     expect(failedStop).toHaveBeenCalledOnce();
     expect(failed.unsubscribe).toHaveBeenCalledOnce();
   });
