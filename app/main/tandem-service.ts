@@ -275,6 +275,7 @@ export class TandemService {
         confirmCodexWrite: (_role, message) => this.requestPermission({ action: "bash", target: message })
       });
       const goals = formatStandingGoals((await listGoals(this.projectDir)).filter((goal) => goal.status === "active"));
+      let directLeaderAnswer = false;
       const result = await (this.deps.runOrchestration ?? runOrchestration)({
         request: promptWithAttachments,
         config: this.config,
@@ -293,8 +294,23 @@ export class TandemService {
         initialState,
         confirmPlan: (plan) => this.confirmPlan(plan),
         waitIfPaused: () => this.waitIfPaused(),
-        emit: (event) => void this.emitMachine(event)
+        emit: (event) => {
+          if (event.type === "transition" && event.message === "leader answered without build plan") {
+            directLeaderAnswer = true;
+          }
+          void this.emitMachine(event);
+        }
       });
+      if (directLeaderAnswer) {
+        this.emitRemoteSessionEvent({
+          role: "leader",
+          phase: "completed",
+          health: "healthy",
+          lastEventKind: "answer",
+          text: result.summary,
+          ended: true
+        });
+      }
       const done = { summary: result.summary, takeover: result.takeover };
       this.window.webContents.send(ipcChannels.doneEvent, done);
       await session.append("done", done);
@@ -695,8 +711,7 @@ export class TandemService {
       phase: this.currentPhase.toLowerCase(),
       health: event.type === "error" ? "likely stalled" : "healthy",
       lastEventKind: event.type,
-      text: event.type === "notice" || event.type === "error" || event.type === "transition" ? event.message : undefined,
-      ended: event.type === "checkpoint" && event.checkpoint.phase === "DONE"
+      text: event.type === "notice" || event.type === "error" || event.type === "transition" ? event.message : undefined
     });
     const totals = this.costTotals();
     this.window.webContents.send(ipcChannels.costEvent, this.costEventTotals(totals));

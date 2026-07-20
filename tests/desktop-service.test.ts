@@ -999,7 +999,7 @@ describe("TandemService", () => {
     expect(remoteEdited.at(-1)).toMatch(/Resolved from Telegram: approved/i);
   });
 
-  it("streams Telegram prompts and leader responses through the real service run path", async () => {
+  it("sends a direct leader answer from the real orchestration path to Telegram", async () => {
     const cwd = await tempDir();
     const home = await tempDir();
     await mkdir(path.join(home, ".tandem"), { recursive: true });
@@ -1020,38 +1020,30 @@ describe("TandemService", () => {
       editMessage: async (_chatId, _messageId, text) => { remoteEdited.push(text); },
       answerCallback: async () => undefined
     };
-    const requests: string[] = [];
-    let emitLeader: ((text: string) => void) | undefined;
     const service = new TandemService(window as never, {
       registerIpcResponses: false,
       homeDir: home,
       baseEnv: {},
       remoteTransportFactory: () => transport,
-      createAgents: async (options): Promise<AgentFns> => {
-        emitLeader = options.onLeaderText;
-        return fakeAgents();
-      },
-      runOrchestration: async (options: RunOptions): Promise<RunResult> => {
-        requests.push(options.request);
-        emitLeader?.("Visible leader response");
-        options.emit?.({ type: "notice", message: `remote saw ${options.request}` });
-        return { phase: "DONE", summary: "remote done", plan, reports: [], verdicts: [], takeover: false };
-      }
+      createAgents: async (): Promise<AgentFns> => ({
+        ...fakeAgents(),
+        plan: async ({ request }) => {
+          expect(request).toBe("Hi");
+          return { kind: "answer", answer: "Hi! How can I help?" };
+        }
+      })
     });
 
     const started = await service.startSession({ projectDir: cwd });
     await onRemoteMessage?.({ updateId: 1, senderId: 101, chatId: 101, text: "/sessions" });
-    await onRemoteMessage?.({ updateId: 2, senderId: 101, chatId: 101, text: "plain remote prompt" });
+    await onRemoteMessage?.({ updateId: 2, senderId: 101, chatId: 101, text: "Hi" });
 
     const deadline = Date.now() + 2_000;
-    while (requests.length === 0 && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 10));
     expect(started.sessionId).toBeTruthy();
-    expect(requests).toEqual(["plain remote prompt"]);
     while (!sent.some((event) => event.channel === ipcChannels.doneEvent) && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 10));
-    await new Promise((resolve) => setTimeout(resolve, 1_600));
 
     expect(remoteSent.some((message) => message.text.includes("Submitting prompt"))).toBe(true);
-    expect(remoteEdited.some((text) => text.includes("leader: Visible leader response"))).toBe(true);
+    expect(remoteEdited.at(-1)).toContain("leader: Hi! How can I help?");
   });
 
   it("auto-approves build plans when session auto-approve-all is active", async () => {
