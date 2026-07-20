@@ -1,0 +1,37 @@
+Round: D159
+
+Commits:
+- 10c40b488cde993c45b4644fbbade191928b5206 D159-1: persist Telegram polling offset
+
+What changed:
+- Added TelegramOffsetStore and FileTelegramOffsetStore in src/remote-control/telegram.ts.
+- TelegramLongPollingTransport now optionally reads a persisted offset before the first getUpdates request.
+- After each successfully inspected update, the transport writes the advanced offset to the store. That includes callback updates, normal message updates, and malformed/non-text updates that still advanced update_id.
+- Read failures, missing files, or corrupted files fail safe to offset 0, causing at most a one-time backlog replay instead of silently skipping future messages.
+- Write failures are reported through the existing transport error callback but do not crash polling.
+
+Offset file location:
+- The real desktop service writes the offset beside the existing remote-control audit log in the Tandem state directory.
+- File path: path.join(tandemStateDir(homeDir), "remote-control-telegram-offset.json")
+- In the default user profile this resolves alongside remote-control-audit.jsonl, e.g. C:\Users\huizh\.tandem\remote-control-telegram-offset.json or the configured app state equivalent for the service homeDir.
+- File contents are a tiny JSON object: {"offset": <next getUpdates offset>}.
+
+Regression proof:
+- tests/remote-control-bridge-prompt.test.ts now constructs a TelegramLongPollingTransport with a memory offset store.
+- First instance processes update IDs 41 and 42 and writes offsets 42 then 43.
+- A second fresh transport instance reads the persisted value and its first getUpdates URL is asserted to use offset >= 43.
+- The mock API would return the old update 42 only if the second instance queried with an old offset; the test verifies no old update is reprocessed.
+
+Safe restart-equivalent proof:
+- Command: npx tsx - <inline D159 offset proof script>
+- Offset path: C:\Users\huizh\AppData\Local\Temp\d159-offset-proof-1784511670650\remote-control-telegram-offset.json
+- First transport received update IDs [901, 902].
+- Offset file after first transport: {"offset":903}
+- Fresh second transport first queried with offset 903.
+- Replayed old update: false.
+
+Verification:
+- npx vitest run tests/remote-control-bridge-prompt.test.ts tests/remote-control.test.ts: passed, 2 files / 18 tests.
+- npm run typecheck: passed.
+- npm test: passed, 48 files passed / 1 skipped, 462 tests passed / 1 skipped.
+- git diff --check: passed.
