@@ -138,6 +138,7 @@ const RATE_LIMIT_MAX = 10;
 const STOP_CONFIRM_TTL_MS = 60 * 1000;
 const REMOTE_APPROVAL_TTL_MS = 5 * 60 * 1000;
 const APPROVAL_PREFIX = "approval:";
+const SESSION_PREFIX = "session:";
 const MAX_REMOTE_BODY_CHARS = 900;
 
 export function parseRemoteCommand(text: string): RemoteCommand {
@@ -461,6 +462,11 @@ export class RemoteBridge {
     }
     if (!this.consumeRateLimit()) {
       if (message.callbackId) await this.transport?.answerCallback?.(message.callbackId, "Remote control is cooling down.");
+      if (message.callbackData?.startsWith(SESSION_PREFIX)) await this.audit("session-select", { outcome: "rate-limited" });
+      return;
+    }
+    if (message.callbackData?.startsWith(SESSION_PREFIX)) {
+      await this.handleSessionSelection(message, message.callbackData.slice(SESSION_PREFIX.length));
       return;
     }
     const match = new RegExp(`^${APPROVAL_PREFIX}([^:]+):(approve|deny)$`).exec(message.callbackData ?? "");
@@ -480,6 +486,38 @@ export class RemoteBridge {
     await this.resolveApproval(id, approved, "telegram");
     pending.request.onResolve(approved, "telegram");
     if (message.callbackId) await this.transport?.answerCallback?.(message.callbackId, approved ? "Approved." : "Denied.");
+  }
+
+  private async handleSessionSelection(message: RemoteInboundMessage, token: string): Promise<void> {
+    const sessions = await this.deps.sessionsProvider();
+    const matches = sessions.filter((session) => hashArgs(session.id) === token);
+    if (!/^[a-f0-9]{16}$/.test(token) || matches.length !== 1) {
+      const outcome = matches.length > 1 ? "ambiguous" : "stale";
+      await this.audit("session-select", { outcome, token });
+      if (message.callbackId) await this.transport?.answerCallback?.(message.callbackId, "That session is no longer available.");
+      await this.send(message.chatId, "That session is no longer available. Send /sessions to refresh the list.", "session-select");
+      return;
+    }
+    const target = matches[0] as RemoteSessionSummary;
+    if (!this.deps.actions) {
+      await this.audit("session-select", { outcome: "unavailable", sessionId: target.id });
+      if (message.callbackId) await this.transport?.answerCallback?.(message.callbackId, "Session switching is unavailable.");
+      await this.send(message.chatId, "Remote session switching is unavailable in this build.", "session-select");
+      return;
+    }
+    let result: { ok: boolean; message: string };
+    try {
+      result = await this.deps.actions.useSession(target.id);
+    } catch (error) {
+      await this.audit("session-select", { outcome: "error", sessionId: target.id, message: errorMessage(error) });
+      if (message.callbackId) await this.transport?.answerCallback?.(message.callbackId, "Session not selected.");
+      await this.send(message.chatId, "Could not select that session. Send /sessions to refresh and try again.", "session-select");
+      return;
+    }
+    if (result.ok) this.selectedSessionsByChat.set(message.chatId, target.id);
+    await this.audit("session-select", { outcome: result.ok ? "ok" : "rejected", sessionId: target.id });
+    if (message.callbackId) await this.transport?.answerCallback?.(message.callbackId, result.ok ? "Session selected." : "Session not selected.");
+    await this.send(message.chatId, result.ok ? `${result.message} Send any message to prompt it.` : result.message, "session-select");
   }
 
   private consumeRateLimit(): boolean {
@@ -518,8 +556,7 @@ export class RemoteBridge {
       ? `Selected ${selected.id.slice(0, 8)} (${selected.title || "Untitled session"}). Send any message to prompt it.`
       : "Tap a session button to select it; you do not need to type the session ID.";
     await this.send(message.chatId, `${intro}\n\n${formatSessions(sessions)}`, "sessions", {
-      keyboard: sessionSelectionKeyboard(sessions),
-      oneTimeKeyboard: true
+      inlineKeyboard: sessionSelectionInlineKeyboard(sessions)
     });
   }
 
@@ -681,8 +718,11 @@ function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
-function sessionSelectionKeyboard(sessions: RemoteSessionSummary[]): string[][] | undefined {
-  const buttons = sessions.slice(0, 8).map((session) => `/use ${session.id.slice(0, 8)}`);
+function sessionSelectionInlineKeyboard(sessions: RemoteSessionSummary[]): Array<Array<{ text: string; data: string }>> | undefined {
+  const buttons = sessions.slice(0, 8).map((session, index) => ({
+    text: `${index + 1}. ${Array.from(session.title || "Untitled session").slice(0, 40).join("")}`,
+    data: `${SESSION_PREFIX}${hashArgs(session.id)}`
+  }));
   return buttons.length > 0 ? buttons.map((button) => [button]) : undefined;
 }
 

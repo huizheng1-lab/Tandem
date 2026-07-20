@@ -16,6 +16,7 @@ class PromptTransport implements RemoteTransport {
   nextMessageId = 100;
   sent: Array<{ chatId: number; messageId: number; text: string; options?: RemoteSendOptions }> = [];
   edited: Array<{ chatId: number; messageId: number; text: string }> = [];
+  answered: Array<{ callbackId: string; text?: string }> = [];
   start(): void {}
   stop(): void {}
   async sendMessage(chatId: number, text: string, options?: RemoteSendOptions): Promise<{ messageId: number }> {
@@ -25,6 +26,9 @@ class PromptTransport implements RemoteTransport {
   }
   async editMessage(chatId: number, messageId: number, text: string): Promise<void> {
     this.edited.push({ chatId, messageId, text });
+  }
+  async answerCallback(callbackId: string, text?: string): Promise<void> {
+    this.answered.push({ callbackId, text });
   }
 }
 
@@ -58,7 +62,12 @@ describe("RemoteBridge prompt routing", () => {
 
     await bridge.handleMessage(message("/sessions"));
     expect(transport.sent.at(-1)?.text).toContain("Send any message to prompt it.");
-    expect(transport.sent.at(-1)?.options?.keyboard).toEqual([["/use session-"]]);
+    const button = transport.sent.at(-1)?.options?.inlineKeyboard?.[0]?.[0];
+    expect(button).toMatchObject({ text: "1. Session" });
+    expect(button?.data).toMatch(/^session:[a-f0-9]{16}$/);
+
+    await bridge.handleMessage(callback(button?.data ?? ""));
+    expect(transport.answered.at(-1)?.text).toBe("Session selected.");
     await bridge.handleMessage(message("plain prompt without /prompt"));
     expect(submissions).toEqual(["plain prompt without /prompt"]);
   });
@@ -205,6 +214,10 @@ class MemoryOffsetStore implements TelegramOffsetStore {
 
 function message(text: string, replyToMessageId?: number): RemoteInboundMessage {
   return { updateId: Math.floor(Math.random() * 100_000), senderId: 42, chatId: 77, text, replyToMessageId };
+}
+
+function callback(callbackData: string): RemoteInboundMessage {
+  return { updateId: Math.floor(Math.random() * 100_000), senderId: 42, chatId: 77, text: "", callbackData, callbackId: "session-callback", messageId: 100 };
 }
 
 async function createBridge(

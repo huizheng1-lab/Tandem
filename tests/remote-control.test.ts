@@ -176,7 +176,9 @@ describe("RemoteBridge", () => {
     expect(transport.sent.at(-1)?.text).toContain("Session: session-1");
     await bridge.handleMessage(message(101, "/sessions"));
     expect(transport.sent.at(-1)?.text).toContain("1. Build feature - repo (abcdef12)");
-    expect(transport.sent.at(-1)?.options?.keyboard).toEqual([["/use abcdef12"]]);
+    expect(transport.sent.at(-1)?.options?.inlineKeyboard).toEqual([[
+      { text: "1. Build feature", data: expect.stringMatching(/^session:[a-f0-9]{16}$/) }
+    ]]);
 
     const sentBeforeReject = transport.sent.length;
     await bridge.handleMessage(message(202, "/status"));
@@ -297,6 +299,110 @@ describe("RemoteBridge", () => {
     await bridge.handleMessage(message(101, "/use abcdef12"));
     expect(transport.sent.at(-1)?.text).toBe("Using abcdef12 Send any message to prompt it.");
     expect(used).toEqual(["abcdef123456"]);
+  });
+
+  it("selects a live session from an inline button and rejects a stale button", async () => {
+    const auditPath = await tempAuditPath();
+    const transport = new FakeTransport();
+    const used: string[] = [];
+    let sessions = [{ id: "abcdef123456", title: "Build feature", projectDir: "C:\\repo" }];
+    const bridge = new RemoteBridge({
+      auditPath,
+      transportFactory: () => transport,
+      tokenProvider: () => "token",
+      statusProvider: () => ({ ...statusFixture(), sessionId: undefined }),
+      sessionsProvider: async () => sessions,
+      actions: {
+        pause: async () => ({ ok: true, message: "paused" }),
+        resume: async () => ({ ok: true, message: "resumed" }),
+        stop: async () => ({ ok: true, message: "stopped" }),
+        useSession: async (id) => {
+          used.push(id);
+          return { ok: true, message: `Using ${id.slice(0, 8)}` };
+        }
+      },
+      saveConfig: async () => {}
+    });
+    await bridge.configure({ enabled: true, telegramUserId: 101 });
+
+    await bridge.handleMessage(message(101, "/sessions"));
+    const buttonData = transport.sent.at(-1)?.options?.inlineKeyboard?.[0]?.[0]?.data ?? "";
+    expect(buttonData).toMatch(/^session:[a-f0-9]{16}$/);
+
+    await bridge.handleMessage(callback(101, buttonData));
+    expect(used).toEqual(["abcdef123456"]);
+    expect(transport.answered.at(-1)?.text).toBe("Session selected.");
+    expect(transport.sent.at(-1)?.text).toBe("Using abcdef12 Send any message to prompt it.");
+
+    sessions = [];
+    await bridge.handleMessage(callback(101, buttonData, "callback-stale"));
+    expect(used).toEqual(["abcdef123456"]);
+    expect(transport.answered.at(-1)?.text).toMatch(/no longer available/i);
+    expect(transport.sent.at(-1)?.text).toMatch(/\/sessions to refresh/i);
+
+    const audit = await readFile(auditPath, "utf8");
+    expect(audit).toContain('"event":"session-select","outcome":"ok"');
+    expect(audit).toContain('"event":"session-select","outcome":"stale"');
+  });
+
+  it("keeps session callbacks authorized and rate limited", async () => {
+    const auditPath = await tempAuditPath();
+    const transport = new FakeTransport();
+    const used: string[] = [];
+    const bridge = new RemoteBridge({
+      auditPath,
+      transportFactory: () => transport,
+      tokenProvider: () => "token",
+      statusProvider: () => ({ ...statusFixture(), sessionId: undefined }),
+      sessionsProvider: async () => [{ id: "abcdef123456", title: "Build feature" }],
+      actions: {
+        pause: async () => ({ ok: true, message: "paused" }),
+        resume: async () => ({ ok: true, message: "resumed" }),
+        stop: async () => ({ ok: true, message: "stopped" }),
+        useSession: async (id) => {
+          used.push(id);
+          return { ok: true, message: "using" };
+        }
+      },
+      saveConfig: async () => {}
+    });
+    await bridge.configure({ enabled: true, telegramUserId: 101 });
+    await bridge.handleMessage(message(101, "/sessions"));
+    const buttonData = transport.sent.at(-1)?.options?.inlineKeyboard?.[0]?.[0]?.data ?? "";
+
+    const sentBeforeReject = transport.sent.length;
+    await bridge.handleMessage(callback(202, buttonData, "callback-unauthorized"));
+    expect(used).toEqual([]);
+    expect(transport.sent).toHaveLength(sentBeforeReject);
+
+    for (let index = 0; index < 9; index += 1) await bridge.handleMessage(message(101, "/status"));
+    await bridge.handleMessage(callback(101, buttonData, "callback-limited"));
+    expect(used).toEqual([]);
+    expect(transport.answered.at(-1)?.text).toMatch(/cooling down/i);
+
+    const audit = await readFile(auditPath, "utf8");
+    expect(audit).toContain('"event":"rejected-sender"');
+    expect(audit).toContain('"event":"session-select","outcome":"rate-limited"');
+  });
+
+  it("answers a session callback when switching is unavailable", async () => {
+    const transport = new FakeTransport();
+    const bridge = new RemoteBridge({
+      auditPath: await tempAuditPath(),
+      transportFactory: () => transport,
+      tokenProvider: () => "token",
+      statusProvider: () => ({ ...statusFixture(), sessionId: undefined }),
+      sessionsProvider: async () => [{ id: "abcdef123456", title: "Build feature" }],
+      saveConfig: async () => {}
+    });
+    await bridge.configure({ enabled: true, telegramUserId: 101 });
+    await bridge.handleMessage(message(101, "/sessions"));
+    const buttonData = transport.sent.at(-1)?.options?.inlineKeyboard?.[0]?.[0]?.data ?? "";
+
+    await bridge.handleMessage(callback(101, buttonData, "callback-unavailable"));
+
+    expect(transport.answered.at(-1)?.text).toMatch(/unavailable/i);
+    expect(transport.sent.at(-1)?.text).toMatch(/unavailable in this build/i);
   });
 
   it("rate limits the new mutating verbs through the shared command bucket", async () => {
