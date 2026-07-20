@@ -101,6 +101,14 @@ function Normalize-ControlPath([string]$Value) {
     return [IO.Path]::GetFullPath($Value).TrimEnd([IO.Path]::DirectorySeparatorChar, [IO.Path]::AltDirectorySeparatorChar).ToLowerInvariant()
 }
 
+function Read-Utf8Lines([string]$Path) {
+    return @([IO.File]::ReadAllLines($Path, [Text.UTF8Encoding]::new($false)))
+}
+
+function Read-Utf8Text([string]$Path) {
+    return [IO.File]::ReadAllText($Path, [Text.UTF8Encoding]::new($false))
+}
+
 function Get-CanonicalControlPaths([string]$Workspace) {
     $paths = @()
     if ($env:TANDEM_RECIPROCAL_ROOT) {
@@ -131,7 +139,7 @@ function Initialize-WishlistFile([string]$WishlistPath, [string]$SharedDirection
     if (Test-Path -LiteralPath $WishlistPath) { return }
     $items = @()
     if (Test-Path -LiteralPath $SharedDirectionPath) {
-        $sourceLines = @(Get-Content -LiteralPath $SharedDirectionPath)
+        $sourceLines = Read-Utf8Lines $SharedDirectionPath
         $wishlistHeader = [Array]::IndexOf($sourceLines, "## Wishlist And Progress")
         if ($wishlistHeader -ge 0) {
             $notesHeader = [Array]::IndexOf($sourceLines, "## Human Notes")
@@ -160,7 +168,7 @@ function Initialize-WishlistFile([string]$WishlistPath, [string]$SharedDirection
 
 function Normalize-SharedDirectionFile([string]$SharedDirectionPath) {
     if (-not (Test-Path -LiteralPath $SharedDirectionPath)) { return }
-    $sourceLines = @(Get-Content -LiteralPath $SharedDirectionPath)
+    $sourceLines = Read-Utf8Lines $SharedDirectionPath
     $wishlistHeader = [Array]::IndexOf($sourceLines, "## Wishlist And Progress")
     if ($wishlistHeader -lt 0) { return }
     $notesHeader = [Array]::IndexOf($sourceLines, "## Human Notes")
@@ -258,13 +266,13 @@ if (-not $mutex.WaitOne(5000)) { throw "Timed out waiting for the shared directi
 
 try {
     if ($Action -eq "Show") {
-        Get-Content -LiteralPath $WishlistPath -Raw
+        Read-Utf8Text $WishlistPath
         exit 0
     }
 
-    $directionLines = @(Get-Content -LiteralPath $ControlPath)
+    $directionLines = Read-Utf8Lines $ControlPath
     $targetPath = if ($Action -eq "UpdateDirection") { $ControlPath } else { $WishlistPath }
-    $lines = if ($Action -eq "UpdateDirection") { $directionLines } else { @(Get-Content -LiteralPath $WishlistPath) }
+    $lines = if ($Action -eq "UpdateDirection") { $directionLines } else { Read-Utf8Lines $WishlistPath }
     $now = (Get-Date).ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ")
 
     if ($Action -eq "UpdateDirection") {

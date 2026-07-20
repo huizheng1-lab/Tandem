@@ -505,6 +505,30 @@ try {
         return $metadata
     }
 
+    function Read-Utf8Lines([string]$Path) {
+        return @([IO.File]::ReadAllLines($Path, [Text.UTF8Encoding]::new($false)))
+    }
+
+    function Assert-WishlistToolingCompatible {
+        $directionScript = Join-Path $Workspace "scripts\reciprocal-direction.ps1"
+        if (-not (Test-Path -LiteralPath $directionScript)) {
+            throw "Cannot claim: reciprocal-direction.ps1 is missing from this executor worktree."
+        }
+        $scriptText = [IO.File]::ReadAllText($directionScript, [Text.UTF8Encoding]::new($false))
+        if ($scriptText -notmatch "Get-WishlistPath" -or $scriptText -notmatch "WISHLIST\.md") {
+            throw "Cannot claim: executor worktree has stale pre-D167 wishlist tooling. Reconcile reciprocal infrastructure before starting work."
+        }
+
+        $showOutput = @(& $directionScript -Action Show 2>&1)
+        if (-not $?) {
+            throw "Cannot claim: D167 wishlist tooling check failed: $($showOutput -join ' ')"
+        }
+        $shownBoard = $showOutput -join [Environment]::NewLine
+        if ($shownBoard -notmatch "<!-- wishlist-items -->") {
+            throw "Cannot claim: executor direction script did not return the WISHLIST.md work-state board."
+        }
+    }
+
     function New-AutonomousContinuation([string]$Id, [string]$NextStep) {
         $nextStep = $NextStep.Trim()
         if ($nextStep -notmatch "^\d+/\d+$") { return $null }
@@ -527,7 +551,7 @@ try {
 
         $escapedCommit = [regex]::Escape($AcceptedCommit)
         $candidateLine = @(
-            Get-Content -LiteralPath $boardPath |
+            Read-Utf8Lines $boardPath |
                 Where-Object { $_ -match "^- \[ \] (W\d+) \| .+ \| CANDIDATE\b" -and $_ -match "(^|\s)commit=$escapedCommit(\s|$)" }
         )
         if ($candidateLine.Count -eq 0) { return $null }
@@ -973,7 +997,7 @@ try {
         $boardPath = Get-SharedDirectionPath
         if (-not (Test-Path -LiteralPath $boardPath)) { return $null }
         $line = @(
-            Get-Content -LiteralPath $boardPath |
+            Read-Utf8Lines $boardPath |
                 Where-Object { $_ -match "^- \[ \] (W\d{4}) \| (P[0-3]) \| (.*?) \| QUEUED\b" -and $_ -match "(^|\s)artifact=candidate-preview(\s|$)" -and $_ -match "(^|\s)source=([0-9a-fA-F]{7,40})(\s|$)" } |
                 Select-Object -First 1
         )
@@ -1065,6 +1089,7 @@ try {
             Write-Result "WAIT"
             exit 0
         }
+        Assert-WishlistToolingCompatible
 
         $artifactItem = Get-NextArtifactItem
         if ($artifactItem -and -not (Test-CandidatePreviewArtifactCapability)) {

@@ -90,6 +90,20 @@ describeWindows("reciprocal direction wishlist removal", () => {
     expect(board).toContain(`${added.id} | P0 | Infrastructure repair | QUEUED`);
   });
 
+  it("D168: migrates legacy wishlist text as UTF-8 without mojibake", async () => {
+    const text = "Preserve leader\u2019s \u201cHi\u201d answer";
+    const file = await boardFile();
+    await writeFile(file, boardText(`- [ ] W9999 | P0 | ${text} | QUEUED added=now`), "utf8");
+
+    await direction(file, "-Action", "Show");
+
+    const shared = await readFile(file, "utf8");
+    const board = await readBoard(file);
+    expect(shared).not.toContain("W9999");
+    expect(board).toContain(text);
+    expect(board).not.toMatch(/Ã|â€™|â€œ|â€|ÃƒÂ¢/);
+  });
+
   it("rejects explicit scratch control paths under a worktree .tandem directory", async () => {
     const repo = path.join(tmpdir(), `tandem-direction-guard-${Date.now()}-${Math.random().toString(16).slice(2)}`);
     const canonical = path.join(repo, ".tandem", "shared-control", "SHARED_DIRECTION.md");
