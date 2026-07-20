@@ -1,6 +1,6 @@
 param(
     [Parameter(Mandatory = $true)]
-    [ValidateSet("Show", "Add", "Remove", "Retire", "Start", "Candidate", "ArtifactComplete", "ApprovePlan", "AutoApprovePlan", "RejectPlan", "AcceptStep", "Complete", "Block", "Requeue")]
+    [ValidateSet("Show", "Add", "Remove", "Retire", "Start", "Candidate", "DeclareArtifact", "ArtifactComplete", "ApprovePlan", "AutoApprovePlan", "RejectPlan", "AcceptStep", "Complete", "Block", "Requeue")]
     [string]$Action,
 
     [string]$Text,
@@ -263,7 +263,8 @@ try {
                 if (-not $Role) { throw "Start requires -Role." }
                 if ($base[0] -match '\[x\]') { throw "$Id is already complete." }
                 if (-not $isEpic) {
-                    $lines[$index] = ($base + "IN_PROGRESS role=$Role started=$now") -join " | "
+                    $artifactSuffix = if ($metadata.artifact) { " artifact=$($metadata.artifact) source=$($metadata.source)" } else { "" }
+                    $lines[$index] = ($base + "IN_PROGRESS$artifactSuffix role=$Role started=$now") -join " | "
                     break
                 }
                 $revision = if ($metadata.revision) { [int]$metadata.revision } else { 1 }
@@ -314,6 +315,14 @@ try {
                 $planPath = Assert-EpicPlanPath $metadata.plan $Id
                 $lines[$index] = ($base + "CANDIDATE epic=true$autonomySuffix$safetySuffix candidate=STEP revision=$revision completed=$completed step=$step/$total plan=$planPath commit=$Commit updated=$now") -join " | "
             }
+            "DeclareArtifact" {
+                if (-not $Commit) { throw "DeclareArtifact requires the trusted artifact source -Commit." }
+                if (-not $ArtifactKind) { throw "DeclareArtifact requires -ArtifactKind." }
+                if ($isEpic) { throw "DeclareArtifact is only valid for non-epic wishlist items." }
+                if ($status -ne "QUEUED") { throw "$Id must be QUEUED before declaring artifact mode." }
+                if ($Commit -notmatch '^[0-9a-fA-F]{7,40}$') { throw "DeclareArtifact requires a source commit SHA." }
+                $lines[$index] = ($base + "QUEUED artifact=$ArtifactKind source=$Commit declared=$now") -join " | "
+            }
             "ArtifactComplete" {
                 if (-not $Commit) { throw "ArtifactComplete requires -Commit." }
                 if (-not $Role) { throw "ArtifactComplete requires -Role." }
@@ -321,6 +330,8 @@ try {
                 if (-not $Evidence -or $Evidence -notmatch '^[A-Za-z0-9._:-]{6,128}$') { throw "ArtifactComplete requires machine-checkable -Evidence metadata." }
                 if ($isEpic) { throw "ArtifactComplete is only valid for non-epic wishlist items." }
                 if ($status -notin @("QUEUED", "IN_PROGRESS")) { throw "$Id cannot complete an artifact from status $status." }
+                if (-not $metadata.artifact -or $metadata.artifact -ne $ArtifactKind) { throw "$Id is not declared for artifact $ArtifactKind." }
+                if (-not $metadata.source -or $metadata.source -ne $Commit) { throw "$Id is not declared for source $Commit." }
                 if ($status -eq "IN_PROGRESS" -and $metadata.role -and $metadata.role -ne $Role) {
                     throw "$Id is owned by role $($metadata.role), not $Role."
                 }

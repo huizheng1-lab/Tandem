@@ -12,7 +12,9 @@ export interface ReciprocalCandidateCommitOptions {
   role?: string;
   report: CompletionReport;
   summary?: string;
+  artifactRoot?: string;
   commandRunner?: (file: string, args: string[], cwd: string) => Promise<{ stdout: string; stderr: string }>;
+  artifactSmokeRunner?: (executablePath: string, cwd: string) => Promise<{ exitCode: number; stdout: string; stderr: string }>;
 }
 
 const roleBranch: Record<"A" | "B", string> = {
@@ -113,26 +115,78 @@ function shaPrefixEqual(left: string, right: string): boolean {
   return a === b || a.startsWith(b) || b.startsWith(a);
 }
 
-function artifactPath(cwd: string, value: string | undefined, fallback: string): string {
-  return path.join(cwd, normalizeReportedPath(value ?? fallback));
+function canonicalArtifactRoot(relayRoot: string, configuredRoot: string | undefined): string {
+  return path.resolve(
+    configuredRoot ??
+      process.env.TANDEM_RECIPROCAL_ARTIFACT_ROOT ??
+      process.env.TANDEM_SOURCE_REPO ??
+      path.join(path.dirname(relayRoot), "HZ code")
+  );
 }
 
-function artifactEvidenceId(artifact: ReciprocalArtifact): string {
+function assertUnderRoot(value: string, root: string): string {
+  const resolved = path.resolve(value);
+  const relative = path.relative(path.resolve(root), resolved);
+  if (relative.startsWith("..") || path.isAbsolute(relative)) {
+    throw new Error(`Artifact evidence path escapes trusted release directory: ${resolved}`);
+  }
+  return resolved;
+}
+
+function artifactEvidenceId(values: { kind: string; wishlistId: string; sourceSha: string; smokeOutput: string }): string {
   return createHash("sha256")
-    .update(JSON.stringify({
-      kind: artifact.kind,
-      wishlistId: artifact.wishlistId,
-      sourceSha: artifact.sourceSha,
-      buildInfoPath: artifact.buildInfoPath,
-      executablePath: artifact.executablePath,
-      smoke: artifact.smoke
-    }))
+    .update(JSON.stringify(values))
     .digest("hex")
     .slice(0, 16);
 }
 
+interface RelayStatus {
+  phase?: string | null;
+  pausedFromPhase?: string | null;
+  activeRole?: string | null;
+  baseCommit?: string | null;
+  stableCommit?: string | null;
+  candidateCommit?: string | null;
+  rollbackCommit?: string | null;
+  lastCompletedCommit?: string | null;
+}
+
+function canCloseArtifactRelay(state: RelayStatus, head: string): boolean {
+  const working = state.phase === "working" || (state.phase === "paused" && state.pausedFromPhase === "working");
+  return Boolean(
+    working &&
+      state.activeRole === "A" &&
+      state.baseCommit &&
+      state.baseCommit === state.stableCommit &&
+      state.baseCommit === head &&
+      !state.candidateCommit &&
+      !state.rollbackCommit
+  );
+}
+
+function alreadyClosedArtifactRelay(state: RelayStatus, head: string): boolean {
+  return Boolean(state.phase === "idle" && !state.activeRole && state.lastCompletedCommit === head);
+}
+
 async function defaultRunner(file: string, args: string[], cwd: string): Promise<{ stdout: string; stderr: string }> {
   return execFileAsync(file, args, { cwd, windowsHide: true, maxBuffer: 10 * 1024 * 1024 });
+}
+
+async function defaultArtifactSmokeRunner(executablePath: string, cwd: string): Promise<{ exitCode: number; stdout: string; stderr: string }> {
+  try {
+    const result = await execFileAsync(executablePath, ["--smoke"], { cwd, windowsHide: true, timeout: 15_000, maxBuffer: 1024 * 1024 });
+    return { exitCode: 0, stdout: result.stdout, stderr: result.stderr };
+  } catch (error) {
+    const failure = error as Error & { code?: unknown; stdout?: unknown; stderr?: unknown; killed?: boolean; signal?: unknown };
+    if (failure.killed) {
+      throw new Error(`Candidate preview smoke timed out: ${failure.message}`);
+    }
+    return {
+      exitCode: typeof failure.code === "number" ? failure.code : 1,
+      stdout: typeof failure.stdout === "string" ? failure.stdout : "",
+      stderr: typeof failure.stderr === "string" ? failure.stderr : failure.message
+    };
+  }
 }
 
 async function run(runner: NonNullable<ReciprocalCandidateCommitOptions["commandRunner"]>, cwd: string, file: string, args: string[]): Promise<string> {
@@ -267,37 +321,79 @@ async function completeReciprocalArtifact(
   if (options.role !== "A") throw new Error("Artifact-only reciprocal completion is reserved for Executor A.");
   if (artifact.kind !== "candidate-preview") throw new Error(`Unsupported reciprocal artifact kind: ${artifact.kind}`);
   if (options.report.filesChanged.length !== 0) throw new Error("Artifact-only reciprocal completion requires zero source filesChanged.");
-  if (!artifact.smoke.passed || artifact.smoke.exitCode !== 0) {
-    throw new Error(`Candidate preview smoke did not pass: exitCode=${artifact.smoke.exitCode}`);
-  }
 
   const statusLines = (await runRaw(runner, options.cwd, "git", ["status", "--porcelain", "--untracked-files=all"])).trim();
   if (statusLines) throw new Error(`Artifact-only reciprocal completion requires a clean worktree: ${statusLines.replace(/\r?\n/g, "; ")}`);
   const head = await run(runner, options.cwd, "git", ["rev-parse", "HEAD"]);
-  if (!shaPrefixEqual(head, artifact.sourceSha)) {
-    throw new Error(`Candidate preview source SHA ${artifact.sourceSha} does not match producer HEAD ${head}.`);
-  }
-
-  const buildInfoPath = artifactPath(options.cwd, artifact.buildInfoPath, "release/win-unpacked/BUILD_INFO.json");
-  const buildInfo = JSON.parse(await readFile(buildInfoPath, "utf8")) as { sourceSha?: unknown };
-  if (typeof buildInfo.sourceSha !== "string" || !shaPrefixEqual(buildInfo.sourceSha, artifact.sourceSha)) {
-    throw new Error(`Candidate preview BUILD_INFO sourceSha ${String(buildInfo.sourceSha)} does not match ${artifact.sourceSha}.`);
-  }
-  const executablePath = artifactPath(options.cwd, artifact.executablePath, "release/win-unpacked/Tandem.exe");
-  const executable = await stat(executablePath);
-  if (!executable.isFile()) throw new Error(`Candidate preview executable is missing: ${executablePath}`);
 
   const relayRoot = relayRootForWorktree(options.cwd);
   if (!relayRoot) throw new Error(`Reciprocal artifact cwd is not under a relay worktrees directory: ${options.cwd}`);
   const boardPath = path.join(relayRoot, "control", "SHARED_DIRECTION.md");
   const item = wishlistItem(await readFile(boardPath, "utf8"), artifact.wishlistId);
   if (!item) throw new Error(`Reciprocal artifact wishlist item was not found: ${artifact.wishlistId}`);
+  if (item.status === "DONE") {
+    if (item.metadata.artifact === artifact.kind && item.metadata.source && (!artifact.sourceSha || shaPrefixEqual(item.metadata.source, artifact.sourceSha))) {
+      return {
+        ...options.report,
+        summary: `${options.report.summary}\n\nReciprocal artifact item ${artifact.wishlistId} was already terminal for source ${item.metadata.source}.`,
+        deviationsFromPlan: [...options.report.deviationsFromPlan, `Tandem app layer observed already-completed reciprocal artifact item ${artifact.wishlistId}`]
+      };
+    }
+    throw new Error(`Reciprocal artifact wishlist item ${artifact.wishlistId} is already DONE with incompatible metadata.`);
+  }
   if (item.status !== "QUEUED" && item.status !== "IN_PROGRESS") {
     throw new Error(`Reciprocal artifact wishlist item ${artifact.wishlistId} is ${item.status}; expected QUEUED or IN_PROGRESS.`);
+  }
+  if (item.metadata.artifact !== artifact.kind) {
+    throw new Error(`Wishlist item ${artifact.wishlistId} is not declared for artifact kind ${artifact.kind}.`);
+  }
+  const artifactSource = item.metadata.source;
+  if (!artifactSource || !/^[0-9a-f]{7,40}$/i.test(artifactSource)) {
+    throw new Error(`Wishlist item ${artifact.wishlistId} is missing trusted artifact source metadata.`);
+  }
+  if (artifact.sourceSha && !shaPrefixEqual(artifactSource, artifact.sourceSha)) {
+    throw new Error(`Report artifact source ${artifact.sourceSha} does not match trusted wishlist source ${artifactSource}.`);
   }
   if (item.status === "IN_PROGRESS" && item.metadata.role !== options.role) {
     throw new Error(`Reciprocal artifact wishlist item ${artifact.wishlistId} is owned by ${item.metadata.role}; expected ${options.role}.`);
   }
+
+  const relayStatus = JSON.parse(
+    await run(runner, options.cwd, "powershell", [
+      "-NoProfile",
+      "-ExecutionPolicy",
+      "Bypass",
+      "-File",
+      path.join(options.cwd, "scripts", "reciprocal-relay.ps1"),
+      "-Action",
+      "Status"
+    ])
+  ) as RelayStatus;
+  const relayCanClose = canCloseArtifactRelay(relayStatus, head);
+  const relayAlreadyClosed = alreadyClosedArtifactRelay(relayStatus, head);
+  if (!relayCanClose && !relayAlreadyClosed) {
+    throw new Error(`Artifact relay is not in a safe no-commit close state: phase=${relayStatus.phase ?? "unknown"} activeRole=${relayStatus.activeRole ?? "none"}.`);
+  }
+  if (relayAlreadyClosed && item.status === "QUEUED") {
+    throw new Error(`Artifact relay is already idle but wishlist item ${artifact.wishlistId} was never started.`);
+  }
+
+  const artifactRoot = canonicalArtifactRoot(relayRoot, options.artifactRoot);
+  const releaseDir = path.join(artifactRoot, "release", "win-unpacked");
+  const buildInfoPath = assertUnderRoot(path.join(releaseDir, "BUILD_INFO.json"), releaseDir);
+  const executablePath = assertUnderRoot(path.join(releaseDir, "Tandem.exe"), releaseDir);
+  const buildInfo = JSON.parse(await readFile(buildInfoPath, "utf8")) as { sourceSha?: unknown };
+  if (typeof buildInfo.sourceSha !== "string" || !shaPrefixEqual(buildInfo.sourceSha, artifactSource)) {
+    throw new Error(`Candidate preview BUILD_INFO sourceSha ${String(buildInfo.sourceSha)} does not match trusted source ${artifactSource}.`);
+  }
+  const executable = await stat(executablePath);
+  if (!executable.isFile()) throw new Error(`Candidate preview executable is missing: ${executablePath}`);
+  const smokeRunner = options.artifactSmokeRunner ?? defaultArtifactSmokeRunner;
+  const smoke = await smokeRunner(executablePath, releaseDir);
+  if (smoke.exitCode !== 0) {
+    throw new Error(`Candidate preview smoke failed with exit code ${smoke.exitCode}: ${(smoke.stderr || smoke.stdout).trim()}`);
+  }
+
   const directionScript = path.join(options.cwd, "scripts", "reciprocal-direction.ps1");
   if (item.status === "QUEUED") {
     await run(runner, options.cwd, "powershell", [
@@ -314,6 +410,21 @@ async function completeReciprocalArtifact(
       options.role
     ]);
   }
+  if (relayCanClose) {
+    await run(runner, options.cwd, "powershell", [
+      "-NoProfile",
+      "-ExecutionPolicy",
+      "Bypass",
+      "-File",
+      path.join(options.cwd, "scripts", "reciprocal-relay.ps1"),
+      "-Action",
+      "CompleteArtifact",
+      "-Role",
+      options.role,
+      "-Summary",
+      options.summary ?? options.report.summary
+    ]);
+  }
   await run(runner, options.cwd, "powershell", [
     "-NoProfile",
     "-ExecutionPolicy",
@@ -327,29 +438,16 @@ async function completeReciprocalArtifact(
     "-Role",
     options.role,
     "-Commit",
-    head,
+    artifactSource,
     "-ArtifactKind",
     artifact.kind,
     "-Evidence",
-    artifactEvidenceId(artifact)
-  ]);
-  await run(runner, options.cwd, "powershell", [
-    "-NoProfile",
-    "-ExecutionPolicy",
-    "Bypass",
-    "-File",
-    path.join(options.cwd, "scripts", "reciprocal-relay.ps1"),
-    "-Action",
-    "CompleteArtifact",
-    "-Role",
-    options.role,
-    "-Summary",
-    options.summary ?? options.report.summary
+    artifactEvidenceId({ kind: artifact.kind, wishlistId: artifact.wishlistId, sourceSha: artifactSource, smokeOutput: `${smoke.stdout}\n${smoke.stderr}` })
   ]);
 
   return {
     ...options.report,
-    summary: `${options.report.summary}\n\nReciprocal artifact completed for human review: ${artifact.kind} ${head} (${artifact.wishlistId}).`,
+    summary: `${options.report.summary}\n\nReciprocal artifact completed for human review: ${artifact.kind} ${artifactSource} (${artifact.wishlistId}); relay producer stayed at ${head}.`,
     deviationsFromPlan: [...options.report.deviationsFromPlan, `Tandem app layer completed artifact-only reciprocal item ${artifact.wishlistId} without a source commit`]
   };
 }

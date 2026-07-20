@@ -44,19 +44,48 @@ const artifactReport: CompletionReport = {
   }
 };
 
-async function writeArtifactEvidence(cwd: string, sourceSha = "abc123"): Promise<void> {
-  await mkdir(path.join(cwd, "release", "win-unpacked"), { recursive: true });
-  await writeFile(path.join(cwd, "release", "win-unpacked", "BUILD_INFO.json"), JSON.stringify({ sourceSha }), "utf8");
-  await writeFile(path.join(cwd, "release", "win-unpacked", "Tandem.exe"), "fake exe", "utf8");
+async function writeArtifactEvidence(root: string, sourceSha = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"): Promise<void> {
+  await mkdir(path.join(root, "release", "win-unpacked"), { recursive: true });
+  await writeFile(path.join(root, "release", "win-unpacked", "BUILD_INFO.json"), JSON.stringify({ sourceSha }), "utf8");
+  await writeFile(path.join(root, "release", "win-unpacked", "Tandem.exe"), "fake exe", "utf8");
 }
 
-async function writeQueuedArtifactItem(cwd: string): Promise<void> {
+async function writeQueuedArtifactItem(cwd: string, sourceSha = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", detail = `QUEUED artifact=candidate-preview source=${sourceSha} declared=now`): Promise<void> {
   const relayRoot = path.dirname(path.dirname(cwd));
   await writeFile(
     path.join(relayRoot, "control", "SHARED_DIRECTION.md"),
-    "# Board\n\n<!-- wishlist-items -->\n- [ ] W1234 | P0 | Build candidate preview | QUEUED added=now\n",
+    `# Board\n\n<!-- wishlist-items -->\n- [ ] W1234 | P0 | Build candidate preview | ${detail}\n`,
     "utf8"
   );
+}
+
+const producerSha = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+const artifactSha = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+
+function artifactCommandRunner(calls: Array<{ file: string; args: string[] }>, options: { relayStatus?: Record<string, unknown>; failCompleteArtifact?: boolean } = {}) {
+  return async (file: string, args: string[]) => {
+    calls.push({ file, args });
+    if (file === "git" && args.join(" ") === "branch --show-current") return { stdout: "codex/reciprocal-b\n", stderr: "" };
+    if (file === "git" && args[0] === "status") return { stdout: "", stderr: "" };
+    if (file === "git" && args[0] === "rev-parse") return { stdout: `${producerSha}\n`, stderr: "" };
+    if (file === "powershell" && args.includes("Status")) {
+      return {
+        stdout: JSON.stringify(options.relayStatus ?? {
+          phase: "working",
+          activeRole: "A",
+          baseCommit: producerSha,
+          stableCommit: producerSha,
+          candidateCommit: null,
+          rollbackCommit: null
+        }),
+        stderr: ""
+      };
+    }
+    if (file === "powershell" && args.includes("CompleteArtifact") && options.failCompleteArtifact) {
+      throw new Error("relay close failed");
+    }
+    return { stdout: "", stderr: "" };
+  };
 }
 
 describe("reciprocal candidate commit", () => {
@@ -120,49 +149,112 @@ describe("reciprocal candidate commit", () => {
     expect(result.summary).toContain("Immediate reciprocal continuation attempted");
   });
 
-  it("D162: completes verified artifact-only work without creating a source candidate commit", async () => {
+  it("D163: completes distinct-topology artifact work from a trusted admin release without creating a source candidate commit", async () => {
     const cwd = await relayWorktree();
-    await writeArtifactEvidence(cwd);
+    const adminRoot = path.join(path.dirname(path.dirname(cwd)), "admin-root");
+    await writeArtifactEvidence(adminRoot, artifactSha);
     await writeQueuedArtifactItem(cwd);
     const calls: Array<{ file: string; args: string[] }> = [];
     const result = await commitReciprocalCandidate({
       cwd,
       role: "A",
-      report: artifactReport,
-      commandRunner: async (file, args) => {
-        calls.push({ file, args });
-        if (file === "git" && args.join(" ") === "branch --show-current") return { stdout: "codex/reciprocal-b\n", stderr: "" };
-        if (file === "git" && args[0] === "status") return { stdout: "", stderr: "" };
-        if (file === "git" && args[0] === "rev-parse") return { stdout: "abc123\n", stderr: "" };
-        return { stdout: "", stderr: "" };
+      artifactRoot: adminRoot,
+      report: { ...artifactReport, reciprocalArtifact: { ...artifactReport.reciprocalArtifact!, sourceSha: artifactSha } },
+      commandRunner: artifactCommandRunner(calls),
+      artifactSmokeRunner: async (executablePath, releaseDir) => {
+        expect(executablePath).toBe(path.join(adminRoot, "release", "win-unpacked", "Tandem.exe"));
+        expect(releaseDir).toBe(path.join(adminRoot, "release", "win-unpacked"));
+        return { exitCode: 0, stdout: "launched and exited", stderr: "" };
       }
     });
 
     expect(calls.some((call) => call.file === "git" && call.args[0] === "commit")).toBe(false);
     expect(calls.some((call) => call.file === "powershell" && call.args.includes("Start") && call.args.includes("W1234") && call.args.includes("A"))).toBe(true);
-    expect(calls.some((call) => call.file === "powershell" && call.args.includes("ArtifactComplete") && call.args.includes("candidate-preview"))).toBe(true);
+    expect(calls.some((call) => call.file === "powershell" && call.args.includes("ArtifactComplete") && call.args.includes("candidate-preview") && call.args.includes(artifactSha))).toBe(true);
     expect(calls.some((call) => call.file === "powershell" && call.args.includes("CompleteArtifact") && call.args.includes("A"))).toBe(true);
     expect(result.summary).toContain("Reciprocal artifact completed for human review");
+    expect(result.summary).toContain(artifactSha);
+    expect(result.summary).toContain(producerSha);
   });
 
-  it("D162: refuses artifact-only work with mismatched BUILD_INFO provenance", async () => {
+  it("D163: refuses ordinary source items even when the model reports reciprocalArtifact", async () => {
     const cwd = await relayWorktree();
-    await writeArtifactEvidence(cwd, "different");
-    await writeQueuedArtifactItem(cwd);
+    const adminRoot = path.join(path.dirname(path.dirname(cwd)), "admin-root");
+    await writeArtifactEvidence(adminRoot, artifactSha);
+    await writeQueuedArtifactItem(cwd, artifactSha, "QUEUED added=now");
+    const calls: Array<{ file: string; args: string[] }> = [];
 
     await expect(
       commitReciprocalCandidate({
         cwd,
         role: "A",
-        report: artifactReport,
-        commandRunner: async (file, args) => {
-          if (file === "git" && args.join(" ") === "branch --show-current") return { stdout: "codex/reciprocal-b\n", stderr: "" };
-          if (file === "git" && args[0] === "status") return { stdout: "", stderr: "" };
-          if (file === "git" && args[0] === "rev-parse") return { stdout: "abc123\n", stderr: "" };
-          return { stdout: "", stderr: "" };
-        }
+        artifactRoot: adminRoot,
+        report: { ...artifactReport, reciprocalArtifact: { ...artifactReport.reciprocalArtifact!, sourceSha: artifactSha } },
+        commandRunner: artifactCommandRunner(calls),
+        artifactSmokeRunner: async () => ({ exitCode: 0, stdout: "ok", stderr: "" })
       })
-    ).rejects.toThrow(/BUILD_INFO sourceSha/);
+    ).rejects.toThrow(/not declared for artifact kind/);
+  });
+
+  it("D163: refuses model-asserted smoke success when the app-layer smoke fails", async () => {
+    const cwd = await relayWorktree();
+    const adminRoot = path.join(path.dirname(path.dirname(cwd)), "admin-root");
+    await writeArtifactEvidence(adminRoot, artifactSha);
+    await writeQueuedArtifactItem(cwd);
+    const calls: Array<{ file: string; args: string[] }> = [];
+
+    await expect(
+      commitReciprocalCandidate({
+        cwd,
+        role: "A",
+        artifactRoot: adminRoot,
+        report: { ...artifactReport, reciprocalArtifact: { ...artifactReport.reciprocalArtifact!, sourceSha: artifactSha } },
+        commandRunner: artifactCommandRunner(calls),
+        artifactSmokeRunner: async () => ({ exitCode: 42, stdout: "", stderr: "launch failed" })
+      })
+    ).rejects.toThrow(/smoke failed/);
+    expect(calls.some((call) => call.file === "powershell" && call.args.includes("ArtifactComplete"))).toBe(false);
+  });
+
+  it("D163: leaves the board nonterminal when relay artifact close fails before terminal write", async () => {
+    const cwd = await relayWorktree();
+    const adminRoot = path.join(path.dirname(path.dirname(cwd)), "admin-root");
+    await writeArtifactEvidence(adminRoot, artifactSha);
+    await writeQueuedArtifactItem(cwd);
+    const calls: Array<{ file: string; args: string[] }> = [];
+
+    await expect(
+      commitReciprocalCandidate({
+        cwd,
+        role: "A",
+        artifactRoot: adminRoot,
+        report: { ...artifactReport, reciprocalArtifact: { ...artifactReport.reciprocalArtifact!, sourceSha: artifactSha } },
+        commandRunner: artifactCommandRunner(calls, { failCompleteArtifact: true }),
+        artifactSmokeRunner: async () => ({ exitCode: 0, stdout: "ok", stderr: "" })
+      })
+    ).rejects.toThrow(/relay close failed/);
+    expect(calls.some((call) => call.file === "powershell" && call.args.includes("Start"))).toBe(true);
+    expect(calls.some((call) => call.file === "powershell" && call.args.includes("ArtifactComplete"))).toBe(false);
+  });
+
+  it("D163: retries after relay close by writing the terminal board metadata exactly once", async () => {
+    const cwd = await relayWorktree();
+    const adminRoot = path.join(path.dirname(path.dirname(cwd)), "admin-root");
+    await writeArtifactEvidence(adminRoot, artifactSha);
+    await writeQueuedArtifactItem(cwd, artifactSha, `IN_PROGRESS artifact=candidate-preview source=${artifactSha} role=A started=now`);
+    const calls: Array<{ file: string; args: string[] }> = [];
+    const result = await commitReciprocalCandidate({
+      cwd,
+      role: "A",
+      artifactRoot: adminRoot,
+      report: { ...artifactReport, reciprocalArtifact: { ...artifactReport.reciprocalArtifact!, sourceSha: artifactSha } },
+      commandRunner: artifactCommandRunner(calls, { relayStatus: { phase: "idle", activeRole: null, lastCompletedCommit: producerSha } }),
+      artifactSmokeRunner: async () => ({ exitCode: 0, stdout: "ok", stderr: "" })
+    });
+
+    expect(calls.some((call) => call.file === "powershell" && call.args.includes("CompleteArtifact"))).toBe(false);
+    expect(calls.filter((call) => call.file === "powershell" && call.args.includes("ArtifactComplete"))).toHaveLength(1);
+    expect(result.summary).toContain(artifactSha);
   });
 
   it("pre-fast-forwards a clean reciprocal worktree from its peer branch", async () => {
