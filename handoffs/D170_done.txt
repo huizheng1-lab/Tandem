@@ -1,0 +1,88 @@
+Round: D170
+Status: DONE
+
+Root cause of stalled W0024 round:
+- Executor A had a plausible W0024 implementation in copy-b but hit the relay auto-pause after three consecutive RESUME claims without a candidate.
+- The current real verification blocker was a stale prompt-routing test assertion in tests/remote-control-bridge-prompt.test.ts that still expected options.keyboard == [["/use session-"]] after /sessions.
+- W0024 intentionally replaced that typed reply keyboard with numbered Telegram inline buttons, so the integration test needed to exercise the new tap-to-select path while preserving prompt routing.
+- The earlier esbuild access-denied build failure was stale; current build passed after the test reconciliation.
+
+Files changed:
+- C:\Users\huizh\Apps\Tandem Reciprocal\worktrees\copy-b\src\remote-control\bridge.ts
+- C:\Users\huizh\Apps\Tandem Reciprocal\worktrees\copy-b\tests\remote-control.test.ts
+- C:\Users\huizh\Apps\Tandem Reciprocal\worktrees\copy-b\tests\remote-control-bridge-prompt.test.ts
+- handoffs/D170_done.txt
+
+Commit hashes:
+- W0024 implementation candidate commit: ace6dd9f0b17fe0dcd2e7bb7b37ad2391357c3c4
+- D170 marker commit: pending
+
+Relay recovery:
+- Command:
+  powershell -NoProfile -ExecutionPolicy Bypass -File scripts\reciprocal-relay.ps1 -Action Resume -Role A -Summary "D170 recovered W0024 after reconciling stale prompt-routing test to inline session selection; continue verification and candidate completion." -Workspace "C:\Users\huizh\Apps\Tandem Reciprocal\worktrees\copy-b"
+- Result:
+  outcome=RESUMED, phase=working, activeRole=A, turn=14, resumeCount=0.
+
+Old failing assertion and replacement coverage:
+- Old assertion:
+  expect(transport.sent.at(-1)?.options?.keyboard).toEqual([["/use session-"]]);
+- Replacement integration coverage:
+  - /sessions now asserts a numbered inline button with text "1. Session".
+  - The callback data must match /^session:[a-f0-9]{16}$/.
+  - The test taps that callback and asserts "Session selected."
+  - A subsequent plain message still submits to the selected/only session.
+- Existing and added RemoteBridge coverage also proves:
+  - bounded inline callback data;
+  - live session re-resolution through actions.useSession;
+  - stale callback rejection with a /sessions refresh hint;
+  - unauthorized callback does not switch sessions;
+  - rate-limited callback does not switch sessions and audits session-select rate-limited;
+  - callback answer is sent when switching is unavailable;
+  - typed /use remains backward compatible.
+
+Candidate workflow:
+- copy-b implementation commit:
+  ace6dd9f0b17fe0dcd2e7bb7b37ad2391357c3c4
+- Relay Complete command from copy-b returned:
+  outcome=COMPLETED, phase=passive-testing, candidateCommit=ace6dd9f0b17fe0dcd2e7bb7b37ad2391357c3c4.
+- PassiveTest command from copy-a returned:
+  outcome=PASSIVE_ACCEPTED, phase=a-upgrade-pending, stableCommit=ace6dd9f0b17fe0dcd2e7bb7b37ad2391357c3c4.
+- Passive package BUILD_INFO.json:
+  sourceSha=ace6dd9f0b17fe0dcd2e7bb7b37ad2391357c3c4, sourceShortSha=ace6dd9, sourceBranch=codex/reciprocal-a, artifact=release/win-unpacked.
+- Dashboard /api/status:
+  phase=a-upgrade-pending, stableCommit=ace6dd9f0b17fe0dcd2e7bb7b37ad2391357c3c4, candidateUpdate.sourceSha=ace6dd9f0b17fe0dcd2e7bb7b37ad2391357c3c4, reviewNote.ready=true, reviewNote.visible=true, reviewNote.wishlistId=W0024.
+- W0024 board status:
+  CANDIDATE commit=ace6dd9f0b17fe0dcd2e7bb7b37ad2391357c3c4.
+
+Verification from copy-b:
+- npm run build: PASS
+- npm run typecheck: PASS
+- npx vitest run --configLoader runner tests/remote-control.test.ts tests/remote-control-bridge-prompt.test.ts: PASS, 24 tests
+- npx vitest run --configLoader runner tests/reciprocal-direction.test.ts: PASS, 18 tests
+- npm test: PASS, 49 files passed, 1 skipped; 505 tests passed, 1 skipped
+- git diff --check: PASS, line-ending warnings only
+
+Passive gate verification from copy-a:
+- npm run typecheck: PASS
+- npm test: PASS, 49 files passed, 1 skipped; 505 tests passed, 1 skipped
+- npm run build: PASS
+- git diff --check refs/tandem-relay/stable refs/tandem-relay/candidate --: PASS
+- scripts/package-passive-runtime.ps1: PASS
+
+Admin repo baseline checks:
+- npm run typecheck: PASS
+- git diff --check: PASS
+- npm test: PASS on rerun, 49 files passed, 1 skipped; 494 tests passed, 1 skipped
+- Note: the first admin npm test run and an isolated concurrent rerun of tests/reciprocal-relay.test.ts -t "D132: pause closes a clean no-work active A turn" hit the existing 5s Windows timing timeout, while the subsequent full admin suite passed.
+
+W0023 / direction safety proof:
+- W0023 remains QUEUED and unchanged.
+- W0024 is CANDIDATE, not DONE.
+- C:\Users\huizh\Apps\Tandem Reciprocal\control\SHARED_DIRECTION.md contains none of W0022, W0023, W0024, wishlist-items, ## Wishlist, or ## Removed.
+
+Explicit non-goals:
+- W0023 was not implemented.
+- Telegram approval-integration Step 3 was not implemented.
+- W0024 was not marked DONE.
+- W0024 was not promoted into the live Executor A runtime; relay remains at the human A-upgrade gate.
+- No unrelated user changes were overwritten.
