@@ -999,7 +999,7 @@ describe("TandemService", () => {
     expect(remoteEdited.at(-1)).toMatch(/Resolved from Telegram: approved/i);
   });
 
-  it("sends a direct leader answer after command churn from the real orchestration path to Telegram", async () => {
+  it("taps the inline session button and delivers a real direct leader answer after command churn without cooling down or breaking the prompt limit", async () => {
     const cwd = await tempDir();
     const home = await tempDir();
     await mkdir(path.join(home, ".tandem"), { recursive: true });
@@ -1007,14 +1007,14 @@ describe("TandemService", () => {
     await writeFile(path.join(home, ".tandem", "config.json"), JSON.stringify({ remoteControl: { enabled: true, telegramUserId: 101 } }), "utf8");
     const { window, sent } = fakeWindow();
     let onRemoteMessage: ((message: RemoteInboundMessage) => void | Promise<void>) | undefined;
-    const remoteSent: Array<{ text: string; messageId: number }> = [];
+    const remoteSent: Array<{ text: string; messageId: number; options?: RemoteSendOptions }> = [];
     const remoteEdited: string[] = [];
     const transport: RemoteTransport = {
       start: (onMessage) => { onRemoteMessage = onMessage; },
       stop: () => undefined,
-      sendMessage: async (_chatId, text) => {
+      sendMessage: async (_chatId, text, options) => {
         const messageId = 200 + remoteSent.length;
-        remoteSent.push({ text, messageId });
+        remoteSent.push({ text, messageId, options });
         return { messageId };
       },
       editMessage: async (_chatId, _messageId, text) => { remoteEdited.push(text); },
@@ -1028,26 +1028,45 @@ describe("TandemService", () => {
       createAgents: async (): Promise<AgentFns> => ({
         ...fakeAgents(),
         plan: async ({ request }) => {
-          expect(request).toBe("Hi");
-          return { kind: "answer", answer: "Hi! How can I help?" };
+          return { kind: "answer", answer: request === "Hi" ? "Hi! How can I help?" : `Got: ${request}` };
         }
       })
     });
 
     const started = await service.startSession({ projectDir: cwd });
     await onRemoteMessage?.({ updateId: 1, senderId: 101, chatId: 101, text: "/sessions" });
-    for (let updateId = 2; updateId <= 10; updateId += 1) {
+
+    // Tap the inline session button instead of relying on implicit single-session selection.
+    const buttonData = remoteSent.at(-1)?.options?.inlineKeyboard?.[0]?.[0]?.data ?? "";
+    expect(buttonData).toMatch(/^session:[a-f0-9]{16}$/);
+    await onRemoteMessage?.({ updateId: 2, senderId: 101, chatId: 101, text: "", callbackId: "session-cb", callbackData: buttonData });
+
+    // Fill the command bucket: /sessions + callback + 8 /status = 10 commands.
+    for (let updateId = 3; updateId <= 10; updateId += 1) {
       await onRemoteMessage?.({ updateId, senderId: 101, chatId: 101, text: "/status" });
     }
+
     await onRemoteMessage?.({ updateId: 11, senderId: 101, chatId: 101, text: "Hi" });
 
     const deadline = Date.now() + 2_000;
     expect(started.sessionId).toBeTruthy();
     while (!sent.some((event) => event.channel === ipcChannels.doneEvent) && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 10));
 
+    // The button tap must trigger the session-select message, the prompt must reach the real
+    // orchestration direct-answer path, and Telegram must show the leader's actual answer
+    // rather than only system/progress messages.
+    expect(remoteSent.some((message) => /Send any message to prompt it/.test(message.text))).toBe(true);
     expect(remoteSent.some((message) => message.text.includes("Submitting prompt"))).toBe(true);
     expect(remoteSent.some((message) => /cooling down/i.test(message.text))).toBe(false);
     expect(remoteEdited.at(-1)).toContain("leader: Hi! How can I help?");
+
+    // Retain the prompt rate-limit: nine more "Hi X" prompts succeed and the eleventh
+    // prompt bucket entry is rejected with cooling down.
+    for (let i = 1; i < 10; i += 1) {
+      await onRemoteMessage?.({ updateId: 100 + i, senderId: 101, chatId: 101, text: `Hi ${i}` });
+    }
+    await onRemoteMessage?.({ updateId: 111, senderId: 101, chatId: 101, text: "one too many" });
+    expect(remoteSent.at(-1)?.text).toMatch(/cooling down/i);
   });
 
   it("auto-approves build plans when session auto-approve-all is active", async () => {

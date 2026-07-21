@@ -72,23 +72,12 @@ describe("RemoteBridge prompt routing", () => {
     expect(submissions).toEqual(["plain prompt without /prompt"]);
   });
 
-  it("delivers a selected-session Hi after command churn without removing prompt rate limits", async () => {
+  it("fills the command bucket via the session button and keeps the prompt bucket separate", async () => {
     const transport = new PromptTransport();
     const submissions: string[] = [];
-    let receive: ((event: StreamingSessionEvent) => void) | undefined;
     const bridge = await createBridge(transport, async (prompt) => {
       submissions.push(prompt.text);
-      receive?.({
-        role: "leader",
-        phase: "answering",
-        lastEventKind: "done",
-        text: "Hi! How can I help?",
-        ended: true
-      });
       return { status: "submitted" };
-    }, (_sessionId, onEvent) => {
-      receive = onEvent;
-      return () => {};
     });
 
     await bridge.handleMessage(message("/sessions"));
@@ -98,10 +87,12 @@ describe("RemoteBridge prompt routing", () => {
     await bridge.handleMessage(message("/status"));
     expect(transport.sent.at(-1)?.text).toMatch(/cooling down/i);
 
+    // The prompt bucket is independent of the command bucket, so a plain "Hi" still
+    // submits while the command bucket is exhausted.
     await bridge.handleMessage(message("Hi"));
     expect(submissions).toEqual(["Hi"]);
-    expect(transport.edited.at(-1)?.text).toContain("leader: Hi! How can I help?");
 
+    // The prompt bucket still enforces the ten-prompts-per-minute limit.
     for (let index = 0; index < 9; index += 1) await bridge.handleMessage(message(`prompt ${index}`));
     await bridge.handleMessage(message("one prompt too many"));
     expect(submissions).toHaveLength(10);
