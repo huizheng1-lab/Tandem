@@ -1,0 +1,72 @@
+Round: D176
+Completed: 2026-07-22T04:04:00Z
+
+Commits:
+- ef8147fb72d4f83eb6ee726070c4ca27b184f9ad D176-1: finish progress-first control path
+
+Corrective work completed:
+- Added process/reciprocal/gate-taxonomy.json as a machine-readable taxonomy source.
+- Removed broad keyword authority inference from scripts/reciprocal-direction.ps1 and dashboard lib.mjs.
+- Normal queued work now normalizes to autonomous planning even when prose mentions Python, permission, sandbox helper, credentials, or "never weaken sandboxing".
+- Explicit authority is represented by structured metadata on the exact step/action: authority=<kind> action=<precise-action> checkpoint=<id> resume=<action>.
+- Added MigrateAuthorityMetadata to correct false-positive authority metadata without changing ID, text, priority, owner, phase, role, revision, timestamps, or plan path.
+- Migrated live W0027 only in control metadata. Before: IN_PROGRESS epic=true autonomy=plan-gated safety=security-surface phase=PLAN revision=1 completed=0 plan=process/reciprocal/epics/W0027-plan.md role=A started=2026-07-22T03:25:39Z. After: IN_PROGRESS epic=true autonomy=full phase=PLAN revision=1 completed=0 plan=process/reciprocal/epics/W0027-plan.md role=A started=2026-07-22T03:25:39Z migrated=2026-07-22T03:57:53Z.
+- Did not edit or regenerate process/reciprocal/epics/W0027-plan.md.
+- Preserved W0023 queued behind W0027.
+
+Supervisor/controller:
+- Added token-owned continuation-supervisor.lock.json with PID plus process start identity, heartbeat/expiry timestamps, stale reclamation, and token-matched cleanup.
+- Added continuation-supervisor-state.json with displayState, lastRun, persisted blocker category/code/fingerprint/attempt/backoff/next-attempt, and transition history.
+- Added bounded blocker backoff. A transition resets blocker state; active/waiting ownership does not consume attempts.
+- Dashboard startup now runs exactly one controller path at startup and on a bounded recurring tick; manual Kickstart calls the same controller as a diagnostic.
+- /api/status exposes supervisor.displayState and the shared classifier gate category/code/action.
+- UI displays the semantic supervisor state such as working, testing, waiting for review, retrying prerequisite, human paused, and hard blocked.
+- Live audit proof without Kickstart:
+  {"action":"supervisor.tick","source":"dashboard-startup","ok":true,"transitionsUsed":0,"finalPhase":"working","actions":[]}
+- Live status after deployment: phase=working, activeRole=A, supervisor=working, gateCategory=waiting-not-blocked, gateCode=progress-wait, blocker=null.
+
+Plan/intermediate semantics:
+- Direction tests still cover auto-approval for full-autonomy plan candidates and non-final step continuation.
+- The classifier now treats active ownership as waiting-not-blocked before considering stale broad/planning summary text.
+- Final runtime replacement remains a hard human gate; no pinned runtime was promoted or replaced.
+
+Transactional reconciliation:
+- scripts/reciprocal-main-update.mjs now snapshots staged index entries as well as dirty tracked/untracked files.
+- Local checked-out master is not moved before push. The updater pushes the isolated merge SHA directly to refs/heads/master, then updates the local ref after preservation validation.
+- Transaction state is written under .git/tandem-relay/main-update-transaction.json for merged/tagged/pushed stages and cleared on complete or safe pre-push failure.
+- Pre-push failures delete the local annotated tag and leave refs coherent.
+- Cleanup uses component-aware path.relative containment rather than string-prefix temp path checks.
+- Live reconciliation was intentionally not forced because W0027 currently owns the relay and copy-b has active plan work/checkpoint. The corrected updater refused safely at preconditions:
+  {"ok":false,"stage":"preconditions","error":"Relay turn 2 is active (working, owner A). Wait for it to finish before updating master.","remaining":[]}
+- Ref proof after refusal: master=ef8147fb72d4f83eb6ee726070c4ca27b184f9ad, stable=974d64c67c75d27151d9776d2c2b88888d820038, latest main-update tag=main-update-006, transactionExists=false, relay phase=working activeRole=A.
+
+Deployment/runtime:
+- Dashboard deploy succeeded and restarted.
+- Final deployment staging root: C:\Users\huizh\Apps\Tandem Reciprocal\dashboard\.deploy-staging\20260722T040123Z.
+- Final deployment backup root: C:\Users\huizh\Apps\Tandem Reciprocal\dashboard\.deploy-backups\20260722T040123Z.
+- VerifyOnly after deployment passed with no planned updates.
+- Executor A runtime BUILD_INFO remained sourceSha=ead38ad2692d2a5641ce3cdaed684ab75ebf2db1 sourceShortSha=ead38ad promotedRound=D123 promotedAt=2026-07-21T20:22:31.2950294-04:00.
+- Executor B runtime BUILD_INFO remained sourceSha=ead38ad2692d2a5641ce3cdaed684ab75ebf2db1 sourceShortSha=ead38ad promotedRound=D123 promotedAt=2026-07-21T20:22:32.2318597-04:00.
+
+Verification:
+- PowerShell parse: scripts/reciprocal-direction.ps1 PASS.
+- PowerShell parse: scripts/continue-reciprocal-automation.ps1 PASS.
+- node --check scripts/reciprocal-main-update.mjs PASS.
+- node --check dashboard-source/reciprocal-control-panel/server.mjs PASS.
+- node --check dashboard-source/reciprocal-control-panel/lib.mjs PASS.
+- node --check dashboard-source/reciprocal-control-panel/public/app.js PASS.
+- node --test dashboard-source/reciprocal-control-panel/lib.nodecheck.mjs PASS, 14 tests.
+- node --test dashboard-source/reciprocal-control-panel/approval-flow.e2e.mjs PASS, 2 tests.
+- npm test -- tests/reciprocal-direction.test.ts PASS, 21 tests.
+- npm test -- tests/reciprocal-supervisor.test.ts PASS, 1 test.
+- npm run typecheck PASS.
+- npm test PASS, 51 files passed and 1 skipped; 515 tests passed and 1 skipped.
+- git diff --check PASS.
+- powershell -NoProfile -ExecutionPolicy Bypass -File scripts/deploy-reciprocal-dashboard.ps1 -VerifyOnly PASS.
+
+Preservation notes:
+- W0027 product work was not implemented by D176.
+- W0027 owner/checkpoint was not canceled, duplicated, restarted, or replaced.
+- process/reciprocal/epics/W0027-plan.md was left to the W0027 owner.
+- Existing unrelated admin dirty file scripts/setup-reciprocal-tandem.ps1 was not staged.
+- Untracked handoff docs and unrelated files were left untouched.
