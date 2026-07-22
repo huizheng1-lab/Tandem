@@ -187,6 +187,35 @@ describe("reciprocal relay script", () => {
     }
   }, 30_000);
 
+  windowsIt("D168: claim refuses stale pre-D167 wishlist tooling", async () => {
+    const repo = await mkdtemp(path.join(tmpdir(), "tandem-relay-d168-stale-tooling-"));
+    try {
+      await initRepo(repo);
+      await writeSharedBoard(repo, "- [ ] W0022 | P0 | real work | QUEUED added=now");
+      await writeFile(
+        path.join(repo, ".tandem", "shared-control", "SHARED_DIRECTION.md"),
+        "# Shared Direction\n\n## General Direction\n\nDurable only.\n",
+        "utf8",
+      );
+      await writeFile(
+        path.join(repo, "scripts", "reciprocal-direction.ps1"),
+        [
+          "param([Parameter(Mandatory = $true)][ValidateSet(\"Show\")][string]$Action)",
+          "$path = Join-Path (Get-Location).Path \".tandem\\shared-control\\SHARED_DIRECTION.md\"",
+          "if ($Action -eq \"Show\" -and (Test-Path -LiteralPath $path)) { Get-Content -LiteralPath $path -Raw }",
+        ].join("\n"),
+        "utf8",
+      );
+      await execa("git", ["add", "scripts/reciprocal-direction.ps1"], { cwd: repo });
+      await execa("git", ["commit", "-m", "stale direction tooling"], { cwd: repo });
+      await relay(repo, "-Action", "Reset", "-Force");
+
+      await expect(relay(repo, "-Action", "Claim", "-Role", "A")).rejects.toThrow(/stale pre-D167 wishlist tooling/);
+    } finally {
+      await rm(repo, { recursive: true, force: true });
+    }
+  }, 30_000);
+
   windowsIt("D133: repeated RESUME claims still auto-pause A recovery loops", async () => {
     const repo = await mkdtemp(path.join(tmpdir(), "tandem-relay-d133-resume-"));
     try {

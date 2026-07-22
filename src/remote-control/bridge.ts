@@ -138,6 +138,7 @@ const RATE_LIMIT_MAX = 10;
 const STOP_CONFIRM_TTL_MS = 60 * 1000;
 const REMOTE_APPROVAL_TTL_MS = 5 * 60 * 1000;
 const APPROVAL_PREFIX = "approval:";
+const SESSION_PREFIX = "session:";
 const MAX_REMOTE_BODY_CHARS = 900;
 
 export function parseRemoteCommand(text: string): RemoteCommand {
@@ -177,6 +178,7 @@ export class RemoteBridge {
   private transport?: RemoteTransport;
   private pairing?: PairingCode;
   private readonly commandTimes: number[] = [];
+  private readonly promptTimes: number[] = [];
   private readonly rejectedAuditAt = new Map<number, number>();
   private polling = false;
   private lastError: string | undefined;
@@ -250,7 +252,16 @@ export class RemoteBridge {
       return;
     }
 
-    if (!this.consumeRateLimit()) {
+    // Keep content submissions in their own rate-limit bucket. Session browsing
+    // and status checks must not consume the capacity needed for the selected
+    // session's next prompt, while prompts still retain the same abuse cap.
+    const routesAsContentPrompt =
+      command.verb === "prompt" ||
+      (command.verb === "unknown" &&
+        (message.replyToMessageId !== undefined || this.selectedSessionsByChat.has(message.chatId)));
+    const rateLimitTimes = routesAsContentPrompt ? this.promptTimes : this.commandTimes;
+
+    if (!this.consumeRateLimit(rateLimitTimes)) {
       await this.send(message.chatId, "Remote control is cooling down; try again in a minute.", "rate-limit");
       return;
     }
@@ -262,7 +273,7 @@ export class RemoteBridge {
       return;
     }
     if (command.verb === "sessions") {
-      await this.send(message.chatId, formatSessions(await this.deps.sessionsProvider()), "sessions");
+      await this.handleSessions(message);
       return;
     }
     if (command.verb === "use") {
@@ -461,6 +472,11 @@ export class RemoteBridge {
     }
     if (!this.consumeRateLimit()) {
       if (message.callbackId) await this.transport?.answerCallback?.(message.callbackId, "Remote control is cooling down.");
+      if (message.callbackData?.startsWith(SESSION_PREFIX)) await this.audit("session-select", { outcome: "rate-limited" });
+      return;
+    }
+    if (message.callbackData?.startsWith(SESSION_PREFIX)) {
+      await this.handleSessionSelection(message, message.callbackData.slice(SESSION_PREFIX.length));
       return;
     }
     const match = new RegExp(`^${APPROVAL_PREFIX}([^:]+):(approve|deny)$`).exec(message.callbackData ?? "");
@@ -482,11 +498,43 @@ export class RemoteBridge {
     if (message.callbackId) await this.transport?.answerCallback?.(message.callbackId, approved ? "Approved." : "Denied.");
   }
 
-  private consumeRateLimit(): boolean {
+  private async handleSessionSelection(message: RemoteInboundMessage, token: string): Promise<void> {
+    const sessions = await this.deps.sessionsProvider();
+    const matches = sessions.filter((session) => hashArgs(session.id) === token);
+    if (!/^[a-f0-9]{16}$/.test(token) || matches.length !== 1) {
+      const outcome = matches.length > 1 ? "ambiguous" : "stale";
+      await this.audit("session-select", { outcome, token });
+      if (message.callbackId) await this.transport?.answerCallback?.(message.callbackId, "That session is no longer available.");
+      await this.send(message.chatId, "That session is no longer available. Send /sessions to refresh the list.", "session-select");
+      return;
+    }
+    const target = matches[0] as RemoteSessionSummary;
+    if (!this.deps.actions) {
+      await this.audit("session-select", { outcome: "unavailable", sessionId: target.id });
+      if (message.callbackId) await this.transport?.answerCallback?.(message.callbackId, "Session switching is unavailable.");
+      await this.send(message.chatId, "Remote session switching is unavailable in this build.", "session-select");
+      return;
+    }
+    let result: { ok: boolean; message: string };
+    try {
+      result = await this.deps.actions.useSession(target.id);
+    } catch (error) {
+      await this.audit("session-select", { outcome: "error", sessionId: target.id, message: errorMessage(error) });
+      if (message.callbackId) await this.transport?.answerCallback?.(message.callbackId, "Session not selected.");
+      await this.send(message.chatId, "Could not select that session. Send /sessions to refresh and try again.", "session-select");
+      return;
+    }
+    if (result.ok) this.selectedSessionsByChat.set(message.chatId, target.id);
+    await this.audit("session-select", { outcome: result.ok ? "ok" : "rejected", sessionId: target.id });
+    if (message.callbackId) await this.transport?.answerCallback?.(message.callbackId, result.ok ? "Session selected." : "Session not selected.");
+    await this.send(message.chatId, result.ok ? `${result.message} Send any message to prompt it.` : result.message, "session-select");
+  }
+
+  private consumeRateLimit(times = this.commandTimes): boolean {
     const now = this.now();
-    while (this.commandTimes.length > 0 && now - (this.commandTimes[0] ?? 0) > RATE_LIMIT_WINDOW_MS) this.commandTimes.shift();
-    if (this.commandTimes.length >= RATE_LIMIT_MAX) return false;
-    this.commandTimes.push(now);
+    while (times.length > 0 && now - (times[0] ?? 0) > RATE_LIMIT_WINDOW_MS) times.shift();
+    if (times.length >= RATE_LIMIT_MAX) return false;
+    times.push(now);
     return true;
   }
 
@@ -509,6 +557,19 @@ export class RemoteBridge {
     await this.send(chatId, result.message, auditEvent);
   }
 
+  private async handleSessions(message: RemoteInboundMessage): Promise<void> {
+    const sessions = await this.deps.sessionsProvider();
+    const currentId = this.deps.statusProvider().sessionId;
+    const selected = sessions.find((session) => session.id === currentId) ?? (sessions.length === 1 ? sessions[0] : undefined);
+    if (selected) this.selectedSessionsByChat.set(message.chatId, selected.id);
+    const intro = selected
+      ? `Selected ${selected.id.slice(0, 8)} (${selected.title || "Untitled session"}). Send any message to prompt it.`
+      : "Tap a session button to select it; you do not need to type the session ID.";
+    await this.send(message.chatId, `${intro}\n\n${formatSessions(sessions)}`, "sessions", {
+      inlineKeyboard: sessionSelectionInlineKeyboard(sessions)
+    });
+  }
+
   private async handleUse(message: RemoteInboundMessage, prefix: string): Promise<void> {
     const sessions = await this.deps.sessionsProvider();
     const matches = sessions.filter((session) => session.id.toLowerCase().startsWith(prefix.toLowerCase()));
@@ -529,7 +590,7 @@ export class RemoteBridge {
     const result = await this.deps.actions.useSession(target.id);
     if (result.ok) this.selectedSessionsByChat.set(message.chatId, target.id);
     await this.audit("use", { outcome: result.ok ? "ok" : "rejected", sessionId: target.id });
-    await this.send(message.chatId, result.message, "use");
+    await this.send(message.chatId, result.ok ? `${result.message} Send any message to prompt it.` : result.message, "use");
   }
 
   private async handlePrompt(message: RemoteInboundMessage, text: string): Promise<void> {
@@ -660,11 +721,19 @@ export class RemoteBridge {
 }
 
 function noActiveSessionMessage(): string {
-  return "No active session. Use /sessions, then /use <id>.";
+  return "No active session. Send /sessions, then tap a session button.";
 }
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+function sessionSelectionInlineKeyboard(sessions: RemoteSessionSummary[]): Array<Array<{ text: string; data: string }>> | undefined {
+  const buttons = sessions.slice(0, 8).map((session, index) => ({
+    text: `${index + 1}. ${Array.from(session.title || "Untitled session").slice(0, 40).join("")}`,
+    data: `${SESSION_PREFIX}${hashArgs(session.id)}`
+  }));
+  return buttons.length > 0 ? buttons.map((button) => [button]) : undefined;
 }
 
 export function formatStatus(status: RemoteStatusSnapshot): string {
@@ -680,9 +749,9 @@ export function formatStatus(status: RemoteStatusSnapshot): string {
 
 export function formatSessions(sessions: RemoteSessionSummary[]): string {
   if (sessions.length === 0) return "No saved sessions.";
-  return sessions.slice(0, 8).map((session) => {
+  return sessions.slice(0, 8).map((session, index) => {
     const project = session.projectDir ? path.basename(session.projectDir) || session.projectDir : "unknown project";
-    return `${session.id.slice(0, 8)} - ${session.title || "Untitled session"} - ${project}`;
+    return `${index + 1}. ${session.title || "Untitled session"} - ${project} (${session.id.slice(0, 8)})`;
   }).join("\n");
 }
 

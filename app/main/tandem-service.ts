@@ -34,6 +34,7 @@ import type { MemoryAuthor, SessionMemoryNote } from "../../src/session/memory.j
 import { appendProjectMemoryNote, formatProjectInstructions, readProjectInstructions } from "../../src/session/project-memory.js";
 import { archiveSession, deleteSession, findSessionProjectDir, listAllSessions, renameSession, sessionDir, SessionStore } from "../../src/session/store.js";
 import type { SessionMetadata } from "../../src/session/store.js";
+import { searchSessionsStream } from "../../src/session/search.js";
 import { safeDefaultProjectDir } from "../../src/tools/protection.js";
 import { readJsonFileSync } from "../../src/json.js";
 import type { PermissionBridge, PermissionRequest } from "../../src/tools/permissions.js";
@@ -52,6 +53,8 @@ import {
   type SessionAutoApproveMode,
   type SessionDeleteResponse,
   type SessionResumeResponse,
+  type SessionSearchBatchEvent,
+  type SessionSearchRequest,
   type ToolActivityEvent,
   type SessionStartRequest,
   type SessionStartResponse
@@ -113,6 +116,7 @@ export interface TandemServiceDeps {
   createSession?: (cwd: string) => Promise<SessionLike>;
   openSession?: (id: string, cwd: string) => Promise<SessionLike>;
   findSessionProjectDir?: typeof findSessionProjectDir;
+  searchSessionsStream?: typeof searchSessionsStream;
   remoteTransportFactory?: (token: string) => RemoteTransport;
   registerIpcResponses?: boolean;
   homeDir?: string;
@@ -135,6 +139,7 @@ export class TandemService {
   private readonly pendingPermissions = new Map<string, PendingResolver>();
   private readonly pendingPlans = new Map<string, PendingResolver>();
   private readonly cronTasks = new Map<string, ScheduledTask>();
+  private readonly sessionSearchControllers = new Map<string, AbortController>();
   private sessionAutoApprove: SessionAutoApproveMode = "none";
   private lastPersistedCostKey?: string;
   private runBaselineTotals?: CostTotals;
@@ -270,6 +275,7 @@ export class TandemService {
         confirmCodexWrite: (_role, message) => this.requestPermission({ action: "bash", target: message })
       });
       const goals = formatStandingGoals((await listGoals(this.projectDir)).filter((goal) => goal.status === "active"));
+      let directLeaderAnswer = false;
       const result = await (this.deps.runOrchestration ?? runOrchestration)({
         request: promptWithAttachments,
         config: this.config,
@@ -288,8 +294,23 @@ export class TandemService {
         initialState,
         confirmPlan: (plan) => this.confirmPlan(plan),
         waitIfPaused: () => this.waitIfPaused(),
-        emit: (event) => void this.emitMachine(event)
+        emit: (event) => {
+          if (event.type === "transition" && event.message === "leader answered without build plan") {
+            directLeaderAnswer = true;
+          }
+          void this.emitMachine(event);
+        }
       });
+      if (directLeaderAnswer) {
+        this.emitRemoteSessionEvent({
+          role: "leader",
+          phase: "completed",
+          health: "healthy",
+          lastEventKind: "answer",
+          text: result.summary,
+          ended: true
+        });
+      }
       const done = { summary: result.summary, takeover: result.takeover };
       this.window.webContents.send(ipcChannels.doneEvent, done);
       await session.append("done", done);
@@ -303,7 +324,12 @@ export class TandemService {
       await session.append("done", done);
       this.lastCheckpoint = undefined;
     } finally {
-      this.emitRemoteSessionEvent({ phase: this.currentPhase === "IDLE" ? "completed" : this.currentPhase.toLowerCase(), health: "healthy", lastEventKind: "done", ended: true });
+      this.emitRemoteSessionEvent({
+        phase: this.currentPhase === "IDLE" ? "completed" : this.currentPhase.toLowerCase(),
+        health: "healthy",
+        lastEventKind: "done",
+        ended: true
+      });
       this.controller = undefined;
       this.paused = false;
       this.releasePauseWaiters();
@@ -386,6 +412,36 @@ export class TandemService {
 
   listSessions(): Promise<SessionMetadata[]> {
     return listAllSessions(this.homeDir);
+  }
+
+  async startSessionSearch(
+    request: SessionSearchRequest,
+    onBatch: (batch: SessionSearchBatchEvent) => void
+  ): Promise<void> {
+    this.cancelSessionSearch(request.searchId);
+    const controller = new AbortController();
+    this.sessionSearchControllers.set(request.searchId, controller);
+    try {
+      const stream = await (this.deps.searchSessionsStream ?? searchSessionsStream)(
+        { query: request.query, limit: request.limit, homeDir: this.homeDir },
+        controller.signal
+      );
+      for await (const batch of stream) {
+        if (controller.signal.aborted) break;
+        onBatch({ searchId: request.searchId, ...batch });
+        if (batch.done) break;
+      }
+    } finally {
+      if (this.sessionSearchControllers.get(request.searchId) === controller) {
+        this.sessionSearchControllers.delete(request.searchId);
+      }
+    }
+  }
+
+  cancelSessionSearch(searchId: string): void {
+    const controller = this.sessionSearchControllers.get(searchId);
+    controller?.abort();
+    if (controller) this.sessionSearchControllers.delete(searchId);
   }
 
   private async projectDirForSession(id: string): Promise<string> {
@@ -655,8 +711,7 @@ export class TandemService {
       phase: this.currentPhase.toLowerCase(),
       health: event.type === "error" ? "likely stalled" : "healthy",
       lastEventKind: event.type,
-      text: event.type === "notice" || event.type === "error" || event.type === "transition" ? event.message : undefined,
-      ended: event.type === "checkpoint" && event.checkpoint.phase === "DONE"
+      text: event.type === "notice" || event.type === "error" || event.type === "transition" ? event.message : undefined
     });
     const totals = this.costTotals();
     this.window.webContents.send(ipcChannels.costEvent, this.costEventTotals(totals));
@@ -806,7 +861,6 @@ export class TandemService {
       phase: this.controller ? this.currentPhase : this.lastCheckpoint?.phase ?? "IDLE",
       activeRole: this.controller ? (this.currentPhase === "BUILDING" ? "worker" : "leader") : undefined,
       runHealth: this.paused ? "paused" : this.controller ? "running" : "idle",
-      capabilities: { candidatePreviewArtifactLifecycle: 1 },
       cost: this.costEventTotals()
     };
   }

@@ -44,8 +44,7 @@ export class FileTelegramOffsetStore implements TelegramOffsetStore {
   async read(): Promise<number> {
     try {
       const parsed = JSON.parse(await readFile(this.filePath, "utf8")) as { offset?: unknown } | number;
-      const offset = typeof parsed === "number" ? parsed : parsed.offset;
-      return normalizeOffset(offset);
+      return normalizeOffset(typeof parsed === "number" ? parsed : parsed.offset);
     } catch {
       return 0;
     }
@@ -208,6 +207,5 @@ async function telegramHttpError(response: Response, method: string): Promise<Er
   } catch {
     description = "";
   }
-  const suffix = description ? `: ${description}` : "";
-  return new Error(`Telegram ${method} failed: HTTP ${response.status}${suffix}`);
+  return new Error(`Telegram ${method} failed: HTTP ${response.status}${description ? `: ${description}` : ""}`);
 }

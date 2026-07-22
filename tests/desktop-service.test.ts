@@ -11,6 +11,7 @@ import type { PermissionBridge } from "../src/tools/permissions.js";
 import { safeDefaultProjectDir } from "../src/tools/protection.js";
 import { SessionStore } from "../src/session/store.js";
 import type { RemoteInboundMessage, RemoteSendOptions, RemoteTransport } from "../src/remote-control/bridge.js";
+import type { SessionSearchBatch } from "../src/session/search.js";
 
 async function tempDir(): Promise<string> {
   const dir = path.join(tmpdir(), `tandem-desktop-${Date.now()}-${Math.random().toString(16).slice(2)}`);
@@ -66,6 +67,10 @@ function respondToPlan(service: TandemService, id: string, approved: boolean): v
     resolvePending(map: Map<string, (approved: boolean) => void>, id: string, approved: boolean): void;
   };
   internals.resolvePending(internals.pendingPlans, id, approved);
+}
+
+async function* searchBatches(batches: SessionSearchBatch[]): AsyncGenerator<SessionSearchBatch> {
+  for (const batch of batches) yield batch;
 }
 
 describe("TandemService", () => {
@@ -994,7 +999,7 @@ describe("TandemService", () => {
     expect(remoteEdited.at(-1)).toMatch(/Resolved from Telegram: approved/i);
   });
 
-  it("lets Telegram submit plain selected-session prompts through the real service run path", async () => {
+  it("taps the inline session button and delivers a real direct leader answer after command churn without cooling down or breaking the prompt limit", async () => {
     const cwd = await tempDir();
     const home = await tempDir();
     await mkdir(path.join(home, ".tandem"), { recursive: true });
@@ -1002,49 +1007,66 @@ describe("TandemService", () => {
     await writeFile(path.join(home, ".tandem", "config.json"), JSON.stringify({ remoteControl: { enabled: true, telegramUserId: 101 } }), "utf8");
     const { window, sent } = fakeWindow();
     let onRemoteMessage: ((message: RemoteInboundMessage) => void | Promise<void>) | undefined;
-    const remoteSent: Array<{ text: string; messageId: number }> = [];
+    const remoteSent: Array<{ text: string; messageId: number; options?: RemoteSendOptions }> = [];
     const remoteEdited: string[] = [];
     const transport: RemoteTransport = {
-      start: (onMessage) => {
-        onRemoteMessage = onMessage;
-      },
+      start: (onMessage) => { onRemoteMessage = onMessage; },
       stop: () => undefined,
-      sendMessage: async (_chatId, text) => {
+      sendMessage: async (_chatId, text, options) => {
         const messageId = 200 + remoteSent.length;
-        remoteSent.push({ text, messageId });
+        remoteSent.push({ text, messageId, options });
         return { messageId };
       },
-      editMessage: async (_chatId, _messageId, text) => {
-        remoteEdited.push(text);
-      },
+      editMessage: async (_chatId, _messageId, text) => { remoteEdited.push(text); },
       answerCallback: async () => undefined
     };
-    const requests: string[] = [];
     const service = new TandemService(window as never, {
       registerIpcResponses: false,
       homeDir: home,
       baseEnv: {},
       remoteTransportFactory: () => transport,
-      createAgents: async (): Promise<AgentFns> => fakeAgents(),
-      runOrchestration: async (options: RunOptions): Promise<RunResult> => {
-        requests.push(options.request);
-        options.emit?.({ type: "notice", message: `remote saw ${options.request}` });
-        return { phase: "DONE", summary: "remote done", plan, reports: [], verdicts: [], takeover: false };
-      }
+      createAgents: async (): Promise<AgentFns> => ({
+        ...fakeAgents(),
+        plan: async ({ request }) => {
+          return { kind: "answer", answer: request === "Hi" ? "Hi! How can I help?" : `Got: ${request}` };
+        }
+      })
     });
 
     const started = await service.startSession({ projectDir: cwd });
-    await onRemoteMessage?.({ updateId: 1, senderId: 101, chatId: 101, text: `/use ${started.sessionId.slice(0, 8)}` });
-    await onRemoteMessage?.({ updateId: 2, senderId: 101, chatId: 101, text: "plain remote prompt" });
+    await onRemoteMessage?.({ updateId: 1, senderId: 101, chatId: 101, text: "/sessions" });
 
-    const deadline = Date.now() + 2000;
-    while (requests.length === 0 && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 10));
-    expect(requests).toEqual(["plain remote prompt"]);
+    // Tap the inline session button instead of relying on implicit single-session selection.
+    const buttonData = remoteSent.at(-1)?.options?.inlineKeyboard?.[0]?.[0]?.data ?? "";
+    expect(buttonData).toMatch(/^session:[a-f0-9]{16}$/);
+    await onRemoteMessage?.({ updateId: 2, senderId: 101, chatId: 101, text: "", callbackId: "session-cb", callbackData: buttonData });
+
+    // Fill the command bucket: /sessions + callback + 8 /status = 10 commands.
+    for (let updateId = 3; updateId <= 10; updateId += 1) {
+      await onRemoteMessage?.({ updateId, senderId: 101, chatId: 101, text: "/status" });
+    }
+
+    await onRemoteMessage?.({ updateId: 11, senderId: 101, chatId: 101, text: "Hi" });
+
+    const deadline = Date.now() + 2_000;
+    expect(started.sessionId).toBeTruthy();
     while (!sent.some((event) => event.channel === ipcChannels.doneEvent) && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 10));
-    await new Promise((resolve) => setTimeout(resolve, 1600));
 
+    // The button tap must trigger the session-select message, the prompt must reach the real
+    // orchestration direct-answer path, and Telegram must show the leader's actual answer
+    // rather than only system/progress messages.
+    expect(remoteSent.some((message) => /Send any message to prompt it/.test(message.text))).toBe(true);
     expect(remoteSent.some((message) => message.text.includes("Submitting prompt"))).toBe(true);
-    expect(remoteEdited.some((text) => text.includes("remote saw plain remote prompt"))).toBe(true);
+    expect(remoteSent.some((message) => /cooling down/i.test(message.text))).toBe(false);
+    expect(remoteEdited.at(-1)).toContain("leader: Hi! How can I help?");
+
+    // Retain the prompt rate-limit: nine more "Hi X" prompts succeed and the eleventh
+    // prompt bucket entry is rejected with cooling down.
+    for (let i = 1; i < 10; i += 1) {
+      await onRemoteMessage?.({ updateId: 100 + i, senderId: 101, chatId: 101, text: `Hi ${i}` });
+    }
+    await onRemoteMessage?.({ updateId: 111, senderId: 101, chatId: 101, text: "one too many" });
+    expect(remoteSent.at(-1)?.text).toMatch(/cooling down/i);
   });
 
   it("auto-approves build plans when session auto-approve-all is active", async () => {
@@ -1073,6 +1095,106 @@ describe("TandemService", () => {
 
     expect(confirmed).toBe(true);
     expect(sent.some((event) => event.channel === ipcChannels.planConfirm)).toBe(false);
+  });
+
+  it("streams replacement search batches in order and terminates empty queries cleanly", async () => {
+    const { window } = fakeWindow();
+    const rankedHit = {
+      id: "ranked",
+      title: "Ranked result",
+      lastActiveAt: "2026-07-18T18:00:00.000Z",
+      matchCount: 3,
+      sourceRole: "leader" as const,
+      snippet: { text: "matching text", start: 0, end: 8 }
+    };
+    const service = new TandemService(window as never, {
+      registerIpcResponses: false,
+      searchSessionsStream: async ({ query }) => searchBatches(query.trim() ? [
+        { hits: [], scannedCount: 1, skippedCount: 0, done: false },
+        { hits: [rankedHit], scannedCount: 2, skippedCount: 0, done: true }
+      ] : [{ hits: [], scannedCount: 0, skippedCount: 0, done: true }])
+    });
+    const streamed: Array<{ searchId: string } & SessionSearchBatch> = [];
+
+    await service.startSessionSearch({ searchId: "search-1", query: "match" }, (batch) => streamed.push(batch));
+    expect(streamed).toEqual([
+      { searchId: "search-1", hits: [], scannedCount: 1, skippedCount: 0, done: false },
+      { searchId: "search-1", hits: [rankedHit], scannedCount: 2, skippedCount: 0, done: true }
+    ]);
+
+    const empty: Array<{ searchId: string } & SessionSearchBatch> = [];
+    await service.startSessionSearch({ searchId: "empty", query: "   " }, (batch) => empty.push(batch));
+    expect(empty).toEqual([{ searchId: "empty", hits: [], scannedCount: 0, skippedCount: 0, done: true }]);
+  });
+
+  it("cancels a search without emitting later batches", async () => {
+    const { window } = fakeWindow();
+    const service = new TandemService(window as never, {
+      registerIpcResponses: false,
+      searchSessionsStream: async (_options, signal) => (async function* () {
+        yield { hits: [], scannedCount: 1, skippedCount: 0, done: false };
+        await new Promise<void>((resolve) => signal?.addEventListener("abort", () => resolve(), { once: true }));
+        yield { hits: [], scannedCount: 2, skippedCount: 0, done: true };
+      })()
+    });
+    const streamed: Array<{ searchId: string } & SessionSearchBatch> = [];
+    const run = service.startSessionSearch({ searchId: "cancel-me", query: "match" }, (batch) => streamed.push(batch));
+    while (streamed.length === 0) await Promise.resolve();
+
+    service.cancelSessionSearch("cancel-me");
+    await run;
+    expect(streamed).toHaveLength(1);
+    expect(streamed[0]?.done).toBe(false);
+  });
+
+  it("replaces duplicate search IDs and keeps the replacement controller", async () => {
+    const { window } = fakeWindow();
+    const service = new TandemService(window as never, {
+      registerIpcResponses: false,
+      searchSessionsStream: async ({ query }, signal) => (async function* () {
+        if (query === "first") {
+          yield { hits: [], scannedCount: 1, skippedCount: 0, done: false };
+          await new Promise<void>((resolve) => signal?.addEventListener("abort", () => resolve(), { once: true }));
+          yield { hits: [], scannedCount: 2, skippedCount: 0, done: true };
+          return;
+        }
+        yield { hits: [], scannedCount: 4, skippedCount: 0, done: true };
+      })()
+    });
+    const streamed: Array<{ searchId: string } & SessionSearchBatch> = [];
+    const first = service.startSessionSearch({ searchId: "same", query: "first" }, (batch) => streamed.push(batch));
+    while (streamed.length === 0) await Promise.resolve();
+    const replacement = service.startSessionSearch({ searchId: "same", query: "replacement" }, (batch) => streamed.push(batch));
+
+    await Promise.all([first, replacement]);
+    expect(streamed.map((batch) => batch.scannedCount)).toEqual([1, 4]);
+  });
+
+  it("cleans search controllers after success, failure, and cancellation", async () => {
+    const { window } = fakeWindow();
+    const service = new TandemService(window as never, {
+      registerIpcResponses: false,
+      searchSessionsStream: async ({ query }, signal) => {
+        if (query === "failure") throw new Error("search failed");
+        if (query === "cancel") return (async function* () {
+          if (signal?.aborted) return;
+          await new Promise<void>((resolve) => signal?.addEventListener("abort", () => resolve(), { once: true }));
+          yield { hits: [], scannedCount: 1, skippedCount: 0, done: true };
+        })();
+        return searchBatches([{ hits: [], scannedCount: 0, skippedCount: 0, done: true }]);
+      }
+    });
+    const controllers = (service as unknown as { sessionSearchControllers: Map<string, AbortController> }).sessionSearchControllers;
+
+    await service.startSessionSearch({ searchId: "success", query: "success" }, () => undefined);
+    expect(controllers.size).toBe(0);
+    await expect(service.startSessionSearch({ searchId: "failure", query: "failure" }, () => undefined)).rejects.toThrow("search failed");
+    expect(controllers.size).toBe(0);
+    const cancelled = service.startSessionSearch({ searchId: "cancel", query: "cancel" }, () => undefined);
+    while (controllers.size === 0) await Promise.resolve();
+    service.cancelSessionSearch("cancel");
+    await cancelled;
+    expect(controllers.size).toBe(0);
   });
 
   it("deletes the active session by rotating to a fresh session", async () => {

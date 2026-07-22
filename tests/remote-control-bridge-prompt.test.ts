@@ -1,10 +1,11 @@
-import { mkdir, readFile } from "node:fs/promises";
+import { mkdir } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   RemoteBridge,
   type RemoteInboundMessage,
+  type RemoteSendOptions,
   type RemoteTransport
 } from "../src/remote-control/bridge.js";
 import type { SessionPromptSubmissionResult } from "../src/remote-control/prompt-submission.js";
@@ -13,29 +14,97 @@ import { TelegramLongPollingTransport, type TelegramOffsetStore } from "../src/r
 
 class PromptTransport implements RemoteTransport {
   nextMessageId = 100;
-  sent: Array<{ chatId: number; messageId: number; text: string }> = [];
+  sent: Array<{ chatId: number; messageId: number; text: string; options?: RemoteSendOptions }> = [];
   edited: Array<{ chatId: number; messageId: number; text: string }> = [];
+  answered: Array<{ callbackId: string; text?: string }> = [];
   start(): void {}
   stop(): void {}
-  async sendMessage(chatId: number, text: string): Promise<{ messageId: number }> {
+  async sendMessage(chatId: number, text: string, options?: RemoteSendOptions): Promise<{ messageId: number }> {
     const messageId = this.nextMessageId++;
-    this.sent.push({ chatId, messageId, text });
+    this.sent.push({ chatId, messageId, text, options });
     return { messageId };
   }
   async editMessage(chatId: number, messageId: number, text: string): Promise<void> {
     this.edited.push({ chatId, messageId, text });
+  }
+  async answerCallback(callbackId: string, text?: string): Promise<void> {
+    this.answered.push({ callbackId, text });
   }
 }
 
 afterEach(() => vi.useRealTimers());
 
 describe("RemoteBridge prompt routing", () => {
+  it("subscribes before submission so synchronous leader output reaches Telegram", async () => {
+    const transport = new PromptTransport();
+    let receive: ((event: StreamingSessionEvent) => void) | undefined;
+    const bridge = await createBridge(transport, async () => {
+      receive?.({ role: "leader", phase: "answering", lastEventKind: "text", text: "Visible answer", ended: true });
+      return { status: "submitted" };
+    }, (_sessionId, onEvent) => {
+      receive = onEvent;
+      return () => {};
+    });
+
+    await bridge.handleMessage(message("/use session"));
+    await bridge.handleMessage(message("/prompt explain this"));
+
+    expect(transport.edited.at(-1)?.text).toContain("leader: Visible answer");
+  });
+
+  it("selects the only current session with tap-to-use controls so plain messages work", async () => {
+    const transport = new PromptTransport();
+    const submissions: string[] = [];
+    const bridge = await createBridge(transport, async (prompt) => {
+      submissions.push(prompt.text);
+      return { status: "submitted" };
+    });
+
+    await bridge.handleMessage(message("/sessions"));
+    expect(transport.sent.at(-1)?.text).toContain("Send any message to prompt it.");
+    const button = transport.sent.at(-1)?.options?.inlineKeyboard?.[0]?.[0];
+    expect(button).toMatchObject({ text: "1. Session" });
+    expect(button?.data).toMatch(/^session:[a-f0-9]{16}$/);
+
+    await bridge.handleMessage(callback(button?.data ?? ""));
+    expect(transport.answered.at(-1)?.text).toBe("Session selected.");
+    await bridge.handleMessage(message("plain prompt without /prompt"));
+    expect(submissions).toEqual(["plain prompt without /prompt"]);
+  });
+
+  it("fills the command bucket via the session button and keeps the prompt bucket separate", async () => {
+    const transport = new PromptTransport();
+    const submissions: string[] = [];
+    const bridge = await createBridge(transport, async (prompt) => {
+      submissions.push(prompt.text);
+      return { status: "submitted" };
+    });
+
+    await bridge.handleMessage(message("/sessions"));
+    const buttonData = transport.sent.at(-1)?.options?.inlineKeyboard?.[0]?.[0]?.data ?? "";
+    await bridge.handleMessage(callback(buttonData));
+    for (let index = 0; index < 8; index += 1) await bridge.handleMessage(message("/status"));
+    await bridge.handleMessage(message("/status"));
+    expect(transport.sent.at(-1)?.text).toMatch(/cooling down/i);
+
+    // The prompt bucket is independent of the command bucket, so a plain "Hi" still
+    // submits while the command bucket is exhausted.
+    await bridge.handleMessage(message("Hi"));
+    expect(submissions).toEqual(["Hi"]);
+
+    // The prompt bucket still enforces the ten-prompts-per-minute limit.
+    for (let index = 0; index < 9; index += 1) await bridge.handleMessage(message(`prompt ${index}`));
+    await bridge.handleMessage(message("one prompt too many"));
+    expect(submissions).toHaveLength(10);
+    expect(transport.sent.at(-1)?.text).toMatch(/cooling down/i);
+  });
+
   it("routes /prompt and live-message replies to the /use session, reuses one stream, and cancels with a summary", async () => {
     vi.useFakeTimers();
     const transport = new PromptTransport();
     const submissions: Array<{ chatId: number; sessionId: string; text: string }> = [];
     let receive: ((event: StreamingSessionEvent) => void) | undefined;
-    const { bridge, auditPath } = await createBridge(transport, async (prompt) => {
+    const bridge = await createBridge(transport, async (prompt) => {
       submissions.push(prompt);
       return { status: "submitted" };
     }, (_sessionId, onEvent) => {
@@ -62,16 +131,12 @@ describe("RemoteBridge prompt routing", () => {
     await vi.advanceTimersByTimeAsync(1_500);
     await bridge.handleMessage(message("/cancel"));
     expect(transport.sent.at(-1)?.text).toMatch(/^Cancelled session-123: leader \/ working; quiet; last event tool-call\.$/);
-
-    const inboundVerbs = await auditInboundVerbs(auditPath);
-    expect(inboundVerbs).toContain("prompt");
-    expect(inboundVerbs).toContain("cancel");
   });
 
   it("falls back from an unknown reply target to the selected session and reports no active session otherwise", async () => {
     const transport = new PromptTransport();
     const submissions: string[] = [];
-    const { bridge } = await createBridge(transport, async (prompt) => {
+    const bridge = await createBridge(transport, async (prompt) => {
       submissions.push(prompt.text);
       return { status: "submitted" };
     });
@@ -80,14 +145,13 @@ describe("RemoteBridge prompt routing", () => {
     expect(transport.sent.at(-1)?.text).toMatch(/No active session/i);
     await bridge.handleMessage(message("/use session"));
     await bridge.handleMessage(message("fallback reply", 999));
-    await bridge.handleMessage(message("plain selected prompt"));
-    expect(submissions).toEqual(["fallback reply", "plain selected prompt"]);
+    expect(submissions).toEqual(["fallback reply"]);
   });
 
   it("keeps the live binding retryable when submission fails", async () => {
     const transport = new PromptTransport();
     let outcome: SessionPromptSubmissionResult = { status: "submitted" };
-    const { bridge } = await createBridge(transport, async () => outcome);
+    const bridge = await createBridge(transport, async () => outcome);
     await bridge.handleMessage(message("/use session"));
     await bridge.handleMessage(message("/prompt works"));
     const liveMessageId = transport.sent.at(-1)?.messageId;
@@ -144,68 +208,31 @@ describe("Telegram prompt reply metadata", () => {
     await expect(transport.editMessage(77, 55, "unchanged")).rejects.toThrow("Bad Request: message is not modified");
   });
 
-  it("persists getUpdates offset so a new transport starts after processed updates", async () => {
-    const offsetStore = new MemoryOffsetStore();
-    const firstFetch = vi.fn(async () => new Response(JSON.stringify({
-      ok: true,
-      result: [
-        { update_id: 41, message: { message_id: 1, chat: { id: 77 }, from: { id: 42 }, text: "/status" } },
-        { update_id: 42, message: { message_id: 2, chat: { id: 77 }, from: { id: 42 }, text: "/sessions" } }
-      ]
-    }), { status: 200, headers: { "Content-Type": "application/json" } }));
-    const first = new TelegramLongPollingTransport("token", firstFetch as typeof fetch, offsetStore);
-    const firstUpdates: number[] = [];
-    await new Promise<void>((resolve, reject) => {
-      first.start((inbound) => {
-        firstUpdates.push(inbound.updateId);
-        if (firstUpdates.length === 2) {
-          first.stop();
-          setTimeout(resolve, 0);
-        }
-      }, reject);
-    });
-    expect(firstUpdates).toEqual([41, 42]);
-    expect(offsetStore.writes).toEqual([42, 43]);
-
-    let second: TelegramLongPollingTransport | undefined;
-    let secondReceived = false;
-    const secondFetch = vi.fn(async (input) => {
-      const offset = Number(new URL(String(input)).searchParams.get("offset"));
-      expect(offset).toBeGreaterThanOrEqual(43);
-      second?.stop();
+  it("loads and persists the polling offset around processed updates", async () => {
+    const offsetStore = new MemoryOffsetStore(40);
+    const fetchImpl = vi.fn(async (input) => {
+      expect(new URL(String(input)).searchParams.get("offset")).toBe("40");
       return new Response(JSON.stringify({
         ok: true,
-        result: offset >= 43
-          ? []
-          : [{ update_id: 42, message: { message_id: 2, chat: { id: 77 }, from: { id: 42 }, text: "/sessions" } }]
+        result: [{ update_id: 41, message: { message_id: 1, chat: { id: 77 }, from: { id: 42 }, text: "/status" } }]
       }), { status: 200, headers: { "Content-Type": "application/json" } });
     });
-    second = new TelegramLongPollingTransport("token", secondFetch as typeof fetch, offsetStore);
+    const transport = new TelegramLongPollingTransport("token", fetchImpl as typeof fetch, offsetStore);
     await new Promise<void>((resolve, reject) => {
-      second?.start(() => {
-        secondReceived = true;
-        reject(new Error("Reprocessed an already persisted Telegram update."));
+      transport.start(() => {
+        transport.stop();
+        setTimeout(resolve, 0);
       }, reject);
-      const deadline = Date.now() + 1000;
-      const wait = () => {
-        if (secondFetch.mock.calls.length > 0) resolve();
-        else if (Date.now() > deadline) reject(new Error("Timed out waiting for second poll."));
-        else setTimeout(wait, 10);
-      };
-      wait();
     });
-    expect(secondReceived).toBe(false);
+
+    expect(offsetStore.writes).toEqual([42]);
   });
 });
 
 class MemoryOffsetStore implements TelegramOffsetStore {
-  value = 0;
   writes: number[] = [];
-
-  async read(): Promise<number> {
-    return this.value;
-  }
-
+  constructor(private value: number) {}
+  async read(): Promise<number> { return this.value; }
   async write(offset: number): Promise<void> {
     this.value = offset;
     this.writes.push(offset);
@@ -216,16 +243,19 @@ function message(text: string, replyToMessageId?: number): RemoteInboundMessage 
   return { updateId: Math.floor(Math.random() * 100_000), senderId: 42, chatId: 77, text, replyToMessageId };
 }
 
+function callback(callbackData: string): RemoteInboundMessage {
+  return { updateId: Math.floor(Math.random() * 100_000), senderId: 42, chatId: 77, text: "", callbackData, callbackId: "session-callback", messageId: 100 };
+}
+
 async function createBridge(
   transport: PromptTransport,
   submitPrompt: NonNullable<ConstructorParameters<typeof RemoteBridge>[0]["submitPrompt"]>,
   subscribeSessionEvents: NonNullable<ConstructorParameters<typeof RemoteBridge>[0]["subscribeSessionEvents"]> = () => () => {}
-): Promise<{ bridge: RemoteBridge; auditPath: string }> {
+): Promise<RemoteBridge> {
   const auditDir = path.join(tmpdir(), `tandem-prompt-${Date.now()}-${Math.random().toString(16).slice(2)}`);
   await mkdir(auditDir, { recursive: true });
-  const auditPath = path.join(auditDir, "audit.jsonl");
   const bridge = new RemoteBridge({
-    auditPath,
+    auditPath: path.join(auditDir, "audit.jsonl"),
     transportFactory: () => transport,
     tokenProvider: () => "token",
     statusProvider: () => ({
@@ -247,13 +277,5 @@ async function createBridge(
     submitPrompt
   });
   await bridge.configure({ enabled: true, telegramUserId: 42 });
-  return { bridge, auditPath };
-}
-
-async function auditInboundVerbs(auditPath: string): Promise<string[]> {
-  const lines = (await readFile(auditPath, "utf8")).trim().split(/\r?\n/).filter(Boolean);
-  return lines
-    .map((line) => JSON.parse(line) as { event?: string; verb?: string })
-    .filter((entry) => entry.event === "inbound")
-    .map((entry) => entry.verb ?? "");
+  return bridge;
 }

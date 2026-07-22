@@ -64,7 +64,33 @@ describe("StreamingSessionGateway", () => {
     await vi.advanceTimersByTimeAsync(1);
     expect(emitted).toHaveLength(1);
     expect(emitted[0]).toMatchObject({ version: 1, role: "worker", phase: "testing" });
-    expect(emitted[0]?.recentText.at(-1)).toBe("chunk 9");
+    expect(emitted[0]?.recentText).toEqual(["worker: chunk 0chunk 1chunk 2chunk 3chunk 4chunk 5chunk 6chunk 7chunk 8chunk 9"]);
+  });
+
+  it("keeps complete role responses while separating later system events", async () => {
+    vi.useFakeTimers();
+    let receive: ((event: StreamingSessionEvent) => void) | undefined;
+    const emitted: StreamingSnapshot[] = [];
+    const gateway = new StreamingSessionGateway({
+      sessionId: "session-1",
+      subscribe: (_sessionId, onEvent) => { receive = onEvent; },
+      onSnapshot: (value) => emitted.push(value),
+      maxRecentLines: 4
+    });
+    gateway.start();
+
+    receive?.({ role: "leader", lastEventKind: "text", text: "Here is " });
+    receive?.({ role: "leader", lastEventKind: "text", text: "the full answer." });
+    receive?.({ lastEventKind: "transition", text: "Reviewing" });
+    receive?.({ lastEventKind: "transition", text: "Completed" });
+    await vi.advanceTimersByTimeAsync(1_500);
+
+    expect(emitted[0]?.recentText).toEqual([
+      "leader: Here is the full answer.",
+      "system: Reviewing",
+      "system: Completed"
+    ]);
+    expect(formatStreamingSnapshot(emitted[0] as StreamingSnapshot)).toContain("leader: Here is the full answer.");
   });
 
   it("releases a synchronous terminal subscription after it returns", () => {

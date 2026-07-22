@@ -27,6 +27,7 @@ import { activityStripState } from "./activity-strip.js";
 import { claudeCliModelOptions } from "./cli-model-options.js";
 import { cumulativeTooltip, formatCumulativeCost, formatTotalCost } from "./cost-display.js";
 import { MODEL_STALL_WARNING_SECONDS, effectiveRendererConfig, isSessionActionable, needsProjectPickForSession, sessionFromResume } from "./session-state.js";
+import { SearchSessionResults, useSessionSearchController, type SessionSearchApi } from "./search-session-results.js";
 import { boundedMessageTextForState, MessageText } from "./TranscriptText.js";
 import { applyDesktopTheme, THEME_REFRESH_INTERVAL_MS } from "./theme.js";
 import "./styles.css";
@@ -277,6 +278,7 @@ function App(): React.ReactElement {
   const [showActivity, setShowActivity] = useState(false);
   const [runActivityCount, setRunActivityCount] = useState(0);
   const [sessions, setSessions] = useState<SessionMetadata[]>([]);
+  const [sessionSearchQuery, setSessionSearchQuery] = useState("");
   const [showArchived, setShowArchived] = useState(false);
   const [renamingSession, setRenamingSession] = useState<string>();
   const [renameTitle, setRenameTitle] = useState("");
@@ -302,6 +304,12 @@ function App(): React.ReactElement {
   const loopTimerRef = useRef<ReturnType<typeof setInterval>>();
   const loopRunningRef = useRef(false);
   const sessionSwitchRef = useRef<{ id: string; token: number }>();
+  const sessionSearch = useSessionSearchController({ api: tandem as SessionSearchApi });
+
+  useEffect(() => {
+    if (!sessionSearchQuery.trim()) return;
+    return tandem.onSessionSearchBatch(sessionSearch.controller.onBatch);
+  }, [tandem, sessionSearch.controller, sessionSearchQuery]);
 
   const effectiveConfig = effectiveRendererConfig(session, config);
   const desktopTheme = effectiveConfig?.desktopTheme ?? "auto";
@@ -1229,6 +1237,32 @@ if (args.length === 1 && sub === "clear") {
         </div>
         <div className="sideSection">
           <div className="sideLabel">Sessions</div>
+          <label className="sessionSearchField">
+            <span className="srOnly">Search sessions</span>
+            <input
+              type="search"
+              value={sessionSearchQuery}
+              placeholder="Search titles and transcripts"
+              aria-label="Search sessions"
+              onChange={(event) => {
+                const query = event.target.value;
+                setSessionSearchQuery(query);
+                sessionSearch.controller.setQuery(query);
+              }}
+            />
+          </label>
+          {sessionSearchQuery.trim() ? (
+            <SearchSessionResults
+              state={sessionSearch.state}
+              relativeTime={relativeTime}
+              onSelect={(id) => void replaySession(id)}
+              onClear={() => {
+                setSessionSearchQuery("");
+                sessionSearch.controller.clear();
+              }}
+            />
+          ) : (
+            <>
           <div className="sideList">
             {activeSessions.map((item) => {
               const pendingKind = pendingSessionAction?.id === item.id ? pendingSessionAction.kind : undefined;
@@ -1302,6 +1336,8 @@ if (args.length === 1 && sub === "clear") {
               })}
             </div>
           ) : null}
+            </>
+          )}
         </div>
         <div className="sideSection">
           <div className="sideLabel">Goals</div>
