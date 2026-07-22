@@ -1,0 +1,101 @@
+Round: D174
+Status: DONE_WITH_NEW_GUARDED_RECONCILIATION_BLOCKER
+
+Archive:
+- Path: C:\Users\huizh\Apps\Tandem Reciprocal\control\reconciliation-backups\D174-copy-b-scratch
+- All eight authorized copy-b scratch scripts were moved there recoverably.
+- Source validation before move:
+  - each source resolved under C:\Users\huizh\Apps\Tandem Reciprocal\worktrees\copy-b
+  - each source was a regular file, not a directory/reparse point
+  - destination archive did not already exist
+  - no destination overwrite occurred
+- Post-move verification:
+  - none of the eight files remains in copy-b
+  - all eight files exist in the archive
+  - archive SHA-256 values match pre-move SHA-256 values
+  - copy-b status became clean
+
+Authorized file hash table:
+- .build-report.ps1
+  - bytes: 7065
+  - sha256: 1EA552261A9732B5D94C4446EEB6788407B2DE47475F74F388B1404498C63F02
+- .capture-passive-error.ps1
+  - bytes: 857
+  - sha256: 231CEF86DE8981941ADECE7CE8D6F2674254FB79A798877C68FE9893C5F2176F
+- .claim-round2-capture.ps1
+  - bytes: 376
+  - sha256: 70F9898E203AC7644FA3181267E6EE887CD987AD11A7B23EFFD5D7D1ECEF7055
+- .passive-test-capture.ps1
+  - bytes: 580
+  - sha256: FAA4CF2FCA3A6447674CA307F3888589827BFAC20043EFF4FC6C9753D6A038E6
+- .read-captures.ps1
+  - bytes: 805
+  - sha256: DDC136999AC6F507739CF579F6B1D29D488752C3434B63D2211EEC7BFD38B430
+- .run-focused-test.ps1
+  - bytes: 538
+  - sha256: CF594631213BD90275BFA9BCF127318AFEAA0C2B50737979F16D1DC373593E37
+- .run-typecheck.ps1
+  - bytes: 371
+  - sha256: 54A611A36D6ADEA600D4F7CD475DC391ACB2EFA696B228FBA06A0F0BF43250DF
+- .show-captures.ps1
+  - bytes: 470
+  - sha256: C539B40C9C5DC7966FDD88D58EDD2A708C3DFB6E0DD0397A6E3E59921F1C8472
+
+Before cleanup:
+- Admin HEAD: 217e4f152b9bc3ae75243c2f9653bbee70c0723a
+- Admin status included unrelated modified scripts/setup-reciprocal-tandem.ps1 and existing unrelated untracked files.
+- scripts/setup-reciprocal-tandem.ps1 content hash: 1bf19f769684b1ef93b2086af0f0739f6bf099ea
+- copy-a HEAD: ead38ad2692d2a5641ce3cdaed684ab75ebf2db1; status clean
+- copy-b HEAD: ead38ad2692d2a5641ce3cdaed684ab75ebf2db1; status contained only the eight authorized untracked scratch scripts
+- Relay: phase=idle, activeRole=null, nextRole=A, stableCommit=ead38ad2692d2a5641ce3cdaed684ab75ebf2db1
+- Runtime BUILD_INFO sourceSha values:
+  - Executor A: ead38ad2692d2a5641ce3cdaed684ab75ebf2db1
+  - Executor B: ead38ad2692d2a5641ce3cdaed684ab75ebf2db1
+
+After cleanup and reconciliation attempt:
+- copy-a status: clean
+- copy-b status: clean
+- copy-a HEAD: ead38ad2692d2a5641ce3cdaed684ab75ebf2db1
+- copy-b HEAD: ead38ad2692d2a5641ce3cdaed684ab75ebf2db1
+- A_contains_D171=no
+- B_contains_D171=no
+- Relay: phase=idle, activeRole=null, nextRole=A, stableCommit=ead38ad2692d2a5641ce3cdaed684ab75ebf2db1
+- Runtime BUILD_INFO sourceSha values remained:
+  - Executor A: ead38ad2692d2a5641ce3cdaed684ab75ebf2db1
+  - Executor B: ead38ad2692d2a5641ce3cdaed684ab75ebf2db1
+- Runtime processes were not restarted by D174; observed runtime PIDs still pointed at the existing executor-a/executor-b Tandem.exe paths.
+- scripts/setup-reciprocal-tandem.ps1 content hash remained 1bf19f769684b1ef93b2086af0f0739f6bf099ea and remained unstaged.
+
+Guarded reconciliation:
+- Command:
+  node scripts\reciprocal-main-update.mjs --repo "C:\Users\huizh\Apps\HZ code" --relay-root "C:\Users\huizh\Apps\Tandem Reciprocal" --comment "D174 reconcile D171-D173 after archiving authorized copy-b scratch scripts"
+- Result: blocked during preconditions, before relay pause, push, branch sync, or runtime action.
+- Exact new blocker:
+  Admin repository has feature-file modifications: scripts/setup-reciprocal-tandem.ps1, scripts/handoff-done-review-watch.ps1, scripts/register-handoff-done-review-watch.ps1, tmp/pdfs/stat_section/crop-40.png, tmp/pdfs/stat_section/crop-41a.png, tmp/pdfs/stat_section/crop-41b.png, tmp/pdfs/stat_section/crop_review.py, tmp/pdfs/stat_section/hi-40.png, tmp/pdfs/stat_section/hi-41.png, tmp/pdfs/stat_section/page-01.png, tmp/pdfs/stat_section/page-02.png, tmp/pdfs/stat_section/page-03.png, tmp/pdfs/stat_section/page-04.png, tmp/pdfs/stat_section/page-05.png, tmp/pdfs/stat_section/page-06.png, tmp/pdfs/stat_section/page-07.png, tmp/pdfs/stat_section/page-08.png, tmp/pdfs/stat_section/page-09.png, tmp/pdfs/stat_section/page-10.png, tmp/pdfs/stat_section/page-11.png, tmp/pdfs/stat_section/page-12.png, tmp/pdfs/stat_section/page-13.png, tmp/pdfs/stat_section/page-14.png, tmp/pdfs/stat_section/page-15.png, tmp/pdfs/stat_section/page-16.png, tmp/pdfs/stat_section/page-17.png, tmp/pdfs/stat_section/page-18.png, tmp/pdfs/stat_section/page-19.png, tmp/pdfs/stat_section/page-20.png, tmp/pdfs/stat_section/page-21.png, tmp/pdfs/stat_section/page-22.png, tmp/pdfs/stat_section/page-23.png, tmp/pdfs/stat_section/page-24.png, tmp/pdfs/stat_section/page-25.png, tmp/pdfs/stat_section/page-26.png, tmp/pdfs/stat_section/page-27.png, tmp/pdfs/stat_section/page-28.png, tmp/pdfs/stat_section/page-29.png, tmp/pdfs/stat_section/page-30.png, tmp/pdfs/stat_section/page-31.png, tmp/pdfs/stat_section/page-32.png, tmp/pdfs/stat_section/page-33.png, tmp/pdfs/stat_section/page-34.png, tmp/pdfs/stat_section/page-35.png, tmp/pdfs/stat_section/page-36.png, tmp/pdfs/stat_section/page-37.png, tmp/pdfs/stat_section/page-38.png, tmp/pdfs/stat_section/page-39.png, tmp/pdfs/stat_section/page-40.png, tmp/pdfs/stat_section/page-41.png, tmp/pdfs/stat_section/page-42.png, tmp/pdfs/stat_section/page-43.png
+- Workflow result flags:
+  ok=false, stage=preconditions, pausedByFlow=false, masterUpdated=false, pushed=false, branchesResynced=false, relayResumed=false.
+- No safety control was bypassed: no reset, stash, checkout-discard, force-push, manual branch rewrite, or broad cleanup.
+
+W0026/W0027:
+- W0026 remains DONE at ead38ad2692d2a5641ce3cdaed684ab75ebf2db1.
+- W0027 remains QUEUED and was not claimed or implemented.
+
+Checks:
+- node --check dashboard-source\reciprocal-control-panel\server.mjs: PASS
+- node --check dashboard-source\reciprocal-control-panel\lib.mjs: PASS
+- node --test dashboard-source\reciprocal-control-panel\lib.nodecheck.mjs: PASS, 12 tests
+- scripts\deploy-reciprocal-dashboard.ps1 -VerifyOnly: PASS
+- node --test dashboard-source\reciprocal-control-panel\approval-flow.e2e.mjs: PASS, 2 tests
+- live GET http://127.0.0.1:4782/api/status: PASS, phase=idle, activeRole=null, stableCommit=ead38ad2692d2a5641ce3cdaed684ab75ebf2db1
+- npm run typecheck: PASS
+- npm test: PASS, 49 files passed, 1 skipped; 494 tests passed, 1 skipped
+- git diff --check: PASS
+
+Runtime boundary:
+- promote-reciprocal-runtime.ps1 was not invoked.
+- No live executor runtime was rebuilt, copied, restarted, or promoted.
+- No Reciprocal product candidate or W0027 implementation commit was created.
+
+Scope confirmation:
+- Only the exact eight authorized copy-b scratch files were moved, and they were moved to the recoverable archive.
+- Unrelated admin worktree changes and untracked files were preserved.
