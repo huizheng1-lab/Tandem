@@ -11,7 +11,7 @@ Normal lifecycle:
 1. `idle`, `nextRole=A`: A may `Claim`.
 2. `working`, `activeRole=A`: A claims a human wishlist item, plans, implements, runs its internal Tandem leader/worker/review lifecycle, verifies, and reports the exact changed files. Tandem's unsandboxed app layer stages only those files, creates one `relay:` commit, marks the wishlist item `CANDIDATE`, and runs `Complete`.
 3. `passive-testing`, no active owner: A's candidate is pending. No executor may start new wishlist work. `Claim -Role A` reports `PASSIVE_TEST`; `Claim -Role B` reports passive `WAIT`. Run `PassiveTest -Role A` from copy A (`codex/reciprocal-a`). It fast-forwards the passive copy to the candidate, runs mechanical checks, packages the Electron app into the admin repo's canonical `release/win-unpacked`, and refuses to call a model.
-4. `a-upgrade-pending`, no active owner: the passive copy accepted the candidate and the stable ref now points at it, but A's running runtime has not been promoted from that same verified build. `PrepareAUpgrade -Role A -DryRun` exposes the exact `promote-reciprocal-runtime.ps1 -TargetRole A` command and records the human gate. `CompleteAUpgrade -Role A -Force` is valid only after a human confirms the A runtime promotion.
+4. `a-upgrade-pending`, no active owner: the passive copy accepted a final source-changing candidate and the stable ref now points at it, but A's running runtime has not been promoted from that same verified build. `PrepareAUpgrade -Role A -DryRun` exposes the exact `promote-reciprocal-runtime.ps1 -TargetRole A` command and records the human gate. `CompleteAUpgrade -Role A -Force` is valid only after a human confirms the A runtime promotion. Plan-only candidates and accepted non-final epic steps return to `idle` and continue automatically; they do not require live runtime replacement.
 5. Back to `idle`, `nextRole=A`.
 
 Failure and recovery:
@@ -20,6 +20,16 @@ Failure and recovery:
 - Passive check failure pauses the relay with `pausedFromPhase=passive-testing` and leaves the candidate for human inspection. It does not hand work to B.
 - The older `Validate`, `Accept`, `Rollback`, and `CompleteRollback` commands remain manual recovery tools for legacy or human-directed rollback situations. They are not part of the normal producer lifecycle and must not be scheduled as B work.
 - `Reset -Force` remains the heavy human recovery path.
+
+## Gate Taxonomy
+
+The control plane records and reports one of three categories for every stop or wait:
+
+- `hard-human-gate`: only explicit human pause/cancel/reject, credentials/authentication/pairing, permission or sandbox weakening, destructive history/data operations, paid or external publication, final live Executor runtime replacement, or an uncorrectable deterministic candidate/test failure may stop autonomous progress.
+- `auto-recoverable-prerequisite`: broad or architectural human work, missing epic metadata, missing plan files, paused-from-idle planning wording, stopped executors with authenticated restart available, stale reciprocal source branches, unrelated dirty admin checkout files that can be proven untouched, and transient endpoint/file-lock/timeout noise must be retried or repaired automatically with bounded backoff.
+- `waiting-not-blocked`: an active owner, passive test, candidate review, runtime review wait, or retry backoff is normal progress and must not be described as a hard block.
+
+A broad human-queued item is authorization to plan. It is not a reason to pause. The shared direction script may normalize any ordinary `QUEUED` item into `epic=true phase=PLAN` while preserving its ID, priority, text, and audit history.
 
 ## Executor A Producer Rules
 
@@ -34,10 +44,10 @@ Interpret the result:
 - `CLAIMED`: begin or continue one producer lifecycle in `working`.
 - `RESUME`: inspect `.tandem/reciprocal-checkpoint.md` and resume the same A lifecycle.
 - `PASSIVE_TEST`: switch to copy A and run the returned passive test command. Do not start new work.
-- `A_UPGRADE_PENDING`: stop for the human A-runtime promotion gate.
-- `WAIT` or `PAUSED`: stop with a short status.
+- `A_UPGRADE_PENDING`: stop for the human A-runtime promotion gate only when the candidate is a final source-changing runtime replacement.
+- `WAIT` or `PAUSED`: stop with a short status. If the pause is machine-created from idle because work was broad, architectural, missing a plan, or missing epic metadata, the continuation supervisor must recover it automatically rather than requiring another human decision.
 
-Do not begin implementation until the relay is in `working`. Read live work state from `.tandem/shared-control/WISHLIST.md` with `scripts/reciprocal-direction.ps1 -Action Show`, then claim the highest-priority safe human item with `Start -Id <id> -Role A`. Durable human direction lives in `.tandem/shared-control/SHARED_DIRECTION.md`. If no safe human item exists, use `Pause -Role A` with a concise reason. Do not self-select `[AUTO]` work unless a human later changes this rule.
+Do not begin implementation until the relay is in `working`. Read live work state from `.tandem/shared-control/WISHLIST.md` with `scripts/reciprocal-direction.ps1 -Action Show`, then claim the highest-priority safe human item with `Start -Id <id> -Role A`. If the item is ordinary queued work without epic metadata and it is too large for one candidate, first run `NormalizeQueued -Id <id>` and produce `process/reciprocal/epics/<ID>-plan.md`; do not pause merely because a plan is missing. Durable human direction lives in `.tandem/shared-control/SHARED_DIRECTION.md`. If no human item exists, report idle status; do not invent `[AUTO]` work unless a human later changes this rule.
 
 Maintain `.tandem/reciprocal-checkpoint.md` with the objective, wishlist ID, intended files, evidence, checks already run, current phase, and next action. Update it after each major phase.
 
@@ -95,8 +105,8 @@ Epics still span multiple one-commit A lifecycles.
 - Every improvement is one candidate commit whose parent is the current stable commit.
 - Do not weaken required checks, suppress failures, disable assertions, or mark work done merely because the producer reported success.
 - Treat pre-existing dirty work as a recovery signal. Resume only when the relay says `RESUME`.
-- Keep turns narrow. If a change is architectural, ambiguous, security-sensitive, or too large for one stable increment, pause and ask for a human D-round.
+- Keep turns narrow. If a change is architectural, ambiguous, or too large for one stable increment, normalize it into an autonomous plan and implement the smallest coherent vertical slice. Pause only at the exact sensitive step that requires new authority or after the same genuine blocker repeats three times without a successful state transition.
 
 ## Master Reconciliation
 
-`master` remains trunk. Pause the relay before integrating stable reciprocal work into `master`. The dashboard's main-branch gate verifies the stable commit, updates `master`, tags the update, and fast-forwards both reciprocal branches. If a D-round lands on `master` mid-batch, finish or pause the active reciprocal state first, then reconcile before A claims more work.
+`master` remains trunk. Reconciliation must run through an isolated temporary worktree/index so unrelated dirty admin files are snapshotted, byte-hashed, and preserved untouched. The dashboard's main-branch gate verifies the stable commit, updates `master`, tags the update, and fast-forwards both reciprocal branches only after isolated validation and push succeed. If a D-round lands on `master` mid-batch, finish or pause the active reciprocal state first, then reconcile before A claims more work.

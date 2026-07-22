@@ -1,4 +1,6 @@
-import { readFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm, stat } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { createHash } from "node:crypto";
 import path from "node:path";
 import { execa } from "execa";
 
@@ -59,20 +61,44 @@ function statusPath(line) {
   return renamed.replace(/^"|"$/g, "");
 }
 
-function isKnownNonFeaturePath(file) {
-  const normalized = file.replaceAll("\\", "/");
-  return normalized === "scripts/reciprocal-direction.ps1"
-    || normalized === "IMPROVEMENT_SUGGESTIONS.md"
-    || normalized === "process/LEADER_WORKER_WORKFLOW.md"
-    || normalized === "process/REMOTE_CONTROL_DESIGN.md"
-    || /^\.reviewer-.*\.mjs$/.test(normalized)
-    || /^handoffs\/HANDOFF_D\d+\.md$/.test(normalized)
-    || /^handoffs\/D\d+_done\.txt$/.test(normalized)
-    || /^release-d98(?:-|\/|$)/.test(normalized)
-    || /^scripts\/d\d+-(?:evidence|smoke)\.mjs$/.test(normalized)
-    || /^scripts\/live-.*\.(?:ts|mjs)$/.test(normalized)
-    || normalized === "scripts/handoff-trigger-watch.ps1"
-    || normalized === "scripts/register-handoff-trigger-watch.ps1";
+async function dirtyAdminSnapshot() {
+  const status = (await git(["status", "--porcelain=v1", "--untracked-files=all"])).output
+    .split(/\r?\n/)
+    .filter(Boolean);
+  const staged = (await git(["diff", "--cached", "--name-status"], repoRoot, false)).output
+    .split(/\r?\n/)
+    .filter(Boolean);
+  const entries = [];
+  for (const line of status) {
+    const file = statusPath(line);
+    const fullPath = path.join(repoRoot, file);
+    let exists = false;
+    let bytes = null;
+    let sha256 = null;
+    let kind = "missing";
+    try {
+      const info = await stat(fullPath);
+      exists = true;
+      kind = info.isDirectory() ? "directory" : "file";
+      if (info.isFile()) {
+        const content = await readFile(fullPath);
+        bytes = content.byteLength;
+        sha256 = createHash("sha256").update(content).digest("hex").toUpperCase();
+      }
+    } catch {
+      exists = false;
+    }
+    entries.push({ status: line.slice(0, 2), path: file, exists, kind, bytes, sha256 });
+  }
+  return { porcelain: status, staged, entries };
+}
+
+function assertSnapshotsEqual(before, after) {
+  const beforeText = JSON.stringify(before);
+  const afterText = JSON.stringify(after);
+  if (beforeText !== afterText) {
+    throw new Error("Dirty admin preservation check failed: before/after status or byte hashes changed.");
+  }
 }
 
 async function assertPreconditions() {
@@ -103,13 +129,9 @@ async function assertPreconditions() {
   if (dirtyA || dirtyB) {
     throw new Error(`Reciprocal worktrees must be clean before main update; A=${dirtyA || "clean"}, B=${dirtyB || "clean"}.`);
   }
-  const dirty = (await git(["status", "--porcelain=v1", "--untracked-files=all"])).output
-    .split(/\r?\n/).filter(Boolean)
-    .map(statusPath).filter((file) => !isKnownNonFeaturePath(file));
-  if (dirty.length) throw new Error(`Admin repository has feature-file modifications: ${dirty.join(", ")}`);
   const trackedEnv = await git(["ls-files", "--error-unmatch", ".env"], repoRoot, false);
   if (trackedEnv.ok) throw new Error(".env is tracked; remove it from git before any remote push.");
-  return { state, stableSha, wasPaused: state.phase === "paused" };
+  return { state, stableSha, wasPaused: state.phase === "paused", adminDirtyBefore: await dirtyAdminSnapshot() };
 }
 
 function tail(value, count = 18) {
@@ -162,8 +184,9 @@ const result = {
 };
 
 try {
-  const { state, stableSha, wasPaused } = await assertPreconditions();
+  const { state, stableSha, wasPaused, adminDirtyBefore } = await assertPreconditions();
   result.stableSha = stableSha;
+  result.adminDirtyBefore = adminDirtyBefore;
   result.turn = state.turn;
   if (!wasPaused) {
     await relay("Pause", ["-Summary", `Human main update gate for stable ${stableSha.slice(0, 7)}`]);
@@ -173,22 +196,39 @@ try {
   result.stage = "validation";
   result.checks = await validateStable(stableSha);
 
-  result.stage = "merge";
+  result.stage = "isolated-merge";
   const beforeMaster = await gitText(["rev-parse", "master"]);
+  let tempWorktree = "";
+  let tempBranch = "";
+  try {
+    tempWorktree = await mkdtemp(path.join(tmpdir(), "reciprocal-main-update-"));
+    tempBranch = `reciprocal-main-update-${Date.now()}-${process.pid}`;
+    await git(["worktree", "add", "--detach", tempWorktree, beforeMaster]);
+    result.integrationWorktree = tempWorktree;
+    result.integrationBase = beforeMaster;
   if (await isAncestor(beforeMaster, stableSha)) {
-    await git(["merge", "--ff-only", stableSha]);
+    await git(["merge", "--ff-only", stableSha], tempWorktree);
     result.mergeMode = "fast-forward";
   } else if (await isAncestor(stableSha, beforeMaster)) {
     result.mergeMode = "master-already-contained-stable";
   } else {
-    const merge = await git(["merge", "--no-edit", stableSha], repoRoot, false);
+    const merge = await git(["merge", "--no-edit", stableSha], tempWorktree, false);
     if (!merge.ok) {
-      await git(["merge", "--abort"], repoRoot, false);
-      throw new Error(`Stable merge failed: ${merge.output}`);
+      await git(["merge", "--abort"], tempWorktree, false);
+      throw new Error(`Isolated stable merge conflict: ${merge.output}`);
     }
     result.mergeMode = "merge-commit";
   }
-  result.masterSha = await gitText(["rev-parse", "master"]);
+  result.masterSha = await gitText(["rev-parse", "HEAD"], tempWorktree);
+  await git(["update-ref", "refs/heads/master", result.masterSha, beforeMaster]);
+  } finally {
+    if (tempWorktree) {
+      const resolved = path.resolve(tempWorktree);
+      if (!resolved.startsWith(path.resolve(tmpdir()))) throw new Error(`Refusing to remove unexpected integration worktree path: ${resolved}`);
+      await git(["worktree", "remove", "--force", tempWorktree], repoRoot, false);
+      await rm(tempWorktree, { recursive: true, force: true }).catch(() => {});
+    }
+  }
   result.masterUpdated = result.masterSha !== beforeMaster || result.mergeMode === "master-already-contained-stable";
 
   result.stage = "tag";
@@ -213,12 +253,16 @@ try {
   result.pushOutput = push.output;
   if (!push.ok) throw new Error(`Master/tag push failed without force: ${push.output}`);
   result.pushed = true;
+  result.adminDirtyAfterPush = await dirtyAdminSnapshot();
+  assertSnapshotsEqual(adminDirtyBefore, result.adminDirtyAfterPush);
 
   result.stage = "branch-sync";
   await git(["merge", "--ff-only", result.masterSha], worktreeA);
   await git(["merge", "--ff-only", result.masterSha], worktreeB);
   await relay("ReconcileMain", ["-NewStableCommit", result.masterSha, "-Summary", `Reconciled at ${result.tag}: ${comment}`]);
   result.branchesResynced = true;
+  result.adminDirtyAfter = await dirtyAdminSnapshot();
+  assertSnapshotsEqual(adminDirtyBefore, result.adminDirtyAfter);
 
   result.stage = "resume";
   if (result.pausedByFlow) {

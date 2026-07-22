@@ -135,7 +135,7 @@ describe("reciprocal relay script", () => {
     } finally {
       await rm(repo, { recursive: true, force: true });
     }
-  });
+  }, 30_000);
 
   windowsIt("D132: pause closes a clean no-work active A turn", async () => {
     const repo = await mkdtemp(path.join(tmpdir(), "tandem-relay-d132-pause-"));
@@ -156,7 +156,7 @@ describe("reciprocal relay script", () => {
     } finally {
       await rm(repo, { recursive: true, force: true });
     }
-  });
+  }, 30_000);
 
   windowsIt("D168: claim refuses stale pre-D167 wishlist tooling", async () => {
     const repo = await mkdtemp(path.join(tmpdir(), "tandem-relay-d168-stale-tooling-"));

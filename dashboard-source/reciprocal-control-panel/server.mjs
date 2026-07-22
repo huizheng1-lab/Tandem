@@ -1626,6 +1626,26 @@ async function handle(request, response) {
     if (url.pathname === "/api/executor/kickstart") {
       const steps = [];
       try {
+        const supervisor = await runResult("powershell", [
+          "-NoProfile", "-ExecutionPolicy", "Bypass",
+          "-File", path.join(repoRoot, "scripts", "continue-reciprocal-automation.ps1"),
+          "-Workspace", repoRoot,
+          "-RelayRoot", relayRoot,
+          "-MaxTransitions", "3",
+        ], repoRoot);
+        let supervisorResult = null;
+        try {
+          supervisorResult = JSON.parse(supervisor.ok ? supervisor.stdout : supervisor.stderr || supervisor.stdout);
+        } catch {
+          supervisorResult = { ok: false, error: supervisor.output };
+        }
+        steps.push({ step: "supervisor", ok: Boolean(supervisor.ok && supervisorResult.ok), detail: `Supervisor transitions=${supervisorResult.transitionsUsed ?? 0}; finalPhase=${supervisorResult.finalPhase || "unknown"}; actions=${(supervisorResult.actions || []).map((action) => action.kind).join(", ") || "none"}.` });
+        if (supervisor.ok && supervisorResult.ok && Number(supervisorResult.transitionsUsed || 0) > 0) {
+          const relayState = await jsonFile(statePath, {});
+          const result = { mode: "supervisor", executor: "A", targetWorktree: worktrees.b.path, steps, relay: relayState, supervisor: supervisorResult };
+          await audit("executor.kickstart", { ok: true, ...result });
+          return send(response, 200, { ok: true, result });
+        }
         const relayState = await jsonFile(statePath, {});
         if (relayState.activeRole || relayState.phase !== "idle") {
           throw new Error(`Kickstart requires an idle relay with no owner; current phase=${relayState.phase || "unknown"}, owner=${relayState.activeRole || "none"}.`);

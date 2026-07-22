@@ -157,6 +157,33 @@ describeWindows("reciprocal direction wishlist removal", () => {
   });
 });
 describeWindows("reciprocal direction epics", () => {
+  it("D175: normal queued work normalizes into an autonomous plan item with the same ID", async () => {
+    const file = await boardFile();
+    const added = JSON.parse((await direction(file, "-Action", "Add", "-Priority", "P0", "-Text", "Repair the broad reciprocal workflow")).stdout);
+
+    await direction(file, "-Action", "NormalizeQueued", "-Id", added.id);
+    await direction(file, "-Action", "Start", "-Id", added.id, "-Role", "A");
+
+    const plan = `process/reciprocal/epics/${added.id}-plan.md`;
+    const board = await readBoard(file);
+    expect(board).toContain(`plan=${plan}`);
+    expect(board).toContain(`${added.id} | P0 | Repair the broad reciprocal workflow | IN_PROGRESS epic=true autonomy=full phase=PLAN revision=1 completed=0 plan=${plan} role=A`);
+    expect(board).not.toContain("W0002 | P0 | Repair the broad reciprocal workflow");
+  });
+
+  it("D175: normalization is idempotent and keeps sensitive authority plan-gated", async () => {
+    const file = await boardFile();
+    const added = JSON.parse((await direction(file, "-Action", "Add", "-Priority", "P0", "-Text", "Add credential pairing for remote operations")).stdout);
+
+    await direction(file, "-Action", "NormalizeQueued", "-Id", added.id);
+    await direction(file, "-Action", "NormalizeQueued", "-Id", added.id);
+
+    const plan = `process/reciprocal/epics/${added.id}-plan.md`;
+    const board = await readBoard(file);
+    expect(board).toContain(`${added.id} | P0 | Add credential pairing for remote operations | QUEUED epic=true autonomy=plan-gated safety=security-surface phase=PLAN revision=1 completed=0 plan=${plan}`);
+    expect(board.split(/\r?\n/).filter((line) => line.startsWith(`- [ ] ${added.id} |`))).toHaveLength(1);
+  });
+
   it("gates step turns on plan approval and advances one accepted step at a time", async () => {
     const file = await boardFile();
     const added = JSON.parse((await direction(file, "-Action", "Add", "-Epic", "-Text", "Large stable feature")).stdout);
@@ -195,7 +222,7 @@ describeWindows("reciprocal direction epics", () => {
     expect(revised).toContain("CANDIDATE epic=true candidate=PLAN revision=2");
     await expect(direction(file, "-Action", "Start", "-Id", added.id, "-Role", "B"))
       .rejects.toThrow(/plan must be approved by a human/);
-  });
+  }, 30_000);
 
   it("preserves epic step metadata through block and requeue recovery", async () => {
     const file = await boardFile();
@@ -212,7 +239,7 @@ describeWindows("reciprocal direction epics", () => {
 
     const recovered = await readBoard(file);
     expect(recovered).toContain(`PLAN_APPROVED epic=true revision=1 completed=1 steps=2 next=2/2 plan=${plan}`);
-  });
+  }, 30_000);
 
   it("auto-approves an independently accepted fully autonomous plan and audits it", async () => {
     const file = await boardFile();

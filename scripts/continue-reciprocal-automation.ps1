@@ -36,7 +36,21 @@ function Invoke-ExecutorPrompt([string]$RelayRootPath, [string]$ProjectDir, [obj
         throw "Executor A automation token is not ready at $tokenPath."
     }
 
-    $prompt = @"
+    $mode = if ($Continuation.mode) { [string]$Continuation.mode } else { "continue-step" }
+    $prompt = if ($mode -eq "plan") {
+@"
+Start the approved reciprocal planning lifecycle immediately, without waiting for the scheduled tick.
+
+First run:
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\reciprocal-relay.ps1 -Action Claim -Role A
+
+If the claim succeeds, run the normalized planning start command:
+$($Continuation.startCommand)
+
+Create only the smallest coherent plan for wishlist $($Continuation.wishlistId) at process/reciprocal/epics/$($Continuation.wishlistId)-plan.md. Do not implement product changes for the planned item in this planning turn. The plan must split the accepted human objective into bounded vertical source steps and identify any exact sensitive authority gates only at the sensitive step. Run required verification and let Tandem's app layer commit and Complete the plan candidate when done. If Claim reports PASSIVE_TEST or A_UPGRADE_PENDING, stop and report that boundary instead of bypassing it.
+"@
+    } else {
+@"
 Continue the already-approved autonomous reciprocal epic immediately, without waiting for the scheduled tick.
 
 First run:
@@ -47,6 +61,7 @@ $($Continuation.startCommand)
 
 Implement only wishlist $($Continuation.wishlistId) step $($Continuation.nextStep), run the required verification, and let Tandem's app layer commit and Complete the candidate when the step is done. If Claim reports PASSIVE_TEST or A_UPGRADE_PENDING, stop and report that boundary instead of bypassing it.
 "@
+    }
 
     $payload = @{
         projectDir = $ProjectDir
@@ -83,6 +98,49 @@ function Get-IntermediateContinuationFromBoard([string]$BoardPath, [string]$Stab
     return $null
 }
 
+function Get-HighestPriorityQueuedItem([string]$BoardPath) {
+    if (-not (Test-Path -LiteralPath $BoardPath)) { return $null }
+    $rank = @{ P0 = 0; P1 = 1; P2 = 2; P3 = 3 }
+    $items = @()
+    foreach ($line in (Get-Content -LiteralPath $BoardPath)) {
+        $match = [regex]::Match($line, '^- \[ \] (W\d+) \| (P[0-3]) \| (.*?) \| QUEUED(?:\s+(.*))?$')
+        if (-not $match.Success) { continue }
+        $detail = [string]$match.Groups[4].Value
+        if ($detail -match '(^|\s)artifact=') { continue }
+        $items += [pscustomobject]@{
+            id = $match.Groups[1].Value
+            priority = $match.Groups[2].Value
+            text = $match.Groups[3].Value
+            detail = $detail
+            rank = [int]$rank[$match.Groups[2].Value]
+            isEpic = $detail -match '(^|\s)epic=true(\s|$)'
+        }
+    }
+    return @($items | Sort-Object rank, id | Select-Object -First 1)
+}
+
+function Get-PlanningContinuationFromBoard([string]$BoardPath) {
+    $item = Get-HighestPriorityQueuedItem $BoardPath
+    if (-not $item) { return $null }
+    $directionScript = Join-Path $PSScriptRoot "reciprocal-direction.ps1"
+    if (-not $item.isEpic) {
+        Invoke-JsonCommand "powershell" @(
+            "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", $directionScript,
+            "-Action", "NormalizeQueued", "-Id", $item.id, "-ControlPath", $BoardPath
+        ) (Split-Path $PSScriptRoot -Parent) | Out-Null
+    }
+    return [pscustomobject]@{
+        available = $true
+        mode = "plan"
+        reason = "human-queued-auto-planning"
+        wishlistId = $item.id
+        nextStep = "PLAN"
+        claimCommand = "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/reciprocal-relay.ps1 -Action Claim -Role A"
+        startCommand = "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/reciprocal-direction.ps1 -Action Start -Id $($item.id) -Role A"
+        requiresHumanGate = $false
+    }
+}
+
 function Save-RelayState([string]$Path, [object]$State) {
     $State | ConvertTo-Json -Depth 20 | Set-Content -LiteralPath $Path -Encoding UTF8
 }
@@ -99,10 +157,45 @@ $copyA = Join-Path $relayRootFull "worktrees\copy-a"
 $copyB = Join-Path $relayRootFull "worktrees\copy-b"
 $statePath = Join-Path $adminRepo ".git\tandem-relay\state.json"
 $relayScript = Join-Path $PSScriptRoot "reciprocal-relay.ps1"
+$leasePath = Join-Path $relayRootFull "control\continuation-supervisor.lock.json"
+
+function Enter-Lease([string]$Path) {
+    New-Item -ItemType Directory -Path (Split-Path $Path -Parent) -Force | Out-Null
+    $lease = [ordered]@{ pid = $PID; startedAt = (Get-Date).ToUniversalTime().ToString("o") } | ConvertTo-Json -Compress
+    try {
+        $stream = [IO.File]::Open($Path, [IO.FileMode]::CreateNew, [IO.FileAccess]::Write, [IO.FileShare]::None)
+        try {
+            $bytes = [Text.UTF8Encoding]::new($false).GetBytes($lease)
+            $stream.Write($bytes, 0, $bytes.Length)
+        } finally {
+            $stream.Dispose()
+        }
+        return $true
+    } catch {
+        return $false
+    }
+}
+
+function Exit-Lease([string]$Path) {
+    Remove-Item -LiteralPath $Path -Force -ErrorAction SilentlyContinue
+}
+
+if (-not (Enter-Lease $leasePath)) {
+    [pscustomobject]@{
+        ok = $true
+        startedAt = (Get-Date).ToUniversalTime().ToString("o")
+        endedAt = (Get-Date).ToUniversalTime().ToString("o")
+        maxTransitions = $MaxTransitions
+        transitionsUsed = 0
+        actions = @([pscustomobject]@{ kind = "lease-held"; retryable = $true })
+    } | ConvertTo-Json -Depth 8
+    exit 0
+}
 
 $actions = @()
 $transitionCount = 0
 $startedAt = (Get-Date).ToUniversalTime().ToString("o")
+try {
 $state = Read-JsonFile $statePath
 if (-not $state) { throw "Relay state is missing at $statePath." }
 
@@ -219,8 +312,31 @@ if ($state.phase -eq "a-upgrade-pending" -and -not $state.candidateCommit -and $
 }
 
 $state = Read-JsonFile $statePath
+if ($state.phase -eq "paused" -and $state.pausedFromPhase -eq "idle" -and -not $state.activeRole -and -not $state.candidateCommit -and $transitionCount -lt $MaxTransitions) {
+    $planning = Get-PlanningContinuationFromBoard (Get-SharedDirectionPath $relayRootFull)
+    if ($planning) {
+        $transitionCount += 1
+        $state.phase = "idle"
+        $state.pausedFromPhase = $null
+        $state.pauseAfterTurn = $false
+        $state.lastSummary = "D175 auto-recovered paused-from-idle planning prerequisite for $($planning.wishlistId); broad human-queued work is normalized into planning, not blocked."
+        $state.updatedAt = (Get-Date).ToUniversalTime().ToString("o")
+        Save-RelayState $statePath $state
+        $actions += [pscustomobject]@{
+            kind = "recover-paused-idle-prerequisite"
+            wishlistId = $planning.wishlistId
+            reason = $planning.reason
+            phase = "idle"
+        }
+    }
+}
+
+$state = Read-JsonFile $statePath
 if ($state.phase -eq "idle" -and -not $state.activeRole -and -not $state.candidateCommit -and $transitionCount -lt $MaxTransitions) {
     $idleContinuation = Get-IntermediateContinuationFromBoard (Get-SharedDirectionPath $relayRootFull) ([string]$state.stableCommit)
+    if (-not $idleContinuation) {
+        $idleContinuation = Get-PlanningContinuationFromBoard (Get-SharedDirectionPath $relayRootFull)
+    }
     if ($idleContinuation) {
         $transitionCount += 1
         $promptStart = (Get-Date).ToUniversalTime().ToString("o")
@@ -261,3 +377,6 @@ $finalState = Read-JsonFile $statePath
     finalStableCommit = $finalState.stableCommit
     finalCandidateCommit = $finalState.candidateCommit
 } | ConvertTo-Json -Depth 12
+} finally {
+    Exit-Lease $leasePath
+}

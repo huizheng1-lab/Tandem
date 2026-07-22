@@ -1,6 +1,6 @@
 param(
     [Parameter(Mandatory = $true)]
-    [ValidateSet("Show", "UpdateDirection", "Add", "Remove", "Retire", "Start", "Candidate", "DeclareArtifact", "ArtifactComplete", "ApprovePlan", "AutoApprovePlan", "RejectPlan", "AcceptStep", "Complete", "Block", "Requeue")]
+    [ValidateSet("Show", "UpdateDirection", "Add", "Remove", "Retire", "Start", "NormalizeQueued", "Candidate", "DeclareArtifact", "ArtifactComplete", "ApprovePlan", "AutoApprovePlan", "RejectPlan", "AcceptStep", "Complete", "Block", "Requeue")]
     [string]$Action,
 
     [string]$Text,
@@ -59,7 +59,7 @@ function Get-CleanNote([string]$Value) {
 }
 
 function Test-SecuritySurface([string]$Value) {
-    return $Value -match '(?i)\b(auth|authentication|credential|credentials|pairing|remote[- ]?control)\b'
+    return $Value -match '(?i)\b(auth|authentication|credential|credentials|pairing|permission|sandbox|destructive|publish|publication|payment|paid)\b'
 }
 
 function Get-AutonomyDefault([string[]]$BoardLines) {
@@ -391,7 +391,8 @@ try {
                 $revision = if ($metadata.revision) { [int]$metadata.revision } else { 1 }
                 $completed = if ($metadata.completed) { [int]$metadata.completed } else { 0 }
                 if ($status -eq "QUEUED" -and $metadata.phase -eq "PLAN") {
-                    $lines[$index] = ($base + "IN_PROGRESS epic=true$autonomySuffix$safetySuffix phase=PLAN revision=$revision completed=$completed role=$Role started=$now") -join " | "
+                    $planSuffix = if ($metadata.plan) { " plan=$($metadata.plan)" } else { "" }
+                    $lines[$index] = ($base + "IN_PROGRESS epic=true$autonomySuffix$safetySuffix phase=PLAN revision=$revision completed=$completed$planSuffix role=$Role started=$now") -join " | "
                     break
                 }
                 if ($status -eq "CANDIDATE" -and $metadata.candidate -eq "PLAN") {
@@ -411,6 +412,26 @@ try {
                 if ($step -le $completed -or $step -gt $total) { throw "Epic $Id next step $step/$total is inconsistent with completed=$completed." }
                 $planPath = Assert-EpicPlanPath $metadata.plan $Id
                 $lines[$index] = ($base + "IN_PROGRESS epic=true$autonomySuffix$safetySuffix phase=STEP revision=$revision completed=$completed step=$step/$total plan=$planPath role=$Role started=$now") -join " | "
+            }
+            "NormalizeQueued" {
+                if ($base[0] -match '\[x\]') { throw "$Id is already complete." }
+                if ($metadata.artifact) { throw "NormalizeQueued is not valid for artifact-only item $Id." }
+                if ($isEpic) {
+                    $planPath = if ($metadata.plan) { Assert-EpicPlanPath $metadata.plan $Id } else { "process/reciprocal/epics/$Id-plan.md" }
+                    if ($status -eq "QUEUED" -and (-not $metadata.phase -or $metadata.phase -eq "PLAN")) {
+                        $revision = if ($metadata.revision) { [int]$metadata.revision } else { 1 }
+                        $completed = if ($metadata.completed) { [int]$metadata.completed } else { 0 }
+                        $lines[$index] = ($base + "QUEUED epic=true$autonomySuffix$safetySuffix phase=PLAN revision=$revision completed=$completed plan=$planPath normalized=$now") -join " | "
+                        break
+                    }
+                    throw "NormalizeQueued is valid only for queued plan items; $Id is $status."
+                }
+                if ($status -ne "QUEUED") { throw "NormalizeQueued requires a QUEUED item; $Id is $status." }
+                $securitySurface = Test-SecuritySurface $base[2]
+                $autonomy = if ($securitySurface) { "plan-gated" } elseif ((Get-AutonomyDefault $directionLines) -eq "autonomous") { "full" } else { "full" }
+                $safety = if ($securitySurface) { " safety=security-surface" } else { "" }
+                $planPath = "process/reciprocal/epics/$Id-plan.md"
+                $lines[$index] = ($base + "QUEUED epic=true autonomy=$autonomy$safety phase=PLAN revision=1 completed=0 plan=$planPath normalized=$now") -join " | "
             }
             "Candidate" {
                 if (-not $Commit) { throw "Candidate requires -Commit." }

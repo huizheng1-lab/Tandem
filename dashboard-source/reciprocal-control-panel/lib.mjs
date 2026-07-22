@@ -70,6 +70,67 @@ export function detailMetadata(value) {
   return Object.fromEntries([...String(value || "").matchAll(/(?:^|\s)([A-Za-z][A-Za-z0-9]*)=([^\s]+)/g)].map((match) => [match[1], match[2]]));
 }
 
+export const reciprocalGateTaxonomy = Object.freeze({
+  hardHumanGate: "hard-human-gate",
+  autoRecoverablePrerequisite: "auto-recoverable-prerequisite",
+  waitingNotBlocked: "waiting-not-blocked",
+});
+
+const hardAuthorityPattern = /\b(human pause|explicit pause|cancel|reject|credential|credentials|authentication|pairing|permission|sandbox|paid|payment|publish|publication|destructive|force-push|runtime promotion|promote executor|replace runtime|live runtime|unresolved conflict)\b/i;
+const autoRecoverablePattern = /\b(too broad|broad|architectural|ambiguous|missing epic|epic metadata|missing plan|no safe item|paused-from-idle|paused from idle|source branch(?:es)? stale|stale source|dirty admin|dirty worktree|endpoint|file-lock|file lock|timeout|startup)\b/i;
+
+export function classifyReciprocalGate({ reason = "", state = {}, item = null, attemptCount = 0 } = {}) {
+  const text = [reason, state?.lastSummary, item?.text, item?.detail].filter(Boolean).join(" ");
+  if (state?.humanPaused === true || hardAuthorityPattern.test(text)) {
+    return {
+      category: reciprocalGateTaxonomy.hardHumanGate,
+      code: "human-authority-required",
+      retryable: false,
+      nextAction: "wait-for-human-authority",
+    };
+  }
+  if (
+    (state?.phase === "paused" && state?.pausedFromPhase === "idle" && autoRecoverablePattern.test(text))
+    || (item?.status === "QUEUED" && !detailMetadata(item.detail).epic)
+    || autoRecoverablePattern.test(text)
+  ) {
+    const escalates = Number(attemptCount) >= 3;
+    return {
+      category: escalates ? reciprocalGateTaxonomy.hardHumanGate : reciprocalGateTaxonomy.autoRecoverablePrerequisite,
+      code: escalates ? "repeated-genuine-blocker" : "auto-recoverable-prerequisite",
+      retryable: !escalates,
+      nextAction: escalates ? "surface-actionable-blocker" : "normalize-plan-reconcile-or-retry",
+    };
+  }
+  if (["working", "passive-testing", "validating", "a-upgrade-pending"].includes(state?.phase) || state?.activeRole) {
+    return {
+      category: reciprocalGateTaxonomy.waitingNotBlocked,
+      code: "progress-wait",
+      retryable: false,
+      nextAction: "wait-for-current-owner-or-review",
+    };
+  }
+  return {
+    category: reciprocalGateTaxonomy.autoRecoverablePrerequisite,
+    code: "idle-supervisor-dispatch",
+    retryable: true,
+    nextAction: "dispatch-highest-priority-human-item",
+  };
+}
+
+export function nextQueuedHumanItem(direction) {
+  const rank = { P0: 0, P1: 1, P2: 2, P3: 3 };
+  return [...(direction?.items || [])]
+    .filter((item) => !item.done && item.status === "QUEUED")
+    .sort((a, b) => (rank[a.priority] ?? 9) - (rank[b.priority] ?? 9) || a.id.localeCompare(b.id))[0] || null;
+}
+
+export function queuedItemNeedsPlanning(item) {
+  if (!item || item.status !== "QUEUED") return false;
+  const metadata = detailMetadata(item.detail);
+  return !metadata.artifact && metadata.epic !== "true";
+}
+
 export function reviewOriginItem(direction, sourceSha) {
   const sha = String(sourceSha || "").trim();
   if (!sha) return null;

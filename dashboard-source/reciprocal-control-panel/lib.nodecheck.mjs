@@ -6,11 +6,15 @@ import {
   approvalCompletionRelayAction,
   approvalRemainingActions,
   candidatePreviewArtifactCapabilityStatus,
+  classifyReciprocalGate,
+  nextQueuedHumanItem,
   parseDirection,
   recoveryPlan,
   rejectedCandidateOriginRetirement,
   rejectedCandidateRelayAction,
   rejectedCandidateWishlist,
+  queuedItemNeedsPlanning,
+  reciprocalGateTaxonomy,
   reviewOriginItem,
   validateAlreadyPromotedAUpgradeRecovery,
 } from "./lib.mjs";
@@ -20,6 +24,35 @@ test("parses shared direction and wishlist metadata", () => {
   assert.equal(result.general, "Build carefully.");
   assert.equal(result.items.length, 2);
   assert.deepEqual(result.items[0], { done: false, id: "W0003", priority: "P2", text: "Add remote control", status: "QUEUED", detail: "added=now" });
+});
+
+test("D175 classifies broad queued work and paused-from-idle planning stops as auto-recoverable", () => {
+  const direction = parseDirection(`# Board
+
+## Wishlist And Progress
+
+- [ ] W0027 | P0 | Comprehensive reciprocal workflow repair | QUEUED added=now
+- [ ] W0023 | P1 | Later item | QUEUED added=now
+`);
+  const item = nextQueuedHumanItem(direction);
+  assert.equal(item.id, "W0027");
+  assert.equal(queuedItemNeedsPlanning(item), true);
+  assert.deepEqual(classifyReciprocalGate({ item }), {
+    category: reciprocalGateTaxonomy.autoRecoverablePrerequisite,
+    code: "auto-recoverable-prerequisite",
+    retryable: true,
+    nextAction: "normalize-plan-reconcile-or-retry",
+  });
+  assert.equal(classifyReciprocalGate({
+    state: { phase: "paused", pausedFromPhase: "idle", lastSummary: "W0027 rejected as too broad and missing epic metadata" },
+  }).category, reciprocalGateTaxonomy.autoRecoverablePrerequisite);
+});
+
+test("D175 keeps explicit authority gates hard and active owners waiting", () => {
+  assert.equal(classifyReciprocalGate({ reason: "explicit human pause requested" }).category, reciprocalGateTaxonomy.hardHumanGate);
+  assert.equal(classifyReciprocalGate({ reason: "credential pairing required for the next step" }).category, reciprocalGateTaxonomy.hardHumanGate);
+  assert.equal(classifyReciprocalGate({ state: { phase: "working", activeRole: "A" } }).category, reciprocalGateTaxonomy.waitingNotBlocked);
+  assert.equal(classifyReciprocalGate({ reason: "endpoint timeout", attemptCount: 3 }).code, "repeated-genuine-blocker");
 });
 
 test("builds an auditable rollback plan for a failed candidate", () => {
