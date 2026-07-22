@@ -1,0 +1,31 @@
+Round: D179
+
+Implementation commit:
+- 6db7d9016ba7b1cd79dd15620e41bf0ca94e8a0c D179-1: enforce trusted authority handoffs
+
+Summary:
+- Added trusted relay authority checkpoints with hidden single-use decision proofs.
+- Exposed authenticated dashboard declare/approve/deny controls without leaking decision proofs.
+- Hardened direct direction mutations so approval/denial require relay-issued proof files.
+- Routed source reconciliation and passive-test retries through stored backoff/blocker state.
+- Loaded canonical taxonomy display-state mappings in relay, supervisor, dashboard, and tests.
+- Deployed refreshed managed dashboard files and verified target hashes.
+
+Verification:
+- PowerShell parser checks: reciprocal-relay.ps1, reciprocal-direction.ps1, continue-reciprocal-automation.ps1 passed.
+- npx vitest run tests\reciprocal-relay.test.ts --configLoader runner --reporter verbose -t "D179" passed.
+- npx vitest run tests\reciprocal-direction.test.ts --configLoader runner --reporter verbose passed, 23 tests.
+- npx vitest run tests\reciprocal-supervisor.test.ts --configLoader runner --reporter verbose passed, 3 tests.
+- node dashboard-source\reciprocal-control-panel\lib.nodecheck.mjs passed, 15 tests.
+- node dashboard-source\reciprocal-control-panel\approval-flow.e2e.mjs passed, 3 tests.
+- powershell -NoProfile -ExecutionPolicy Bypass -File scripts\deploy-reciprocal-dashboard.ps1 passed.
+- powershell -NoProfile -ExecutionPolicy Bypass -File scripts\deploy-reciprocal-dashboard.ps1 -VerifyOnly passed.
+- npm run typecheck passed.
+- npm test passed, 52 files passed and 1 skipped; 522 tests passed and 1 skipped.
+- git diff --check passed.
+
+Preservation:
+- W0027 remained IN_PROGRESS epic=true autonomy=full phase=PLAN role=A.
+- W0027 plan SHA256: 7021A3635A10B1F9B5D7C62CD8FA43E8F31F9291CC6E3BC931B8A4A1637589B2
+- W0027 checkpoint SHA256: D1D1D9D1AFC8DDB9DDA66E8320777E61210B4F33D89BEEE6837B7A37DD0967AF
+- Unrelated tracked edit scripts/setup-reciprocal-tandem.ps1 and untracked handoff/backlog files were left unstaged.
