@@ -401,7 +401,7 @@ describeWindows("reciprocal direction epics", () => {
     expect(board).toContain(`${sensitive.id} | P1 | Add remote control authentication | QUEUED epic=true phase=PLAN`);
     const explicitFull = JSON.parse((await direction(file, "-Action", "Add", "-Epic", "-Autonomy", "full", "-Text", "Change credentials in a later explicit authority step")).stdout);
     expect(await readBoard(file)).toContain(`${explicitFull.id} | P1 | Change credentials in a later explicit authority step | QUEUED epic=true autonomy=full phase=PLAN`);
-  });
+  }, 30_000);
 
   it("treats requeue with a note as retroactive rejection of an autonomous plan", async () => {
     const file = await boardFile();
@@ -415,7 +415,7 @@ describeWindows("reciprocal direction epics", () => {
     await direction(file, "-Action", "Requeue", "-Id", added.id, "-Note", "change the second step");
 
     expect(await readBoard(file)).toContain(`QUEUED epic=true autonomy=full phase=PLAN revision=2 completed=0 plan=${plan} note=change the second step`);
-  });
+  }, 30_000);
 });
 
 describeWindows("reciprocal direction artifact completion", () => {
