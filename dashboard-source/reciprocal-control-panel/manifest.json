@@ -1,6 +1,6 @@
 ﻿{
     "schemaVersion":  1,
-    "generatedAtUtc":  "2026-07-22T01:56:30.7796415Z",
+    "generatedAtUtc":  "2026-07-22T03:19:49.6277723Z",
     "files":  [
                   {
                       "path":  "approval-flow.e2e.mjs",
@@ -19,13 +19,13 @@
                   },
                   {
                       "path":  "lib.mjs",
-                      "sha256":  "CB8E3D1853D0ABB0C218CAE9365BBBDF1E8A8BFD87D654D59800C4E35CE4BBBC",
-                      "bytes":  12163
+                      "sha256":  "BCF7418BC0ADB3F9EF84D7D1B7B9CF7F345C1E3BDE3A6E7519E71968AE3F8A4F",
+                      "bytes":  15062
                   },
                   {
                       "path":  "lib.nodecheck.mjs",
-                      "sha256":  "2AEAC73A8D19E6E468FFD7FB2041B660A47F2DF2E7EFB2736C3C957E864831D2",
-                      "bytes":  9511
+                      "sha256":  "B0A6FCA0AC607B5A8E3992B41451FEB3B12CCB62D24595E754A923149B423F6E",
+                      "bytes":  11172
                   },
                   {
                       "path":  "public/app.js",
@@ -64,8 +64,8 @@
                   },
                   {
                       "path":  "server.mjs",
-                      "sha256":  "DBD4C873D488E8544105B8E21EA434351212BCD7E95E944B6C28131DCCE81A82",
-                      "bytes":  89996
+                      "sha256":  "97C068BAD555322562B6B66BE9E0D5B3579729285B998119749307CB5DC41787",
+                      "bytes":  91370
                   },
                   {
                       "path":  "start-dashboard.ps1",
