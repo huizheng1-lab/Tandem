@@ -1,0 +1,35 @@
+Round: D177
+
+Commits:
+- 5f94306 D177-1: make reciprocal gates authoritative
+
+Implementation summary:
+- Loaded and validated the canonical reciprocal gate taxonomy in dashboard JS and the continuation supervisor.
+- Added relay pause provenance (`pauseOrigin`, `pauseReasonCode`) and migrated the current W0027 auto-pause to machine `repeated-genuine-blocker`.
+- Stopped live lease contention from mutating blocker attempts; enforced persisted `nextAttemptAt`/hard-blocked retry gates.
+- Added exact authority lifecycle actions in reciprocal direction: `DeclareAuthority`, `ApproveAuthority`, and `DenyAuthority`.
+- Added resumable `pushed-not-synced` main-update handling, fault-injection hooks, and deferred local-master updates when the admin worktree is dirty.
+- Persisted live source reconciliation as `source-reconciliation-pending` while W0027 is owned/dirty, with automatic safe-boundary trigger conditions.
+- Deployed the dashboard source and verified the deployed manifest.
+
+Verification:
+- node dashboard-source\reciprocal-control-panel\lib.nodecheck.mjs: PASS
+- npx vitest run --configLoader runner tests/reciprocal-relay.test.ts tests/reciprocal-direction.test.ts tests/reciprocal-supervisor.test.ts: PASS (40 passed)
+- node dashboard-source\reciprocal-control-panel\approval-flow.e2e.mjs: PASS (2 passed)
+- powershell -NoProfile -ExecutionPolicy Bypass -File scripts\deploy-reciprocal-dashboard.ps1 -VerifyOnly: PASS
+- npm run typecheck: PASS
+- npm test: PASS (517 passed, 1 skipped)
+- git diff --check: PASS (line-ending warnings only)
+
+Live state/evidence:
+- Relay after D177: phase=paused, pausedFromPhase=working, activeRole=A, pauseOrigin=machine, pauseReasonCode=repeated-genuine-blocker, resumeCount=3.
+- Dashboard /api/status gate: category=hard-blocked, code=repeated-genuine-blocker, retryable=false, nextAction=inspect-checkpoint-before-diagnostic-retry.
+- W0027 board line preserved as IN_PROGRESS phase=PLAN role=A with plan=process/reciprocal/epics/W0027-plan.md.
+- Copy-B W0027 plan hash preserved: 7021A3635A10B1F9B5D7C62CD8FA43E8F31F9291CC6E3BC931B8A4A1637589B2, bytes=12405.
+- Copy-B checkpoint hash preserved: D1D1D9D1AFC8DDB9DDA66E8320777E61210B4F33D89BEEE6837B7A37DD0967AF, bytes=699.
+- Copy-B W0027 status preserved: ` M process/reciprocal/epics/W0027-plan.md`.
+- Source reconciliation remains pending because W0027 is unsafe to disturb: sourceHead=1f000abdc2db1ba006bd933e188e694c7f8aacf2, stableCommit=974d64c67c75d27151d9776d2c2b88888d820038, trigger=automatic when relay is idle with no owner, no candidate/rollback, and both reciprocal worktrees are clean.
+
+Notes:
+- W0027 product/plan content was not edited or committed.
+- Pinned Executor runtimes were not promoted or replaced.
