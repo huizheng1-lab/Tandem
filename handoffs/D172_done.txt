@@ -1,0 +1,86 @@
+Round: D172
+Status: DONE
+
+Tracked commits:
+- D172-1 evidence commit: 6df7be7cd6f4a8078957acd45f6627de8c00a1fb
+
+Changed external dashboard files:
+- C:\Users\huizh\Apps\Tandem Reciprocal\dashboard\server.mjs
+  SHA256: DBD4C873D488E8544105B8E21EA434351212BCD7E95E944B6C28131DCCE81A82
+- C:\Users\huizh\Apps\Tandem Reciprocal\dashboard\approval-flow.e2e.mjs
+  SHA256: E416A8557C163F4F9E684CA67B198D68A45C69742ED274B11EFB967404DD26F8
+
+Tracked evidence file:
+- process/reciprocal/D172_APPROVAL_HARNESS.md
+
+Approval-flow command log proof:
+- Fixture starts with phase=a-upgrade-pending, activeRole=null, stableCommit=<fixture SHA>.
+- Dashboard route exercised: POST /api/update/approve.
+- Relay actions asserted by the fixture command log:
+  - Pause: absent
+  - Resume: absent
+  - CompleteAUpgrade: present exactly once
+  - CompleteAUpgrade workspace: <fixture>\relay\worktrees\copy-a, branch codex/reciprocal-a
+  - CompleteAUpgrade role: -Role A
+  - CompleteAUpgrade force: -Force
+  - CompleteAUpgrade summary: non-empty
+- Real relay result proof:
+  - audit detail contains a_upgrade_completed
+  - persisted fixture state becomes phase=idle, activeRole=null, nextRole=A
+- Mock promotion path:
+  - promote-reciprocal-runtime.ps1 invoked exactly once for the new approval case.
+- Audit step order asserted:
+  1. a-upgrade-boundary
+  2. review-recorded
+  3. executors-stopped
+  4. runtime-promoted
+  5. executors-restarted
+  6. a-upgrade-completed
+
+Recovery command log proof:
+- Fixture starts with phase=paused, pausedFromPhase=a-upgrade-pending, activeRole=null,
+  stableCommit=<approved fixture SHA>.
+- Review index records decision=approve.
+- Fixture Executor A and B BUILD_INFO sourceSha values match the approved fixture SHA.
+- Dashboard route exercised: POST /api/update/approve/recover-a-upgrade.
+- Relay/action log assertion:
+  - action list is exactly [CompleteAUpgrade]
+  - no runtime promotion helper
+  - no executor stop helper
+  - no executor start helper
+  - no generic Resume
+  - no wishlist/direction command
+- Real relay result proof:
+  - persisted fixture state becomes phase=idle
+  - audit contains update.approvePromoteRecovery mode=already-promoted-relay-gate-recovered
+
+Recovery negative-case proof:
+- wrong pausedFromPhase: HTTP 400, fixture state unchanged, no relay action, no promotion helper
+- active role: HTTP 400, fixture state unchanged, no relay action, no promotion helper
+- stable SHA mismatch: HTTP 400, fixture state unchanged, no relay action, no promotion helper
+- rejected review decision: HTTP 400, fixture state unchanged, no relay action, no promotion helper
+- Executor A BUILD_INFO mismatch: HTTP 400, fixture state unchanged, no relay action, no promotion helper
+- Executor B BUILD_INFO mismatch: HTTP 400, fixture state unchanged, no relay action, no promotion helper
+
+Verification:
+- node --test C:\Users\huizh\Apps\Tandem Reciprocal\dashboard\approval-flow.e2e.mjs: PASS, 2 tests
+- node --test C:\Users\huizh\Apps\Tandem Reciprocal\dashboard\lib.nodecheck.mjs: PASS, 12 tests
+- node --check C:\Users\huizh\Apps\Tandem Reciprocal\dashboard\server.mjs: PASS
+- node --check C:\Users\huizh\Apps\Tandem Reciprocal\dashboard\lib.mjs: PASS
+- npm run typecheck: PASS
+- npm test: PASS, 49 files passed, 1 skipped; 494 tests passed, 1 skipped
+- git diff --check: PASS
+
+Read-only live proof after tests:
+- Relay state: phase=idle, activeRole=null, nextRole=A.
+- Stable commit: ead38ad2692d2a5641ce3cdaed684ab75ebf2db1.
+- Executor A BUILD_INFO sourceSha: ead38ad2692d2a5641ce3cdaed684ab75ebf2db1.
+- Executor B BUILD_INFO sourceSha: ead38ad2692d2a5641ce3cdaed684ab75ebf2db1.
+- W0026 remains DONE at ead38ad2692d2a5641ce3cdaed684ab75ebf2db1.
+- W0027 remains QUEUED.
+
+Scope confirmation:
+- No live approval or live recovery endpoint was called during D172.
+- No live runtime rebuild, copy, stop/start, or promotion was performed by the tests.
+- W0027 was not claimed or implemented.
+- Untracked handoff docs and unrelated moved files were left untouched.
