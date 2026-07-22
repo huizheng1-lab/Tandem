@@ -126,11 +126,20 @@ async function planCandidateArguments(cwd: string, item: WishlistItem): Promise<
   const sectionStart = lines.findIndex((line) => line.trim() === "## Ordered Steps");
   const sectionEnd = sectionStart < 0 ? sectionStart : lines.findIndex((line, index) => index > sectionStart && /^##\s/.test(line));
   const section = sectionStart < 0 ? "" : lines.slice(sectionStart + 1, sectionEnd < 0 ? undefined : sectionEnd).join("\n");
-  const stepNumbers = [...section.matchAll(/^- \[ \] Step (\d+):\s+.+$/gm)].map((match) => Number(match[1]));
-  if (stepNumbers.length === 0 || stepNumbers.some((value, index) => value !== index + 1)) {
-    throw new Error(`Epic ${item.id} plan must contain contiguous unchecked Ordered Steps starting at Step 1.`);
+  const steps = [...section.matchAll(/^- \[([ xX])\] Step (\d+):\s+.+$/gm)].map((match) => ({
+    completed: match[1].toLowerCase() === "x",
+    number: Number(match[2])
+  }));
+  if (steps.length === 0 || steps.some((step, index) => step.number !== index + 1)) {
+    throw new Error(`Epic ${item.id} plan must contain contiguous Ordered Steps starting at Step 1.`);
   }
-  return ["-Steps", String(stepNumbers.length), "-Plan", planPath];
+  const completed = steps.findIndex((step) => !step.completed);
+  const completedCount = completed < 0 ? steps.length : completed;
+  if (completedCount === steps.length) throw new Error(`Epic ${item.id} plan has no remaining Ordered Step.`);
+  if (steps.slice(completedCount).some((step) => step.completed)) {
+    throw new Error(`Epic ${item.id} plan may only check a contiguous completed prefix of Ordered Steps.`);
+  }
+  return ["-Steps", String(steps.length), "-Completed", String(completedCount), "-Plan", planPath];
 }
 
 function shaPrefixEqual(left: string, right: string): boolean {

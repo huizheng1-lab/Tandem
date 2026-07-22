@@ -181,7 +181,41 @@ describe("reciprocal candidate commit", () => {
     });
 
     const candidate = calls.find((call) => call.file === "powershell" && call.args.includes("Candidate"));
-    expect(candidate?.args).toEqual(expect.arrayContaining(["-Steps", "3", "-Plan", planPath]));
+    expect(candidate?.args).toEqual(expect.arrayContaining(["-Steps", "3", "-Completed", "0", "-Plan", planPath]));
+  });
+
+  it("finalizes a resumed epic plan with a checked completed-step prefix", async () => {
+    const cwd = await relayWorktree();
+    const relayRoot = path.dirname(path.dirname(cwd));
+    const planPath = "process/reciprocal/epics/W1234-plan.md";
+    await mkdir(path.join(cwd, "process", "reciprocal", "epics"), { recursive: true });
+    await writeFile(
+      path.join(cwd, ...planPath.split("/")),
+      "# Plan\n\n## Ordered Steps\n\n- [x] Step 1: accepted baseline\n- [x] Step 2: accepted routing\n- [ ] Step 3: approval integration\n\n## Verification\n\nRun tests.\n",
+      "utf8"
+    );
+    await writeFile(
+      path.join(relayRoot, "control", "WISHLIST.md"),
+      `# Board\n\n<!-- wishlist-items -->\n- [ ] W1234 | P0 | Remaining step | IN_PROGRESS epic=true autonomy=full phase=PLAN revision=1 completed=0 plan=${planPath} role=B started=now\n`,
+      "utf8"
+    );
+    const calls: Array<{ file: string; args: string[] }> = [];
+    await commitReciprocalCandidate({
+      cwd,
+      role: "B",
+      report: { ...report, filesChanged: [planPath] },
+      commandRunner: async (file, args) => {
+        calls.push({ file, args });
+        if (file === "git" && args.join(" ") === "branch --show-current") return { stdout: "codex/reciprocal-a\n", stderr: "" };
+        if (file === "git" && args[0] === "status") return { stdout: ` M ${planPath}\n`, stderr: "" };
+        if (file === "git" && args[0] === "rev-parse") return { stdout: "abc123\n", stderr: "" };
+        if (file === "powershell" && args.includes("Status")) return { stdout: JSON.stringify({ phase: "working", activeRole: "B", stableCommit: "base123" }), stderr: "" };
+        return { stdout: "", stderr: "" };
+      }
+    });
+
+    const candidate = calls.find((call) => call.file === "powershell" && call.args.includes("Candidate"));
+    expect(candidate?.args).toEqual(expect.arrayContaining(["-Steps", "3", "-Completed", "2", "-Plan", planPath]));
   });
 
   it("durably recovers a commit when board finalization fails after git commit", async () => {

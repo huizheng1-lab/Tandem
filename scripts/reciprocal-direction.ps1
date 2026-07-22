@@ -30,6 +30,9 @@ param(
     [ValidateRange(0, 99)]
     [int]$Steps = 0,
 
+    [ValidateRange(-1, 99)]
+    [int]$Completed = -1,
+
     [string]$Plan,
 
     [switch]$PlanRevision,
@@ -613,6 +616,10 @@ try {
                 $revision = if ($metadata.revision) { [int]$metadata.revision } else { 1 }
                 $completed = if ($metadata.completed) { [int]$metadata.completed } else { 0 }
                 if ($metadata.phase -eq "PLAN" -or $PlanRevision) {
+                    if ($Completed -ge 0) {
+                        if ($Completed -lt $completed) { throw "Epic $Id plan cannot reduce completed steps from $completed to $Completed." }
+                        $completed = $Completed
+                    }
                     if ($Steps -le $completed) { throw "Epic $Id plan requires more than $completed total steps." }
                     $planPath = Assert-EpicPlanPath $Plan $Id
                     if ($PlanRevision) { $revision += 1 }
