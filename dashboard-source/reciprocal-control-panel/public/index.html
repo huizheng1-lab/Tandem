@@ -1,0 +1,233 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="control-token" content="__CONTROL_TOKEN__">
+  <title>Tandem Reciprocal Control</title>
+  <link rel="stylesheet" href="/styles.css">
+  <link rel="stylesheet" href="/update-gate.css">
+  <link rel="stylesheet" href="/mobile.css">
+</head>
+<body>
+  <div class="shell">
+    <aside class="sidebar">
+      <div class="brand">
+        <span class="brand-mark">TR</span>
+        <div><strong>Tandem</strong><span>Reciprocal control</span></div>
+      </div>
+      <nav aria-label="Control panel sections">
+        <button class="nav-item active" data-view="overview"><span>01</span>Overview</button>
+        <button class="nav-item" data-view="wishlist"><span>02</span>Wishlist <b id="wishlist-count">0</b></button>
+        <button class="nav-item" data-view="models"><span>03</span>Models</button>
+        <button class="nav-item" data-view="versions"><span>04</span>Versions</button>
+        <button class="nav-item" data-view="recovery"><span>05</span>Recovery</button>
+        <button class="nav-item" data-view="activity"><span>06</span>Activity</button>
+      </nav>
+      <div class="sidebar-foot">
+        <span class="live-dot"></span>
+        <div><strong>Local control</strong><span>127.0.0.1 only</span></div>
+      </div>
+    </aside>
+
+    <main>
+      <header class="topbar">
+        <div>
+          <p class="eyebrow">Human oversight console</p>
+          <h1 id="view-title">Reciprocal overview</h1>
+        </div>
+        <div class="top-actions">
+          <span class="updated" id="updated">Connecting...</span>
+          <button class="icon-button" id="refresh" title="Refresh status" aria-label="Refresh status">↻</button>
+          <button class="button quiet" id="relay-pause">Pause relay</button>
+          <button class="button primary" id="relay-resume" hidden>Resume relay</button>
+          <button class="button quiet" id="kickstart">Kickstart</button>
+          <button class="button danger quiet" id="stop-all">■ Stop both</button>
+          <button class="button primary" id="start-all">▶ Start both</button>
+          <button class="button danger" id="quit-dashboard">Quit panel</button>
+        </div>
+      </header>
+
+      <div id="alert" class="alert" hidden></div>
+      <div id="kickstart-status" class="kickstart-status" hidden></div>
+      <section class="review-note" id="review-note" hidden>
+        <div>
+          <p class="eyebrow">Build ready for review</p>
+          <h2><span id="review-note-sha">--</span> needs a human look</h2>
+          <p id="review-note-summary">Checking the accepted build...</p>
+          <small id="review-note-message">Waiting for candidate preview state.</small>
+        </div>
+        <div class="review-note-actions">
+          <button class="button primary" id="review-note-launch" type="button">Launch preview</button>
+          <button class="button quiet" id="review-note-dismiss" type="button">Dismiss as reviewed</button>
+        </div>
+      </section>
+
+      <section class="view active" id="overview-view">
+        <div class="metric-grid">
+          <article class="metric"><span>Relay phase</span><strong id="phase">--</strong><small id="turn">Waiting for state</small></article>
+          <article class="metric"><span>Next gate</span><strong id="next-role">--</strong><small id="active-role">No active owner</small></article>
+          <article class="metric"><span>Stable version</span><strong class="mono" id="stable">--</strong><small>Independently verified</small></article>
+          <article class="metric"><span>Runtimes online</span><strong id="online">0 / 2</strong><small id="runtime-note">Checking processes</small></article>
+        </div>
+
+        <div class="section-heading">
+          <div><p class="eyebrow">Current cycle</p><h2>Reciprocal lane</h2></div>
+          <span class="status-chip" id="cycle-chip">Loading</span>
+        </div>
+        <div class="relay-lane">
+          <article class="executor" id="executor-a">
+            <div class="executor-top"><span class="executor-letter">A</span><span class="runtime-state">Offline</span></div>
+            <h3>Executor A</h3><p>Sole producer for Copy B</p>
+            <dl><div><dt>Target branch</dt><dd class="branch">--</dd></div><div><dt>Source</dt><dd class="head mono">--</dd></div></dl>
+            <div class="row-actions"><button class="button small start-one" data-role="A">▶ Start</button><button class="button small quiet stop-one" data-role="A">■ Stop</button></div>
+          </article>
+          <div class="lane-link"><span></span><b>candidate</b><span></span></div>
+          <article class="gate">
+            <div class="gate-ring"><span>✓</span></div>
+            <h3>Stable gate</h3><p id="gate-copy">Only verified work advances</p>
+            <code id="gate-sha">--</code>
+          </article>
+          <div class="lane-link reverse"><span></span><b>passive test</b><span></span></div>
+          <article class="executor" id="executor-b">
+            <div class="executor-top"><span class="executor-letter">B</span><span class="runtime-state">Offline</span></div>
+            <h3>Executor B</h3><p>Passive build/launch target</p>
+            <dl><div><dt>Target branch</dt><dd class="branch">--</dd></div><div><dt>Source</dt><dd class="head mono">--</dd></div></dl>
+            <div class="row-actions"><button class="button small start-one" data-role="B">▶ Start</button><button class="button small quiet stop-one" data-role="B">■ Stop</button></div>
+          </article>
+        </div>
+
+        <div class="overview-grid">
+          <section class="panel direction-panel">
+            <div class="panel-head"><div><p class="eyebrow">Human-owned</p><h2>General direction</h2></div><div class="direction-actions"><span class="lock">READ BY BOTH EXECUTORS</span><button class="button small quiet" id="edit-direction">Edit</button></div></div>
+            <p id="general-direction">Loading shared direction...</p>
+            <form id="direction-form" class="direction-form" hidden>
+              <label for="direction-text">General direction</label>
+              <textarea id="direction-text" rows="6" maxlength="4000" required></textarea>
+              <div class="form-foot"><span id="direction-count">0 / 4000</span><div class="row-actions"><button class="button small quiet" type="button" id="cancel-direction">Cancel</button><button class="button small primary" type="submit">Save direction</button></div></div>
+            </form>
+            <div class="next-item"><span>Next queued request</span><strong id="next-item">No queued request</strong></div>
+          </section>
+          <section class="panel">
+            <div class="panel-head"><div><p class="eyebrow">Guardrails</p><h2>System health</h2></div><span id="health-total">--</span></div>
+            <div class="health-list" id="health-list"></div>
+          </section>
+        </div>
+      </section>
+
+      <section class="view" id="wishlist-view">
+        <div class="split-layout wishlist-layout">
+          <section>
+            <div class="section-heading compact"><div><p class="eyebrow">Shared direction board</p><h2>Wishlist and progress</h2></div><div class="segmented" id="wishlist-filter"><button class="active" data-filter="open">Open</button><button data-filter="all">All</button><button data-filter="done">Done</button></div></div>
+            <div class="wishlist-list" id="wishlist-list"></div>
+          </section>
+          <aside class="panel add-panel">
+            <p class="eyebrow">Human input</p><h2>Add a request</h2>
+            <p>New items enter the shared queue. They will not interrupt a turn already in progress.</p>
+            <form id="wishlist-form">
+              <label>Priority<select id="item-priority"><option>P0</option><option selected>P1</option><option>P2</option><option>P3</option></select></label>
+              <label class="check-line"><input id="item-epic" type="checkbox"> Multi-turn epic</label>
+              <label class="check-line"><input id="item-autonomous" type="checkbox" disabled> Fully autonomous - skip plan approval</label>
+              <label>Desired outcome<textarea id="item-text" rows="7" maxlength="1000" placeholder="Describe the feature, constraints, and what success looks like..." required></textarea></label>
+              <div class="form-foot"><span id="char-count">0 / 1000</span><button class="button primary" type="submit">＋ Add to wishlist</button></div>
+            </form>
+            <button class="button full" id="artifact-preview-create" type="button">Build latest for review</button>
+            <p class="small-print" id="artifact-preview-state">Checking artifact build capability...</p>
+          </aside>
+        </div>
+      </section>
+
+      <section class="view" id="models-view">
+        <div class="section-heading"><div><p class="eyebrow">Per-copy configuration</p><h2>Leader and worker models</h2></div><span class="status-chip">Credentials stay private</span></div>
+        <div class="model-grid" id="model-grid"></div>
+      </section>
+
+      <section class="view" id="versions-view">
+        <div class="section-heading"><div><p class="eyebrow">Build and branch inventory</p><h2>Version comparison</h2></div><span class="status-chip" id="drift-chip">Live from disk</span></div>
+        <section class="panel update-panel main-update-panel" id="main-update-panel">
+          <div class="panel-head"><div><p class="eyebrow">Stable to trunk</p><h2>Main branch update</h2></div><span class="status-chip" id="main-update-state">Checking</span></div>
+          <div class="update-grid">
+            <div>
+              <p id="main-update-message">Reading annotated update tags...</p>
+              <dl class="update-facts">
+                <div><dt>Master is at</dt><dd class="mono" id="main-version">--</dd></div>
+                <div><dt>Stable tip</dt><dd class="mono" id="main-stable">--</dd></div>
+                <div><dt>Pending stable commits</dt><dd id="main-pending">--</dd></div>
+                <div><dt>Remote backup</dt><dd>Reciprocal refs only</dd></div>
+              </dl>
+              <button class="button small" id="backup-github">Backup to GitHub</button>
+            </div>
+            <form id="main-update-form">
+              <label>Integration comment<textarea id="main-update-comment" rows="5" maxlength="1200" placeholder="Summarize the reviewed batch and why it is ready for master." required></textarea></label>
+              <p class="small-print">Runs typecheck and tests on stable, updates and tags master, pushes without force, then re-synchronizes both reciprocal branches.</p>
+              <div class="row-actions"><button class="button primary" type="submit">Update main branch</button></div>
+            </form>
+          </div>
+        </section>
+        <section class="panel update-panel" id="update-panel">
+          <div class="panel-head"><div><p class="eyebrow">Human approval gate</p><h2>Candidate runtime update</h2></div><span class="status-chip" id="update-state">Checking</span></div>
+          <div class="update-grid">
+            <div>
+              <p id="update-message">Checking release/win-unpacked...</p>
+              <dl class="update-facts">
+                <div><dt>Candidate</dt><dd class="mono" id="update-sha">--</dd></div>
+                <div><dt>Built</dt><dd id="update-built">--</dd></div>
+                <div><dt>Ahead</dt><dd id="update-ahead">--</dd></div>
+                <div><dt>Preview</dt><dd id="update-preview">--</dd></div>
+                <div><dt>Master version</dt><dd id="update-main-version">--</dd></div>
+                <div><dt>Runtime versions</dt><dd id="update-runtime-versions">--</dd></div>
+              </dl>
+              <div class="row-actions">
+                <button class="button small" id="launch-candidate">Launch candidate</button>
+                <button class="button small quiet" id="stop-candidate">Stop candidate</button>
+              </div>
+            </div>
+            <form id="update-review-form">
+              <label>Review comment<textarea id="update-comment" rows="5" maxlength="1200" placeholder="What failed, and exactly what should the next reciprocal candidate fix?"></textarea></label>
+              <div class="row-actions">
+                <button class="button danger" type="submit" data-decision="reject">Reject</button>
+                <button class="button primary" type="submit" data-decision="approve">Approve and promote</button>
+              </div>
+              <button class="button small" type="button" id="approve-backup" hidden>Backup approved branches now</button>
+            </form>
+          </div>
+          <div class="approval-progress" id="approval-progress" hidden>
+            <div><p class="eyebrow">Approval operation</p><strong id="approval-current">Preparing safe boundary...</strong><p id="approval-detail">No executor will be stopped during an active turn without your explicit override.</p></div>
+            <div class="row-actions"><button class="button small quiet" id="approval-cancel" type="button">Cancel wait</button><button class="button small danger" id="approval-override" type="button" hidden>Stop anyway</button></div>
+            <div class="approval-steps" id="approval-steps"></div>
+          </div>
+        </section>
+        <div class="version-grid" id="version-grid"></div>
+        <section class="panel history-panel"><div class="panel-head"><div><p class="eyebrow">Git history</p><h2>Recent versions</h2></div><span>All reciprocal branches</span></div><div id="version-history" class="history-table"></div></section>
+      </section>
+
+      <section class="view" id="recovery-view">
+        <div class="recovery-hero">
+          <div><p class="eyebrow">Human-supervised safety</p><h2 id="recovery-title">Inspecting recovery state...</h2><p id="recovery-summary"></p></div>
+          <div class="recovery-mark" id="recovery-mark">✓</div>
+        </div>
+        <div class="recovery-grid">
+          <section class="panel command-panel">
+            <div class="panel-head"><div><p class="eyebrow">Generated for current state</p><h2>Recovery runbook</h2></div><button class="button small quiet" id="copy-runbook">Copy all</button></div>
+            <p class="working-dir">Run in <code id="recovery-workspace">--</code></p>
+            <div id="recovery-commands"></div>
+          </section>
+          <aside class="panel safety-panel">
+            <p class="eyebrow">Before acting</p><h2>Safety checklist</h2>
+            <ol><li>Stop both executors to freeze new work.</li><li>Read the active checkpoint and failing output.</li><li>Confirm the candidate is a direct child of stable.</li><li>Use the relay command so history stays auditable.</li><li>Run all three baseline checks before resuming.</li></ol>
+            <button class="button danger full" id="recovery-stop">■ Emergency stop both</button>
+            <p class="small-print">Stopping preserves relay state, checkpoints, candidate refs, and recovery stashes.</p>
+          </aside>
+        </div>
+      </section>
+
+      <section class="view" id="activity-view">
+        <div class="section-heading"><div><p class="eyebrow">Evidence and oversight</p><h2>Activity log</h2></div><span class="status-chip">Git + panel audit</span></div>
+        <div class="activity-grid"><section class="panel"><div class="panel-head"><h2>Reciprocal progress</h2><span>commits</span></div><div class="timeline" id="git-activity"></div></section><section class="panel"><div class="panel-head"><h2>Human control log</h2><span>local JSONL</span></div><div class="timeline" id="control-activity"></div></section></div>
+      </section>
+    </main>
+  </div>
+  <div id="toast" class="toast" role="status"></div>
+  <script type="module" src="/app.js"></script>
+</body>
+</html>
