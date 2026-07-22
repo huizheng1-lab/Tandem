@@ -1,12 +1,25 @@
 param(
     [Parameter(Mandatory = $true)]
-    [ValidateSet("Status", "Claim", "Validate", "PassiveTest", "PrepareAUpgrade", "CompleteAUpgrade", "Accept", "Complete", "CompleteArtifact", "Rollback", "CompleteRollback", "Abandon", "Pause", "Resume", "ReconcileMain", "Reset")]
+    [ValidateSet("Status", "Claim", "Validate", "PassiveTest", "PrepareAUpgrade", "CompleteAUpgrade", "Accept", "Complete", "CompleteArtifact", "Rollback", "CompleteRollback", "Abandon", "Pause", "Resume", "ReconcileMain", "DeclareAuthority", "ApproveAuthority", "DenyAuthority", "Reset")]
     [string]$Action,
 
     [ValidateSet("A", "B")]
     [string]$Role,
 
     [string]$Summary,
+
+    [string]$Id,
+
+    [ValidateSet("credentials", "authentication", "pairing", "permission", "sandbox", "destructive", "payment", "publication", "runtime")]
+    [string]$AuthKind,
+
+    [string]$AuthVerb,
+
+    [string]$Checkpoint,
+
+    [string]$ResumeToken,
+
+    [string]$AuthorityProof,
 
     [string]$NewStableCommit,
 
@@ -44,6 +57,9 @@ function Get-ReciprocalTaxonomy {
     }
     foreach ($name in @("explicitHumanPause", "resumeCircuitBreaker", "candidateFailure")) {
         if (-not $taxonomy.pauseReasonCodes.$name) { throw "Canonical reciprocal taxonomy is missing pauseReasonCodes.$name." }
+    }
+    foreach ($name in @("working", "testing", "waitingForReview", "humanPaused", "machineBlocked", "hardBlocked", "retryBackoff", "retryingPrerequisite", "planning", "unknown", "waitingNotBlocked")) {
+        if (-not $taxonomy.displayStates.$name) { throw "Canonical reciprocal taxonomy is missing displayStates.$name." }
     }
     return $taxonomy
 }
@@ -126,6 +142,7 @@ function New-RelayState([string]$StableCommit) {
         lastCompletedCommit = $null
         lastSummary = $null
         lastRecoveryStash = $null
+        authorityRequest = $null
     }
 }
 
@@ -185,6 +202,9 @@ try {
         $state | Add-Member -NotePropertyName pauseOrigin -NotePropertyValue $origin
         $state | Add-Member -NotePropertyName pauseReasonCode -NotePropertyValue $reasonCode
     }
+    if (-not $state.PSObject.Properties["authorityRequest"]) {
+        $state | Add-Member -NotePropertyName authorityRequest -NotePropertyValue $null
+    }
 
     function Update-RelayRefs {
         function Get-RelayRef([string]$RefName) {
@@ -238,6 +258,13 @@ try {
     }
 
     function Write-Result([string]$Outcome, [object]$Extra) {
+        $authority = $null
+        if ($state.authorityRequest) {
+            $authority = [ordered]@{}
+            foreach ($property in $state.authorityRequest.PSObject.Properties) {
+                if ($property.Name -ne "decisionProof") { $authority[$property.Name] = $property.Value }
+            }
+        }
         $result = [ordered]@{
             outcome = $Outcome
             turn = $state.turn
@@ -259,6 +286,7 @@ try {
             lastCompletedCommit = $state.lastCompletedCommit
             lastSummary = $state.lastSummary
             lastRecoveryStash = $state.lastRecoveryStash
+            authorityRequest = $authority
             capabilities = Get-ReciprocalCapabilities
             statePath = $statePath
         }
@@ -532,6 +560,52 @@ try {
         $adminRepo = Split-Path $commonDir -Parent
         $relayRoot = Join-Path (Split-Path $adminRepo -Parent) "Tandem Reciprocal"
         return (Join-Path $relayRoot "control\WISHLIST.md")
+    }
+
+    function New-CleanAuthorityValue([string]$Value, [string]$Name) {
+        $clean = if ($null -eq $Value) { "" } else { $Value.Trim() }
+        if ($clean -notmatch '^[A-Za-z0-9._:-]{2,128}$') { throw "Authority $Name must be exact machine-readable metadata." }
+        return $clean
+    }
+
+    function New-AuthorityProofFile([object]$Request, [string]$Decision) {
+        $proofPath = Join-Path $relayDir "authority-proof-$($Request.requestId)-$Decision.json"
+        $payload = [ordered]@{
+            requestId = $Request.requestId
+            proof = $Request.decisionProof
+            decision = $Decision
+            id = $Request.id
+            authority = $Request.authority
+            action = $Request.action
+            checkpoint = $Request.checkpoint
+            resume = $Request.resume
+            expiresAtUtc = (Get-Date).ToUniversalTime().AddMinutes(2).ToString("o")
+        }
+        $payload | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath $proofPath -Encoding UTF8
+        return $proofPath
+    }
+
+    function Invoke-DirectionAuthorityDecision([object]$Request, [string]$Decision, [string]$NoteText = "") {
+        $directionScript = Join-Path $Workspace "scripts\reciprocal-direction.ps1"
+        $boardPath = Get-SharedDirectionPath
+        $proofPath = New-AuthorityProofFile $Request $Decision
+        try {
+            $directionAction = if ($Decision -eq "approve") { "ApproveAuthority" } else { "DenyAuthority" }
+            $directionArgs = @(
+                "-Action", $directionAction,
+                "-Id", $Request.id,
+                "-AuthKind", $Request.authority,
+                "-AuthorityProofPath", $proofPath,
+                "-ControlPath", $boardPath
+            )
+            if ($Decision -eq "deny") { $directionArgs += @("-Note", $NoteText) }
+            $powershellArgs = @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", $directionScript) + $directionArgs
+            $output = @(& powershell @powershellArgs 2>&1)
+            if ($LASTEXITCODE -ne 0 -or -not $?) { throw "Direction authority $Decision failed: $($output -join ' ')" }
+            return ($output -join [Environment]::NewLine)
+        } finally {
+            Remove-Item -LiteralPath $proofPath -Force -ErrorAction SilentlyContinue
+        }
     }
 
     function Get-Metadata([string]$Value) {
@@ -924,6 +998,93 @@ try {
     if ($Action -eq "Status") {
         Save-State
         Write-Result "STATUS"
+        exit 0
+    }
+
+    if ($Action -eq "DeclareAuthority") {
+        if (-not $Role) { throw "DeclareAuthority requires -Role." }
+        if (-not $Id -or $Id -notmatch '^W\d{4}$') { throw "DeclareAuthority requires a wishlist item -Id." }
+        if (-not $AuthKind) { throw "DeclareAuthority requires -AuthKind." }
+        if ($state.authorityRequest -and $state.authorityRequest.status -eq "pending") { throw "Relay already has a pending authority request for $($state.authorityRequest.id)." }
+        if ($state.activeRole -ne $Role -or $state.phase -ne "working") { throw "DeclareAuthority requires the active working owner. phase=$($state.phase) owner=$($state.activeRole)" }
+        $verb = New-CleanAuthorityValue $AuthVerb "action"
+        $checkpointValue = New-CleanAuthorityValue $Checkpoint "checkpoint"
+        $resumeValue = New-CleanAuthorityValue $ResumeToken "resume"
+        $directionScript = Join-Path $Workspace "scripts\reciprocal-direction.ps1"
+        $boardPath = Get-SharedDirectionPath
+        $declareText = "$AuthKind`__$verb`__$checkpointValue`__$resumeValue"
+        $output = @(& $directionScript -Action DeclareAuthority -Id $Id -Text $declareText -ControlPath $boardPath 2>&1)
+        if ($LASTEXITCODE -ne 0 -or -not $?) { throw "Direction authority declaration failed: $($output -join ' ')" }
+        $state.authorityRequest = [pscustomobject]@{
+            requestId = [guid]::NewGuid().ToString("n")
+            decisionProof = [guid]::NewGuid().ToString("n")
+            id = $Id
+            owner = $Role
+            authority = $AuthKind
+            action = $verb
+            checkpoint = $checkpointValue
+            resume = $resumeValue
+            status = "pending"
+            declaredAtUtc = (Get-Date).ToUniversalTime().ToString("o")
+            approvedAtUtc = $null
+            deniedAtUtc = $null
+            consumedAtUtc = $null
+        }
+        $state.phase = "paused"
+        $state.pausedFromPhase = "working"
+        $state.pauseOrigin = [string]$taxonomy.pauseOrigins.human
+        $state.pauseReasonCode = [string]$taxonomy.pauseReasonCodes.explicitHumanPause
+        $state.lastSummary = "Authority checkpoint $checkpointValue for $Id requires explicit human decision before $resumeValue."
+        Save-State
+        Write-Result "AUTHORITY_DECLARED"
+        exit 0
+    }
+
+    if ($Action -eq "ApproveAuthority") {
+        $request = $state.authorityRequest
+        if (-not $request) { throw "No relay authority request is pending." }
+        if ($request.status -in @("approved", "consumed")) {
+            Write-Result "AUTHORITY_APPROVED_NOOP"
+            exit 0
+        }
+        if ($request.status -ne "pending") { throw "Authority request is not pending; status=$($request.status)." }
+        if (-not $AuthorityProof -or $AuthorityProof -ne $request.decisionProof) { throw "ApproveAuthority requires the trusted dashboard decision proof." }
+        Invoke-DirectionAuthorityDecision $request "approve" | Out-Null
+        $request.status = "approved"
+        $request.approvedAtUtc = (Get-Date).ToUniversalTime().ToString("o")
+        if ($state.phase -eq "paused" -and $state.pausedFromPhase -eq "working" -and $state.activeRole -eq $request.owner) {
+            $state.phase = "working"
+            $state.pausedFromPhase = $null
+            $state.pauseOrigin = $null
+            $state.pauseReasonCode = $null
+            Reset-ResumeCounter
+        }
+        $state.lastSummary = "Authority checkpoint $($request.checkpoint) for $($request.id) approved; resume $($request.resume) for owner $($request.owner)."
+        Save-State
+        Write-Result "AUTHORITY_APPROVED"
+        exit 0
+    }
+
+    if ($Action -eq "DenyAuthority") {
+        $request = $state.authorityRequest
+        if (-not $request) { throw "No relay authority request is pending." }
+        if ($request.status -eq "denied") {
+            Write-Result "AUTHORITY_DENIED_NOOP"
+            exit 0
+        }
+        if ($request.status -ne "pending") { throw "Authority request is not pending; status=$($request.status)." }
+        if (-not $AuthorityProof -or $AuthorityProof -ne $request.decisionProof) { throw "DenyAuthority requires the trusted dashboard decision proof." }
+        $noteText = if ($Summary.Trim()) { $Summary.Trim() } else { "authority denied" }
+        Invoke-DirectionAuthorityDecision $request "deny" $noteText | Out-Null
+        $request.status = "denied"
+        $request.deniedAtUtc = (Get-Date).ToUniversalTime().ToString("o")
+        $state.phase = "paused"
+        $state.pausedFromPhase = "working"
+        $state.pauseOrigin = [string]$taxonomy.pauseOrigins.human
+        $state.pauseReasonCode = [string]$taxonomy.pauseReasonCodes.explicitHumanPause
+        $state.lastSummary = "Authority checkpoint $($request.checkpoint) for $($request.id) denied: $noteText"
+        Save-State
+        Write-Result "AUTHORITY_DENIED"
         exit 0
     }
 
@@ -1485,6 +1646,10 @@ try {
     $state.candidateKind = "improvement"
     $state.rollbackCommit = $null
     $state.startedAt = $null
+    if ($state.authorityRequest -and $state.authorityRequest.status -eq "approved" -and $state.authorityRequest.owner -eq $Role) {
+        $state.authorityRequest.status = "consumed"
+        $state.authorityRequest.consumedAtUtc = (Get-Date).ToUniversalTime().ToString("o")
+    }
     Reset-ResumeCounter
     $state.lastCompletedCommit = $head
     $state.lastSummary = $Summary.Trim()

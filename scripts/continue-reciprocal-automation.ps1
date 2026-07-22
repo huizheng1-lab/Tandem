@@ -168,6 +168,9 @@ function Get-ReciprocalTaxonomy([string]$RepoRoot) {
     foreach ($name in @("baseSeconds", "maxSeconds", "escalateAfterIdenticalAttempts")) {
         if ($null -eq $taxonomy.retry.$name) { throw "Canonical reciprocal taxonomy is missing retry.$name." }
     }
+    foreach ($name in @("working", "testing", "waitingForReview", "humanPaused", "machineBlocked", "hardBlocked", "retryBackoff", "retryingPrerequisite", "planning", "unknown", "waitingNotBlocked")) {
+        if (-not $taxonomy.displayStates.$name) { throw "Canonical reciprocal taxonomy is missing displayStates.$name." }
+    }
     return $taxonomy
 }
 
@@ -417,15 +420,15 @@ function Exit-Lease([string]$Path) {
 }
 
 function Set-DisplayState([object]$RelayState, [object]$SupervisorState) {
-    if ($RelayState.phase -eq "working" -and $RelayState.activeRole) { return "working" }
-    if ($RelayState.phase -eq "validating" -or $RelayState.phase -eq "passive-testing") { return "testing" }
-    if ($RelayState.phase -eq "a-upgrade-pending") { return "waiting for review" }
-    if ($RelayState.phase -eq "paused" -and $RelayState.pauseOrigin -eq "human") { return "human paused" }
-    if ($RelayState.phase -eq "paused" -and $RelayState.pauseOrigin -eq "machine") { return "machine blocked" }
-    if ($SupervisorState.blocker -and $SupervisorState.blocker.category -eq [string]$taxonomy.categories.hardBlocked) { return "hard blocked" }
-    if ($SupervisorState.blocker) { return "retrying prerequisite" }
+    if ($RelayState.phase -eq "working" -and $RelayState.activeRole) { return [string]$taxonomy.displayStates.working }
+    if ($RelayState.phase -eq "validating" -or $RelayState.phase -eq "passive-testing") { return [string]$taxonomy.displayStates.testing }
+    if ($RelayState.phase -eq "a-upgrade-pending") { return [string]$taxonomy.displayStates.waitingForReview }
+    if ($RelayState.phase -eq "paused" -and $RelayState.pauseOrigin -eq [string]$taxonomy.pauseOrigins.human) { return [string]$taxonomy.displayStates.humanPaused }
+    if ($RelayState.phase -eq "paused" -and $RelayState.pauseOrigin -eq [string]$taxonomy.pauseOrigins.machine) { return [string]$taxonomy.displayStates.machineBlocked }
+    if ($SupervisorState.blocker -and $SupervisorState.blocker.category -eq [string]$taxonomy.categories.hardBlocked) { return [string]$taxonomy.displayStates.hardBlocked }
+    if ($SupervisorState.blocker) { return [string]$taxonomy.displayStates.retryingPrerequisite }
     $board = Get-HighestPriorityQueuedItem (Get-SharedDirectionPath $relayRootFull)
-    if ($board) { return "planning" }
+    if ($board) { return [string]$taxonomy.displayStates.planning }
     return [string]$RelayState.phase
 }
 
@@ -445,8 +448,8 @@ function Invoke-TrackedPrompt([object]$SupervisorState, [string]$Kind, [object]$
         Reset-BlockerState $SupervisorState
         return [pscustomobject]@{
             kind = $Kind
-            category = "auto-recoverable-prerequisite"
-            code = "idle-supervisor-dispatch"
+            category = [string]$taxonomy.categories.autoRecoverablePrerequisite
+            code = [string]$taxonomy.codes.idleSupervisorDispatch
             startedAt = $promptStart
             endedAt = (Get-Date).ToUniversalTime().ToString("o")
             wishlistId = $Continuation.wishlistId
@@ -456,11 +459,11 @@ function Invoke-TrackedPrompt([object]$SupervisorState, [string]$Kind, [object]$
         }
     } catch {
         $message = $_.Exception.Message
-        Update-BlockerState $SupervisorState "auto-recoverable-prerequisite" "endpoint-unavailable" $message
+        Update-BlockerState $SupervisorState ([string]$taxonomy.categories.autoRecoverablePrerequisite) ([string]$taxonomy.codes.endpointUnavailable) $message
         return [pscustomobject]@{
             kind = "$Kind-unavailable"
-            category = "auto-recoverable-prerequisite"
-            code = "endpoint-unavailable"
+            category = [string]$taxonomy.categories.autoRecoverablePrerequisite
+            code = [string]$taxonomy.codes.endpointUnavailable
             startedAt = $promptStart
             endedAt = (Get-Date).ToUniversalTime().ToString("o")
             wishlistId = $Continuation.wishlistId
@@ -479,7 +482,7 @@ if (-not (Enter-Lease $leasePath)) {
         endedAt = (Get-Date).ToUniversalTime().ToString("o")
         transitionsUsed = 0
     }
-    $supervisorState.displayState = "waiting-not-blocked"
+    $supervisorState.displayState = [string]$taxonomy.displayStates.waitingNotBlocked
     Save-SupervisorState $supervisorStatePath $supervisorState
     [pscustomobject]@{
         ok = $true
@@ -499,6 +502,30 @@ try {
 Update-LeaseHeartbeat $leasePath
 $state = Read-JsonFile $statePath
 if (-not $state) { throw "Relay state is missing at $statePath." }
+if (-not (Test-BackoffReady $supervisorState)) {
+    $supervisorState.lastRun = [pscustomObject]@{
+        startedAt = $startedAt
+        endedAt = (Get-Date).ToUniversalTime().ToString("o")
+        transitionsUsed = 0
+        finalPhase = $state.phase
+        finalActiveRole = $state.activeRole
+    }
+    $supervisorState.displayState = if ($supervisorState.blocker.category -eq [string]$taxonomy.categories.hardBlocked) { [string]$taxonomy.displayStates.hardBlocked } else { [string]$taxonomy.displayStates.retryBackoff }
+    Save-SupervisorState $supervisorStatePath $supervisorState
+    [pscustomobject]@{
+        ok = $true
+        startedAt = $startedAt
+        endedAt = (Get-Date).ToUniversalTime().ToString("o")
+        maxTransitions = $MaxTransitions
+        transitionsUsed = 0
+        actions = @([pscustomobject]@{ kind = "retry-backoff"; category = $supervisorState.blocker.category; code = $supervisorState.blocker.code; retryable = $supervisorState.blocker.category -ne [string]$taxonomy.categories.hardBlocked; nextAttemptAt = $supervisorState.blocker.nextAttemptAt })
+        finalPhase = $state.phase
+        finalActiveRole = $state.activeRole
+        supervisor = $supervisorState
+    } | ConvertTo-Json -Depth 12
+    exit 0
+}
+
 $sourcePrerequisite = Update-SourceReconciliationPrerequisite $state
 if ($sourcePrerequisite -and $sourcePrerequisite.status -eq "pending") {
     $actions += [pscustomobject]@{
@@ -516,59 +543,54 @@ if ($sourcePrerequisite -and $sourcePrerequisite.status -eq "ready" -and $transi
     if ($reconciliation) { $actions += $reconciliation }
 }
 
-if (-not (Test-BackoffReady $supervisorState)) {
-    $supervisorState.lastRun = [pscustomObject]@{
-        startedAt = $startedAt
-        endedAt = (Get-Date).ToUniversalTime().ToString("o")
-        transitionsUsed = 0
-        finalPhase = $state.phase
-        finalActiveRole = $state.activeRole
-    }
-    $supervisorState.displayState = if ($supervisorState.blocker.category -eq [string]$taxonomy.categories.hardBlocked) { "hard blocked" } else { "retry backoff" }
-    Save-SupervisorState $supervisorStatePath $supervisorState
-    [pscustomobject]@{
-        ok = $true
-        startedAt = $startedAt
-        endedAt = (Get-Date).ToUniversalTime().ToString("o")
-        maxTransitions = $MaxTransitions
-        transitionsUsed = 0
-        actions = @([pscustomobject]@{ kind = "retry-backoff"; category = $supervisorState.blocker.category; code = $supervisorState.blocker.code; retryable = $supervisorState.blocker.category -ne [string]$taxonomy.categories.hardBlocked; nextAttemptAt = $supervisorState.blocker.nextAttemptAt })
-        finalPhase = $state.phase
-        finalActiveRole = $state.activeRole
-        supervisor = $supervisorState
-    } | ConvertTo-Json -Depth 12
-    exit 0
-}
-
 if (($state.phase -eq "passive-testing" -or $state.candidateCommit) -and $transitionCount -lt $MaxTransitions) {
     $candidate = [string]$state.candidateCommit
     $transitionCount += 1
     $passiveStart = (Get-Date).ToUniversalTime().ToString("o")
-    $passive = Invoke-JsonCommand "powershell" @(
-        "-NoProfile",
-        "-ExecutionPolicy",
-        "Bypass",
-        "-File",
-        $relayScript,
-        "-Action",
-        "PassiveTest",
-        "-Role",
-        "A",
-        "-Workspace",
-        $copyA,
-        "-Summary",
-        "D156 immediate automatic PassiveTest for candidate $candidate"
-    ) $adminRepo
-    $actions += [pscustomobject]@{
-        kind = "passive-test"
-        startedAt = $passiveStart
-        endedAt = (Get-Date).ToUniversalTime().ToString("o")
-        candidate = $candidate
-        outcome = $passive.outcome
-        phase = $passive.phase
+    try {
+        Update-LeaseHeartbeat $leasePath
+        $passive = Invoke-JsonCommand "powershell" @(
+            "-NoProfile",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-File",
+            $relayScript,
+            "-Action",
+            "PassiveTest",
+            "-Role",
+            "A",
+            "-Workspace",
+            $copyA,
+            "-Summary",
+            "D156 immediate automatic PassiveTest for candidate $candidate"
+        ) $adminRepo
+        Reset-BlockerState $supervisorState
+        $actions += [pscustomobject]@{
+            kind = "passive-test"
+            startedAt = $passiveStart
+            endedAt = (Get-Date).ToUniversalTime().ToString("o")
+            candidate = $candidate
+            outcome = $passive.outcome
+            phase = $passive.phase
+        }
+    } catch {
+        $message = $_.Exception.Message
+        Update-BlockerState $supervisorState ([string]$taxonomy.categories.autoRecoverablePrerequisite) ([string]$taxonomy.codes.endpointUnavailable) $message
+        $actions += [pscustomobject]@{
+            kind = "passive-test-failed"
+            category = $supervisorState.blocker.category
+            code = $supervisorState.blocker.code
+            startedAt = $passiveStart
+            endedAt = (Get-Date).ToUniversalTime().ToString("o")
+            candidate = $candidate
+            error = $message
+            attemptCount = $supervisorState.blocker.attemptCount
+            nextAttemptAt = $supervisorState.blocker.nextAttemptAt
+        }
+        $passive = $null
     }
 
-    $continuation = $passive.autonomousContinuation
+    $continuation = if ($passive) { $passive.autonomousContinuation } else { $null }
     if ($passive.outcome -eq "PASSIVE_ACCEPTED" -and $continuation -and $continuation.available -and -not $continuation.requiresHumanGate) {
         if ($transitionCount -lt $MaxTransitions) {
             $transitionCount += 1

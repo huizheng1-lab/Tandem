@@ -120,10 +120,12 @@ function renderWishlist(items) {
   let filtered = items;
   if (state.filter === "open") filtered = items.filter((item) => !item.done);
   if (state.filter === "done") filtered = items.filter((item) => item.done);
+  const authorityRequest = state.data?.state?.authorityRequest || null;
   $("#wishlist-list").innerHTML = filtered.length ? filtered.map((item) => {
     const inProgress = item.status === "IN_PROGRESS";
     const epic = /(?:^|\s)epic=true(?:\s|$)/.test(item.detail || "");
     const autonomous = epic && item.effectiveAutonomy === "full";
+    const role = (item.detail || "").match(/(?:^|\s)role=([AB])(?:\s|$)/)?.[1] || "";
     const planCandidate = epic && item.status === "CANDIDATE" && /(?:^|\s)candidate=PLAN(?:\s|$)/.test(item.detail || "");
     const step = (item.detail || "").match(/(?:^|\s)(?:step|next)=(\d+\/\d+)/)?.[1];
     const commit = (item.detail || "").match(/(?:^|\s)commit=([^\s]+)/)?.[1];
@@ -131,7 +133,16 @@ function renderWishlist(items) {
     const planGate = planCandidate && !autonomous ? `<button class="button small primary approve-epic-plan" type="button" data-id="${item.id}" ${planValidated ? "" : "disabled"} title="${planValidated ? "Approve this validated epic plan" : "Awaiting passive validation"}">Approve plan</button><button class="button small quiet reject-epic-plan" type="button" data-id="${item.id}">Reject plan</button>` : "";
     const autoStatus = planCandidate && autonomous ? `<span class="auto-plan-status">${planValidated ? "Validated; automatic approval pending" : "Awaiting passive validation"}</span>` : "";
     const replan = autonomous && !item.done && !(/(?:^|\s)phase=PLAN(?:\s|$)/.test(item.detail || "") && item.status === "QUEUED") ? `<button class="button small quiet replan-epic" type="button" data-id="${item.id}">Return to planning</button>` : "";
-    const epicActions = planGate || autoStatus || replan ? `<div class="epic-actions">${planGate}${autoStatus}${replan}</div>` : "";
+    const canDeclareAuthority = epic && inProgress && role && /(?:^|\s)phase=STEP(?:\s|$)/.test(item.detail || "") && !authorityRequest;
+    const matchingAuthority = authorityRequest?.id === item.id ? authorityRequest : null;
+    const authorityControls = matchingAuthority?.status === "pending"
+      ? `<div class="authority-actions"><span class="auto-plan-status">Authority ${escapeHtml(matchingAuthority.authority)}:${escapeHtml(matchingAuthority.action)} at ${escapeHtml(matchingAuthority.checkpoint)}</span><button class="button small primary approve-authority" type="button">Approve authority</button><button class="button small danger deny-authority" type="button">Deny</button></div>`
+      : canDeclareAuthority
+        ? `<div class="authority-actions"><button class="button small quiet declare-authority" type="button" data-id="${item.id}" data-role="${role}">Declare authority checkpoint</button></div>`
+        : matchingAuthority
+          ? `<div class="authority-actions"><span class="auto-plan-status">Authority ${escapeHtml(matchingAuthority.status)}</span></div>`
+          : "";
+    const epicActions = planGate || autoStatus || replan || authorityControls ? `<div class="epic-actions">${planGate}${autoStatus}${replan}${authorityControls}</div>` : "";
     const planHistory = epic && item.planSteps?.length ? `<ol class="epic-history">${item.planSteps.map((entry) => `<li class="${entry.done ? "done" : ""}"><span>${entry.done ? "✓" : ""}</span>${escapeHtml(entry.text)}</li>`).join("")}</ol>` : "";
     return `<article class="wish-item ${epic ? "epic-item" : ""}"><div><span class="wish-id">${item.id}</span>${epic ? '<span class="epic-badge">EPIC</span>' : ""}${autonomous ? '<span class="autonomy-badge">AUTONOMOUS</span>' : ""}</div><div class="wish-copy"><p>${escapeHtml(item.text)}</p><span class="wish-detail">${escapeHtml(item.detail || "No additional metadata")}</span>${step ? `<span class="epic-step">Step ${escapeHtml(step)}</span>` : ""}${planHistory}${epicActions}</div><div class="wish-controls"><div><span class="priority ${item.priority}">${item.priority}</span><span class="wish-status">${item.status.replaceAll("_", " ")}</span></div><button class="button small quiet remove-wish" type="button" data-id="${item.id}" ${inProgress ? "disabled" : ""} title="${inProgress ? "Cannot remove an item while an executor owns it" : `Remove ${item.id} from the board`}">Remove</button></div></article>`;
   }).join("") : '<div class="panel">No items in this view.</div>';
@@ -611,6 +622,42 @@ $("#wishlist-list").addEventListener("click", async (event) => {
   try {
     await api(`/api/wishlist/${decision}-plan`, { method: "POST", body: JSON.stringify({ id, note: note.trim() }) });
     toast(`${id} plan ${decision === "approve" ? "approved" : "returned for revision"}`);
+    await refresh(true, true);
+  } catch (error) { setAlert(error.message); } finally { button.disabled = false; }
+});
+$("#wishlist-list").addEventListener("click", async (event) => {
+  const declareButton = event.target.closest(".declare-authority");
+  const approveButton = event.target.closest(".approve-authority");
+  const denyButton = event.target.closest(".deny-authority");
+  const button = declareButton || approveButton || denyButton;
+  if (!button) return;
+  button.disabled = true;
+  try {
+    if (declareButton) {
+      const id = declareButton.dataset.id;
+      const role = declareButton.dataset.role;
+      const kind = window.prompt(`Authority kind for ${id} (permission, sandbox, credentials, runtime, etc.)`);
+      if (!kind) return;
+      const action = window.prompt("Exact authority action token");
+      if (!action) return;
+      const checkpoint = window.prompt("Exact checkpoint token");
+      if (!checkpoint) return;
+      const resume = window.prompt("Exact resume token");
+      if (!resume) return;
+      if (!window.confirm(`Pause ${id} at ${checkpoint} for human authority ${kind}:${action}?`)) return;
+      await api("/api/authority/declare", { method: "POST", body: JSON.stringify({ id, role, kind: kind.trim(), action: action.trim(), checkpoint: checkpoint.trim(), resume: resume.trim() }) });
+      toast(`${id} authority checkpoint declared`);
+    } else if (approveButton) {
+      if (!window.confirm("Approve this exact authority checkpoint and resume its owner once?")) return;
+      await api("/api/authority/approve", { method: "POST", body: JSON.stringify({ confirmed: true }) });
+      toast("Authority approved");
+    } else {
+      const note = window.prompt("Why is this authority denied?");
+      if (!note?.trim()) return;
+      if (!window.confirm("Deny this authority request and keep the checkpoint stopped?")) return;
+      await api("/api/authority/deny", { method: "POST", body: JSON.stringify({ note: note.trim() }) });
+      toast("Authority denied");
+    }
     await refresh(true, true);
   } catch (error) { setAlert(error.message); } finally { button.disabled = false; }
 });

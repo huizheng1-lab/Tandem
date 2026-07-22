@@ -93,6 +93,9 @@ export function validateReciprocalTaxonomy(value) {
   for (const key of ["baseSeconds", "maxSeconds", "escalateAfterIdenticalAttempts"]) {
     if (!Number.isFinite(Number(value?.retry?.[key]))) missing.push(`retry.${key}`);
   }
+  for (const key of ["working", "testing", "waitingForReview", "humanPaused", "machineBlocked", "hardBlocked", "retryBackoff", "retryingPrerequisite", "planning", "unknown", "waitingNotBlocked"]) {
+    if (!value?.displayStates?.[key]) missing.push(`displayStates.${key}`);
+  }
   if (missing.length) throw new Error(`Invalid reciprocal gate taxonomy: missing ${missing.join(", ")}`);
   return Object.freeze({
     raw: Object.freeze(value),
@@ -101,6 +104,7 @@ export function validateReciprocalTaxonomy(value) {
     retry: Object.freeze(value.retry),
     pauseOrigins: Object.freeze(value.pauseOrigins || {}),
     pauseReasonCodes: Object.freeze(value.pauseReasonCodes || {}),
+    displayStates: Object.freeze(value.displayStates || {}),
   });
 }
 

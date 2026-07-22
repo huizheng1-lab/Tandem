@@ -107,6 +107,19 @@ test("D177 loads canonical taxonomy fixtures and classifies machine pauses disti
         sourceReconciliationPending: "fixture-source",
       },
       pauseOrigins: { human: "human", machine: "machine", unknown: "unknown" },
+      displayStates: {
+        working: "fixture-working",
+        testing: "fixture-testing",
+        waitingForReview: "fixture-review",
+        humanPaused: "fixture-human-paused",
+        machineBlocked: "fixture-machine-blocked",
+        hardBlocked: "fixture-hard-blocked",
+        retryBackoff: "fixture-backoff",
+        retryingPrerequisite: "fixture-retry",
+        planning: "fixture-planning",
+        unknown: "fixture-unknown",
+        waitingNotBlocked: "fixture-waiting",
+      },
       retry: { baseSeconds: 1, maxSeconds: 2, escalateAfterIdenticalAttempts: 2 },
     }), "utf8");
     const taxonomy = loadReciprocalTaxonomy(file);

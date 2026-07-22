@@ -1,11 +1,11 @@
 ﻿{
     "schemaVersion":  1,
-    "generatedAtUtc":  "2026-07-22T05:18:04.0024907Z",
+    "generatedAtUtc":  "2026-07-22T06:00:10.9716036Z",
     "files":  [
                   {
                       "path":  "approval-flow.e2e.mjs",
-                      "sha256":  "35B351386123E6C0C8D176715A6A5F86C76663932148E68301E57AB5455A729E",
-                      "bytes":  15154
+                      "sha256":  "4B9A654CCEEB021712F2760E3C9AB88324ED6D569795CBC42017D695712EA43D",
+                      "bytes":  18089
                   },
                   {
                       "path":  "dashboard-watchdog.ps1",
@@ -19,18 +19,18 @@
                   },
                   {
                       "path":  "lib.mjs",
-                      "sha256":  "2F98FF32A88AB2D20CD002B8033B58C06271305E129B844BD0AD1F7B3A0DAE14",
-                      "bytes":  18526
+                      "sha256":  "55A42EE7ABDF771B4655599E8976DF8BA1CE50B538981683609453E48925821D",
+                      "bytes":  18865
                   },
                   {
                       "path":  "lib.nodecheck.mjs",
-                      "sha256":  "7065FFDDF9A05E8FAC56928ED2BB02AC25B4C24D24D5CC2ED33BBBB3163765AD",
-                      "bytes":  14311
+                      "sha256":  "A95521F3DF41BFFE63F41B72C52C60B79F00764E25A4AB27D66CC39F562BA5FB",
+                      "bytes":  14808
                   },
                   {
                       "path":  "public/app.js",
-                      "sha256":  "F7F9A84AAA9835019E40F6941CB36531C0830DB09C69861BC2091D42EB82663F",
-                      "bytes":  38878
+                      "sha256":  "B2EE577346547499BA6BAD095188D7A7CED0DF97621D502CD78990EB77F7B091",
+                      "bytes":  42196
                   },
                   {
                       "path":  "public/index.html",
@@ -64,8 +64,8 @@
                   },
                   {
                       "path":  "server.mjs",
-                      "sha256":  "35062894101ACC2D29013B72FE64785B8C259259CF8FAD9FC03911B969C9E6BE",
-                      "bytes":  93896
+                      "sha256":  "873255BD48CE48E3D11B7248FD5208825B5CE675597CBFFEB80BA81BF4686940",
+                      "bytes":  97611
                   },
                   {
                       "path":  "start-dashboard.ps1",

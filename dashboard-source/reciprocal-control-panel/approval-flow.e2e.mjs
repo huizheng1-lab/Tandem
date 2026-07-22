@@ -105,6 +105,7 @@ async function makeFixture(t) {
   await mkdir(path.join(repoRoot, "scripts"), { recursive: true });
   await mkdir(path.join(repoRoot, "process", "reciprocal"), { recursive: true });
   await copyFile(relayScript, path.join(repoRoot, "scripts", "reciprocal-relay.ps1"));
+  await copyFile(path.join(adminRepo, "scripts", "reciprocal-direction.ps1"), path.join(repoRoot, "scripts", "reciprocal-direction.ps1"));
   await copyFile(path.join(adminRepo, "process", "reciprocal", "gate-taxonomy.json"), path.join(repoRoot, "process", "reciprocal", "gate-taxonomy.json"));
   await writeFile(path.join(repoRoot, "package.json"), "{\"name\":\"fixture\",\"version\":\"0.0.0\"}\n", "utf8");
   await git(repoRoot, "init", "-b", "master");
@@ -172,7 +173,7 @@ async function makeFixture(t) {
     }
   }
 
-  return { root, relayRoot, repoRoot, copyA, copyB, fixtureSha, oldSha, statePath, reviewIndexPath, auditPath, commandLog, setState, setRuntimeShas };
+  return { root, relayRoot, repoRoot, copyA, copyB, fixtureSha, oldSha, statePath, reviewIndexPath, auditPath, commandLog, wishlistPath: path.join(relayRoot, "control", "WISHLIST.md"), setState, setRuntimeShas };
 }
 
 async function withServer(t, fixture, runTest) {
@@ -212,7 +213,23 @@ async function withServer(t, fixture, runTest) {
     return { response, result };
   }
 
-  return runTest({ post });
+  async function get(pathname) {
+    const response = await fetch(`http://127.0.0.1:${port}${pathname}`);
+    const result = await response.json();
+    return { response, result };
+  }
+
+  async function postWithoutToken(pathname, body) {
+    const response = await fetch(`http://127.0.0.1:${port}${pathname}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body || {}),
+    });
+    const result = await response.json();
+    return { response, result };
+  }
+
+  return runTest({ post, get, postWithoutToken });
 }
 
 test("approval flow uses the real relay to complete an inactive A-upgrade boundary", async (t) => {
@@ -255,6 +272,58 @@ test("approval flow uses the real relay to complete an inactive A-upgrade bounda
   const audit = await readJsonl(fixture.auditPath);
   assert.equal(audit.some((entry) => entry.step === "a-upgrade-completed" && /a_upgrade_completed/.test(entry.detail)), true);
   await writeEvidence("approval-flow", { commands, actions, state, auditSteps: audit.filter((entry) => entry.action === "update.approvalStep").map((entry) => ({ step: entry.step, detail: entry.detail })) });
+});
+
+test("authority flow uses authenticated dashboard API to approve one relay checkpoint", async (t) => {
+  const fixture = await makeFixture(t);
+  await fixture.setState({
+    phase: "working",
+    activeRole: "A",
+    pausedFromPhase: null,
+    baseCommit: fixture.fixtureSha,
+    startedAt: "2026-07-22T00:00:00.000Z",
+  });
+  await writeFile(fixture.wishlistPath, [
+    "# Tandem Reciprocal: Shared Direction",
+    "",
+    "AutonomyDefault: plan-gated",
+    "",
+    "## Wishlist And Progress",
+    "",
+    "<!-- wishlist-items -->",
+    "- [ ] W0001 | P0 | Sensitive step | IN_PROGRESS epic=true autonomy=full phase=STEP revision=1 completed=0 step=1/1 plan=process/reciprocal/epics/W0001-plan.md role=A started=now",
+    "",
+  ].join("\n"), "utf8");
+
+  await withServer(t, fixture, async ({ post, postWithoutToken }) => {
+    const declared = await post("/api/authority/declare", {
+      id: "W0001",
+      role: "A",
+      kind: "permission",
+      action: "enableLoopback",
+      checkpoint: "step1",
+      resume: "resumeStep1",
+    });
+    assert.equal(declared.response.status, 200, JSON.stringify(declared.result));
+    assert.equal(declared.result.result.outcome, "AUTHORITY_DECLARED");
+    assert.equal(declared.result.result.authorityRequest.decisionProof, undefined);
+
+    const unauthenticated = await postWithoutToken("/api/authority/approve", {});
+    assert.equal(unauthenticated.response.status, 403);
+
+    const approved = await post("/api/authority/approve", { confirmed: true });
+    assert.equal(approved.response.status, 200, JSON.stringify(approved.result));
+    assert.equal(approved.result.result.outcome, "AUTHORITY_APPROVED");
+    assert.equal(approved.result.result.phase, "working");
+    assert.match(await readFile(fixture.wishlistPath, "utf8"), /authorityStatus=approved/);
+
+    const repeat = await post("/api/authority/approve", { confirmed: true });
+    assert.equal(repeat.response.status, 200, JSON.stringify(repeat.result));
+    assert.equal(repeat.result.noop, true);
+    const audit = await readFile(fixture.auditPath, "utf8");
+    assert.match(audit, /"action":"authority\.declare"/);
+    assert.match(audit, /"action":"authority\.approve"/);
+  });
 });
 
 test("recovery flow closes the stranded gate without promotion and rejects unsafe states", async (t) => {

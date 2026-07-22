@@ -53,6 +53,19 @@ async function fixture() {
       resumeCircuitBreaker: "repeated-genuine-blocker",
       candidateFailure: "candidate-failure",
     },
+    displayStates: {
+      working: "working",
+      testing: "testing",
+      waitingForReview: "waiting for review",
+      humanPaused: "human paused",
+      machineBlocked: "machine blocked",
+      hardBlocked: "hard blocked",
+      retryBackoff: "retry backoff",
+      retryingPrerequisite: "retrying prerequisite",
+      planning: "planning",
+      unknown: "unknown",
+      waitingNotBlocked: "waiting-not-blocked",
+    },
     retry: { baseSeconds: 30, maxSeconds: 300, escalateAfterIdenticalAttempts: 3 },
   }), "utf8");
   await writeFile(path.join(relay, "control", "WISHLIST.md"), [
@@ -143,5 +156,41 @@ describeWindows("reciprocal continuation supervisor", () => {
     const hard = await supervisor(repo, relay);
     expect(hard.actions[0]).toMatchObject({ kind: "retry-backoff", retryable: false });
     expect((await readJson(state)).displayState).toBe("hard blocked");
+  }, 30_000);
+
+  it("D179 checks stored backoff before ready source reconciliation", async () => {
+    const { repo, relay, state } = await fixture();
+    await writeFile(path.join(repo, "README.md"), "source\n", "utf8");
+    await execa("git", ["config", "user.email", "supervisor@example.test"], { cwd: repo });
+    await execa("git", ["config", "user.name", "Supervisor Test"], { cwd: repo });
+    await execa("git", ["add", "README.md"], { cwd: repo });
+    await execa("git", ["commit", "-m", "source"], { cwd: repo });
+    await writeFile(path.join(repo, ".git", "tandem-relay", "state.json"), JSON.stringify({
+      schemaVersion: 2,
+      phase: "idle",
+      activeRole: null,
+      nextRole: "A",
+      stableCommit: "0000000000000000000000000000000000000000",
+      candidateCommit: null,
+      rollbackCommit: null,
+    }), "utf8");
+    await writeFile(state, JSON.stringify({
+      schemaVersion: 1,
+      displayState: "retrying prerequisite",
+      blocker: {
+        category: "auto-recoverable-prerequisite",
+        code: "source-reconciliation-pending",
+        fingerprint: "auto-recoverable-prerequisite|source-reconciliation-pending|boom",
+        attemptCount: 1,
+        nextAttemptAt: new Date(Date.now() + 60_000).toISOString(),
+        message: "boom",
+      },
+      transitions: [],
+    }), "utf8");
+
+    const backoff = await supervisor(repo, relay);
+    expect(backoff.actions).toHaveLength(1);
+    expect(backoff.actions[0]).toMatchObject({ kind: "retry-backoff", code: "source-reconciliation-pending" });
+    await expect(readFile(path.join(relay, "control", "source-reconciliation-pending.json"), "utf8")).rejects.toThrow();
   }, 30_000);
 });

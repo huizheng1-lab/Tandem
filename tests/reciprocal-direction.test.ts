@@ -251,21 +251,10 @@ describeWindows("reciprocal direction epics", () => {
     await expect(direction(file, "-Action", "Start", "-Id", added.id, "-Role", "B"))
       .rejects.toThrow(/pending exact authority/);
 
-    await direction(file, "-Action", "ApproveAuthority", "-Id", added.id);
-    expect(await readBoard(file)).toContain("authorityStatus=approved");
-
-    await direction(file, "-Action", "Candidate", "-Id", added.id, "-Commit", "step1");
-    const consumed = await readBoard(file);
-    expect(consumed).toContain("authorityStatus=consumed");
-    expect(consumed).toContain("authorityConsumed=");
-
-    await direction(file, "-Action", "Requeue", "-Id", added.id, "-Note", "exercise denial path");
-    await direction(file, "-Action", "Start", "-Id", added.id, "-Role", "A");
-    await direction(file, "-Action", "DeclareAuthority", "-Id", added.id, "-Text", "sandbox__allowTempFixtureWrite__step1b__resumeStep1b");
-    await direction(file, "-Action", "DenyAuthority", "-Id", added.id, "-Note", "too risky");
-    const board = await readBoard(file);
-    expect(board).toContain("BLOCKED");
-    expect(board).toContain("authorityStatus=denied");
+    await expect(direction(file, "-Action", "ApproveAuthority", "-Id", added.id))
+      .rejects.toThrow(/trusted relay authority proof/);
+    await expect(direction(file, "-Action", "DenyAuthority", "-Id", added.id, "-Note", "too risky"))
+      .rejects.toThrow(/trusted relay authority proof/);
   }, 30_000);
 
   it("D178 loads the canonical taxonomy fixture before mutating direction state", async () => {
@@ -285,6 +274,19 @@ describeWindows("reciprocal direction epics", () => {
         resumeCircuitBreaker: "fixture-repeat",
         candidateFailure: "fixture-candidate",
       },
+      displayStates: {
+        working: "fixture-working",
+        testing: "fixture-testing",
+        waitingForReview: "fixture-review",
+        humanPaused: "fixture-human-paused",
+        machineBlocked: "fixture-machine-blocked",
+        hardBlocked: "fixture-hard-blocked",
+        retryBackoff: "fixture-backoff",
+        retryingPrerequisite: "fixture-retry",
+        planning: "fixture-planning",
+        unknown: "fixture-unknown",
+        waitingNotBlocked: "fixture-waiting",
+      },
     }), "utf8");
 
     const added = JSON.parse((await directionWithEnv(file, { TANDEM_RECIPROCAL_TAXONOMY: taxonomy }, "-Action", "Add", "-Text", "taxonomy-backed item")).stdout);
@@ -298,6 +300,19 @@ describeWindows("reciprocal direction epics", () => {
         explicitHumanPause: "fixture-human-pause",
         resumeCircuitBreaker: "fixture-repeat",
         candidateFailure: "fixture-candidate",
+      },
+      displayStates: {
+        working: "fixture-working",
+        testing: "fixture-testing",
+        waitingForReview: "fixture-review",
+        humanPaused: "fixture-human-paused",
+        machineBlocked: "fixture-machine-blocked",
+        hardBlocked: "fixture-hard-blocked",
+        retryBackoff: "fixture-backoff",
+        retryingPrerequisite: "fixture-retry",
+        planning: "fixture-planning",
+        unknown: "fixture-unknown",
+        waitingNotBlocked: "fixture-waiting",
       },
     }), "utf8");
 

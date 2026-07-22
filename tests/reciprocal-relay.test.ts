@@ -280,6 +280,19 @@ describe("reciprocal relay script", () => {
           resumeCircuitBreaker: "fixture-repeat",
           candidateFailure: "fixture-candidate",
         },
+        displayStates: {
+          working: "fixture-working",
+          testing: "fixture-testing",
+          waitingForReview: "fixture-review",
+          humanPaused: "fixture-human-paused",
+          machineBlocked: "fixture-machine-blocked",
+          hardBlocked: "fixture-hard-blocked",
+          retryBackoff: "fixture-backoff",
+          retryingPrerequisite: "fixture-retry",
+          planning: "fixture-planning",
+          unknown: "fixture-unknown",
+          waitingNotBlocked: "fixture-waiting",
+        },
       }), "utf8");
 
       const env = { TANDEM_RECIPROCAL_TAXONOMY: taxonomy };
@@ -303,6 +316,59 @@ describe("reciprocal relay script", () => {
     } finally {
       await rm(repo, { recursive: true, force: true });
       if (taxonomyDir) await rm(taxonomyDir, { recursive: true, force: true });
+    }
+  }, 30_000);
+
+  windowsIt("D179: trusted authority checkpoint resumes once and consumes on completion", async () => {
+    const repo = await mkdtemp(path.join(tmpdir(), "tandem-relay-d179-authority-"));
+    try {
+      await initRepo(repo);
+      await relay(repo, "-Action", "Reset", "-Force");
+      const claimed = await relay(repo, "-Action", "Claim", "-Role", "A");
+      const boardPath = await writeSharedBoard(
+        repo,
+        "- [ ] W0001 | P0 | Sensitive step | IN_PROGRESS epic=true autonomy=full phase=STEP revision=1 completed=0 step=1/1 plan=process/reciprocal/epics/W0001-plan.md role=A started=now",
+      );
+
+      const declared = await relay(repo, "-Action", "DeclareAuthority", "-Role", "A", "-Id", "W0001", "-AuthKind", "permission", "-AuthVerb", "enableLoopback", "-Checkpoint", "step1", "-ResumeToken", "resumeStep1");
+      expect(declared).toMatchObject({
+        outcome: "AUTHORITY_DECLARED",
+        phase: "paused",
+        activeRole: "A",
+        authorityRequest: { id: "W0001", owner: "A", status: "pending", checkpoint: "step1", resume: "resumeStep1" },
+      });
+      expect(declared.authorityRequest.decisionProof).toBeUndefined();
+      expect(await readFile(boardPath, "utf8")).toContain("authorityStatus=pending");
+
+      await expect(relay(repo, "-Action", "ApproveAuthority")).rejects.toThrow(/trusted dashboard decision proof/);
+      const statePath = path.join(repo, ".git", "tandem-relay", "state.json");
+      const state = JSON.parse(await readFile(statePath, "utf8"));
+      const approved = await relay(repo, "-Action", "ApproveAuthority", "-AuthorityProof", state.authorityRequest.decisionProof);
+      expect(approved).toMatchObject({
+        outcome: "AUTHORITY_APPROVED",
+        phase: "working",
+        activeRole: "A",
+        authorityRequest: { id: "W0001", status: "approved" },
+      });
+      expect(await readFile(boardPath, "utf8")).toContain("authorityStatus=approved");
+
+      await writeFile(path.join(repo, "README.md"), `initial\n${claimed.stableCommit}\nauthority\n`, "utf8");
+      await execa("git", ["add", "README.md"], { cwd: repo });
+      await execa("git", ["commit", "-m", "authority candidate"], { cwd: repo });
+      const head = (await execa("git", ["rev-parse", "HEAD"], { cwd: repo })).stdout.trim();
+      await execa("powershell", [
+        "-NoProfile", "-ExecutionPolicy", "Bypass",
+        "-File", path.join(repo, "scripts", "reciprocal-direction.ps1"),
+        "-Action", "Candidate", "-Id", "W0001", "-Commit", head, "-ControlPath", boardPath,
+      ], { cwd: repo });
+      expect(await readFile(boardPath, "utf8")).toContain("authorityStatus=consumed");
+
+      const completed = await relay(repo, "-Action", "Complete", "-Role", "A", "-Summary", "authority step done");
+      expect(completed).toMatchObject({ outcome: "COMPLETED", authorityRequest: { id: "W0001", status: "consumed" } });
+      const repeat = await relay(repo, "-Action", "ApproveAuthority");
+      expect(repeat).toMatchObject({ outcome: "AUTHORITY_APPROVED_NOOP", authorityRequest: { status: "consumed" } });
+    } finally {
+      await rm(repo, { recursive: true, force: true });
     }
   }, 30_000);
 

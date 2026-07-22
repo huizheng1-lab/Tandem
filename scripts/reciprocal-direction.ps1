@@ -43,6 +43,8 @@ param(
 
     [string]$ResumeToken,
 
+    [string]$AuthorityProofPath,
+
     [string]$ControlPath
 )
 
@@ -64,10 +66,31 @@ function Get-ReciprocalTaxonomy {
     foreach ($name in @("explicitHumanPause", "resumeCircuitBreaker", "candidateFailure")) {
         if (-not $taxonomy.pauseReasonCodes.$name) { throw "Canonical reciprocal taxonomy is missing pauseReasonCodes.$name." }
     }
+    foreach ($name in @("working", "testing", "waitingForReview", "humanPaused", "machineBlocked", "hardBlocked", "retryBackoff", "retryingPrerequisite", "planning", "unknown", "waitingNotBlocked")) {
+        if (-not $taxonomy.displayStates.$name) { throw "Canonical reciprocal taxonomy is missing displayStates.$name." }
+    }
     return $taxonomy
 }
 
 $taxonomy = Get-ReciprocalTaxonomy
+
+function Assert-AuthorityProof([string]$ExpectedDecision, [string]$WishlistId, [hashtable]$Metadata) {
+    if (-not $AuthorityProofPath) { throw "$ExpectedDecision requires a trusted relay authority proof." }
+    if (-not (Test-Path -LiteralPath $AuthorityProofPath -PathType Leaf)) { throw "$ExpectedDecision authority proof is missing." }
+    try {
+        $proof = Get-Content -LiteralPath $AuthorityProofPath -Raw | ConvertFrom-Json
+    } catch {
+        throw "$ExpectedDecision authority proof is invalid JSON."
+    }
+    $expires = [datetime]::Parse([string]$proof.expiresAtUtc).ToUniversalTime()
+    if ($expires -lt (Get-Date).ToUniversalTime()) { throw "$ExpectedDecision authority proof expired." }
+    if ($proof.decision -ne $ExpectedDecision) { throw "$ExpectedDecision authority proof decision mismatch." }
+    if ($proof.id -ne $WishlistId) { throw "$ExpectedDecision authority proof item mismatch." }
+    foreach ($name in @("authority", "action", "checkpoint", "resume")) {
+        if ([string]$proof.$name -ne [string]$Metadata[$name]) { throw "$ExpectedDecision authority proof $name mismatch." }
+    }
+    if (-not $proof.requestId -or -not $proof.proof) { throw "$ExpectedDecision authority proof is incomplete." }
+}
 
 function Get-GitValue([string[]]$Arguments) {
     $output = @(& git @Arguments 2>$null)
@@ -536,6 +559,7 @@ try {
                     throw "ApproveAuthority requires a pending exact authority request."
                 }
                 if ($AuthKind -and $AuthKind -ne $metadata.authority) { throw "ApproveAuthority kind mismatch for $Id." }
+                Assert-AuthorityProof "approve" $Id $metadata
                 $existing = $statusAndDetail -replace '\s+authorityStatus=pending\b', ' authorityStatus=approved'
                 $lines[$index] = ($base + "$existing authorityApproved=$now") -join " | "
             }
@@ -543,6 +567,7 @@ try {
                 if (-not $isEpic -or $metadata.authorityStatus -ne "pending") {
                     throw "DenyAuthority requires a pending exact authority request."
                 }
+                Assert-AuthorityProof "deny" $Id $metadata
                 $cleanNote = Get-CleanNote $Note
                 if (-not $cleanNote) { throw "DenyAuthority requires -Note." }
                 $preserved = ($statusAndDetail.Substring($status.Length)).Trim()

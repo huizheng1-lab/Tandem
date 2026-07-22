@@ -30,6 +30,19 @@
     "candidateFailure": "candidate-failure",
     "runtimeReview": "runtime-review"
   },
+  "displayStates": {
+    "working": "working",
+    "testing": "testing",
+    "waitingForReview": "waiting for review",
+    "humanPaused": "human paused",
+    "machineBlocked": "machine blocked",
+    "hardBlocked": "hard blocked",
+    "retryBackoff": "retry backoff",
+    "retryingPrerequisite": "retrying prerequisite",
+    "planning": "planning",
+    "unknown": "unknown",
+    "waitingNotBlocked": "waiting-not-blocked"
+  },
   "retry": {
     "baseSeconds": 30,
     "maxSeconds": 300,

@@ -866,7 +866,7 @@ async function getStatus() {
     now: new Date().toISOString(), repoRoot, relayRoot, controlPath, wishlistPath,
     master: { head: masterHead, shortHead: shortSha(masterHead) },
     drift: { warnings: driftWarnings, ok: driftWarnings.length === 0 },
-    state: { ...state, shortStable: shortSha(state.stableCommit), shortCandidate: shortSha(state.candidateCommit), shortRollback: shortSha(state.rollbackCommit) },
+    state: { ...sanitizedRelayState(state), shortStable: shortSha(state.stableCommit), shortCandidate: shortSha(state.candidateCommit), shortRollback: shortSha(state.rollbackCommit) },
     direction,
     supervisor: {
       ...supervisorState,
@@ -911,7 +911,7 @@ async function runSupervisorController(source = "tick") {
 }
 
 async function audit(action, detail = {}) {
-  await appendFile(auditPath, `${JSON.stringify({ at: new Date().toISOString(), action, ...detail })}\n`, "utf8");
+  await appendFile(auditPath, `${JSON.stringify({ at: new Date().toISOString(), ...detail, action })}\n`, "utf8");
 }
 
 async function recordUpdateReview(decision, comment, candidate) {
@@ -1337,6 +1337,13 @@ function send(response, status, payload, type = "application/json; charset=utf-8
   }
 }
 
+function sanitizedRelayState(state) {
+  const authorityRequest = state?.authorityRequest
+    ? Object.fromEntries(Object.entries(state.authorityRequest).filter(([key]) => key !== "decisionProof"))
+    : null;
+  return { ...state, authorityRequest };
+}
+
 async function serveFile(response, name, type) {
   const value = await readFile(path.join(here, "public", name), "utf8");
   send(response, 200, name === "index.html" ? value.replace("__CONTROL_TOKEN__", token) : value, type);
@@ -1376,6 +1383,53 @@ async function handle(request, response) {
       const text = String(input.text || "").replace(/\s+/g, " ").trim();
       const result = await createArtifactWishlist(kind, text);
       return send(response, 201, { ok: true, result });
+    }
+
+    if (url.pathname === "/api/authority/declare") {
+      const id = String(input.id || "").trim().toUpperCase();
+      const role = String(input.role || "").trim().toUpperCase();
+      const kind = String(input.kind || "").trim();
+      const action = String(input.action || "").trim();
+      const checkpoint = String(input.checkpoint || "").trim();
+      const resume = String(input.resume || "").trim();
+      if (!/^W\d{4}$/.test(id)) throw new Error("Authority declaration requires a valid wishlist item ID");
+      if (!["A", "B"].includes(role)) throw new Error("Authority declaration requires owner role A or B");
+      if (!["credentials", "authentication", "pairing", "permission", "sandbox", "destructive", "payment", "publication", "runtime"].includes(kind)) throw new Error("Unsupported authority kind");
+      for (const [label, value] of Object.entries({ action, checkpoint, resume })) {
+        if (!/^[A-Za-z0-9._:-]{2,128}$/.test(value)) throw new Error(`Authority ${label} must be exact machine-readable metadata`);
+      }
+      const output = await powershell(
+        "-File", path.join(repoRoot, "scripts", "reciprocal-relay.ps1"),
+        "-Action", "DeclareAuthority", "-Role", role, "-Id", id, "-AuthKind", kind, "-AuthVerb", action, "-Checkpoint", checkpoint, "-ResumeToken", resume, "-Workspace", worktrees.b.path,
+      );
+      await audit("authority.declare", { id, role, kind, action, checkpoint, resume });
+      return send(response, 200, { ok: true, result: JSON.parse(output) });
+    }
+
+    if (url.pathname === "/api/authority/approve" || url.pathname === "/api/authority/deny") {
+      const decision = url.pathname.endsWith("/approve") ? "approve" : "deny";
+      const currentState = await jsonFile(statePath, {});
+      const request = currentState.authorityRequest;
+      if (!request) throw new Error("No relay authority request is pending");
+      if (decision === "approve" && (request.status === "consumed" || request.status === "approved")) {
+        return send(response, 200, { ok: true, decision, noop: true, request: sanitizedRelayState(currentState).authorityRequest });
+      }
+      if (decision === "deny" && request.status === "denied") {
+        return send(response, 200, { ok: true, decision, noop: true, request: sanitizedRelayState(currentState).authorityRequest });
+      }
+      if (request.status !== "pending") throw new Error(`Authority request is not pending; status=${request.status}`);
+      if (!request.decisionProof) throw new Error("Authority request is missing its trusted decision proof");
+      const note = String(input.note || "").replace(/\s+/g, " ").trim();
+      if (decision === "deny" && (!note || note.length > 500)) throw new Error("Authority denial requires a note between 1 and 500 characters");
+      const output = await powershell(
+        "-File", path.join(repoRoot, "scripts", "reciprocal-relay.ps1"),
+        "-Action", decision === "approve" ? "ApproveAuthority" : "DenyAuthority",
+        "-AuthorityProof", request.decisionProof,
+        ...(decision === "deny" ? ["-Summary", note] : []),
+        "-Workspace", worktrees.b.path,
+      );
+      await audit(`authority.${decision}`, { id: request.id, role: request.owner, kind: request.authority, action: request.action, checkpoint: request.checkpoint, resume: request.resume, note: note || null });
+      return send(response, 200, { ok: true, decision, result: JSON.parse(output) });
     }
 
     if (url.pathname === "/api/wishlist/requeue") {
