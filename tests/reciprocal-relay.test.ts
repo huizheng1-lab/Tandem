@@ -235,6 +235,8 @@ describe("reciprocal relay script", () => {
         outcome: "PAUSED",
         phase: "paused",
         pausedFromPhase: "working",
+        pauseOrigin: "machine",
+        pauseReasonCode: "repeated-genuine-blocker",
         activeRole: "A",
         resumeCount: 3,
         resumeThreshold: 3,
@@ -398,7 +400,7 @@ describe("reciprocal relay script", () => {
       await relay(repo, "-Action", "Claim", "-Role", "A");
       await relay(repo, "-Action", "Claim", "-Role", "A");
       const paused = await relay(repo, "-Action", "Claim", "-Role", "A");
-      expect(paused).toMatchObject({ phase: "paused", pausedFromPhase: "working", activeRole: "A" });
+      expect(paused).toMatchObject({ phase: "paused", pausedFromPhase: "working", pauseOrigin: "machine", pauseReasonCode: "repeated-genuine-blocker", activeRole: "A" });
 
       const completed = await relay(repo, "-Action", "CompleteArtifact", "-Role", "A", "-Summary", "candidate preview completed after human review of paused turn");
       expect(completed).toMatchObject({ outcome: "ARTIFACT_COMPLETED", phase: "idle", activeRole: null, resumeCount: 0 });

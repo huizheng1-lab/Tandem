@@ -90,6 +90,8 @@ function New-RelayState([string]$StableCommit) {
         activeRole = $null
         phase = "idle"
         pausedFromPhase = $null
+        pauseOrigin = $null
+        pauseReasonCode = $null
         pauseAfterTurn = $false
         resumeCount = 0
         resumeTurn = $null
@@ -149,6 +151,18 @@ try {
     }
     if (-not $state.PSObject.Properties["resumeTurn"]) {
         $state | Add-Member -NotePropertyName resumeTurn -NotePropertyValue $null
+    }
+    if (-not $state.PSObject.Properties["pauseOrigin"]) {
+        $origin = $null
+        $reasonCode = $null
+        if ($state.phase -eq "paused" -and $state.lastSummary -match 'Auto-paused.*consecutive RESUME claims') {
+            $origin = "machine"
+            $reasonCode = "repeated-genuine-blocker"
+        } elseif ($state.phase -eq "paused" -and $state.lastSummary) {
+            $origin = "unknown"
+        }
+        $state | Add-Member -NotePropertyName pauseOrigin -NotePropertyValue $origin
+        $state | Add-Member -NotePropertyName pauseReasonCode -NotePropertyValue $reasonCode
     }
 
     function Update-RelayRefs {
@@ -210,6 +224,8 @@ try {
             activeRole = $state.activeRole
             phase = $state.phase
             pausedFromPhase = $state.pausedFromPhase
+            pauseOrigin = $state.pauseOrigin
+            pauseReasonCode = $state.pauseReasonCode
             pauseAfterTurn = [bool]$state.pauseAfterTurn
             resumeCount = [int]$state.resumeCount
             resumeThreshold = $ResumePauseThreshold
@@ -837,10 +853,14 @@ try {
         if ($state.pauseAfterTurn) {
             $state.phase = "paused"
             $state.pausedFromPhase = "idle"
+            $state.pauseOrigin = "human"
+            $state.pauseReasonCode = "explicit-human-pause"
             $state.pauseAfterTurn = $false
         } else {
             $state.phase = "idle"
             $state.pausedFromPhase = $null
+            $state.pauseOrigin = $null
+            $state.pauseReasonCode = $null
         }
     }
 
@@ -862,6 +882,8 @@ try {
         $previousPhase = $state.phase
         $state.phase = "paused"
         $state.pausedFromPhase = $previousPhase
+        $state.pauseOrigin = "machine"
+        $state.pauseReasonCode = "repeated-genuine-blocker"
         $state.pauseAfterTurn = $false
         $state.lastSummary = "Auto-paused turn $($state.turn): executor $SelectedRole received $($state.resumeCount) consecutive RESUME claims without completing. Human attention is required before resuming."
         Save-State
@@ -896,6 +918,8 @@ try {
                     $state.activeRole = $null
                     $state.phase = "paused"
                     $state.pausedFromPhase = "idle"
+                    $state.pauseOrigin = "human"
+                    $state.pauseReasonCode = "explicit-human-pause"
                     $state.pauseAfterTurn = $false
                     $state.baseCommit = $null
                     $state.startedAt = $null
@@ -914,6 +938,8 @@ try {
         }
         $state.pausedFromPhase = $state.phase
         $state.phase = "paused"
+        $state.pauseOrigin = "human"
+        $state.pauseReasonCode = "explicit-human-pause"
         $state.lastSummary = $Summary.Trim()
         Save-State
         Write-Result "PAUSED"
@@ -935,6 +961,8 @@ try {
         if ($restorePhase -eq "paused") { throw "Cannot resume from malformed pausedFromPhase=paused." }
         $state.phase = $restorePhase
         $state.pausedFromPhase = $null
+        $state.pauseOrigin = $null
+        $state.pauseReasonCode = $null
         Reset-ResumeCounter
         $state.lastSummary = $Summary.Trim()
         Save-State
@@ -1080,6 +1108,8 @@ try {
         if ($state.pauseAfterTurn) {
             $state.phase = "paused"
             $state.pausedFromPhase = "idle"
+            $state.pauseOrigin = "human"
+            $state.pauseReasonCode = "explicit-human-pause"
             $state.pauseAfterTurn = $false
             Save-State
             Write-Result "PAUSED"
@@ -1166,6 +1196,8 @@ try {
         if ($failed.Count -gt 0) {
             $state.phase = "paused"
             $state.pausedFromPhase = "passive-testing"
+            $state.pauseOrigin = "machine"
+            $state.pauseReasonCode = "candidate-failure"
             $state.activeRole = $null
             $state.lastSummary = "Passive build/test failed for candidate $($state.candidateCommit): $((@($failed | ForEach-Object { $_.command })) -join ', ')"
             Save-State
@@ -1197,6 +1229,8 @@ try {
         if ($failed.Count -gt 0) {
             $state.phase = "paused"
             $state.pausedFromPhase = "passive-testing"
+            $state.pauseOrigin = "machine"
+            $state.pauseReasonCode = "candidate-failure"
             $state.activeRole = $null
             $state.lastSummary = "Passive package failed for candidate $($state.candidateCommit): $((@($failed | ForEach-Object { $_.command })) -join ', ')"
             Save-State
@@ -1422,6 +1456,8 @@ try {
     $state.activeRole = $null
     $state.phase = if ($state.pauseAfterTurn) { "paused" } else { "passive-testing" }
     $state.pausedFromPhase = if ($state.pauseAfterTurn) { "passive-testing" } else { $null }
+    $state.pauseOrigin = if ($state.pauseAfterTurn) { "human" } else { $null }
+    $state.pauseReasonCode = if ($state.pauseAfterTurn) { "explicit-human-pause" } else { $null }
     $state.pauseAfterTurn = $false
     $state.baseCommit = $null
     $state.candidateCommit = $head

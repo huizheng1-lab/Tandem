@@ -227,6 +227,33 @@ describeWindows("reciprocal direction epics", () => {
     expect(await readBoard(file)).toContain(`DONE stable=step2 completed=`);
   }, 30_000);
 
+  it("D177 declares, approves, and denies exact step authority without broad prose grants", async () => {
+    const file = await boardFile();
+    const added = JSON.parse((await direction(file, "-Action", "Add", "-Epic", "-Text", "Authority gated feature")).stdout);
+    const plan = `process/reciprocal/epics/${added.id}-plan.md`;
+
+    await direction(file, "-Action", "Start", "-Id", added.id, "-Role", "A");
+    await direction(file, "-Action", "Candidate", "-Id", added.id, "-Commit", "plan123", "-Steps", "2", "-Plan", plan);
+    await direction(file, "-Action", "ApprovePlan", "-Id", added.id);
+    await direction(file, "-Action", "Start", "-Id", added.id, "-Role", "A");
+
+    await expect(direction(file, "-Action", "DeclareAuthority", "-Id", added.id, "-Text", "permission__all__step1__resumeStep1"))
+      .rejects.toThrow(/must be exact/);
+    await direction(file, "-Action", "DeclareAuthority", "-Id", added.id, "-Text", "permission__enableLoopback__step1__resumeStep1");
+    expect(await readBoard(file)).toContain("authority=permission action=enableLoopback checkpoint=step1 resume=resumeStep1 authorityStatus=pending");
+    await expect(direction(file, "-Action", "Start", "-Id", added.id, "-Role", "B"))
+      .rejects.toThrow(/pending exact authority/);
+
+    await direction(file, "-Action", "ApproveAuthority", "-Id", added.id);
+    expect(await readBoard(file)).toContain("authorityStatus=approved");
+
+    await direction(file, "-Action", "DeclareAuthority", "-Id", added.id, "-Text", "sandbox__allowTempFixtureWrite__step1b__resumeStep1b");
+    await direction(file, "-Action", "DenyAuthority", "-Id", added.id, "-Note", "too risky");
+    const board = await readBoard(file);
+    expect(board).toContain("BLOCKED");
+    expect(board).toContain("authorityStatus=denied");
+  }, 30_000);
+
   it("requires plan revisions to return through the human plan gate", async () => {
     const file = await boardFile();
     const added = JSON.parse((await direction(file, "-Action", "Add", "-Epic", "-Text", "Replanned feature")).stdout);

@@ -12,6 +12,7 @@ async function fixture() {
   const repo = path.join(root, "repo");
   const relay = path.join(root, "relay");
   await mkdir(path.join(repo, ".git", "tandem-relay"), { recursive: true });
+  await mkdir(path.join(repo, "process", "reciprocal"), { recursive: true });
   await mkdir(path.join(relay, "control"), { recursive: true });
   await mkdir(path.join(relay, "worktrees", "copy-a"), { recursive: true });
   await mkdir(path.join(relay, "worktrees", "copy-b"), { recursive: true });
@@ -22,6 +23,27 @@ async function fixture() {
     activeRole: null,
     nextRole: "A",
     stableCommit: "0123456789012345678901234567890123456789",
+  }), "utf8");
+  await writeFile(path.join(repo, "process", "reciprocal", "gate-taxonomy.json"), JSON.stringify({
+    version: 1,
+    categories: {
+      autoRecoverablePrerequisite: "auto-recoverable-prerequisite",
+      hardBlocked: "hard-blocked",
+      hardHumanGate: "hard-human-gate",
+      waitingNotBlocked: "waiting-not-blocked",
+    },
+    codes: {
+      idleSupervisorDispatch: "idle-supervisor-dispatch",
+      humanAuthorityRequired: "human-authority-required",
+      explicitHumanPause: "explicit-human-pause",
+      progressWait: "progress-wait",
+      endpointUnavailable: "endpoint-unavailable",
+      leaseHeld: "lease-held",
+      repeatedGenuineBlocker: "repeated-genuine-blocker",
+      recoverPausedIdlePrerequisite: "recover-paused-idle-prerequisite",
+      sourceReconciliationPending: "source-reconciliation-pending",
+    },
+    retry: { baseSeconds: 30, maxSeconds: 300, escalateAfterIdenticalAttempts: 3 },
   }), "utf8");
   await writeFile(path.join(relay, "control", "WISHLIST.md"), [
     "# Tandem Reciprocal: Wishlist And Progress",
@@ -67,7 +89,9 @@ describeWindows("reciprocal continuation supervisor", () => {
     const held = await supervisor(repo, relay);
     expect(held.actions[0]).toMatchObject({ kind: "lease-held", code: "lease-held" });
     expect((await readJson(lock)).token).toBe("other");
-    expect((await readJson(state)).blocker.code).toBe("lease-held");
+    const heldState = await readJson(state);
+    expect(heldState.blocker).toBeNull();
+    expect(heldState.displayState).toBe("waiting-not-blocked");
 
     await writeFile(lock, JSON.stringify({
       token: "dead",
@@ -81,5 +105,33 @@ describeWindows("reciprocal continuation supervisor", () => {
     const reclaimed = await supervisor(repo, relay);
     expect(reclaimed.ok).toBe(true);
     expect(reclaimed.actions.map((action: { kind: string }) => action.kind)).not.toContain("lease-held");
+  }, 30_000);
+
+  it("D177 enforces stored retry backoff and hard blockers before retrying", async () => {
+    const { repo, relay, state } = await fixture();
+    await writeFile(state, JSON.stringify({
+      schemaVersion: 1,
+      displayState: "retrying prerequisite",
+      blocker: {
+        category: "auto-recoverable-prerequisite",
+        code: "endpoint-unavailable",
+        fingerprint: "auto-recoverable-prerequisite|endpoint-unavailable|executor-token",
+        attemptCount: 2,
+        nextAttemptAt: new Date(Date.now() + 60_000).toISOString(),
+        message: "executor-token",
+      },
+      transitions: [],
+    }), "utf8");
+
+    const backoff = await supervisor(repo, relay);
+    expect(backoff.actions[0]).toMatchObject({ kind: "retry-backoff", code: "endpoint-unavailable" });
+    expect(backoff.transitionsUsed).toBe(0);
+
+    const hardState = await readJson(state);
+    hardState.blocker.category = "hard-blocked";
+    await writeFile(state, JSON.stringify(hardState), "utf8");
+    const hard = await supervisor(repo, relay);
+    expect(hard.actions[0]).toMatchObject({ kind: "retry-backoff", retryable: false });
+    expect((await readJson(state)).displayState).toBe("hard blocked");
   }, 30_000);
 });

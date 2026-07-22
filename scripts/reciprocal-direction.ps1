@@ -1,6 +1,6 @@
 param(
     [Parameter(Mandatory = $true)]
-    [ValidateSet("Show", "UpdateDirection", "Add", "Remove", "Retire", "Start", "NormalizeQueued", "MigrateAuthorityMetadata", "Candidate", "DeclareArtifact", "ArtifactComplete", "ApprovePlan", "AutoApprovePlan", "RejectPlan", "AcceptStep", "Complete", "Block", "Requeue")]
+    [ValidateSet("Show", "UpdateDirection", "Add", "Remove", "Retire", "Start", "NormalizeQueued", "MigrateAuthorityMetadata", "DeclareAuthority", "ApproveAuthority", "DenyAuthority", "Candidate", "DeclareArtifact", "ArtifactComplete", "ApprovePlan", "AutoApprovePlan", "RejectPlan", "AcceptStep", "Complete", "Block", "Requeue")]
     [string]$Action,
 
     [string]$Text,
@@ -34,6 +34,15 @@ param(
 
     [switch]$PlanRevision,
 
+    [ValidateSet("credentials", "authentication", "pairing", "permission", "sandbox", "destructive", "payment", "publication", "runtime")]
+    [string]$AuthKind,
+
+    [string]$AuthVerb,
+
+    [string]$Checkpoint,
+
+    [string]$ResumeToken,
+
     [string]$ControlPath
 )
 
@@ -56,6 +65,13 @@ function Get-Metadata([string]$Value) {
 function Get-CleanNote([string]$Value) {
     if ($null -eq $Value) { return "" }
     return ($Value -replace "\s+", " ").Trim().Replace("|", "/")
+}
+
+function Get-CleanMetadataValue([string]$Value, [string]$Name) {
+    $clean = Get-CleanNote $Value
+    if (-not $clean -or $clean -notmatch '^[A-Za-z0-9._:-]+$') { throw "$Name requires a precise token using only letters, numbers, dot, underscore, colon, or hyphen." }
+    if ($clean -match '^(all|anything|everything|broad|general|whatever|full)$') { throw "$Name must be exact, not broad." }
+    return $clean
 }
 
 function Get-AutonomyDefault([string[]]$BoardLines) {
@@ -394,6 +410,12 @@ try {
                 if ($status -notin @("PLAN_APPROVED", "IN_PROGRESS")) {
                     throw "Epic $Id cannot start a step from status $status."
                 }
+                if ($metadata.authorityStatus -eq "pending") {
+                    throw "Epic $Id has a pending exact authority request at checkpoint $($metadata.checkpoint)."
+                }
+                if ($metadata.authorityStatus -eq "denied") {
+                    throw "Epic $Id authority request was denied at checkpoint $($metadata.checkpoint)."
+                }
                 if ($status -eq "IN_PROGRESS" -and $metadata.role) {
                     throw "Epic $Id is already owned by role $($metadata.role)."
                 }
@@ -468,6 +490,43 @@ try {
                     break
                 }
                 throw "MigrateAuthorityMetadata does not support $Id in status $status with current metadata."
+            }
+            "DeclareAuthority" {
+                if (-not $isEpic -or $status -ne "IN_PROGRESS" -or $metadata.phase -ne "STEP") {
+                    throw "DeclareAuthority requires the exact current IN_PROGRESS epic STEP."
+                }
+                if (-not $metadata.role) { throw "DeclareAuthority requires an owned current step." }
+                if ($metadata.authorityStatus -eq "pending") { throw "$Id already has a pending authority request." }
+                if (-not $AuthKind -and $Text -match '^(.+?)__(.+?)__(.+?)__(.+?)$') {
+                    $AuthKind = $Matches[1]
+                    $AuthVerb = $Matches[2]
+                    $Checkpoint = $Matches[3]
+                    $ResumeToken = $Matches[4]
+                }
+                $kind = Get-CleanMetadataValue $AuthKind "authority kind"
+                $authorityAction = Get-CleanMetadataValue $(if ($AuthVerb) { $AuthVerb } else { $Note }) "authority action"
+                $checkpoint = Get-CleanMetadataValue $(if ($Checkpoint) { $Checkpoint } else { $Evidence }) "checkpoint"
+                $resume = Get-CleanMetadataValue $(if ($ResumeToken) { $ResumeToken } else { $Commit }) "resume action"
+                if ($kind -notin @("credentials", "authentication", "pairing", "permission", "sandbox", "destructive", "payment", "publication", "runtime")) { throw "authority kind '$kind' is not supported." }
+                $lines[$index] = "$originalLine authority=$kind action=$authorityAction checkpoint=$checkpoint resume=$resume authorityStatus=pending authorityDeclared=$now"
+            }
+            "ApproveAuthority" {
+                if (-not $isEpic -or $metadata.authorityStatus -ne "pending") {
+                    throw "ApproveAuthority requires a pending exact authority request."
+                }
+                if ($AuthKind -and $AuthKind -ne $metadata.authority) { throw "ApproveAuthority kind mismatch for $Id." }
+                $existing = $statusAndDetail -replace '\s+authorityStatus=pending\b', ' authorityStatus=approved'
+                $lines[$index] = ($base + "$existing authorityApproved=$now") -join " | "
+            }
+            "DenyAuthority" {
+                if (-not $isEpic -or $metadata.authorityStatus -ne "pending") {
+                    throw "DenyAuthority requires a pending exact authority request."
+                }
+                $cleanNote = Get-CleanNote $Note
+                if (-not $cleanNote) { throw "DenyAuthority requires -Note." }
+                $preserved = ($statusAndDetail.Substring($status.Length)).Trim()
+                $preserved = $preserved -replace '\s+authorityStatus=pending\b', ' authorityStatus=denied'
+                $lines[$index] = ($base + "BLOCKED $preserved previous=$status authorityDenied=$now note=$cleanNote") -join " | "
             }
             "Candidate" {
                 if (-not $Commit) { throw "Candidate requires -Commit." }

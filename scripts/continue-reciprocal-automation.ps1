@@ -1,7 +1,8 @@
 param(
     [string]$Workspace = (Get-Location).Path,
     [string]$RelayRoot = "",
-    [int]$MaxTransitions = 3
+    [int]$MaxTransitions = 3,
+    [switch]$DiagnosticRetry
 )
 
 $ErrorActionPreference = "Stop"
@@ -145,6 +146,19 @@ function Save-RelayState([string]$Path, [object]$State) {
     $State | ConvertTo-Json -Depth 20 | Set-Content -LiteralPath $Path -Encoding UTF8
 }
 
+function Get-ReciprocalTaxonomy([string]$RepoRoot) {
+    $path = Join-Path $RepoRoot "process\reciprocal\gate-taxonomy.json"
+    if (-not (Test-Path -LiteralPath $path)) { throw "Canonical reciprocal taxonomy is missing at $path." }
+    $taxonomy = Get-Content -LiteralPath $path -Raw | ConvertFrom-Json
+    foreach ($name in @("autoRecoverablePrerequisite", "hardBlocked", "hardHumanGate", "waitingNotBlocked")) {
+        if (-not $taxonomy.categories.$name) { throw "Canonical reciprocal taxonomy is missing categories.$name." }
+    }
+    foreach ($name in @("baseSeconds", "maxSeconds", "escalateAfterIdenticalAttempts")) {
+        if ($null -eq $taxonomy.retry.$name) { throw "Canonical reciprocal taxonomy is missing retry.$name." }
+    }
+    return $taxonomy
+}
+
 if ($MaxTransitions -lt 1) { throw "MaxTransitions must be at least 1." }
 
 $workspaceFull = (Resolve-Path $Workspace).Path
@@ -160,6 +174,8 @@ $relayScript = Join-Path $PSScriptRoot "reciprocal-relay.ps1"
 $leasePath = Join-Path $relayRootFull "control\continuation-supervisor.lock.json"
 $supervisorStatePath = Join-Path $relayRootFull "control\continuation-supervisor-state.json"
 $auditPath = Join-Path $relayRootFull "control\CONTROL_PANEL_AUDIT.jsonl"
+$sourceReconciliationPendingPath = Join-Path $relayRootFull "control\source-reconciliation-pending.json"
+$taxonomy = Get-ReciprocalTaxonomy $adminRepo
 $leaseToken = [guid]::NewGuid().ToString("N")
 $leaseTtlSeconds = 120
 
@@ -178,9 +194,59 @@ function Write-Audit([string]$Action, [hashtable]$Detail) {
     [IO.File]::AppendAllText($auditPath, (($entry | ConvertTo-Json -Compress -Depth 10) + [Environment]::NewLine), [Text.UTF8Encoding]::new($false))
 }
 
+function Get-GitText([string]$Path, [string[]]$Arguments) {
+    $oldErrorAction = $ErrorActionPreference
+    try {
+        $ErrorActionPreference = "Continue"
+        $output = @(& git -C $Path @Arguments 2>$null)
+        if ($LASTEXITCODE -ne 0 -or $output.Count -eq 0) { return $null }
+        return ($output -join "`n").Trim()
+    } finally {
+        $ErrorActionPreference = $oldErrorAction
+    }
+}
+
+function Update-SourceReconciliationPrerequisite([object]$RelayState) {
+    $masterHead = Get-GitText $adminRepo @("rev-parse", "master")
+    if (-not $masterHead -or -not $RelayState.stableCommit -or $masterHead -eq [string]$RelayState.stableCommit) {
+        Remove-Item -LiteralPath $sourceReconciliationPendingPath -Force -ErrorAction SilentlyContinue
+        return $null
+    }
+    $dirtyA = Get-GitText $copyA @("status", "--porcelain=v1", "--untracked-files=all")
+    $dirtyB = Get-GitText $copyB @("status", "--porcelain=v1", "--untracked-files=all")
+    $safe = -not $RelayState.activeRole -and $RelayState.phase -eq "idle" -and -not $RelayState.candidateCommit -and -not $RelayState.rollbackCommit -and -not $dirtyA -and -not $dirtyB
+    $pending = [ordered]@{
+        schemaVersion = 1
+        status = if ($safe) { "ready" } else { "pending" }
+        category = [string]$taxonomy.categories.autoRecoverablePrerequisite
+        reasonCode = [string]$taxonomy.codes.sourceReconciliationPending
+        sourceHead = $masterHead
+        stableCommit = [string]$RelayState.stableCommit
+        trigger = "automatic when relay is idle with no owner, no candidate/rollback, and both reciprocal worktrees are clean"
+        unsafe = [ordered]@{
+            phase = $RelayState.phase
+            activeRole = $RelayState.activeRole
+            candidateCommit = $RelayState.candidateCommit
+            rollbackCommit = $RelayState.rollbackCommit
+            copyAStatus = $dirtyA
+            copyBStatus = $dirtyB
+        }
+        updatedAt = (Get-Date).ToUniversalTime().ToString("o")
+    }
+    New-Item -ItemType Directory -Path (Split-Path $sourceReconciliationPendingPath -Parent) -Force | Out-Null
+    $pending | ConvertTo-Json -Depth 10 | Set-Content -LiteralPath $sourceReconciliationPendingPath -Encoding UTF8
+    return [pscustomobject]$pending
+}
+
 function Read-SupervisorState([string]$Path) {
     $state = Read-JsonFile $Path
-    if ($state) { return $state }
+    if ($state) {
+        if (-not $state.PSObject.Properties["lastRun"]) { $state | Add-Member -NotePropertyName lastRun -NotePropertyValue $null }
+        if (-not $state.PSObject.Properties["displayState"]) { $state | Add-Member -NotePropertyName displayState -NotePropertyValue "unknown" }
+        if (-not $state.PSObject.Properties["blocker"]) { $state | Add-Member -NotePropertyName blocker -NotePropertyValue $null }
+        if (-not $state.PSObject.Properties["transitions"]) { $state | Add-Member -NotePropertyName transitions -NotePropertyValue @() }
+        return $state
+    }
     return [pscustomobject]@{
         schemaVersion = 1
         lastRun = $null
@@ -205,18 +271,26 @@ function Update-BlockerState([object]$SupervisorState, [string]$Category, [strin
     $fingerprint = Get-Fingerprint $Category $Code $Message
     $previous = $SupervisorState.blocker
     $attempt = if ($previous -and $previous.fingerprint -eq $fingerprint) { [int]$previous.attemptCount + 1 } else { 1 }
-    $backoffSeconds = [Math]::Min(300, 30 * [Math]::Pow(2, [Math]::Max(0, $attempt - 1)))
+    $backoffSeconds = [Math]::Min([int]$taxonomy.retry.maxSeconds, [int]$taxonomy.retry.baseSeconds * [Math]::Pow(2, [Math]::Max(0, $attempt - 1)))
+    $hardBlocked = $attempt -ge [int]$taxonomy.retry.escalateAfterIdenticalAttempts
     $SupervisorState.blocker = [pscustomobject]@{
-        category = $Category
+        category = if ($hardBlocked) { [string]$taxonomy.categories.hardBlocked } else { $Category }
         code = $Code
         fingerprint = $fingerprint
         attemptCount = $attempt
         lastAttemptAt = $now.ToString("o")
         nextAttemptAt = $now.AddSeconds($backoffSeconds).ToString("o")
         backoffSeconds = [int]$backoffSeconds
-        nextAction = if ($attempt -ge 3) { "surface-actionable-blocker" } else { "retry-prerequisite" }
+        nextAction = if ($hardBlocked) { "surface-actionable-blocker" } else { "retry-prerequisite" }
         message = $Message
     }
+}
+
+function Test-BackoffReady([object]$SupervisorState) {
+    if ($DiagnosticRetry -or -not $SupervisorState.blocker) { return $true }
+    if ($SupervisorState.blocker.category -eq [string]$taxonomy.categories.hardBlocked) { return $false }
+    if (-not $SupervisorState.blocker.nextAttemptAt) { return $true }
+    return ([datetime]::Parse([string]$SupervisorState.blocker.nextAttemptAt).ToUniversalTime() -le (Get-Date).ToUniversalTime())
 }
 
 function Reset-BlockerState([object]$SupervisorState) {
@@ -285,8 +359,9 @@ function Set-DisplayState([object]$RelayState, [object]$SupervisorState) {
     if ($RelayState.phase -eq "working" -and $RelayState.activeRole) { return "working" }
     if ($RelayState.phase -eq "validating" -or $RelayState.phase -eq "passive-testing") { return "testing" }
     if ($RelayState.phase -eq "a-upgrade-pending") { return "waiting for review" }
-    if ($RelayState.phase -eq "paused" -and $RelayState.pausedFromPhase -ne "idle") { return "human paused" }
-    if ($SupervisorState.blocker -and [int]$SupervisorState.blocker.attemptCount -ge 3) { return "hard blocked" }
+    if ($RelayState.phase -eq "paused" -and $RelayState.pauseOrigin -eq "human") { return "human paused" }
+    if ($RelayState.phase -eq "paused" -and $RelayState.pauseOrigin -eq "machine") { return "machine blocked" }
+    if ($SupervisorState.blocker -and $SupervisorState.blocker.category -eq [string]$taxonomy.categories.hardBlocked) { return "hard blocked" }
     if ($SupervisorState.blocker) { return "retrying prerequisite" }
     $board = Get-HighestPriorityQueuedItem (Get-SharedDirectionPath $relayRootFull)
     if ($board) { return "planning" }
@@ -295,6 +370,10 @@ function Set-DisplayState([object]$RelayState, [object]$SupervisorState) {
 
 function Add-Transition([object]$SupervisorState, [object]$Action) {
     $existing = @($SupervisorState.transitions)
+    $last = @($existing | Select-Object -Last 1)[0]
+    if ($last -and $last.kind -eq $Action.kind -and $last.code -eq $Action.code -and $last.sourceHead -eq $Action.sourceHead -and $last.stableCommit -eq $Action.stableCommit) {
+        return
+    }
     $SupervisorState.transitions = @($existing + $Action | Select-Object -Last 40)
 }
 
@@ -334,13 +413,12 @@ function Invoke-TrackedPrompt([object]$SupervisorState, [string]$Kind, [object]$
 
 $supervisorState = Read-SupervisorState $supervisorStatePath
 if (-not (Enter-Lease $leasePath)) {
-    Update-BlockerState $supervisorState "waiting-not-blocked" "lease-held" "Another live continuation supervisor owns the lease."
     $supervisorState.lastRun = [pscustomobject]@{
         startedAt = (Get-Date).ToUniversalTime().ToString("o")
         endedAt = (Get-Date).ToUniversalTime().ToString("o")
         transitionsUsed = 0
     }
-    $supervisorState.displayState = "retrying prerequisite"
+    $supervisorState.displayState = "waiting-not-blocked"
     Save-SupervisorState $supervisorStatePath $supervisorState
     [pscustomobject]@{
         ok = $true
@@ -348,7 +426,7 @@ if (-not (Enter-Lease $leasePath)) {
         endedAt = (Get-Date).ToUniversalTime().ToString("o")
         maxTransitions = $MaxTransitions
         transitionsUsed = 0
-        actions = @([pscustomobject]@{ kind = "lease-held"; category = "waiting-not-blocked"; code = "lease-held"; retryable = $true; blocker = $supervisorState.blocker })
+        actions = @([pscustomobject]@{ kind = "lease-held"; category = [string]$taxonomy.categories.waitingNotBlocked; code = [string]$taxonomy.codes.leaseHeld; retryable = $false; blocker = $supervisorState.blocker })
     } | ConvertTo-Json -Depth 8
     exit 0
 }
@@ -360,6 +438,41 @@ try {
 Update-LeaseHeartbeat $leasePath
 $state = Read-JsonFile $statePath
 if (-not $state) { throw "Relay state is missing at $statePath." }
+$sourcePrerequisite = Update-SourceReconciliationPrerequisite $state
+if ($sourcePrerequisite -and $sourcePrerequisite.status -eq "pending") {
+    $actions += [pscustomobject]@{
+        kind = "source-reconciliation-pending"
+        category = $sourcePrerequisite.category
+        code = $sourcePrerequisite.reasonCode
+        sourceHead = $sourcePrerequisite.sourceHead
+        stableCommit = $sourcePrerequisite.stableCommit
+        trigger = $sourcePrerequisite.trigger
+    }
+}
+
+if (-not (Test-BackoffReady $supervisorState)) {
+    $supervisorState.lastRun = [pscustomObject]@{
+        startedAt = $startedAt
+        endedAt = (Get-Date).ToUniversalTime().ToString("o")
+        transitionsUsed = 0
+        finalPhase = $state.phase
+        finalActiveRole = $state.activeRole
+    }
+    $supervisorState.displayState = if ($supervisorState.blocker.category -eq [string]$taxonomy.categories.hardBlocked) { "hard blocked" } else { "retry backoff" }
+    Save-SupervisorState $supervisorStatePath $supervisorState
+    [pscustomobject]@{
+        ok = $true
+        startedAt = $startedAt
+        endedAt = (Get-Date).ToUniversalTime().ToString("o")
+        maxTransitions = $MaxTransitions
+        transitionsUsed = 0
+        actions = @([pscustomobject]@{ kind = "retry-backoff"; category = $supervisorState.blocker.category; code = $supervisorState.blocker.code; retryable = $supervisorState.blocker.category -ne [string]$taxonomy.categories.hardBlocked; nextAttemptAt = $supervisorState.blocker.nextAttemptAt })
+        finalPhase = $state.phase
+        finalActiveRole = $state.activeRole
+        supervisor = $supervisorState
+    } | ConvertTo-Json -Depth 12
+    exit 0
+}
 
 if (($state.phase -eq "passive-testing" -or $state.candidateCommit) -and $transitionCount -lt $MaxTransitions) {
     $candidate = [string]$state.candidateCommit

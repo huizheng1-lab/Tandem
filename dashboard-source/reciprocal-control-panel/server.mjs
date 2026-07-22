@@ -32,6 +32,7 @@ const wishlistPath = path.join(relayRoot, "control", "WISHLIST.md");
 const statePath = path.join(repoRoot, ".git", "tandem-relay", "state.json");
 const auditPath = path.join(relayRoot, "control", "CONTROL_PANEL_AUDIT.jsonl");
 const supervisorStatePath = path.join(relayRoot, "control", "continuation-supervisor-state.json");
+const sourceReconciliationPendingPath = path.join(relayRoot, "control", "source-reconciliation-pending.json");
 const serverLogPath = path.join(relayRoot, "control", "dashboard-server.log");
 const updateReviewPath = path.join(relayRoot, "control", "UPDATE_REVIEWS.md");
 const updateReviewIndexPath = path.join(relayRoot, "control", "UPDATE_REVIEW_INDEX.json");
@@ -778,11 +779,12 @@ async function getMainVersionStatus(masterHead, stableSha, candidate, runtimeA, 
 }
 
 async function getStatus() {
-  const [state, directionText, wishlistText, supervisorState, a, b, runtimeA, runtimeB, producerRelay, historyText, stableExists, masterHead, updateReviewIndex] = await Promise.all([
+  const [state, directionText, wishlistText, supervisorState, sourceReconciliationPending, a, b, runtimeA, runtimeB, producerRelay, historyText, stableExists, masterHead, updateReviewIndex] = await Promise.all([
     jsonFile(statePath, {}),
     textFile(controlPath),
     textFile(wishlistPath),
     jsonFile(supervisorStatePath, {}),
+    jsonFile(sourceReconciliationPendingPath, null),
     getWorktree("a"),
     getWorktree("b"),
     getRuntime("A"),
@@ -825,7 +827,7 @@ async function getStatus() {
   const supervisorGate = classifyReciprocalGate({
     state: {
       ...state,
-      humanPaused: state.phase === "paused" && state.pausedFromPhase !== "idle",
+      humanPaused: state.pauseOrigin === "human",
     },
     item: activeItem,
     attemptCount: supervisorState?.blocker?.attemptCount || 0,
@@ -839,7 +841,7 @@ async function getStatus() {
   const health = [
     { label: "Stable recovery ref", ok: stableExists, detail: stableExists ? shortSha(state.stableCommit) : "Missing" },
     { label: "Relay state", ok: Boolean(state.schemaVersion === 2 && !state._readError), detail: state._readError ? `Unavailable: ${state._readError.message}` : (state.phase || "Unavailable") },
-    { label: "Supervisor", ok: supervisorGate.category !== "hard-human-gate" || supervisorGate.code === "human-authority-required" || supervisorGate.code === "explicit-human-pause", detail: `${supervisorState?.displayState || supervisorGate.nextAction}${supervisorState?.blocker?.nextAttemptAt ? `; next ${supervisorState.blocker.nextAttemptAt}` : ""}` },
+    { label: "Supervisor", ok: supervisorGate.category !== "hard-blocked", detail: `${supervisorState?.displayState || supervisorGate.nextAction}${supervisorState?.blocker?.nextAttemptAt ? `; next ${supervisorState.blocker.nextAttemptAt}` : ""}` },
     {
       label: "Resume circuit breaker",
       ok: Number(state.resumeCount || 0) < Number(state.resumeThreshold || 3),
@@ -852,6 +854,7 @@ async function getStatus() {
     { label: "Branches vs master", ok: a.drift.upToDate && b.drift.upToDate, detail: `A ${a.drift.behindMaster}/${a.drift.aheadOfMaster}, B ${b.drift.behindMaster}/${b.drift.aheadOfMaster}` },
     { label: "Runtime builds vs master", ok: !runtimeA.lagsMaster && !runtimeB.lagsMaster, detail: `A ${runtimeA.buildShortSha}, B ${runtimeB.buildShortSha}` },
     { label: "Candidate update", ok: !candidateUpdate.unknownProvenance, detail: candidateUpdate.reviewNote?.visible ? `${candidateUpdate.reviewNote.shortSha} awaits review` : candidateUpdate.message },
+    { label: "Source reconciliation", ok: !sourceReconciliationPending, detail: sourceReconciliationPending ? `${sourceReconciliationPending.status}: ${sourceReconciliationPending.reasonCode}` : "No pending source reconciliation" },
   ];
   const driftWarnings = [
     a.drift.upToDate ? null : `Copy A branch is ${a.drift.behindMaster} behind / ${a.drift.aheadOfMaster} ahead master`,
@@ -875,6 +878,7 @@ async function getStatus() {
     runtimes: { a: runtimeA, b: runtimeB },
     candidateUpdate,
     mainVersion,
+    sourceReconciliationPending,
     models: { a: modelsA, b: modelsB },
     history,
     health,

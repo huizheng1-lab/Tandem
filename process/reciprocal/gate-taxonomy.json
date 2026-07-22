@@ -2,6 +2,7 @@
   "version": 1,
   "categories": {
     "autoRecoverablePrerequisite": "auto-recoverable-prerequisite",
+    "hardBlocked": "hard-blocked",
     "hardHumanGate": "hard-human-gate",
     "waitingNotBlocked": "waiting-not-blocked"
   },
@@ -13,7 +14,21 @@
     "endpointUnavailable": "endpoint-unavailable",
     "leaseHeld": "lease-held",
     "repeatedGenuineBlocker": "repeated-genuine-blocker",
-    "recoverPausedIdlePrerequisite": "recover-paused-idle-prerequisite"
+    "recoverPausedIdlePrerequisite": "recover-paused-idle-prerequisite",
+    "sourceReconciliationPending": "source-reconciliation-pending"
+  },
+  "pauseOrigins": {
+    "human": "human",
+    "machine": "machine",
+    "unknown": "unknown"
+  },
+  "pauseReasonCodes": {
+    "explicitHumanPause": "explicit-human-pause",
+    "resumeCircuitBreaker": "repeated-genuine-blocker",
+    "retryExhausted": "retry-exhausted",
+    "machinePlanningPause": "machine-planning-pause",
+    "candidateFailure": "candidate-failure",
+    "runtimeReview": "runtime-review"
   },
   "retry": {
     "baseSeconds": 30,

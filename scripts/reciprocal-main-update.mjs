@@ -56,6 +56,20 @@ async function readJson(file) {
   return JSON.parse((await readFile(file, "utf8")).replace(/^\uFEFF/, ""));
 }
 
+async function readTransaction() {
+  try {
+    return JSON.parse((await readFile(transactionPath, "utf8")).replace(/^\uFEFF/, ""));
+  } catch {
+    return null;
+  }
+}
+
+function maybeFault(stage) {
+  if (process.env.TANDEM_MAIN_UPDATE_FAULT_STAGE === stage) {
+    throw new Error(`Injected main-update fault at ${stage}`);
+  }
+}
+
 function statusPath(line) {
   const value = line.slice(3).trim();
   const renamed = value.includes(" -> ") ? value.split(" -> ").at(-1) : value;
@@ -159,6 +173,15 @@ async function clearTransaction() {
   await unlink(transactionPath).catch(() => {});
 }
 
+async function updateLocalMasterIfClean(beforeMaster, masterSha, adminDirtyBefore) {
+  if (adminDirtyBefore.porcelain.length) {
+    result.localMasterDeferred = true;
+    return;
+  }
+  await git(["update-ref", "refs/heads/master", masterSha, beforeMaster]);
+  result.localMasterUpdated = true;
+}
+
 async function validateStable(stableSha) {
   const validationHead = await gitText(["rev-parse", "HEAD"], worktreeA);
   if (validationHead !== stableSha) throw new Error(`Validation worktree moved from stable: ${validationHead}.`);
@@ -205,6 +228,47 @@ const result = {
 };
 
 try {
+  const existingTransaction = await readTransaction();
+  if (existingTransaction?.stage === "pushed-not-synced") {
+    result.stage = "resume-pushed-not-synced";
+    Object.assign(result, {
+      resumedTransaction: true,
+      beforeMaster: existingTransaction.beforeMaster,
+      masterSha: existingTransaction.masterSha,
+      stableSha: existingTransaction.stableSha,
+      tag: existingTransaction.tag,
+    });
+    const [remoteMaster, tagSha] = await Promise.all([
+      gitText(["ls-remote", "origin", "refs/heads/master"]).then((text) => text.split(/\s+/)[0] || ""),
+      gitText(["rev-parse", `${existingTransaction.tag}^{}`]),
+    ]);
+    if (remoteMaster !== existingTransaction.masterSha) {
+      throw new Error(`Cannot resume pushed-not-synced transaction: origin/master is ${remoteMaster || "missing"}, expected ${existingTransaction.masterSha}.`);
+    }
+    if (tagSha !== existingTransaction.masterSha) {
+      throw new Error(`Cannot resume pushed-not-synced transaction: tag ${existingTransaction.tag} points at ${tagSha}, expected ${existingTransaction.masterSha}.`);
+    }
+    const adminDirtyBefore = await dirtyAdminSnapshot();
+    result.adminDirtyBefore = adminDirtyBefore;
+    maybeFault("after-push");
+    result.stage = "branch-sync";
+    await git(["merge", "--ff-only", existingTransaction.masterSha], worktreeA);
+    maybeFault("after-copy-a");
+    await git(["merge", "--ff-only", existingTransaction.masterSha], worktreeB);
+    maybeFault("after-copy-b");
+    await relay("ReconcileMain", ["-NewStableCommit", existingTransaction.masterSha, "-Summary", `Resumed ${existingTransaction.tag}: ${comment}`]);
+    maybeFault("after-relay");
+    result.branchesResynced = true;
+    result.adminDirtyAfter = await dirtyAdminSnapshot();
+    assertSnapshotsEqual(adminDirtyBefore, result.adminDirtyAfter);
+    await updateLocalMasterIfClean(existingTransaction.beforeMaster, existingTransaction.masterSha, adminDirtyBefore);
+    result.stage = "complete";
+    result.ok = true;
+    maybeFault("before-cleanup");
+    await clearTransaction();
+    process.stdout.write(JSON.stringify(result));
+    process.exit(0);
+  }
   const { state, stableSha, wasPaused, adminDirtyBefore } = await assertPreconditions();
   result.stableSha = stableSha;
   result.adminDirtyBefore = adminDirtyBefore;
@@ -215,6 +279,7 @@ try {
   }
 
   result.stage = "validation";
+  maybeFault("before-push");
   result.checks = await validateStable(stableSha);
 
   result.stage = "isolated-merge";
@@ -302,13 +367,16 @@ try {
     tag: result.tag,
     createdAt: new Date().toISOString(),
   });
-  await git(["update-ref", "refs/heads/master", result.masterSha, beforeMaster]);
-  result.localMasterUpdated = true;
+  maybeFault("after-push");
+  await updateLocalMasterIfClean(beforeMaster, result.masterSha, adminDirtyBefore);
 
   result.stage = "branch-sync";
   await git(["merge", "--ff-only", result.masterSha], worktreeA);
+  maybeFault("after-copy-a");
   await git(["merge", "--ff-only", result.masterSha], worktreeB);
+  maybeFault("after-copy-b");
   await relay("ReconcileMain", ["-NewStableCommit", result.masterSha, "-Summary", `Reconciled at ${result.tag}: ${comment}`]);
+  maybeFault("after-relay");
   result.branchesResynced = true;
   result.adminDirtyAfter = await dirtyAdminSnapshot();
   assertSnapshotsEqual(adminDirtyBefore, result.adminDirtyAfter);
@@ -320,6 +388,7 @@ try {
   }
   result.stage = "complete";
   result.ok = true;
+  maybeFault("before-cleanup");
   await clearTransaction();
   process.stdout.write(JSON.stringify(result));
 } catch (error) {

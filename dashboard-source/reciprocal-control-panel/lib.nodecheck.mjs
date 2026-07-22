@@ -7,6 +7,7 @@ import {
   approvalRemainingActions,
   candidatePreviewArtifactCapabilityStatus,
   classifyReciprocalGate,
+  loadReciprocalTaxonomy,
   nextQueuedHumanItem,
   parseDirection,
   recoveryPlan,
@@ -18,6 +19,9 @@ import {
   reviewOriginItem,
   validateAlreadyPromotedAUpgradeRecovery,
 } from "./lib.mjs";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import path from "node:path";
 
 test("parses shared direction and wishlist metadata", () => {
   const result = parseDirection(`# Board\n\n## General Direction\n\nBuild carefully.\n\n## Human Guardrails\n\n- Verify.\n\n## Wishlist And Progress\n\n- [ ] W0003 | P2 | Add remote control | QUEUED added=now\n- [x] W0001 | P1 | Set up copies | DONE stable=abc1234\n\n## Human Notes\n\nKeep it legible.`);
@@ -65,6 +69,52 @@ test("D175 keeps explicit authority gates hard and active owners waiting", () =>
   }).category, reciprocalGateTaxonomy.autoRecoverablePrerequisite);
   assert.equal(classifyReciprocalGate({ state: { phase: "working", activeRole: "A" } }).category, reciprocalGateTaxonomy.waitingNotBlocked);
   assert.equal(classifyReciprocalGate({ reason: "endpoint timeout", attemptCount: 3 }).code, "repeated-genuine-blocker");
+});
+
+test("D177 loads canonical taxonomy fixtures and classifies machine pauses distinctly from human pauses", async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), "reciprocal-taxonomy-"));
+  try {
+    const file = path.join(dir, "gate-taxonomy.json");
+    await writeFile(file, JSON.stringify({
+      version: 1,
+      categories: {
+        autoRecoverablePrerequisite: "fixture-auto",
+        hardBlocked: "fixture-hard",
+        hardHumanGate: "fixture-human",
+        waitingNotBlocked: "fixture-wait",
+      },
+      codes: {
+        idleSupervisorDispatch: "fixture-idle",
+        humanAuthorityRequired: "fixture-authority",
+        explicitHumanPause: "fixture-human-pause",
+        progressWait: "fixture-progress",
+        endpointUnavailable: "fixture-endpoint",
+        leaseHeld: "fixture-lease",
+        repeatedGenuineBlocker: "fixture-repeat",
+        recoverPausedIdlePrerequisite: "fixture-recover",
+        sourceReconciliationPending: "fixture-source",
+      },
+      pauseOrigins: { human: "human", machine: "machine", unknown: "unknown" },
+      retry: { baseSeconds: 1, maxSeconds: 2, escalateAfterIdenticalAttempts: 2 },
+    }), "utf8");
+    const taxonomy = loadReciprocalTaxonomy(file);
+    assert.equal(taxonomy.hardBlocked, "fixture-hard");
+    assert.equal(taxonomy.codes.repeatedGenuineBlocker, "fixture-repeat");
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+
+  assert.deepEqual(classifyReciprocalGate({
+    state: { phase: "paused", pauseOrigin: "machine", pauseReasonCode: "repeated-genuine-blocker", resumeCount: 3 },
+  }), {
+    category: reciprocalGateTaxonomy.hardBlocked,
+    code: reciprocalGateTaxonomy.codes.repeatedGenuineBlocker,
+    retryable: false,
+    nextAction: "inspect-checkpoint-before-diagnostic-retry",
+  });
+  assert.equal(classifyReciprocalGate({
+    state: { phase: "paused", pauseOrigin: "human", lastSummary: "human paused at checkpoint" },
+  }).code, reciprocalGateTaxonomy.codes.explicitHumanPause);
 });
 
 test("builds an auditable rollback plan for a failed candidate", () => {
