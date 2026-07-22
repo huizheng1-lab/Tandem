@@ -209,6 +209,34 @@ describeWindows("reciprocal continuation supervisor", () => {
     await expect(readFile(path.join(relay, "control", "source-reconciliation-pending.json"), "utf8")).rejects.toThrow();
   }, 30_000);
 
+  it("does not reconcile again when stable already contains the source head", async () => {
+    const { repo, relay } = await fixture();
+    await execa("git", ["config", "user.email", "supervisor@example.test"], { cwd: repo });
+    await execa("git", ["config", "user.name", "Supervisor Test"], { cwd: repo });
+    await writeFile(path.join(repo, "README.md"), "source\n", "utf8");
+    await execa("git", ["add", "README.md"], { cwd: repo });
+    await execa("git", ["commit", "-m", "source"], { cwd: repo });
+    const source = (await execa("git", ["rev-parse", "HEAD"], { cwd: repo })).stdout.trim();
+    await writeFile(path.join(repo, "STABLE.md"), "relay descendant\n", "utf8");
+    await execa("git", ["add", "STABLE.md"], { cwd: repo });
+    await execa("git", ["commit", "-m", "stable descendant"], { cwd: repo });
+    const stable = (await execa("git", ["rev-parse", "HEAD"], { cwd: repo })).stdout.trim();
+    await execa("git", ["reset", "--hard", source], { cwd: repo });
+    await writeFile(path.join(repo, ".git", "tandem-relay", "state.json"), JSON.stringify({
+      schemaVersion: 2,
+      phase: "idle",
+      activeRole: null,
+      nextRole: "A",
+      stableCommit: stable,
+      candidateCommit: null,
+      rollbackCommit: null,
+    }), "utf8");
+
+    const result = await supervisor(repo, relay);
+    expect(result.actions).toEqual([]);
+    await expect(readFile(path.join(relay, "control", "source-reconciliation-pending.json"), "utf8")).rejects.toThrow();
+  }, 30_000);
+
   it("continues a PLAN_APPROVED epic before planning a lower-priority queued item", async () => {
     const { repo, relay, state } = await fixture();
     await writeFile(path.join(relay, "control", "WISHLIST.md"), [

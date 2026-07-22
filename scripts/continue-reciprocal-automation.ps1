@@ -278,9 +278,21 @@ function Get-GitText([string]$Path, [string[]]$Arguments) {
     }
 }
 
+function Test-GitAncestor([string]$Path, [string]$Ancestor, [string]$Descendant) {
+    if (-not $Ancestor -or -not $Descendant) { return $false }
+    $oldErrorAction = $ErrorActionPreference
+    try {
+        $ErrorActionPreference = "Continue"
+        & git -C $Path merge-base --is-ancestor $Ancestor $Descendant 2>$null
+        return $LASTEXITCODE -eq 0
+    } finally {
+        $ErrorActionPreference = $oldErrorAction
+    }
+}
+
 function Update-SourceReconciliationPrerequisite([object]$RelayState) {
     $masterHead = Get-GitText $adminRepo @("rev-parse", "master")
-    if (-not $masterHead -or -not $RelayState.stableCommit -or $masterHead -eq [string]$RelayState.stableCommit) {
+    if (-not $masterHead -or -not $RelayState.stableCommit -or $masterHead -eq [string]$RelayState.stableCommit -or (Test-GitAncestor $adminRepo $masterHead ([string]$RelayState.stableCommit))) {
         Remove-Item -LiteralPath $sourceReconciliationPendingPath -Force -ErrorAction SilentlyContinue
         return $null
     }
