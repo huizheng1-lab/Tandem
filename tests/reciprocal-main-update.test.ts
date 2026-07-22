@@ -224,6 +224,36 @@ describe("reciprocal main update transaction recovery", () => {
     }
   }, 60_000);
 
+  windowsIt("resumes the exact relay pause created by an interrupted automatic main update", async () => {
+    const fx = await makeFixture();
+    try {
+      await fx.advanceStable("stable automatic pause recovery");
+      const statePath = path.join(fx.relayDir, "state.json");
+      const state = JSON.parse(await readFile(statePath, "utf8"));
+      Object.assign(state, {
+        phase: "idle",
+        pausedFromPhase: null,
+        pauseOrigin: null,
+        pauseReasonCode: null,
+        lastSummary: "ready",
+      });
+      await writeJson(statePath, state);
+
+      const failed = await fx.run("fault after automatic pause", { TANDEM_MAIN_UPDATE_FAULT_STAGE: "after-push" });
+      expect(failed.result.exitCode).not.toBe(0);
+      const transaction = JSON.parse(await readFile(path.join(fx.relayDir, "main-update-transaction.json"), "utf8"));
+      expect(transaction).toMatchObject({ stage: "pushed-not-synced", resumeRequired: true });
+      expect(JSON.parse(await readFile(statePath, "utf8"))).toMatchObject({ phase: "paused", pauseOrigin: "human", pauseReasonCode: "explicit-human-pause" });
+
+      const resumed = await fx.run("resume exact automatic pause");
+      expect(resumed.result.exitCode, resumed.text).toBe(0);
+      expect(resumed.parsed).toMatchObject({ ok: true, resumedTransaction: true, relayResumed: true });
+      expect(JSON.parse(await readFile(statePath, "utf8"))).toMatchObject({ phase: "idle", activeRole: null, stableCommit: transaction.masterSha });
+    } finally {
+      await rm(fx.root, { recursive: true, force: true });
+    }
+  }, 60_000);
+
   windowsIt("D180 isolated merge conflict leaves refs tags and transaction state unchanged", async () => {
     const fx = await makeFixture();
     try {

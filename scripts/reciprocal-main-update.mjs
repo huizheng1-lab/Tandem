@@ -88,6 +88,17 @@ async function resumePushedSync(transaction, adminDirtyBefore) {
   await relay("ReconcileMain", ["-NewStableCommit", transaction.masterSha, "-Summary", `Resumed ${transaction.tag}: ${comment}`]);
   maybeFault("after-relay");
   result.branchesResynced = true;
+  if (transaction.resumeRequired) {
+    const relayState = await relay("Status");
+    if (relayState.phase === "paused" && relayState.pausedFromPhase === "idle" && relayState.pauseOrigin === "human" && relayState.pauseReasonCode === "explicit-human-pause" && !relayState.activeRole && !relayState.candidateCommit && relayState.stableCommit === transaction.masterSha) {
+      await relay("Resume", ["-Summary", `Completed ${transaction.tag}; reciprocal branches synchronized with master.`]);
+      result.relayResumed = true;
+    } else if (relayState.phase === "idle" && !relayState.activeRole && !relayState.candidateCommit && relayState.stableCommit === transaction.masterSha) {
+      result.relayResumed = true;
+    } else {
+      throw new Error(`Cannot resume ${transaction.tag}: relay no longer matches its durable main-update pause.`);
+    }
+  }
   result.adminDirtyAfter = await dirtyAdminSnapshot();
   assertSnapshotsEqual(adminDirtyBefore, result.adminDirtyAfter);
   await updateLocalMasterIfClean(transaction.beforeMaster, transaction.masterSha, adminDirtyBefore);
@@ -382,6 +393,7 @@ try {
     beforeMaster,
     masterSha: result.masterSha,
     stableSha,
+    resumeRequired: result.pausedByFlow,
     createdAt: new Date().toISOString(),
   });
   } finally {
@@ -417,6 +429,7 @@ try {
     masterSha: result.masterSha,
     stableSha,
     tag: result.tag,
+    resumeRequired: result.pausedByFlow,
     createdAt: new Date().toISOString(),
   });
 
@@ -434,6 +447,7 @@ try {
     masterSha: result.masterSha,
     stableSha,
     tag: result.tag,
+    resumeRequired: result.pausedByFlow,
     createdAt: new Date().toISOString(),
   });
   maybeFault("after-push");
