@@ -1,0 +1,128 @@
+Round: D173
+Status: DONE_WITH_GUARDED_RECONCILIATION_BLOCKER
+
+Tracked commits:
+- D173-1 dashboard source/deploy commit: 3859fbbb16c02f20609d6cf5dd44327332cd35bc
+
+Canonical dashboard source:
+- Location: dashboard-source/reciprocal-control-panel
+- Managed manifest: dashboard-source/reciprocal-control-panel/manifest.json
+- Managed file count: 16
+- Managed files:
+  - approval-flow.e2e.mjs
+  - dashboard-watchdog.ps1
+  - Launch Reciprocal Control Panel.bat
+  - lib.mjs
+  - lib.nodecheck.mjs
+  - public/app.js
+  - public/index.html
+  - public/mobile.css
+  - public/styles.css
+  - public/update-gate.css
+  - README.md
+  - register-dashboard-watchdog-task.ps1
+  - server.mjs
+  - start-dashboard.ps1
+  - stop-reciprocal-tandem.ps1
+  - update-model-config.ps1
+
+Deployment script:
+- scripts/deploy-reciprocal-dashboard.ps1
+- Dry-run mode validates source manifest and reports target drift without mutation.
+- Verify-only mode proves live target hashes match the manifest.
+- Deploy mode stages managed files, backs up replaced managed files, copies only manifest files,
+  verifies live hashes, restarts through start-dashboard.ps1/watchdog, and checks /api/status.
+- It does not delete unmanaged runtime data, historical logs, state, tokens, homes, or candidate data.
+
+Deploy dry-run proof:
+- Command: powershell -NoProfile -ExecutionPolicy Bypass -File scripts\deploy-reciprocal-dashboard.ps1 -DryRun
+- Result: ok=true, managedFileCount=16.
+- Planned update before deploy: approval-flow.e2e.mjs only.
+
+Deploy result:
+- Command: powershell -NoProfile -ExecutionPolicy Bypass -File scripts\deploy-reciprocal-dashboard.ps1
+- Result: ok=true, restarted=true, managedFileCount=16.
+- Staging root: C:\Users\huizh\Apps\Tandem Reciprocal\dashboard\.deploy-staging\20260722T015723Z
+- Backup root: C:\Users\huizh\Apps\Tandem Reciprocal\dashboard\.deploy-backups\20260722T015723Z
+- Post-deploy manifest verification: ok=true, all 16 managed files matched.
+- Live status from deploy: phase=idle, activeRole=null,
+  stableCommit=ead38ad2692d2a5641ce3cdaed684ab75ebf2db1.
+
+Post-deploy verification:
+- Verify-only command passed: ok=true, no planned updates.
+- Live GET http://127.0.0.1:4782/api/status passed:
+  phase=idle, activeRole=null, stableCommit=ead38ad2692d2a5641ce3cdaed684ab75ebf2db1.
+- Live dashboard process proof:
+  PID 27028 command line was
+  "C:\Program Files\nodejs\node.exe" "C:\Users\huizh\Apps\Tandem Reciprocal\dashboard\server.mjs" --port=4782
+  and commandContainsTestHarness=false.
+- Scheduled task action did not contain TANDEM_DASHBOARD_TEST_HARNESS:
+  taskContainsTestHarness=false.
+- TANDEM_DASHBOARD_TEST_HARNESS=1 remains test-only and inert in normal operation.
+- Canonical post-deploy D172 harness passed using isolated fixtures:
+  node --test dashboard-source\reciprocal-control-panel\approval-flow.e2e.mjs:
+  2 tests passed.
+
+Guarded reconciliation attempt:
+- Command:
+  node scripts\reciprocal-main-update.mjs --repo "C:\Users\huizh\Apps\HZ code" --relay-root "C:\Users\huizh\Apps\Tandem Reciprocal" --comment "D173 durable dashboard source and approval-controller relay fix reconciliation"
+- Result: blocked during preconditions before relay pause, push, branch sync, or runtime action.
+- Exact blocker:
+  Reciprocal worktrees must be clean before main update; A=clean, B=?? .build-report.ps1
+  ?? .capture-passive-error.ps1
+  ?? .claim-round2-capture.ps1
+  ?? .passive-test-capture.ps1
+  ?? .read-captures.ps1
+  ?? .run-focused-test.ps1
+  ?? .run-typecheck.ps1
+  ?? .show-captures.ps1.
+- State-changing integration result:
+  pausedByFlow=false, masterUpdated=false, pushed=false, branchesResynced=false, relayResumed=false.
+- Required human action to unblock:
+  decide whether to remove, commit, or otherwise clear the unrelated untracked helper scripts in
+  C:\Users\huizh\Apps\Tandem Reciprocal\worktrees\copy-b, then rerun the guarded main-update workflow.
+- No reset, stash, force-push, branch rewrite, or untracked-copy workaround was used.
+
+Worktree/relay/runtime SHAs before deploy/reconciliation:
+- Admin master after D173-1: 3859fbbb16c02f20609d6cf5dd44327332cd35bc.
+- Relay phase=idle, activeRole=null, nextRole=A,
+  stableCommit=ead38ad2692d2a5641ce3cdaed684ab75ebf2db1.
+- copy-a HEAD: ead38ad2692d2a5641ce3cdaed684ab75ebf2db1.
+- copy-b HEAD: ead38ad2692d2a5641ce3cdaed684ab75ebf2db1.
+- Executor A BUILD_INFO sourceSha: ead38ad2692d2a5641ce3cdaed684ab75ebf2db1.
+- Executor B BUILD_INFO sourceSha: ead38ad2692d2a5641ce3cdaed684ab75ebf2db1.
+
+Worktree/relay/runtime SHAs after deploy/reconciliation attempt:
+- Relay phase=idle, activeRole=null, nextRole=A,
+  stableCommit=ead38ad2692d2a5641ce3cdaed684ab75ebf2db1.
+- copy-a HEAD: ead38ad2692d2a5641ce3cdaed684ab75ebf2db1; A_contains_D171=no.
+- copy-b HEAD: ead38ad2692d2a5641ce3cdaed684ab75ebf2db1; B_contains_D171=no.
+- Runtime BUILD_INFO remained ead38ad for both executors.
+
+Runtime boundary:
+- No live executor runtime rebuild, copy, restart, or promotion was performed.
+- promote-reciprocal-runtime.ps1 was not invoked during D173.
+- A runtime upgrade remains a human-visible approval step after source reconciliation is unblocked.
+
+Checks:
+- node --check dashboard-source\reciprocal-control-panel\server.mjs: PASS
+- node --check dashboard-source\reciprocal-control-panel\lib.mjs: PASS
+- node --test dashboard-source\reciprocal-control-panel\lib.nodecheck.mjs: PASS, 12 tests
+- node --test dashboard-source\reciprocal-control-panel\approval-flow.e2e.mjs: PASS, 2 tests
+- deploy dry-run: PASS
+- deploy real + post-deploy hash verification: PASS
+- deploy verify-only: PASS
+- live /api/status after supported reload: PASS
+- npm run typecheck: PASS
+- npm test:
+  - first run: FAIL, one 5s timeout in tests/reciprocal-direction.test.ts
+  - second run: FAIL, two 5s timeouts in tests/reciprocal-direction.test.ts and tests/reciprocal-relay.test.ts
+  - npx vitest run --testTimeout 30000: PASS, 494 passed, 1 skipped
+  - final exact npm test rerun: PASS, 494 passed, 1 skipped
+- git diff --check: PASS
+
+Scope confirmation:
+- W0026 remains DONE at ead38ad2692d2a5641ce3cdaed684ab75ebf2db1.
+- W0027 remains QUEUED and was not claimed or implemented.
+- Unrelated scripts/setup-reciprocal-tandem.ps1 remained untouched and unstaged.
+- Existing untracked handoff docs and unrelated user files were left untouched.
