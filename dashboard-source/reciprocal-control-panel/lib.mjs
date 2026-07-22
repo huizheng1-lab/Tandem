@@ -76,30 +76,26 @@ export const reciprocalGateTaxonomy = Object.freeze({
   waitingNotBlocked: "waiting-not-blocked",
 });
 
-const hardAuthorityPattern = /\b(human pause|explicit pause|cancel|reject|credential|credentials|authentication|pairing|permission|sandbox|paid|payment|publish|publication|destructive|force-push|runtime promotion|promote executor|replace runtime|live runtime|unresolved conflict)\b/i;
+const hardAuthorityPattern = /\b(human pause|explicit pause|cancel|reject|runtime promotion|promote executor|replace runtime|live runtime|unresolved conflict)\b/i;
 const autoRecoverablePattern = /\b(too broad|broad|architectural|ambiguous|missing epic|epic metadata|missing plan|no safe item|paused-from-idle|paused from idle|source branch(?:es)? stale|stale source|dirty admin|dirty worktree|endpoint|file-lock|file lock|timeout|startup)\b/i;
+const explicitAuthorityKinds = new Set(["credentials", "authentication", "pairing", "permission", "sandbox", "destructive", "payment", "publication", "runtime"]);
 
 export function classifyReciprocalGate({ reason = "", state = {}, item = null, attemptCount = 0 } = {}) {
-  const text = [reason, state?.lastSummary, item?.text, item?.detail].filter(Boolean).join(" ");
-  if (state?.humanPaused === true || hardAuthorityPattern.test(text)) {
+  const metadata = detailMetadata(item?.detail);
+  const explicitAuthority = metadata.authority && explicitAuthorityKinds.has(String(metadata.authority).toLowerCase());
+  const text = [reason, state?.lastSummary].filter(Boolean).join(" ");
+  if (state?.humanPaused === true || explicitAuthority || hardAuthorityPattern.test(text)) {
     return {
       category: reciprocalGateTaxonomy.hardHumanGate,
-      code: "human-authority-required",
+      code: state?.humanPaused === true ? "explicit-human-pause" : "human-authority-required",
       retryable: false,
       nextAction: "wait-for-human-authority",
-    };
-  }
-  if (
-    (state?.phase === "paused" && state?.pausedFromPhase === "idle" && autoRecoverablePattern.test(text))
-    || (item?.status === "QUEUED" && !detailMetadata(item.detail).epic)
-    || autoRecoverablePattern.test(text)
-  ) {
-    const escalates = Number(attemptCount) >= 3;
-    return {
-      category: escalates ? reciprocalGateTaxonomy.hardHumanGate : reciprocalGateTaxonomy.autoRecoverablePrerequisite,
-      code: escalates ? "repeated-genuine-blocker" : "auto-recoverable-prerequisite",
-      retryable: !escalates,
-      nextAction: escalates ? "surface-actionable-blocker" : "normalize-plan-reconcile-or-retry",
+      authority: explicitAuthority ? {
+        kind: metadata.authority,
+        action: metadata.action || null,
+        checkpoint: metadata.checkpoint || null,
+        resume: metadata.resume || null,
+      } : null,
     };
   }
   if (["working", "passive-testing", "validating", "a-upgrade-pending"].includes(state?.phase) || state?.activeRole) {
@@ -108,6 +104,19 @@ export function classifyReciprocalGate({ reason = "", state = {}, item = null, a
       code: "progress-wait",
       retryable: false,
       nextAction: "wait-for-current-owner-or-review",
+    };
+  }
+  if (
+    (state?.phase === "paused" && state?.pausedFromPhase === "idle" && autoRecoverablePattern.test(text))
+    || (item?.status === "QUEUED" && !metadata.epic)
+    || autoRecoverablePattern.test(text)
+  ) {
+    const escalates = Number(attemptCount) >= 3;
+    return {
+      category: escalates ? reciprocalGateTaxonomy.hardHumanGate : reciprocalGateTaxonomy.autoRecoverablePrerequisite,
+      code: escalates ? "repeated-genuine-blocker" : "auto-recoverable-prerequisite",
+      retryable: !escalates,
+      nextAction: escalates ? "surface-actionable-blocker" : "normalize-plan-reconcile-or-retry",
     };
   }
   return {

@@ -1,0 +1,23 @@
+{
+  "version": 1,
+  "categories": {
+    "autoRecoverablePrerequisite": "auto-recoverable-prerequisite",
+    "hardHumanGate": "hard-human-gate",
+    "waitingNotBlocked": "waiting-not-blocked"
+  },
+  "codes": {
+    "idleSupervisorDispatch": "idle-supervisor-dispatch",
+    "humanAuthorityRequired": "human-authority-required",
+    "explicitHumanPause": "explicit-human-pause",
+    "progressWait": "progress-wait",
+    "endpointUnavailable": "endpoint-unavailable",
+    "leaseHeld": "lease-held",
+    "repeatedGenuineBlocker": "repeated-genuine-blocker",
+    "recoverPausedIdlePrerequisite": "recover-paused-idle-prerequisite"
+  },
+  "retry": {
+    "baseSeconds": 30,
+    "maxSeconds": 300,
+    "escalateAfterIdenticalAttempts": 3
+  }
+}

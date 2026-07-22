@@ -158,36 +158,197 @@ $copyB = Join-Path $relayRootFull "worktrees\copy-b"
 $statePath = Join-Path $adminRepo ".git\tandem-relay\state.json"
 $relayScript = Join-Path $PSScriptRoot "reciprocal-relay.ps1"
 $leasePath = Join-Path $relayRootFull "control\continuation-supervisor.lock.json"
+$supervisorStatePath = Join-Path $relayRootFull "control\continuation-supervisor-state.json"
+$auditPath = Join-Path $relayRootFull "control\CONTROL_PANEL_AUDIT.jsonl"
+$leaseToken = [guid]::NewGuid().ToString("N")
+$leaseTtlSeconds = 120
 
-function Enter-Lease([string]$Path) {
-    New-Item -ItemType Directory -Path (Split-Path $Path -Parent) -Force | Out-Null
-    $lease = [ordered]@{ pid = $PID; startedAt = (Get-Date).ToUniversalTime().ToString("o") } | ConvertTo-Json -Compress
+function Get-ProcessStartedAtUtc([int]$ProcessId) {
     try {
-        $stream = [IO.File]::Open($Path, [IO.FileMode]::CreateNew, [IO.FileAccess]::Write, [IO.FileShare]::None)
-        try {
-            $bytes = [Text.UTF8Encoding]::new($false).GetBytes($lease)
-            $stream.Write($bytes, 0, $bytes.Length)
-        } finally {
-            $stream.Dispose()
-        }
-        return $true
+        $process = Get-Process -Id $ProcessId -ErrorAction Stop
+        return $process.StartTime.ToUniversalTime().ToString("o")
     } catch {
-        return $false
+        return $null
     }
 }
 
-function Exit-Lease([string]$Path) {
-    Remove-Item -LiteralPath $Path -Force -ErrorAction SilentlyContinue
+function Write-Audit([string]$Action, [hashtable]$Detail) {
+    $entry = [ordered]@{ at = (Get-Date).ToUniversalTime().ToString("o"); action = $Action }
+    foreach ($key in $Detail.Keys) { $entry[$key] = $Detail[$key] }
+    [IO.File]::AppendAllText($auditPath, (($entry | ConvertTo-Json -Compress -Depth 10) + [Environment]::NewLine), [Text.UTF8Encoding]::new($false))
 }
 
+function Read-SupervisorState([string]$Path) {
+    $state = Read-JsonFile $Path
+    if ($state) { return $state }
+    return [pscustomobject]@{
+        schemaVersion = 1
+        lastRun = $null
+        displayState = "unknown"
+        blocker = $null
+        transitions = @()
+    }
+}
+
+function Save-SupervisorState([string]$Path, [object]$State) {
+    $State | ConvertTo-Json -Depth 20 | Set-Content -LiteralPath $Path -Encoding UTF8
+}
+
+function Get-Fingerprint([string]$Category, [string]$Code, [string]$Message) {
+    $normalized = (($Message -replace '\s+', ' ').Trim().ToLowerInvariant())
+    if ($normalized.Length -gt 220) { $normalized = $normalized.Substring(0, 220) }
+    return "$Category|$Code|$normalized"
+}
+
+function Update-BlockerState([object]$SupervisorState, [string]$Category, [string]$Code, [string]$Message) {
+    $now = (Get-Date).ToUniversalTime()
+    $fingerprint = Get-Fingerprint $Category $Code $Message
+    $previous = $SupervisorState.blocker
+    $attempt = if ($previous -and $previous.fingerprint -eq $fingerprint) { [int]$previous.attemptCount + 1 } else { 1 }
+    $backoffSeconds = [Math]::Min(300, 30 * [Math]::Pow(2, [Math]::Max(0, $attempt - 1)))
+    $SupervisorState.blocker = [pscustomobject]@{
+        category = $Category
+        code = $Code
+        fingerprint = $fingerprint
+        attemptCount = $attempt
+        lastAttemptAt = $now.ToString("o")
+        nextAttemptAt = $now.AddSeconds($backoffSeconds).ToString("o")
+        backoffSeconds = [int]$backoffSeconds
+        nextAction = if ($attempt -ge 3) { "surface-actionable-blocker" } else { "retry-prerequisite" }
+        message = $Message
+    }
+}
+
+function Reset-BlockerState([object]$SupervisorState) {
+    $SupervisorState.blocker = $null
+}
+
+function Test-LiveLease([object]$Lease) {
+    if (-not $Lease -or -not $Lease.pid -or -not $Lease.processStartedAtUtc -or -not $Lease.expiresAtUtc) { return $false }
+    $expires = [datetime]::Parse([string]$Lease.expiresAtUtc).ToUniversalTime()
+    if ($expires -lt (Get-Date).ToUniversalTime()) { return $false }
+    $actualStart = Get-ProcessStartedAtUtc ([int]$Lease.pid)
+    return ($actualStart -and $actualStart -eq [string]$Lease.processStartedAtUtc)
+}
+
+function Enter-Lease([string]$Path) {
+    New-Item -ItemType Directory -Path (Split-Path $Path -Parent) -Force | Out-Null
+    $now = (Get-Date).ToUniversalTime()
+    $lease = [ordered]@{
+        token = $leaseToken
+        pid = $PID
+        processStartedAtUtc = Get-ProcessStartedAtUtc $PID
+        acquiredAtUtc = $now.ToString("o")
+        heartbeatAtUtc = $now.ToString("o")
+        expiresAtUtc = $now.AddSeconds($leaseTtlSeconds).ToString("o")
+    } | ConvertTo-Json -Compress
+    for ($attempt = 0; $attempt -lt 2; $attempt++) {
+        try {
+            $stream = [IO.File]::Open($Path, [IO.FileMode]::CreateNew, [IO.FileAccess]::Write, [IO.FileShare]::None)
+            try {
+                $bytes = [Text.UTF8Encoding]::new($false).GetBytes($lease)
+                $stream.Write($bytes, 0, $bytes.Length)
+            } finally {
+                $stream.Dispose()
+            }
+            return $true
+        } catch {
+            $existing = Read-JsonFile $Path
+            if (Test-LiveLease $existing) { return $false }
+            Remove-Item -LiteralPath $Path -Force -ErrorAction SilentlyContinue
+        }
+    }
+    return $false
+}
+
+function Update-LeaseHeartbeat([string]$Path) {
+    $lease = Read-JsonFile $Path
+    if (-not $lease -or $lease.token -ne $leaseToken) { return }
+    $now = (Get-Date).ToUniversalTime()
+    $lease.heartbeatAtUtc = $now.ToString("o")
+    $lease.expiresAtUtc = $now.AddSeconds($leaseTtlSeconds).ToString("o")
+    $lease | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $Path -Encoding UTF8
+}
+
+function Exit-Lease([string]$Path) {
+    try {
+        $lease = Read-JsonFile $Path
+        if ($lease -and $lease.token -eq $leaseToken) {
+            Remove-Item -LiteralPath $Path -Force -ErrorAction SilentlyContinue
+        }
+    } catch {
+        # Token-mismatched cleanup must not remove another owner's lease.
+    }
+}
+
+function Set-DisplayState([object]$RelayState, [object]$SupervisorState) {
+    if ($RelayState.phase -eq "working" -and $RelayState.activeRole) { return "working" }
+    if ($RelayState.phase -eq "validating" -or $RelayState.phase -eq "passive-testing") { return "testing" }
+    if ($RelayState.phase -eq "a-upgrade-pending") { return "waiting for review" }
+    if ($RelayState.phase -eq "paused" -and $RelayState.pausedFromPhase -ne "idle") { return "human paused" }
+    if ($SupervisorState.blocker -and [int]$SupervisorState.blocker.attemptCount -ge 3) { return "hard blocked" }
+    if ($SupervisorState.blocker) { return "retrying prerequisite" }
+    $board = Get-HighestPriorityQueuedItem (Get-SharedDirectionPath $relayRootFull)
+    if ($board) { return "planning" }
+    return [string]$RelayState.phase
+}
+
+function Add-Transition([object]$SupervisorState, [object]$Action) {
+    $existing = @($SupervisorState.transitions)
+    $SupervisorState.transitions = @($existing + $Action | Select-Object -Last 40)
+}
+
+function Invoke-TrackedPrompt([object]$SupervisorState, [string]$Kind, [object]$Continuation) {
+    $promptStart = (Get-Date).ToUniversalTime().ToString("o")
+    try {
+        $prompt = Invoke-ExecutorPrompt $relayRootFull $copyB $Continuation
+        Reset-BlockerState $SupervisorState
+        return [pscustomobject]@{
+            kind = $Kind
+            category = "auto-recoverable-prerequisite"
+            code = "idle-supervisor-dispatch"
+            startedAt = $promptStart
+            endedAt = (Get-Date).ToUniversalTime().ToString("o")
+            wishlistId = $Continuation.wishlistId
+            nextStep = $Continuation.nextStep
+            accepted = [bool]$prompt.ok
+            projectDir = $prompt.projectDir
+        }
+    } catch {
+        $message = $_.Exception.Message
+        Update-BlockerState $SupervisorState "auto-recoverable-prerequisite" "endpoint-unavailable" $message
+        return [pscustomobject]@{
+            kind = "$Kind-unavailable"
+            category = "auto-recoverable-prerequisite"
+            code = "endpoint-unavailable"
+            startedAt = $promptStart
+            endedAt = (Get-Date).ToUniversalTime().ToString("o")
+            wishlistId = $Continuation.wishlistId
+            nextStep = $Continuation.nextStep
+            error = $message
+            attemptCount = $SupervisorState.blocker.attemptCount
+            nextAttemptAt = $SupervisorState.blocker.nextAttemptAt
+        }
+    }
+}
+
+$supervisorState = Read-SupervisorState $supervisorStatePath
 if (-not (Enter-Lease $leasePath)) {
+    Update-BlockerState $supervisorState "waiting-not-blocked" "lease-held" "Another live continuation supervisor owns the lease."
+    $supervisorState.lastRun = [pscustomobject]@{
+        startedAt = (Get-Date).ToUniversalTime().ToString("o")
+        endedAt = (Get-Date).ToUniversalTime().ToString("o")
+        transitionsUsed = 0
+    }
+    $supervisorState.displayState = "retrying prerequisite"
+    Save-SupervisorState $supervisorStatePath $supervisorState
     [pscustomobject]@{
         ok = $true
         startedAt = (Get-Date).ToUniversalTime().ToString("o")
         endedAt = (Get-Date).ToUniversalTime().ToString("o")
         maxTransitions = $MaxTransitions
         transitionsUsed = 0
-        actions = @([pscustomobject]@{ kind = "lease-held"; retryable = $true })
+        actions = @([pscustomobject]@{ kind = "lease-held"; category = "waiting-not-blocked"; code = "lease-held"; retryable = $true; blocker = $supervisorState.blocker })
     } | ConvertTo-Json -Depth 8
     exit 0
 }
@@ -196,6 +357,7 @@ $actions = @()
 $transitionCount = 0
 $startedAt = (Get-Date).ToUniversalTime().ToString("o")
 try {
+Update-LeaseHeartbeat $leasePath
 $state = Read-JsonFile $statePath
 if (-not $state) { throw "Relay state is missing at $statePath." }
 
@@ -231,28 +393,7 @@ if (($state.phase -eq "passive-testing" -or $state.candidateCommit) -and $transi
     if ($passive.outcome -eq "PASSIVE_ACCEPTED" -and $continuation -and $continuation.available -and -not $continuation.requiresHumanGate) {
         if ($transitionCount -lt $MaxTransitions) {
             $transitionCount += 1
-            $promptStart = (Get-Date).ToUniversalTime().ToString("o")
-            try {
-                $prompt = Invoke-ExecutorPrompt $relayRootFull $copyB $continuation
-                $actions += [pscustomobject]@{
-                    kind = "executor-prompt"
-                    startedAt = $promptStart
-                    endedAt = (Get-Date).ToUniversalTime().ToString("o")
-                    wishlistId = $continuation.wishlistId
-                    nextStep = $continuation.nextStep
-                    accepted = [bool]$prompt.ok
-                    projectDir = $prompt.projectDir
-                }
-            } catch {
-                $actions += [pscustomobject]@{
-                    kind = "executor-prompt-unavailable"
-                    startedAt = $promptStart
-                    endedAt = (Get-Date).ToUniversalTime().ToString("o")
-                    wishlistId = $continuation.wishlistId
-                    nextStep = $continuation.nextStep
-                    error = $_.Exception.Message
-                }
-            }
+            $actions += Invoke-TrackedPrompt $supervisorState "executor-prompt" $continuation
         } else {
             $actions += [pscustomobject]@{
                 kind = "chain-boundary"
@@ -285,28 +426,7 @@ if ($state.phase -eq "a-upgrade-pending" -and -not $state.candidateCommit -and $
         }
         if ($transitionCount -lt $MaxTransitions) {
             $transitionCount += 1
-            $promptStart = (Get-Date).ToUniversalTime().ToString("o")
-            try {
-                $prompt = Invoke-ExecutorPrompt $relayRootFull $copyB $boardContinuation
-                $actions += [pscustomobject]@{
-                    kind = "executor-prompt"
-                    startedAt = $promptStart
-                    endedAt = (Get-Date).ToUniversalTime().ToString("o")
-                    wishlistId = $boardContinuation.wishlistId
-                    nextStep = $boardContinuation.nextStep
-                    accepted = [bool]$prompt.ok
-                    projectDir = $prompt.projectDir
-                }
-            } catch {
-                $actions += [pscustomobject]@{
-                    kind = "executor-prompt-unavailable"
-                    startedAt = $promptStart
-                    endedAt = (Get-Date).ToUniversalTime().ToString("o")
-                    wishlistId = $boardContinuation.wishlistId
-                    nextStep = $boardContinuation.nextStep
-                    error = $_.Exception.Message
-                }
-            }
+            $actions += Invoke-TrackedPrompt $supervisorState "executor-prompt" $boardContinuation
         }
     }
 }
@@ -339,32 +459,21 @@ if ($state.phase -eq "idle" -and -not $state.activeRole -and -not $state.candida
     }
     if ($idleContinuation) {
         $transitionCount += 1
-        $promptStart = (Get-Date).ToUniversalTime().ToString("o")
-        try {
-            $prompt = Invoke-ExecutorPrompt $relayRootFull $copyB $idleContinuation
-            $actions += [pscustomobject]@{
-                kind = "idle-continuation-prompt"
-                startedAt = $promptStart
-                endedAt = (Get-Date).ToUniversalTime().ToString("o")
-                wishlistId = $idleContinuation.wishlistId
-                nextStep = $idleContinuation.nextStep
-                accepted = [bool]$prompt.ok
-                projectDir = $prompt.projectDir
-            }
-        } catch {
-            $actions += [pscustomobject]@{
-                kind = "idle-continuation-prompt-unavailable"
-                startedAt = $promptStart
-                endedAt = (Get-Date).ToUniversalTime().ToString("o")
-                wishlistId = $idleContinuation.wishlistId
-                nextStep = $idleContinuation.nextStep
-                error = $_.Exception.Message
-            }
-        }
+        $actions += Invoke-TrackedPrompt $supervisorState "idle-continuation-prompt" $idleContinuation
     }
 }
 
 $finalState = Read-JsonFile $statePath
+$supervisorState.lastRun = [pscustomobject]@{
+    startedAt = $startedAt
+    endedAt = (Get-Date).ToUniversalTime().ToString("o")
+    transitionsUsed = $transitionCount
+    finalPhase = $finalState.phase
+    finalActiveRole = $finalState.activeRole
+}
+$supervisorState.displayState = Set-DisplayState $finalState $supervisorState
+foreach ($action in $actions) { Add-Transition $supervisorState $action; Write-Audit "supervisor.transition" @{ kind = $action.kind; code = $action.code; category = $action.category; wishlistId = $action.wishlistId; displayState = $supervisorState.displayState } }
+Save-SupervisorState $supervisorStatePath $supervisorState
 [pscustomobject]@{
     ok = $true
     startedAt = $startedAt
@@ -376,6 +485,7 @@ $finalState = Read-JsonFile $statePath
     finalActiveRole = $finalState.activeRole
     finalStableCommit = $finalState.stableCommit
     finalCandidateCommit = $finalState.candidateCommit
+    supervisor = $supervisorState
 } | ConvertTo-Json -Depth 12
 } finally {
     Exit-Lease $leasePath

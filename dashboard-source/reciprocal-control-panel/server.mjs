@@ -12,6 +12,7 @@ import {
   approvalRemainingActions,
   candidatePreviewArtifactCapabilityStatus,
   capabilityVersion,
+  classifyReciprocalGate,
   detailMetadata,
   parseDirection,
   recoveryPlan,
@@ -30,6 +31,7 @@ const controlPath = path.join(relayRoot, "control", "SHARED_DIRECTION.md");
 const wishlistPath = path.join(relayRoot, "control", "WISHLIST.md");
 const statePath = path.join(repoRoot, ".git", "tandem-relay", "state.json");
 const auditPath = path.join(relayRoot, "control", "CONTROL_PANEL_AUDIT.jsonl");
+const supervisorStatePath = path.join(relayRoot, "control", "continuation-supervisor-state.json");
 const serverLogPath = path.join(relayRoot, "control", "dashboard-server.log");
 const updateReviewPath = path.join(relayRoot, "control", "UPDATE_REVIEWS.md");
 const updateReviewIndexPath = path.join(relayRoot, "control", "UPDATE_REVIEW_INDEX.json");
@@ -57,6 +59,7 @@ const approvalWaitTimeoutMs = Number(process.env.TANDEM_APPROVAL_WAIT_TIMEOUT_MS
 const testHarness = process.env.TANDEM_DASHBOARD_TEST_HARNESS === "1";
 const testCommandLogPath = process.env.TANDEM_DASHBOARD_COMMAND_LOG || "";
 let approvalFlow = null;
+let supervisorTickRunning = false;
 
 function rotateServerLog() {
   try {
@@ -775,10 +778,11 @@ async function getMainVersionStatus(masterHead, stableSha, candidate, runtimeA, 
 }
 
 async function getStatus() {
-  const [state, directionText, wishlistText, a, b, runtimeA, runtimeB, producerRelay, historyText, stableExists, masterHead, updateReviewIndex] = await Promise.all([
+  const [state, directionText, wishlistText, supervisorState, a, b, runtimeA, runtimeB, producerRelay, historyText, stableExists, masterHead, updateReviewIndex] = await Promise.all([
     jsonFile(statePath, {}),
     textFile(controlPath),
     textFile(wishlistPath),
+    jsonFile(supervisorStatePath, {}),
     getWorktree("a"),
     getWorktree("b"),
     getRuntime("A"),
@@ -817,6 +821,16 @@ async function getStatus() {
     return { ...item, effectiveAutonomy, planSteps };
   }));
   direction.nextQueuedItem = direction.items.find((item) => item.status === "QUEUED") || null;
+  const activeItem = direction.items.find((item) => item.status === "IN_PROGRESS" && /\brole=/.test(item.detail || "")) || direction.nextQueuedItem;
+  const supervisorGate = classifyReciprocalGate({
+    state: {
+      ...state,
+      humanPaused: state.phase === "paused" && state.pausedFromPhase !== "idle",
+    },
+    item: activeItem,
+    attemptCount: supervisorState?.blocker?.attemptCount || 0,
+    reason: supervisorState?.blocker?.message || "",
+  });
   candidateUpdate.reviewNote = reviewNoteForRelay(state, direction, candidateUpdate, updateReviewIndex);
   const history = historyText.split(/\r?\n/).filter(Boolean).map((line) => {
     const [sha, short, date, subject] = line.split("\x1f");
@@ -825,6 +839,7 @@ async function getStatus() {
   const health = [
     { label: "Stable recovery ref", ok: stableExists, detail: stableExists ? shortSha(state.stableCommit) : "Missing" },
     { label: "Relay state", ok: Boolean(state.schemaVersion === 2 && !state._readError), detail: state._readError ? `Unavailable: ${state._readError.message}` : (state.phase || "Unavailable") },
+    { label: "Supervisor", ok: supervisorGate.category !== "hard-human-gate" || supervisorGate.code === "human-authority-required" || supervisorGate.code === "explicit-human-pause", detail: `${supervisorState?.displayState || supervisorGate.nextAction}${supervisorState?.blocker?.nextAttemptAt ? `; next ${supervisorState.blocker.nextAttemptAt}` : ""}` },
     {
       label: "Resume circuit breaker",
       ok: Number(state.resumeCount || 0) < Number(state.resumeThreshold || 3),
@@ -850,6 +865,11 @@ async function getStatus() {
     drift: { warnings: driftWarnings, ok: driftWarnings.length === 0 },
     state: { ...state, shortStable: shortSha(state.stableCommit), shortCandidate: shortSha(state.candidateCommit), shortRollback: shortSha(state.rollbackCommit) },
     direction,
+    supervisor: {
+      ...supervisorState,
+      gate: supervisorGate,
+      displayState: supervisorState?.displayState || supervisorGate.nextAction,
+    },
     reciprocalCapabilities: { candidatePreviewArtifactLifecycle: artifactCapability },
     worktrees: { a, b },
     runtimes: { a: runtimeA, b: runtimeB },
@@ -860,6 +880,30 @@ async function getStatus() {
     health,
     recovery: recoveryPlan(state, { a, b }),
   };
+}
+
+async function runSupervisorController(source = "tick") {
+  if (supervisorTickRunning) return { ok: true, skipped: true, reason: "already-running" };
+  supervisorTickRunning = true;
+  try {
+    const result = await runResult("powershell", [
+      "-NoProfile", "-ExecutionPolicy", "Bypass",
+      "-File", path.join(repoRoot, "scripts", "continue-reciprocal-automation.ps1"),
+      "-Workspace", repoRoot,
+      "-RelayRoot", relayRoot,
+      "-MaxTransitions", "3",
+    ], repoRoot);
+    let parsed;
+    try {
+      parsed = JSON.parse(result.ok ? result.stdout : result.stderr || result.stdout);
+    } catch {
+      parsed = { ok: false, error: result.output };
+    }
+    await audit("supervisor.tick", { source, ok: Boolean(result.ok && parsed.ok), transitionsUsed: parsed.transitionsUsed || 0, finalPhase: parsed.finalPhase || null, actions: (parsed.actions || []).map((action) => ({ kind: action.kind, code: action.code || null, wishlistId: action.wishlistId || null })) });
+    return parsed;
+  } finally {
+    supervisorTickRunning = false;
+  }
 }
 
 async function audit(action, detail = {}) {
@@ -1626,21 +1670,9 @@ async function handle(request, response) {
     if (url.pathname === "/api/executor/kickstart") {
       const steps = [];
       try {
-        const supervisor = await runResult("powershell", [
-          "-NoProfile", "-ExecutionPolicy", "Bypass",
-          "-File", path.join(repoRoot, "scripts", "continue-reciprocal-automation.ps1"),
-          "-Workspace", repoRoot,
-          "-RelayRoot", relayRoot,
-          "-MaxTransitions", "3",
-        ], repoRoot);
-        let supervisorResult = null;
-        try {
-          supervisorResult = JSON.parse(supervisor.ok ? supervisor.stdout : supervisor.stderr || supervisor.stdout);
-        } catch {
-          supervisorResult = { ok: false, error: supervisor.output };
-        }
-        steps.push({ step: "supervisor", ok: Boolean(supervisor.ok && supervisorResult.ok), detail: `Supervisor transitions=${supervisorResult.transitionsUsed ?? 0}; finalPhase=${supervisorResult.finalPhase || "unknown"}; actions=${(supervisorResult.actions || []).map((action) => action.kind).join(", ") || "none"}.` });
-        if (supervisor.ok && supervisorResult.ok && Number(supervisorResult.transitionsUsed || 0) > 0) {
+        const supervisorResult = await runSupervisorController("manual-kickstart");
+        steps.push({ step: "supervisor", ok: Boolean(supervisorResult.ok), detail: `Supervisor transitions=${supervisorResult.transitionsUsed ?? 0}; finalPhase=${supervisorResult.finalPhase || "unknown"}; actions=${(supervisorResult.actions || []).map((action) => action.kind).join(", ") || "none"}.` });
+        if (supervisorResult.ok && Number(supervisorResult.transitionsUsed || 0) > 0) {
           const relayState = await jsonFile(statePath, {});
           const result = { mode: "supervisor", executor: "A", targetWorktree: worktrees.b.path, steps, relay: relayState, supervisor: supervisorResult };
           await audit("executor.kickstart", { ok: true, ...result });
@@ -1752,6 +1784,11 @@ server.listen(port, "127.0.0.1", () => {
   serverLog("server.start", `url=http://127.0.0.1:${port}`);
   console.log(`Tandem Reciprocal Control Panel: http://127.0.0.1:${port}`);
   console.log(`Control root: ${relayRoot}`);
+  if (!testHarness || process.env.TANDEM_DASHBOARD_ENABLE_TEST_SUPERVISOR === "1") {
+    const tickMs = Number(process.env.TANDEM_SUPERVISOR_TICK_MS || 60_000);
+    setTimeout(() => runSupervisorController("dashboard-startup").catch((error) => serverLog("supervisor.startup.error", errorText(error))), 1_500).unref();
+    setInterval(() => runSupervisorController("dashboard-watchdog-tick").catch((error) => serverLog("supervisor.tick.error", errorText(error))), Math.max(10_000, tickMs)).unref();
+  }
   const fault = process.env.TANDEM_DASHBOARD_TEST_FAULT;
   if (fault === "unhandled-rejection") {
     setTimeout(() => Promise.reject(new Error("D128 injected unhandled rejection")), 40);

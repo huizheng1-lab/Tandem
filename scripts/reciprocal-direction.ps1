@@ -1,6 +1,6 @@
 param(
     [Parameter(Mandatory = $true)]
-    [ValidateSet("Show", "UpdateDirection", "Add", "Remove", "Retire", "Start", "NormalizeQueued", "Candidate", "DeclareArtifact", "ArtifactComplete", "ApprovePlan", "AutoApprovePlan", "RejectPlan", "AcceptStep", "Complete", "Block", "Requeue")]
+    [ValidateSet("Show", "UpdateDirection", "Add", "Remove", "Retire", "Start", "NormalizeQueued", "MigrateAuthorityMetadata", "Candidate", "DeclareArtifact", "ArtifactComplete", "ApprovePlan", "AutoApprovePlan", "RejectPlan", "AcceptStep", "Complete", "Block", "Requeue")]
     [string]$Action,
 
     [string]$Text,
@@ -58,10 +58,6 @@ function Get-CleanNote([string]$Value) {
     return ($Value -replace "\s+", " ").Trim().Replace("|", "/")
 }
 
-function Test-SecuritySurface([string]$Value) {
-    return $Value -match '(?i)\b(auth|authentication|credential|credentials|pairing|permission|sandbox|destructive|publish|publication|payment|paid)\b'
-}
-
 function Get-AutonomyDefault([string[]]$BoardLines) {
     $policy = @($BoardLines | Where-Object { $_ -match '^AutonomyDefault:\s*(plan-gated|autonomous)\s*$' })
     if ($policy.Count -ne 1) { return "plan-gated" }
@@ -69,7 +65,7 @@ function Get-AutonomyDefault([string[]]$BoardLines) {
 }
 
 function Get-EffectiveAutonomy([hashtable]$Metadata, [string[]]$BoardLines, [string]$ItemText) {
-    if ($Metadata.safety -eq "security-surface" -or (Test-SecuritySurface $ItemText)) { return "plan-gated" }
+    if ($Metadata.authority -or $Metadata.safety -eq "security-surface") { return "plan-gated" }
     if ($Metadata.autonomy -eq "full") { return "full" }
     if ($Metadata.autonomy -eq "plan-gated") { return "plan-gated" }
     return $(if ((Get-AutonomyDefault $BoardLines) -eq "autonomous") { "full" } else { "plan-gated" })
@@ -296,10 +292,6 @@ try {
         if ($ArtifactKind -and $Epic) { throw "Artifact wishlist creation is only valid for non-epic items." }
         if ($ArtifactKind -and $Commit -notmatch '^[0-9a-fA-F]{7,40}$') { throw "Artifact wishlist creation requires a source commit SHA." }
         if (-not $Epic -and $Autonomy -ne "inherit") { throw "Autonomy applies only to epic wishlist items." }
-        $securitySurface = Test-SecuritySurface $cleanText
-        if ($Epic -and $Autonomy -eq "full" -and $securitySurface) {
-            throw "Security-surface epics must remain plan-gated; remove -Autonomy full."
-        }
         $numbers = @($lines | ForEach-Object {
             if ($_ -match '^- \[(?: |x)\] W(\d{4}) \|' -or $_ -match '^- id=W(\d{4}) \| removed=') {
                 [int]$Matches[1]
@@ -309,7 +301,7 @@ try {
         $Id = "W" + ([int]$nextNumber).ToString("D4")
         $marker = [Array]::IndexOf($lines, "<!-- wishlist-items -->")
         if ($marker -lt 0) { throw "Shared direction file is missing the wishlist marker." }
-        $autonomyMetadata = if ($securitySurface) { " autonomy=plan-gated safety=security-surface" } elseif ($Autonomy -ne "inherit") { " autonomy=$Autonomy" } else { "" }
+        $autonomyMetadata = if ($Autonomy -ne "inherit") { " autonomy=$Autonomy" } else { "" }
         $suffix = if ($ArtifactKind) {
             "QUEUED artifact=$ArtifactKind source=$Commit declared=$now"
         } elseif ($Epic) {
@@ -427,11 +419,55 @@ try {
                     throw "NormalizeQueued is valid only for queued plan items; $Id is $status."
                 }
                 if ($status -ne "QUEUED") { throw "NormalizeQueued requires a QUEUED item; $Id is $status." }
-                $securitySurface = Test-SecuritySurface $base[2]
-                $autonomy = if ($securitySurface) { "plan-gated" } elseif ((Get-AutonomyDefault $directionLines) -eq "autonomous") { "full" } else { "full" }
-                $safety = if ($securitySurface) { " safety=security-surface" } else { "" }
+                $autonomy = "full"
                 $planPath = "process/reciprocal/epics/$Id-plan.md"
-                $lines[$index] = ($base + "QUEUED epic=true autonomy=$autonomy$safety phase=PLAN revision=1 completed=0 plan=$planPath normalized=$now") -join " | "
+                $lines[$index] = ($base + "QUEUED epic=true autonomy=$autonomy phase=PLAN revision=1 completed=0 plan=$planPath normalized=$now") -join " | "
+            }
+            "MigrateAuthorityMetadata" {
+                if ($base[0] -match '\[x\]') { throw "$Id is already complete." }
+                if (-not $isEpic) { throw "MigrateAuthorityMetadata requires an epic item." }
+                if ($metadata.authority) { throw "MigrateAuthorityMetadata refuses to remove explicit authority metadata from $Id." }
+                $planPath = if ($metadata.plan) { Assert-EpicPlanPath $metadata.plan $Id } else { "process/reciprocal/epics/$Id-plan.md" }
+                $revision = if ($metadata.revision) { [int]$metadata.revision } else { 1 }
+                $completed = if ($metadata.completed) { [int]$metadata.completed } else { 0 }
+                $roleSuffix = if ($metadata.role) { " role=$($metadata.role)" } else { "" }
+                $startedSuffix = if ($metadata.started) { " started=$($metadata.started)" } else { "" }
+                $normalizedSuffix = if ($metadata.normalized) { " normalized=$($metadata.normalized)" } else { "" }
+                $candidateSuffix = if ($metadata.commit) { " commit=$($metadata.commit)" } else { "" }
+                $updatedSuffix = " migrated=$now"
+                if ($status -eq "QUEUED" -and $metadata.phase -eq "PLAN") {
+                    $lines[$index] = ($base + "QUEUED epic=true autonomy=full phase=PLAN revision=$revision completed=$completed plan=$planPath$normalizedSuffix$updatedSuffix") -join " | "
+                    break
+                }
+                if ($status -eq "IN_PROGRESS" -and $metadata.phase -eq "PLAN") {
+                    $lines[$index] = ($base + "IN_PROGRESS epic=true autonomy=full phase=PLAN revision=$revision completed=$completed plan=$planPath$roleSuffix$startedSuffix$updatedSuffix") -join " | "
+                    break
+                }
+                if ($status -eq "CANDIDATE" -and $metadata.candidate -eq "PLAN") {
+                    $stepsSuffix = if ($metadata.steps) { " steps=$($metadata.steps)" } else { "" }
+                    $lines[$index] = ($base + "CANDIDATE epic=true autonomy=full candidate=PLAN revision=$revision completed=$completed$stepsSuffix plan=$planPath$candidateSuffix$updatedSuffix") -join " | "
+                    break
+                }
+                if ($status -eq "PLAN_APPROVED") {
+                    $stepsSuffix = if ($metadata.steps) { " steps=$($metadata.steps)" } else { "" }
+                    $nextSuffix = if ($metadata.next) { " next=$($metadata.next)" } else { "" }
+                    $approvalSuffix = if ($metadata.approval) { " approval=$($metadata.approval)" } else { "" }
+                    $lines[$index] = ($base + "PLAN_APPROVED epic=true autonomy=full revision=$revision completed=$completed$stepsSuffix$nextSuffix plan=$planPath$candidateSuffix$approvalSuffix$updatedSuffix") -join " | "
+                    break
+                }
+                if ($status -eq "IN_PROGRESS" -and $metadata.phase -eq "STEP") {
+                    $stepSuffix = if ($metadata.step) { " step=$($metadata.step)" } else { "" }
+                    $nextSuffix = if ($metadata.next) { " next=$($metadata.next)" } else { "" }
+                    $lastSuffix = if ($metadata.last) { " last=$($metadata.last)" } else { "" }
+                    $lines[$index] = ($base + "IN_PROGRESS epic=true autonomy=full phase=STEP revision=$revision completed=$completed$stepSuffix$nextSuffix plan=$planPath$lastSuffix$roleSuffix$startedSuffix$updatedSuffix") -join " | "
+                    break
+                }
+                if ($status -eq "CANDIDATE" -and $metadata.candidate -eq "STEP") {
+                    $stepSuffix = if ($metadata.step) { " step=$($metadata.step)" } else { "" }
+                    $lines[$index] = ($base + "CANDIDATE epic=true autonomy=full candidate=STEP revision=$revision completed=$completed$stepSuffix plan=$planPath$candidateSuffix$updatedSuffix") -join " | "
+                    break
+                }
+                throw "MigrateAuthorityMetadata does not support $Id in status $status with current metadata."
             }
             "Candidate" {
                 if (-not $Commit) { throw "Candidate requires -Commit." }

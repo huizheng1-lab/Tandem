@@ -53,8 +53,9 @@ async function refresh(silent = false, force = false) {
 
 function render(data, audit) {
   const relay = data.state;
+  const supervisorDisplay = data.supervisor?.displayState || relay.phase || "Unknown";
   $("#updated").textContent = `Updated ${relative(data.now)}`;
-  $("#phase").textContent = relay.phase || "Unknown";
+  $("#phase").textContent = supervisorDisplay;
   $("#relay-pause").hidden = relay.phase === "paused";
   $("#relay-resume").hidden = relay.phase !== "paused";
   $("#turn").textContent = `Turn ${relay.turn ?? "--"}`;
@@ -67,7 +68,7 @@ function render(data, audit) {
   const online = Number(data.runtimes.a.running) + Number(data.runtimes.b.running);
   $("#online").textContent = `${online} / 2`;
   $("#runtime-note").textContent = online === 2 ? "Both pinned apps running" : online ? "One executor running" : "Both executors stopped";
-  $("#cycle-chip").textContent = relay.activeRole ? `${relay.phase} · ${relay.activeRole}${resumeSuffix}` : `${relay.phase} · next ${relay.nextRole || "--"}`;
+  $("#cycle-chip").textContent = relay.activeRole ? `${supervisorDisplay} · ${relay.activeRole}${resumeSuffix}` : `${supervisorDisplay} · next ${relay.nextRole || "--"}`;
   $("#gate-sha").textContent = relay.shortStable || "missing";
   $("#gate-copy").textContent = relay.candidateCommit ? `Candidate ${relay.shortCandidate} awaits ${relay.phase}` : "Passive-verified work advances";
   renderExecutor("a", data.runtimes.a, data.worktrees.b);

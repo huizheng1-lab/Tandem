@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, rm, stat } from "node:fs/promises";
+import { mkdtemp, readFile, rm, stat, writeFile, unlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { createHash } from "node:crypto";
 import path from "node:path";
@@ -27,6 +27,7 @@ const worktreeB = path.join(relayRoot, "worktrees", "copy-b");
 const branchA = "codex/reciprocal-a";
 const branchB = "codex/reciprocal-b";
 const stableRef = "refs/tandem-relay/stable";
+const transactionPath = path.join(repoRoot, ".git", "tandem-relay", "main-update-transaction.json");
 
 if (!comment) throw new Error("A human comment is required for a main update.");
 
@@ -68,6 +69,13 @@ async function dirtyAdminSnapshot() {
   const staged = (await git(["diff", "--cached", "--name-status"], repoRoot, false)).output
     .split(/\r?\n/)
     .filter(Boolean);
+  const indexEntries = (await git(["ls-files", "--stage", "-z"], repoRoot, false)).output
+    .split("\0")
+    .filter(Boolean)
+    .map((line) => {
+      const match = line.match(/^(\d+)\s+([0-9a-f]{40,64})\s+(\d)\t(.+)$/);
+      return match ? { mode: match[1], object: match[2], stage: match[3], path: match[4] } : { raw: line };
+    });
   const entries = [];
   for (const line of status) {
     const file = statusPath(line);
@@ -90,7 +98,7 @@ async function dirtyAdminSnapshot() {
     }
     entries.push({ status: line.slice(0, 2), path: file, exists, kind, bytes, sha256 });
   }
-  return { porcelain: status, staged, entries };
+  return { porcelain: status, staged, indexEntries, entries };
 }
 
 function assertSnapshotsEqual(before, after) {
@@ -136,6 +144,19 @@ async function assertPreconditions() {
 
 function tail(value, count = 18) {
   return String(value || "").split(/\r?\n/).slice(-count).join("\n");
+}
+
+function isInside(parent, child) {
+  const relative = path.relative(path.resolve(parent), path.resolve(child));
+  return relative && !relative.startsWith("..") && !path.isAbsolute(relative);
+}
+
+async function writeTransaction(value) {
+  await writeFile(transactionPath, JSON.stringify(value, null, 2), "utf8");
+}
+
+async function clearTransaction() {
+  await unlink(transactionPath).catch(() => {});
 }
 
 async function validateStable(stableSha) {
@@ -198,6 +219,7 @@ try {
 
   result.stage = "isolated-merge";
   const beforeMaster = await gitText(["rev-parse", "master"]);
+  result.beforeMaster = beforeMaster;
   let tempWorktree = "";
   let tempBranch = "";
   try {
@@ -220,11 +242,18 @@ try {
     result.mergeMode = "merge-commit";
   }
   result.masterSha = await gitText(["rev-parse", "HEAD"], tempWorktree);
-  await git(["update-ref", "refs/heads/master", result.masterSha, beforeMaster]);
+  await writeTransaction({
+    schemaVersion: 1,
+    stage: "merged-not-pushed",
+    beforeMaster,
+    masterSha: result.masterSha,
+    stableSha,
+    createdAt: new Date().toISOString(),
+  });
   } finally {
     if (tempWorktree) {
       const resolved = path.resolve(tempWorktree);
-      if (!resolved.startsWith(path.resolve(tmpdir()))) throw new Error(`Refusing to remove unexpected integration worktree path: ${resolved}`);
+      if (!isInside(tmpdir(), resolved)) throw new Error(`Refusing to remove unexpected integration worktree path: ${resolved}`);
       await git(["worktree", "remove", "--force", tempWorktree], repoRoot, false);
       await rm(tempWorktree, { recursive: true, force: true }).catch(() => {});
     }
@@ -232,7 +261,7 @@ try {
   result.masterUpdated = result.masterSha !== beforeMaster || result.mergeMode === "master-already-contained-stable";
 
   result.stage = "tag";
-  const previousTag = (await gitText(["tag", "--merged", "master", "--list", "main-update-*", "--sort=-version:refname"]))
+  const previousTag = (await gitText(["tag", "--merged", beforeMaster, "--list", "main-update-*", "--sort=-version:refname"]))
     .split(/\r?\n/).filter(Boolean)[0] || "";
   result.tag = await nextTag();
   result.wishlistIds = await wishlistIds(previousTag, result.masterSha);
@@ -247,14 +276,34 @@ try {
     `Human comment: ${comment}`,
   ].join("\n");
   await git(["tag", "-a", result.tag, "-m", message, result.masterSha]);
+  await writeTransaction({
+    schemaVersion: 1,
+    stage: "tagged-not-pushed",
+    beforeMaster,
+    masterSha: result.masterSha,
+    stableSha,
+    tag: result.tag,
+    createdAt: new Date().toISOString(),
+  });
 
   result.stage = "push";
-  const push = await git(["push", "--atomic", "origin", "master:refs/heads/master", `refs/tags/${result.tag}:refs/tags/${result.tag}`], repoRoot, false);
+  const push = await git(["push", "--atomic", "origin", `${result.masterSha}:refs/heads/master`, `refs/tags/${result.tag}:refs/tags/${result.tag}`], repoRoot, false);
   result.pushOutput = push.output;
   if (!push.ok) throw new Error(`Master/tag push failed without force: ${push.output}`);
   result.pushed = true;
   result.adminDirtyAfterPush = await dirtyAdminSnapshot();
   assertSnapshotsEqual(adminDirtyBefore, result.adminDirtyAfterPush);
+  await writeTransaction({
+    schemaVersion: 1,
+    stage: "pushed-not-synced",
+    beforeMaster,
+    masterSha: result.masterSha,
+    stableSha,
+    tag: result.tag,
+    createdAt: new Date().toISOString(),
+  });
+  await git(["update-ref", "refs/heads/master", result.masterSha, beforeMaster]);
+  result.localMasterUpdated = true;
 
   result.stage = "branch-sync";
   await git(["merge", "--ff-only", result.masterSha], worktreeA);
@@ -271,9 +320,20 @@ try {
   }
   result.stage = "complete";
   result.ok = true;
+  await clearTransaction();
   process.stdout.write(JSON.stringify(result));
 } catch (error) {
   result.error = error.message;
+  if (!result.pushed && result.tag) {
+    await git(["tag", "-d", result.tag], repoRoot, false).catch(() => {});
+  }
+  if (result.localMasterUpdated && result.beforeMaster) {
+    await git(["update-ref", "refs/heads/master", result.beforeMaster, result.masterSha], repoRoot, false).catch(() => {});
+    result.localMasterRolledBack = true;
+  }
+  if (!result.pushed) {
+    await clearTransaction();
+  }
   if (result.pausedByFlow && !result.masterUpdated) {
     try {
       await relay("Resume", ["-Summary", `Main update stopped safely during ${result.stage}: ${error.message}`]);

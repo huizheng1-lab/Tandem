@@ -171,17 +171,36 @@ describeWindows("reciprocal direction epics", () => {
     expect(board).not.toContain("W0002 | P0 | Repair the broad reciprocal workflow");
   });
 
-  it("D175: normalization is idempotent and keeps sensitive authority plan-gated", async () => {
+  it("D176: normalization is idempotent and does not infer authority gates from prose", async () => {
     const file = await boardFile();
-    const added = JSON.parse((await direction(file, "-Action", "Add", "-Priority", "P0", "-Text", "Add credential pairing for remote operations")).stdout);
+    const added = JSON.parse((await direction(file, "-Action", "Add", "-Priority", "P0", "-Text", "Discover Python, permission state, sandbox helper, and never weaken sandboxing")).stdout);
 
     await direction(file, "-Action", "NormalizeQueued", "-Id", added.id);
     await direction(file, "-Action", "NormalizeQueued", "-Id", added.id);
 
     const plan = `process/reciprocal/epics/${added.id}-plan.md`;
     const board = await readBoard(file);
-    expect(board).toContain(`${added.id} | P0 | Add credential pairing for remote operations | QUEUED epic=true autonomy=plan-gated safety=security-surface phase=PLAN revision=1 completed=0 plan=${plan}`);
+    expect(board).toContain(`${added.id} | P0 | Discover Python, permission state, sandbox helper, and never weaken sandboxing | QUEUED epic=true autonomy=full phase=PLAN revision=1 completed=0 plan=${plan}`);
+    expect(board).not.toContain("safety=security-surface");
     expect(board.split(/\r?\n/).filter((line) => line.startsWith(`- [ ] ${added.id} |`))).toHaveLength(1);
+  });
+
+  it("D176: migrates a false-positive authority gate in place while preserving owner and plan", async () => {
+    const file = await boardFile();
+    const plan = "process/reciprocal/epics/W0027-plan.md";
+    await writeFile(wishlistFile(file), [
+      "# Tandem Reciprocal: Wishlist And Progress",
+      "",
+      "<!-- wishlist-items -->",
+      `- [ ] W0027 | P0 | Discover Python permission state and never weaken sandboxing | IN_PROGRESS epic=true autonomy=plan-gated safety=security-surface phase=PLAN revision=1 completed=0 plan=${plan} role=A started=2026-07-22T03:25:39Z`,
+      "",
+    ].join("\n"), "utf8");
+
+    await direction(file, "-Action", "MigrateAuthorityMetadata", "-Id", "W0027");
+
+    const board = await readBoard(file);
+    expect(board).toContain(`W0027 | P0 | Discover Python permission state and never weaken sandboxing | IN_PROGRESS epic=true autonomy=full phase=PLAN revision=1 completed=0 plan=${plan} role=A started=2026-07-22T03:25:39Z`);
+    expect(board).not.toContain("safety=security-surface");
   });
 
   it("gates step turns on plan approval and advances one accepted step at a time", async () => {
@@ -259,7 +278,7 @@ describeWindows("reciprocal direction epics", () => {
     expect(audit).toContain('"reason":"plan auto-approved (item autonomy: full)"');
   });
 
-  it("uses the board autonomy default and keeps security-surface epics gated", async () => {
+  it("uses the board autonomy default and allows sensitive prose unless authority metadata is explicit", async () => {
     const file = await boardFile();
     const stable = await acceptedCommit();
     const initial = await readFile(file, "utf8");
@@ -272,9 +291,9 @@ describeWindows("reciprocal direction epics", () => {
 
     const sensitive = JSON.parse((await direction(file, "-Action", "Add", "-Epic", "-Text", "Add remote control authentication")).stdout);
     const board = await readBoard(file);
-    expect(board).toContain(`${sensitive.id} | P1 | Add remote control authentication | QUEUED epic=true autonomy=plan-gated safety=security-surface`);
-    await expect(direction(file, "-Action", "Add", "-Epic", "-Autonomy", "full", "-Text", "Change credentials"))
-      .rejects.toThrow(/Security-surface epics must remain plan-gated/);
+    expect(board).toContain(`${sensitive.id} | P1 | Add remote control authentication | QUEUED epic=true phase=PLAN`);
+    const explicitFull = JSON.parse((await direction(file, "-Action", "Add", "-Epic", "-Autonomy", "full", "-Text", "Change credentials in a later explicit authority step")).stdout);
+    expect(await readBoard(file)).toContain(`${explicitFull.id} | P1 | Change credentials in a later explicit authority step | QUEUED epic=true autonomy=full phase=PLAN`);
   });
 
   it("treats requeue with a note as retroactive rejection of an autonomous plan", async () => {

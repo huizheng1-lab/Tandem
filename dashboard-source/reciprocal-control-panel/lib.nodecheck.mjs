@@ -50,7 +50,19 @@ test("D175 classifies broad queued work and paused-from-idle planning stops as a
 
 test("D175 keeps explicit authority gates hard and active owners waiting", () => {
   assert.equal(classifyReciprocalGate({ reason: "explicit human pause requested" }).category, reciprocalGateTaxonomy.hardHumanGate);
-  assert.equal(classifyReciprocalGate({ reason: "credential pairing required for the next step" }).category, reciprocalGateTaxonomy.hardHumanGate);
+  assert.equal(classifyReciprocalGate({
+    item: {
+      status: "IN_PROGRESS",
+      detail: "epic=true autonomy=full authority=permission action=request-new-network-access checkpoint=step-2 resume=after-approval",
+    },
+  }).category, reciprocalGateTaxonomy.hardHumanGate);
+  assert.equal(classifyReciprocalGate({
+    item: {
+      status: "QUEUED",
+      text: "Discover Python, permission state, sandbox helper, and never weaken sandboxing",
+      detail: "QUEUED",
+    },
+  }).category, reciprocalGateTaxonomy.autoRecoverablePrerequisite);
   assert.equal(classifyReciprocalGate({ state: { phase: "working", activeRole: "A" } }).category, reciprocalGateTaxonomy.waitingNotBlocked);
   assert.equal(classifyReciprocalGate({ reason: "endpoint timeout", attemptCount: 3 }).code, "repeated-genuine-blocker");
 });
