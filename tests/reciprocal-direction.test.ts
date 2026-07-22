@@ -385,6 +385,18 @@ describeWindows("reciprocal direction epics", () => {
     expect(audit).toContain('"reason":"plan auto-approved (item autonomy: full)"');
   });
 
+  it("canonicalizes an accepted abbreviated plan commit during auto-approval", async () => {
+    const file = await boardFile();
+    const stable = await acceptedCommit();
+    const added = JSON.parse((await direction(file, "-Action", "Add", "-Epic", "-Autonomy", "full", "-Text", "Abbreviated candidate")).stdout);
+    const plan = `process/reciprocal/epics/${added.id}-plan.md`;
+    await direction(file, "-Action", "Start", "-Id", added.id, "-Role", "A");
+    await direction(file, "-Action", "Candidate", "-Id", added.id, "-Commit", stable.slice(0, 7), "-Steps", "3", "-CompletedSteps", "2", "-Plan", plan);
+    await direction(file, "-Action", "AutoApprovePlan", "-Id", added.id, "-Commit", stable);
+
+    expect(await readBoard(file)).toContain(`PLAN_APPROVED epic=true autonomy=full revision=1 completed=2 steps=3 next=3/3 plan=${plan} commit=${stable}`);
+  });
+
   it("uses the board autonomy default and allows sensitive prose unless authority metadata is explicit", async () => {
     const file = await boardFile();
     const stable = await acceptedCommit();

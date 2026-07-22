@@ -734,10 +734,16 @@ try {
         $boardPath = Get-SharedDirectionPath
         if (-not (Test-Path -LiteralPath $boardPath)) { return $null }
 
-        $escapedCommit = [regex]::Escape($AcceptedCommit)
         $candidateLine = @(
             Read-Utf8Lines $boardPath |
-                Where-Object { $_ -match "^- \[ \] (W\d+) \| .+ \| CANDIDATE\b" -and $_ -match "(^|\s)commit=$escapedCommit(\s|$)" }
+                Where-Object {
+                    if ($_ -notmatch "^- \[ \] (W\d+) \| .+ \| CANDIDATE\b") { return $false }
+                    $candidateMetadata = Get-Metadata $_
+                    if (-not $candidateMetadata.commit) { return $false }
+                    $candidateSha = ([string]$candidateMetadata.commit).ToLowerInvariant()
+                    $acceptedSha = $AcceptedCommit.ToLowerInvariant()
+                    return $candidateSha -eq $acceptedSha -or $candidateSha.StartsWith($acceptedSha) -or $acceptedSha.StartsWith($candidateSha)
+                }
         )
         if ($candidateLine.Count -eq 0) { return $null }
         if ($candidateLine.Count -gt 1) { throw "Accepted commit $AcceptedCommit matches multiple shared-direction candidates." }

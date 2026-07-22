@@ -31,7 +31,7 @@ param(
     [int]$Steps = 0,
 
     [ValidateRange(-1, 99)]
-    [int]$Completed = -1,
+    [int]$CompletedSteps = -1,
 
     [string]$Plan,
 
@@ -616,9 +616,9 @@ try {
                 $revision = if ($metadata.revision) { [int]$metadata.revision } else { 1 }
                 $completed = if ($metadata.completed) { [int]$metadata.completed } else { 0 }
                 if ($metadata.phase -eq "PLAN" -or $PlanRevision) {
-                    if ($Completed -ge 0) {
-                        if ($Completed -lt $completed) { throw "Epic $Id plan cannot reduce completed steps from $completed to $Completed." }
-                        $completed = $Completed
+                    if ($CompletedSteps -ge 0) {
+                        if ($CompletedSteps -lt $completed) { throw "Epic $Id plan cannot reduce completed steps from $completed to $CompletedSteps." }
+                        $completed = $CompletedSteps
                     }
                     if ($Steps -le $completed) { throw "Epic $Id plan requires more than $completed total steps." }
                     $planPath = Assert-EpicPlanPath $Plan $Id
@@ -678,14 +678,18 @@ try {
                     throw "AutoApprovePlan requires an epic PLAN candidate."
                 }
                 if ($effectiveAutonomy -ne "full") { throw "Epic $Id is plan-gated and cannot be auto-approved." }
-                if (-not $Commit -or $Commit -ne $metadata.commit) { throw "AutoApprovePlan requires the independently accepted plan -Commit." }
+                if (-not $Commit -or -not $metadata.commit) { throw "AutoApprovePlan requires the independently accepted plan -Commit." }
                 $stableRef = Get-GitValue @("rev-parse", "refs/tandem-relay/stable")
-                if ($stableRef -and $Commit -ne $stableRef) { throw "Epic $Id plan commit is not the independently accepted relay stable commit." }
+                $acceptedRef = Get-GitValue @("rev-parse", "$Commit^{commit}")
+                $candidateRef = Get-GitValue @("rev-parse", "$($metadata.commit)^{commit}")
+                if (-not $stableRef -or -not $acceptedRef -or -not $candidateRef -or $acceptedRef -ne $stableRef -or $candidateRef -ne $stableRef) {
+                    throw "Epic $Id plan commit is not the independently accepted relay stable commit."
+                }
                 $completed = if ($metadata.completed) { [int]$metadata.completed } else { 0 }
                 $total = [int]$metadata.steps
                 if ($total -le $completed) { throw "Epic $Id plan has no unfinished steps." }
-                $lines[$index] = ($base + "PLAN_APPROVED epic=true$autonomySuffix$safetySuffix revision=$($metadata.revision) completed=$completed steps=$total next=$($completed + 1)/$total plan=$($metadata.plan) commit=$($metadata.commit) approved=$now approval=auto") -join " | "
-                Add-AutoApprovalAudit $ControlPath $Id $metadata.commit $metadata.plan
+                $lines[$index] = ($base + "PLAN_APPROVED epic=true$autonomySuffix$safetySuffix revision=$($metadata.revision) completed=$completed steps=$total next=$($completed + 1)/$total plan=$($metadata.plan) commit=$stableRef approved=$now approval=auto") -join " | "
+                Add-AutoApprovalAudit $ControlPath $Id $stableRef $metadata.plan
             }
             "RejectPlan" {
                 if (-not $isEpic -or $status -ne "CANDIDATE" -or $metadata.candidate -ne "PLAN") {

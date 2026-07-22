@@ -738,12 +738,12 @@ describe("reciprocal relay script", () => {
       await execa("git", ["switch", "codex/reciprocal-a"], { cwd: repo });
       const boardPath = await writeSharedBoard(
         repo,
-        `- [ ] W0001 | P1 | autonomous plan | CANDIDATE epic=true autonomy=full candidate=PLAN revision=1 completed=0 steps=1 plan=process/reciprocal/epics/W0001-plan.md commit=${candidateCommit} updated=now`,
+        `- [ ] W0001 | P1 | autonomous plan | CANDIDATE epic=true autonomy=full candidate=PLAN revision=1 completed=0 steps=1 plan=process/reciprocal/epics/W0001-plan.md commit=${candidateCommit.slice(0, 7)} updated=now`,
       );
 
       const accepted = await passiveAccept(repo);
       expect(accepted).toMatchObject({ outcome: "PASSIVE_ACCEPTED", phase: "idle", stableCommit: candidateCommit });
-      expect(await readFile(boardPath, "utf8")).toContain("PLAN_APPROVED epic=true autonomy=full");
+      expect(await readFile(boardPath, "utf8")).toContain(`PLAN_APPROVED epic=true autonomy=full revision=1 completed=0 steps=1 next=1/1 plan=process/reciprocal/epics/W0001-plan.md commit=${candidateCommit}`);
     } finally {
       await rm(repo, { recursive: true, force: true });
     }

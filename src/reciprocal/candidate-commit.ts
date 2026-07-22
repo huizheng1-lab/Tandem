@@ -139,7 +139,7 @@ async function planCandidateArguments(cwd: string, item: WishlistItem): Promise<
   if (steps.slice(completedCount).some((step) => step.completed)) {
     throw new Error(`Epic ${item.id} plan may only check a contiguous completed prefix of Ordered Steps.`);
   }
-  return ["-Steps", String(steps.length), "-Completed", String(completedCount), "-Plan", planPath];
+  return ["-Steps", String(steps.length), "-CompletedSteps", String(completedCount), "-Plan", planPath];
 }
 
 function shaPrefixEqual(left: string, right: string): boolean {

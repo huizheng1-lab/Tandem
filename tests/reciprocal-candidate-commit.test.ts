@@ -181,7 +181,7 @@ describe("reciprocal candidate commit", () => {
     });
 
     const candidate = calls.find((call) => call.file === "powershell" && call.args.includes("Candidate"));
-    expect(candidate?.args).toEqual(expect.arrayContaining(["-Steps", "3", "-Completed", "0", "-Plan", planPath]));
+    expect(candidate?.args).toEqual(expect.arrayContaining(["-Steps", "3", "-CompletedSteps", "0", "-Plan", planPath]));
   });
 
   it("finalizes a resumed epic plan with a checked completed-step prefix", async () => {
@@ -215,7 +215,7 @@ describe("reciprocal candidate commit", () => {
     });
 
     const candidate = calls.find((call) => call.file === "powershell" && call.args.includes("Candidate"));
-    expect(candidate?.args).toEqual(expect.arrayContaining(["-Steps", "3", "-Completed", "2", "-Plan", planPath]));
+    expect(candidate?.args).toEqual(expect.arrayContaining(["-Steps", "3", "-CompletedSteps", "2", "-Plan", planPath]));
   });
 
   it("durably recovers a commit when board finalization fails after git commit", async () => {
