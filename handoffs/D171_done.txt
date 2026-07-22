@@ -1,0 +1,46 @@
+Round: D171
+Status: DONE
+
+Scope:
+- Fixed the approval state-machine mismatch for an already-safe A-upgrade boundary.
+- Added guarded recovery for an already-promoted A-upgrade gate.
+- Recovered the live ead38ad gate without rebuilding, copying, or promoting runtimes.
+- Did not implement W0027 or change W0026 product files.
+
+Tracked commit:
+- D171-1 relay guard: 1bbf244e427a8a66e077ff5e9e0d0c14690289d7
+
+External dashboard files changed under C:\Users\huizh\Apps\Tandem Reciprocal\dashboard:
+- server.mjs SHA256: 094A81D406983A482E15F7DCD22B926C2719C041C1A6C50E54C4D3C7655BD2A0
+- lib.mjs SHA256: CB8E3D1853D0ABB0C218CAE9365BBBDF1E8A8BFD87D654D59800C4E35CE4BBBC
+- lib.nodecheck.mjs SHA256: 2AEAC73A8D19E6E468FFD7FB2041B660A47F2DF2E7EFB2736C3C957E864831D2
+
+Implementation notes:
+- waitForApprovalBoundary now treats phase=a-upgrade-pending with activeRole=null as the A-upgrade approval boundary instead of issuing a generic Pause first.
+- CompleteAUpgrade still requires Role A, -Force, and a summary. It is additionally valid only for phase=paused when pausedFromPhase=a-upgrade-pending and activeRole is null.
+- The recovery endpoint /api/update/approve/recover-a-upgrade verifies exact stable SHA, approved review, both runtime BUILD_INFO source SHAs, pausedFromPhase=a-upgrade-pending, and no active turn before closing the gate.
+- Recovery records an audit mode of already-promoted-relay-gate-recovered and does not invoke runtime promotion.
+- The recovery endpoint marks failed attempts as failed so the action is retryable.
+
+Live recovery:
+- Approved source SHA: ead38ad2692d2a5641ce3cdaed684ab75ebf2db1
+- Recovery route returned ok=true, decision=approve-recovery, step=a-upgrade-recovered, relay phase=idle.
+- Final relay state: phase=idle, activeRole=null, nextRole=A, stableCommit=ead38ad2692d2a5641ce3cdaed684ab75ebf2db1.
+- Executor A BUILD_INFO sourceSha: ead38ad2692d2a5641ce3cdaed684ab75ebf2db1.
+- Executor B BUILD_INFO sourceSha: ead38ad2692d2a5641ce3cdaed684ab75ebf2db1.
+- W0026 remains DONE at ead38ad2692d2a5641ce3cdaed684ab75ebf2db1.
+- W0027 remains QUEUED.
+
+Verification:
+- node --check C:\Users\huizh\Apps\Tandem Reciprocal\dashboard\server.mjs: PASS
+- node --check C:\Users\huizh\Apps\Tandem Reciprocal\dashboard\lib.mjs: PASS
+- node --test C:\Users\huizh\Apps\Tandem Reciprocal\dashboard\lib.nodecheck.mjs: PASS, 12 tests
+- PowerShell parse check for scripts\reciprocal-relay.ps1: PASS
+- npm run typecheck: PASS
+- npm test: PASS, 49 files passed, 1 skipped; 494 tests passed, 1 skipped
+- git diff --check: PASS, line-ending warning only for scripts/reciprocal-relay.ps1
+
+Safety:
+- No runtime rebuild or promotion was performed during recovery.
+- No W0027 work was claimed.
+- Untracked handoff docs and unrelated moved files were left untouched.
