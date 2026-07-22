@@ -1275,7 +1275,8 @@ try {
         if ($Role -ne "A") { throw "CompleteAUpgrade is driven by Executor A and must use -Role A." }
         if (-not $Force) { throw "CompleteAUpgrade requires -Force after human confirmation." }
         if (-not $Summary.Trim()) { throw "CompleteAUpgrade requires a human-readable confirmation summary." }
-        if ($state.phase -ne "a-upgrade-pending") { throw "CompleteAUpgrade is valid only while a-upgrade-pending. Current phase: $($state.phase)." }
+        $fromPausedAUpgrade = $state.phase -eq "paused" -and $state.pausedFromPhase -eq "a-upgrade-pending" -and -not $state.activeRole
+        if ($state.phase -ne "a-upgrade-pending" -and -not $fromPausedAUpgrade) { throw "CompleteAUpgrade is valid only while a-upgrade-pending or paused from a-upgrade-pending with no active owner. Current phase: $($state.phase)." }
         $state.nextRole = "A"
         $state.activeRole = $null
         Set-IdleOrPauseAfterTurn
