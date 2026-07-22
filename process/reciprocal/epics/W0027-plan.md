@@ -19,6 +19,12 @@ W0027 is `autonomy=plan-gated`. This candidate contains only this plan. Once the
 - No dependency installation, credential change, network-permission change, sandbox weakening, product runtime promotion, protocol change, or unrelated feature work is part of an ordinary source step.
 - Every candidate runs its focused tests, `npm run typecheck`, and `git diff --check`. Its verification list retains `authoritative-only: npm test` for the authoritative runner.
 
+## Ordered Steps
+
+- [ ] Step 1: add the tested canonical capability resolver and hermetic executable/capability probes.
+- [ ] Step 2: propagate one normalized resolved environment through workers and authoritative verification with selected-path and exact-capability diagnostics.
+- [ ] Step 3: re-resolve at takeover time and provide truthful autonomous recovery or an exact sensitive authority request.
+
 ## Step 1 - Canonical capability resolver
 
 Add the resolver and hermetic probes that produce a complete `ResolvedEnvironment` without changing orchestration behavior yet.
