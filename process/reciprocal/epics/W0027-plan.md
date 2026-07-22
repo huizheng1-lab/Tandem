@@ -21,7 +21,7 @@ W0027 is `autonomy=plan-gated`. This candidate contains only this plan. Once the
 
 ## Ordered Steps
 
-- [ ] Step 1: add the tested canonical capability resolver and hermetic executable/capability probes.
+- [x] Step 1: add the tested canonical capability resolver and hermetic executable/capability probes.
 - [ ] Step 2: propagate one normalized resolved environment through workers and authoritative verification with selected-path and exact-capability diagnostics.
 - [ ] Step 3: re-resolve at takeover time and provide truthful autonomous recovery or an exact sensitive authority request.
 
