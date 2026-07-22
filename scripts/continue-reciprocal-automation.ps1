@@ -80,7 +80,41 @@ Implement only wishlist $($Continuation.wishlistId) step $($Continuation.nextSte
         projectDir = $ProjectDir
         prompt = $prompt
     } | ConvertTo-Json -Depth 8
-    return Invoke-RestMethod -Method Post -Uri "http://127.0.0.1:$($credentials.port)/prompt" -Headers @{ Authorization = "Bearer $($credentials.token)" } -ContentType "application/json" -Body $payload
+    $headers = @{ Authorization = "Bearer $($credentials.token)" }
+    $statusUri = "http://127.0.0.1:$($credentials.port)/status"
+    $promptUri = "http://127.0.0.1:$($credentials.port)/prompt"
+    $status = Invoke-RestMethod -Method Get -Uri $statusUri -Headers $headers
+    if ($status.running) {
+        return [pscustomobject]@{
+            ok = $true
+            accepted = $false
+            busy = $true
+            running = $true
+            projectDir = $status.projectDir
+            sessionId = $status.sessionId
+            acceptedAt = $status.acceptedAt
+        }
+    }
+    try {
+        return Invoke-RestMethod -Method Post -Uri $promptUri -Headers $headers -ContentType "application/json" -Body $payload
+    } catch {
+        $statusCode = if ($_.Exception.Response -and $_.Exception.Response.StatusCode) { [int]$_.Exception.Response.StatusCode } else { 0 }
+        if ($statusCode -eq 409) {
+            $status = Invoke-RestMethod -Method Get -Uri $statusUri -Headers $headers
+            if ($status.running) {
+                return [pscustomobject]@{
+                    ok = $true
+                    accepted = $false
+                    busy = $true
+                    running = $true
+                    projectDir = $status.projectDir
+                    sessionId = $status.sessionId
+                    acceptedAt = $status.acceptedAt
+                }
+            }
+        }
+        throw
+    }
 }
 
 function Get-SharedDirectionPath([string]$RelayRootPath) {
@@ -89,7 +123,25 @@ function Get-SharedDirectionPath([string]$RelayRootPath) {
 
 function Get-IntermediateContinuationFromBoard([string]$BoardPath, [string]$StableCommit) {
     if (-not (Test-Path -LiteralPath $BoardPath)) { return $null }
+    $approved = @()
     foreach ($line in (Get-Content -LiteralPath $BoardPath)) {
+        $approvedMatch = [regex]::Match($line, '^- \[ \] (W\d+) \| (P[0-3]) \| .* \| PLAN_APPROVED\b')
+        if ($approvedMatch.Success -and $line -match '\bepic=true\b') {
+            $nextMatch = [regex]::Match($line, '\bnext=(\d+/\d+)\b')
+            if ($nextMatch.Success) {
+                $approved += [pscustomobject]@{
+                    available = $true
+                    mode = "continue-step"
+                    reason = "approved-epic-continuation"
+                    wishlistId = $approvedMatch.Groups[1].Value
+                    nextStep = $nextMatch.Groups[1].Value
+                    claimCommand = "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/reciprocal-relay.ps1 -Action Claim -Role A"
+                    startCommand = "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/reciprocal-direction.ps1 -Action Start -Id $($approvedMatch.Groups[1].Value) -Role A"
+                    requiresHumanGate = $false
+                    rank = [int]$approvedMatch.Groups[2].Value.Substring(1)
+                }
+            }
+        }
         $match = [regex]::Match($line, '^- \[ \] (W\d+) \| .* \| IN_PROGRESS\b')
         if (-not $match.Success) { continue }
         if ($line -notmatch '\bepic=true\b' -or $line -notmatch '\bphase=STEP\b') { continue }
@@ -107,6 +159,11 @@ function Get-IntermediateContinuationFromBoard([string]$BoardPath, [string]$Stab
             startCommand = "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/reciprocal-direction.ps1 -Action Start -Id $id -Role A"
             requiresHumanGate = $false
         }
+    }
+    $selected = @($approved | Sort-Object rank, wishlistId | Select-Object -First 1)[0]
+    if ($selected) {
+        $selected.PSObject.Properties.Remove("rank")
+        return $selected
     }
     return $null
 }
@@ -308,6 +365,7 @@ function Read-SupervisorState([string]$Path) {
         if (-not $state.PSObject.Properties["lastRun"]) { $state | Add-Member -NotePropertyName lastRun -NotePropertyValue $null }
         if (-not $state.PSObject.Properties["displayState"]) { $state | Add-Member -NotePropertyName displayState -NotePropertyValue "unknown" }
         if (-not $state.PSObject.Properties["blocker"]) { $state | Add-Member -NotePropertyName blocker -NotePropertyValue $null }
+        if (-not $state.PSObject.Properties["waiting"]) { $state | Add-Member -NotePropertyName waiting -NotePropertyValue $null }
         if (-not $state.PSObject.Properties["transitions"]) { $state | Add-Member -NotePropertyName transitions -NotePropertyValue @() }
         return $state
     }
@@ -316,6 +374,7 @@ function Read-SupervisorState([string]$Path) {
         lastRun = $null
         displayState = "unknown"
         blocker = $null
+        waiting = $null
         transitions = @()
     }
 }
@@ -359,6 +418,10 @@ function Test-BackoffReady([object]$SupervisorState) {
 
 function Reset-BlockerState([object]$SupervisorState) {
     $SupervisorState.blocker = $null
+}
+
+function Reset-WaitingState([object]$SupervisorState) {
+    $SupervisorState.waiting = $null
 }
 
 function Test-LiveLease([object]$Lease) {
@@ -425,6 +488,7 @@ function Set-DisplayState([object]$RelayState, [object]$SupervisorState) {
     if ($RelayState.phase -eq "paused" -and $RelayState.pauseOrigin -eq [string]$taxonomy.pauseOrigins.machine) { return [string]$taxonomy.displayStates.machineBlocked }
     if ($SupervisorState.blocker -and $SupervisorState.blocker.category -eq [string]$taxonomy.categories.hardBlocked) { return [string]$taxonomy.displayStates.hardBlocked }
     if ($SupervisorState.blocker) { return [string]$taxonomy.displayStates.retryingPrerequisite }
+    if ($SupervisorState.waiting) { return [string]$taxonomy.displayStates.waitingNotBlocked }
     $board = Get-HighestPriorityQueuedItem (Get-SharedDirectionPath $relayRootFull)
     if ($board) { return [string]$taxonomy.displayStates.planning }
     return [string]$RelayState.phase
@@ -444,6 +508,32 @@ function Invoke-TrackedPrompt([object]$SupervisorState, [string]$Kind, [object]$
     try {
         $prompt = Invoke-ExecutorPrompt $relayRootFull $copyB $Continuation
         Reset-BlockerState $SupervisorState
+        if ($prompt.busy) {
+            $SupervisorState.waiting = [pscustomobject]@{
+                category = [string]$taxonomy.categories.waitingNotBlocked
+                code = [string]$taxonomy.codes.executorBusy
+                message = "Executor A is already running accepted work; retry dispatch after that run completes."
+                wishlistId = $Continuation.wishlistId
+                nextStep = $Continuation.nextStep
+                sessionId = $prompt.sessionId
+                acceptedAt = $prompt.acceptedAt
+                observedAt = (Get-Date).ToUniversalTime().ToString("o")
+            }
+            return [pscustomobject]@{
+                kind = "$Kind-busy"
+                category = [string]$taxonomy.categories.waitingNotBlocked
+                code = [string]$taxonomy.codes.executorBusy
+                startedAt = $promptStart
+                endedAt = (Get-Date).ToUniversalTime().ToString("o")
+                wishlistId = $Continuation.wishlistId
+                nextStep = $Continuation.nextStep
+                accepted = $false
+                running = $true
+                sessionId = $prompt.sessionId
+                acceptedAt = $prompt.acceptedAt
+            }
+        }
+        Reset-WaitingState $SupervisorState
         return [pscustomobject]@{
             kind = $Kind
             category = [string]$taxonomy.categories.autoRecoverablePrerequisite
@@ -500,6 +590,12 @@ try {
 Update-LeaseHeartbeat $leasePath
 $state = Read-JsonFile $statePath
 if (-not $state) { throw "Relay state is missing at $statePath." }
+if ($state.phase -ne "idle" -or $state.activeRole -or $state.candidateCommit) {
+    Reset-WaitingState $supervisorState
+    if ($state.phase -eq "working" -or $state.phase -eq "validating" -or $state.phase -eq "passive-testing") {
+        Reset-BlockerState $supervisorState
+    }
+}
 if (-not (Test-BackoffReady $supervisorState)) {
     $supervisorState.lastRun = [pscustomObject]@{
         startedAt = $startedAt

@@ -1,4 +1,5 @@
 import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { execa } from "execa";
@@ -38,6 +39,7 @@ async function fixture() {
       explicitHumanPause: "explicit-human-pause",
       progressWait: "progress-wait",
       endpointUnavailable: "endpoint-unavailable",
+      executorBusy: "executor-busy",
       leaseHeld: "lease-held",
       repeatedGenuineBlocker: "repeated-genuine-blocker",
       recoverPausedIdlePrerequisite: "recover-paused-idle-prerequisite",
@@ -205,5 +207,87 @@ describeWindows("reciprocal continuation supervisor", () => {
     expect(backoff.actions).toHaveLength(1);
     expect(backoff.actions[0]).toMatchObject({ kind: "retry-backoff", code: "source-reconciliation-pending" });
     await expect(readFile(path.join(relay, "control", "source-reconciliation-pending.json"), "utf8")).rejects.toThrow();
+  }, 30_000);
+
+  it("continues a PLAN_APPROVED epic before planning a lower-priority queued item", async () => {
+    const { repo, relay, state } = await fixture();
+    await writeFile(path.join(relay, "control", "WISHLIST.md"), [
+      "# Tandem Reciprocal: Wishlist And Progress",
+      "",
+      "<!-- wishlist-items -->",
+      "- [ ] W0027 | P0 | Environment resolution | PLAN_APPROVED epic=true autonomy=full revision=1 completed=0 steps=3 next=1/3 plan=process/reciprocal/epics/W0027-plan.md commit=0123456789012345678901234567890123456789 approval=auto",
+      "- [ ] W0023 | P1 | Telegram work | QUEUED epic=true autonomy=full",
+      "",
+    ].join("\n"), "utf8");
+
+    let postedPrompt = "";
+    const server = createServer((request, response) => {
+      if (request.method === "GET" && request.url === "/status") {
+        response.writeHead(200, { "Content-Type": "application/json" });
+        response.end(JSON.stringify({ ok: true, running: false, projectDir: path.join(relay, "worktrees", "copy-b") }));
+        return;
+      }
+      let body = "";
+      request.on("data", (chunk) => { body += chunk; });
+      request.on("end", () => {
+        postedPrompt = JSON.parse(body).prompt;
+        response.writeHead(202, { "Content-Type": "application/json" });
+        response.end(JSON.stringify({ ok: true, accepted: true, projectDir: path.join(relay, "worktrees", "copy-b") }));
+      });
+    });
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    try {
+      const address = server.address();
+      if (!address || typeof address === "string") throw new Error("test server did not bind");
+      await mkdir(path.join(relay, "state", "executor-a"), { recursive: true });
+      await writeFile(path.join(relay, "state", "executor-a", "automation.json"), JSON.stringify({ port: address.port, token: "test-token" }), "utf8");
+
+      const result = await supervisor(repo, relay);
+      expect(result.actions[0]).toMatchObject({ kind: "idle-continuation-prompt", wishlistId: "W0027", nextStep: "1/3", accepted: true });
+      expect(postedPrompt).toContain("wishlist W0027 step 1/3");
+      expect((await readJson(state)).blocker).toBeNull();
+    } finally {
+      server.close();
+    }
+  }, 30_000);
+
+  it("treats an already-running executor as waiting, not an unavailable endpoint", async () => {
+    const { repo, relay, state } = await fixture();
+    await writeFile(path.join(relay, "control", "WISHLIST.md"), [
+      "# Tandem Reciprocal: Wishlist And Progress",
+      "",
+      "<!-- wishlist-items -->",
+      "- [ ] W0027 | P0 | Environment resolution | PLAN_APPROVED epic=true autonomy=full revision=1 completed=0 steps=3 next=1/3 plan=process/reciprocal/epics/W0027-plan.md commit=0123456789012345678901234567890123456789 approval=auto",
+      "",
+    ].join("\n"), "utf8");
+
+    let posts = 0;
+    const server = createServer((request, response) => {
+      if (request.method === "GET" && request.url === "/status") {
+        response.writeHead(200, { "Content-Type": "application/json" });
+        response.end(JSON.stringify({ ok: true, running: true, sessionId: "active-session", acceptedAt: "2026-07-22T12:54:03.689Z", projectDir: path.join(relay, "worktrees", "copy-b") }));
+        return;
+      }
+      posts += 1;
+      response.writeHead(409, { "Content-Type": "application/json" });
+      response.end(JSON.stringify({ error: "A Tandem run is already active." }));
+    });
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    try {
+      const address = server.address();
+      if (!address || typeof address === "string") throw new Error("test server did not bind");
+      await mkdir(path.join(relay, "state", "executor-a"), { recursive: true });
+      await writeFile(path.join(relay, "state", "executor-a", "automation.json"), JSON.stringify({ port: address.port, token: "test-token" }), "utf8");
+
+      const result = await supervisor(repo, relay);
+      expect(result.actions[0]).toMatchObject({ kind: "idle-continuation-prompt-busy", category: "waiting-not-blocked", code: "executor-busy", wishlistId: "W0027" });
+      expect(posts).toBe(0);
+      const saved = await readJson(state);
+      expect(saved.blocker).toBeNull();
+      expect(saved.waiting).toMatchObject({ code: "executor-busy", wishlistId: "W0027", sessionId: "active-session" });
+      expect(saved.displayState).toBe("waiting-not-blocked");
+    } finally {
+      server.close();
+    }
   }, 30_000);
 });

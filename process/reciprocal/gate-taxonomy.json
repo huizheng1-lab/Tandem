@@ -12,6 +12,7 @@
     "explicitHumanPause": "explicit-human-pause",
     "progressWait": "progress-wait",
     "endpointUnavailable": "endpoint-unavailable",
+    "executorBusy": "executor-busy",
     "leaseHeld": "lease-held",
     "repeatedGenuineBlocker": "repeated-genuine-blocker",
     "recoverPausedIdlePrerequisite": "recover-paused-idle-prerequisite",
