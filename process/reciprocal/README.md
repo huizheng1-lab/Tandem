@@ -1,5 +1,8 @@
 # Two-Copy Reciprocal Tandem
 
+For the structural recovery work performed after D180, see
+[`POST_D180_RECOVERY_CHANGES.md`](POST_D180_RECOVERY_CHANGES.md).
+
 This setup uses two source worktrees, two local branches, two pinned packaged executors, two isolated `TANDEM_HOME` directories, and two isolated Electron user-data directories. The direction remains crossed for self-modification safety, but the roles are no longer symmetric.
 
 - Executor A is the sole producer. It runs from runtime A and edits worktree B (`codex/reciprocal-b`).
