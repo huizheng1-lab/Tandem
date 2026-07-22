@@ -48,6 +48,27 @@ param(
 
 $ErrorActionPreference = "Stop"
 
+function Get-ReciprocalTaxonomy {
+    $path = $env:TANDEM_RECIPROCAL_TAXONOMY
+    if (-not $path) {
+        $path = Join-Path (Split-Path $PSScriptRoot -Parent) "process\reciprocal\gate-taxonomy.json"
+    }
+    if (-not (Test-Path -LiteralPath $path)) { throw "Canonical reciprocal taxonomy is missing at $path." }
+    $taxonomy = Get-Content -LiteralPath $path -Raw | ConvertFrom-Json
+    foreach ($name in @("autoRecoverablePrerequisite", "hardBlocked", "hardHumanGate", "waitingNotBlocked")) {
+        if (-not $taxonomy.categories.$name) { throw "Canonical reciprocal taxonomy is missing categories.$name." }
+    }
+    foreach ($name in @("human", "machine", "unknown")) {
+        if (-not $taxonomy.pauseOrigins.$name) { throw "Canonical reciprocal taxonomy is missing pauseOrigins.$name." }
+    }
+    foreach ($name in @("explicitHumanPause", "resumeCircuitBreaker", "candidateFailure")) {
+        if (-not $taxonomy.pauseReasonCodes.$name) { throw "Canonical reciprocal taxonomy is missing pauseReasonCodes.$name." }
+    }
+    return $taxonomy
+}
+
+$taxonomy = Get-ReciprocalTaxonomy
+
 function Get-GitValue([string[]]$Arguments) {
     $output = @(& git @Arguments 2>$null)
     if ($LASTEXITCODE -ne 0 -or $output.Count -eq 0) { return $null }
@@ -550,7 +571,11 @@ try {
                 $step = [int]$Matches[1]
                 $total = [int]$Matches[2]
                 $planPath = Assert-EpicPlanPath $metadata.plan $Id
-                $lines[$index] = ($base + "CANDIDATE epic=true$autonomySuffix$safetySuffix candidate=STEP revision=$revision completed=$completed step=$step/$total plan=$planPath commit=$Commit updated=$now") -join " | "
+                $authoritySuffix = ""
+                if ($metadata.authorityStatus -eq "approved") {
+                    $authoritySuffix = " authority=$($metadata.authority) action=$($metadata.action) checkpoint=$($metadata.checkpoint) resume=$($metadata.resume) authorityStatus=consumed authorityConsumed=$now"
+                }
+                $lines[$index] = ($base + "CANDIDATE epic=true$autonomySuffix$safetySuffix candidate=STEP revision=$revision completed=$completed step=$step/$total plan=$planPath commit=$Commit$authoritySuffix updated=$now") -join " | "
             }
             "DeclareArtifact" {
                 if ($env:TANDEM_ALLOW_MANUAL_DECLARE_ARTIFACT -ne "1") { throw "DeclareArtifact is reserved for trusted control-plane compatibility only; create artifact items with Add -ArtifactKind -Commit." }

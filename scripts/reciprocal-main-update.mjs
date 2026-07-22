@@ -58,9 +58,100 @@ async function readJson(file) {
 
 async function readTransaction() {
   try {
-    return JSON.parse((await readFile(transactionPath, "utf8")).replace(/^\uFEFF/, ""));
-  } catch {
-    return null;
+    const parsed = JSON.parse((await readFile(transactionPath, "utf8")).replace(/^\uFEFF/, ""));
+    validateTransaction(parsed);
+    return parsed;
+  } catch (error) {
+    if (error.code === "ENOENT") return null;
+    throw new Error(`Invalid main-update transaction state at ${transactionPath}: ${error.message}`);
+  }
+}
+
+function validateTransaction(value) {
+  const allowed = new Set(["merged-not-pushed", "tagged-not-pushed", "pushed-not-synced"]);
+  if (!value || value.schemaVersion !== 1) throw new Error("missing schemaVersion=1");
+  if (!allowed.has(value.stage)) throw new Error(`unsupported stage ${value.stage || "missing"}`);
+  for (const key of ["beforeMaster", "masterSha", "stableSha"]) {
+    if (!/^[0-9a-f]{40,64}$/i.test(String(value[key] || ""))) throw new Error(`missing or invalid ${key}`);
+  }
+  if (value.stage !== "merged-not-pushed" && !/^main-update-\d{3,}$/.test(String(value.tag || ""))) {
+    throw new Error("missing or invalid tag");
+  }
+}
+
+async function resumePushedSync(transaction, adminDirtyBefore) {
+  result.stage = "branch-sync";
+  await git(["merge", "--ff-only", transaction.masterSha], worktreeA);
+  maybeFault("after-copy-a");
+  await git(["merge", "--ff-only", transaction.masterSha], worktreeB);
+  maybeFault("after-copy-b");
+  await relay("ReconcileMain", ["-NewStableCommit", transaction.masterSha, "-Summary", `Resumed ${transaction.tag}: ${comment}`]);
+  maybeFault("after-relay");
+  result.branchesResynced = true;
+  result.adminDirtyAfter = await dirtyAdminSnapshot();
+  assertSnapshotsEqual(adminDirtyBefore, result.adminDirtyAfter);
+  await updateLocalMasterIfClean(transaction.beforeMaster, transaction.masterSha, adminDirtyBefore);
+  result.stage = "complete";
+  result.ok = true;
+  maybeFault("before-cleanup");
+  await clearTransaction();
+  process.stdout.write(JSON.stringify(result));
+  process.exit(0);
+}
+
+async function ensureTransactionTag(transaction) {
+  if (transaction.stage !== "merged-not-pushed") return transaction;
+  result.stage = "tag";
+  const previousTag = (await gitText(["tag", "--merged", transaction.beforeMaster, "--list", "main-update-*", "--sort=-version:refname"]))
+    .split(/\r?\n/).filter(Boolean)[0] || "";
+  const tag = await nextTag();
+  const wishlist = await wishlistIds(previousTag, transaction.masterSha);
+  result.tag = tag;
+  result.wishlistIds = wishlist;
+  result.timestamp = new Date().toISOString();
+  const message = [
+    `Tandem reciprocal main update ${tag}`,
+    "",
+    `Stable SHA: ${transaction.stableSha}`,
+    "Relay turn: resumed",
+    `Wishlist items: ${wishlist.join(", ") || "none"}`,
+    `Timestamp: ${result.timestamp}`,
+    `Human comment: ${comment}`,
+  ].join("\n");
+  await git(["tag", "-a", tag, "-m", message, transaction.masterSha]);
+  const next = { ...transaction, stage: "tagged-not-pushed", tag, createdAt: transaction.createdAt || new Date().toISOString() };
+  await writeTransaction(next);
+  return next;
+}
+
+async function pushTaggedTransaction(transaction, adminDirtyBefore) {
+  result.stage = "push";
+  result.tag = transaction.tag;
+  const localTag = await gitText(["rev-parse", `${transaction.tag}^{}`]);
+  if (localTag !== transaction.masterSha) throw new Error(`Transaction tag ${transaction.tag} points at ${localTag}, expected ${transaction.masterSha}.`);
+  const push = await git(["push", "--atomic", "origin", `${transaction.masterSha}:refs/heads/master`, `refs/tags/${transaction.tag}:refs/tags/${transaction.tag}`], repoRoot, false);
+  result.pushOutput = push.output;
+  if (!push.ok) throw new Error(`Master/tag push failed without force: ${push.output}`);
+  result.pushed = true;
+  if (adminDirtyBefore) {
+    result.adminDirtyAfterPush = await dirtyAdminSnapshot();
+    assertSnapshotsEqual(adminDirtyBefore, result.adminDirtyAfterPush);
+  }
+  const next = { ...transaction, stage: "pushed-not-synced" };
+  await writeTransaction(next);
+  return next;
+}
+
+async function verifyPushedTransaction(transaction) {
+  const [remoteMaster, tagSha] = await Promise.all([
+    gitText(["ls-remote", "origin", "refs/heads/master"]).then((text) => text.split(/\s+/)[0] || ""),
+    gitText(["rev-parse", `${transaction.tag}^{}`]),
+  ]);
+  if (remoteMaster !== transaction.masterSha) {
+    throw new Error(`Cannot resume pushed-not-synced transaction: origin/master is ${remoteMaster || "missing"}, expected ${transaction.masterSha}.`);
+  }
+  if (tagSha !== transaction.masterSha) {
+    throw new Error(`Cannot resume pushed-not-synced transaction: tag ${transaction.tag} points at ${tagSha}, expected ${transaction.masterSha}.`);
   }
 }
 
@@ -229,8 +320,8 @@ const result = {
 
 try {
   const existingTransaction = await readTransaction();
-  if (existingTransaction?.stage === "pushed-not-synced") {
-    result.stage = "resume-pushed-not-synced";
+  if (existingTransaction) {
+    result.stage = `resume-${existingTransaction.stage}`;
     Object.assign(result, {
       resumedTransaction: true,
       beforeMaster: existingTransaction.beforeMaster,
@@ -238,36 +329,14 @@ try {
       stableSha: existingTransaction.stableSha,
       tag: existingTransaction.tag,
     });
-    const [remoteMaster, tagSha] = await Promise.all([
-      gitText(["ls-remote", "origin", "refs/heads/master"]).then((text) => text.split(/\s+/)[0] || ""),
-      gitText(["rev-parse", `${existingTransaction.tag}^{}`]),
-    ]);
-    if (remoteMaster !== existingTransaction.masterSha) {
-      throw new Error(`Cannot resume pushed-not-synced transaction: origin/master is ${remoteMaster || "missing"}, expected ${existingTransaction.masterSha}.`);
-    }
-    if (tagSha !== existingTransaction.masterSha) {
-      throw new Error(`Cannot resume pushed-not-synced transaction: tag ${existingTransaction.tag} points at ${tagSha}, expected ${existingTransaction.masterSha}.`);
-    }
     const adminDirtyBefore = await dirtyAdminSnapshot();
     result.adminDirtyBefore = adminDirtyBefore;
+    let transaction = existingTransaction;
+    transaction = await ensureTransactionTag(transaction);
+    if (transaction.stage === "tagged-not-pushed") transaction = await pushTaggedTransaction(transaction, adminDirtyBefore);
+    await verifyPushedTransaction(transaction);
     maybeFault("after-push");
-    result.stage = "branch-sync";
-    await git(["merge", "--ff-only", existingTransaction.masterSha], worktreeA);
-    maybeFault("after-copy-a");
-    await git(["merge", "--ff-only", existingTransaction.masterSha], worktreeB);
-    maybeFault("after-copy-b");
-    await relay("ReconcileMain", ["-NewStableCommit", existingTransaction.masterSha, "-Summary", `Resumed ${existingTransaction.tag}: ${comment}`]);
-    maybeFault("after-relay");
-    result.branchesResynced = true;
-    result.adminDirtyAfter = await dirtyAdminSnapshot();
-    assertSnapshotsEqual(adminDirtyBefore, result.adminDirtyAfter);
-    await updateLocalMasterIfClean(existingTransaction.beforeMaster, existingTransaction.masterSha, adminDirtyBefore);
-    result.stage = "complete";
-    result.ok = true;
-    maybeFault("before-cleanup");
-    await clearTransaction();
-    process.stdout.write(JSON.stringify(result));
-    process.exit(0);
+    await resumePushedSync(transaction, adminDirtyBefore);
   }
   const { state, stableSha, wasPaused, adminDirtyBefore } = await assertPreconditions();
   result.stableSha = stableSha;

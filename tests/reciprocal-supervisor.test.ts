@@ -43,6 +43,16 @@ async function fixture() {
       recoverPausedIdlePrerequisite: "recover-paused-idle-prerequisite",
       sourceReconciliationPending: "source-reconciliation-pending",
     },
+    pauseOrigins: {
+      human: "human",
+      machine: "machine",
+      unknown: "unknown",
+    },
+    pauseReasonCodes: {
+      explicitHumanPause: "explicit-human-pause",
+      resumeCircuitBreaker: "repeated-genuine-blocker",
+      candidateFailure: "candidate-failure",
+    },
     retry: { baseSeconds: 30, maxSeconds: 300, escalateAfterIdenticalAttempts: 3 },
   }), "utf8");
   await writeFile(path.join(relay, "control", "WISHLIST.md"), [

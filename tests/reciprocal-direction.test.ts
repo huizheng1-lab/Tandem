@@ -41,6 +41,13 @@ async function direction(file: string, ...args: string[]) {
   ]);
 }
 
+async function directionWithEnv(file: string, env: NodeJS.ProcessEnv, ...args: string[]) {
+  return execa("powershell", [
+    "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", scriptPath,
+    ...args, "-ControlPath", file,
+  ], { env });
+}
+
 function wishlistFile(file: string): string {
   return path.join(path.dirname(file), "WISHLIST.md");
 }
@@ -247,11 +254,54 @@ describeWindows("reciprocal direction epics", () => {
     await direction(file, "-Action", "ApproveAuthority", "-Id", added.id);
     expect(await readBoard(file)).toContain("authorityStatus=approved");
 
+    await direction(file, "-Action", "Candidate", "-Id", added.id, "-Commit", "step1");
+    const consumed = await readBoard(file);
+    expect(consumed).toContain("authorityStatus=consumed");
+    expect(consumed).toContain("authorityConsumed=");
+
+    await direction(file, "-Action", "Requeue", "-Id", added.id, "-Note", "exercise denial path");
+    await direction(file, "-Action", "Start", "-Id", added.id, "-Role", "A");
     await direction(file, "-Action", "DeclareAuthority", "-Id", added.id, "-Text", "sandbox__allowTempFixtureWrite__step1b__resumeStep1b");
     await direction(file, "-Action", "DenyAuthority", "-Id", added.id, "-Note", "too risky");
     const board = await readBoard(file);
     expect(board).toContain("BLOCKED");
     expect(board).toContain("authorityStatus=denied");
+  }, 30_000);
+
+  it("D178 loads the canonical taxonomy fixture before mutating direction state", async () => {
+    const file = await boardFile();
+    const taxonomy = path.join(path.dirname(file), "gate-taxonomy.json");
+    await writeFile(taxonomy, JSON.stringify({
+      version: 1,
+      categories: {
+        autoRecoverablePrerequisite: "fixture-auto",
+        hardBlocked: "fixture-hard",
+        hardHumanGate: "fixture-human",
+        waitingNotBlocked: "fixture-wait",
+      },
+      pauseOrigins: { human: "fixture-human", machine: "fixture-machine", unknown: "fixture-unknown" },
+      pauseReasonCodes: {
+        explicitHumanPause: "fixture-human-pause",
+        resumeCircuitBreaker: "fixture-repeat",
+        candidateFailure: "fixture-candidate",
+      },
+    }), "utf8");
+
+    const added = JSON.parse((await directionWithEnv(file, { TANDEM_RECIPROCAL_TAXONOMY: taxonomy }, "-Action", "Add", "-Text", "taxonomy-backed item")).stdout);
+    expect(added.id).toMatch(/^W\d+$/);
+
+    await writeFile(taxonomy, JSON.stringify({
+      version: 1,
+      categories: { autoRecoverablePrerequisite: "fixture-auto" },
+      pauseOrigins: { human: "fixture-human", machine: "fixture-machine", unknown: "fixture-unknown" },
+      pauseReasonCodes: {
+        explicitHumanPause: "fixture-human-pause",
+        resumeCircuitBreaker: "fixture-repeat",
+        candidateFailure: "fixture-candidate",
+      },
+    }), "utf8");
+
+    await expect(directionWithEnv(file, { TANDEM_RECIPROCAL_TAXONOMY: taxonomy }, "-Action", "Add", "-Text", "must fail")).rejects.toThrow(/categories\.hardBlocked/);
   }, 30_000);
 
   it("requires plan revisions to return through the human plan gate", async () => {

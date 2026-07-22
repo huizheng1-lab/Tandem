@@ -60,6 +60,18 @@ test("D175 keeps explicit authority gates hard and active owners waiting", () =>
       detail: "epic=true autonomy=full authority=permission action=request-new-network-access checkpoint=step-2 resume=after-approval",
     },
   }).category, reciprocalGateTaxonomy.hardHumanGate);
+  assert.notEqual(classifyReciprocalGate({
+    item: {
+      status: "IN_PROGRESS",
+      detail: "epic=true autonomy=full authority=permission action=request-new-network-access checkpoint=step-2 resume=after-approval authorityStatus=approved",
+    },
+  }).category, reciprocalGateTaxonomy.hardHumanGate);
+  assert.notEqual(classifyReciprocalGate({
+    item: {
+      status: "CANDIDATE",
+      detail: "epic=true authority=permission action=request-new-network-access checkpoint=step-2 resume=after-approval authorityStatus=consumed",
+    },
+  }).category, reciprocalGateTaxonomy.hardHumanGate);
   assert.equal(classifyReciprocalGate({
     item: {
       status: "QUEUED",

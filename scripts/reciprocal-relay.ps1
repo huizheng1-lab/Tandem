@@ -29,6 +29,27 @@ $ErrorActionPreference = "Stop"
 $ResumePauseThreshold = 3
 $CandidatePreviewArtifactCapability = 1
 
+function Get-ReciprocalTaxonomy {
+    $path = $env:TANDEM_RECIPROCAL_TAXONOMY
+    if (-not $path) {
+        $path = Join-Path (Split-Path $PSScriptRoot -Parent) "process\reciprocal\gate-taxonomy.json"
+    }
+    if (-not (Test-Path -LiteralPath $path)) { throw "Canonical reciprocal taxonomy is missing at $path." }
+    $taxonomy = Get-Content -LiteralPath $path -Raw | ConvertFrom-Json
+    foreach ($name in @("autoRecoverablePrerequisite", "hardBlocked", "hardHumanGate", "waitingNotBlocked")) {
+        if (-not $taxonomy.categories.$name) { throw "Canonical reciprocal taxonomy is missing categories.$name." }
+    }
+    foreach ($name in @("human", "machine", "unknown")) {
+        if (-not $taxonomy.pauseOrigins.$name) { throw "Canonical reciprocal taxonomy is missing pauseOrigins.$name." }
+    }
+    foreach ($name in @("explicitHumanPause", "resumeCircuitBreaker", "candidateFailure")) {
+        if (-not $taxonomy.pauseReasonCodes.$name) { throw "Canonical reciprocal taxonomy is missing pauseReasonCodes.$name." }
+    }
+    return $taxonomy
+}
+
+$taxonomy = Get-ReciprocalTaxonomy
+
 function Get-ReciprocalCapabilities {
     if ($env:TANDEM_DISABLE_CANDIDATE_PREVIEW_ARTIFACT_CAPABILITY -eq "1") {
         return [ordered]@{}
@@ -156,10 +177,10 @@ try {
         $origin = $null
         $reasonCode = $null
         if ($state.phase -eq "paused" -and $state.lastSummary -match 'Auto-paused.*consecutive RESUME claims') {
-            $origin = "machine"
-            $reasonCode = "repeated-genuine-blocker"
+            $origin = [string]$taxonomy.pauseOrigins.machine
+            $reasonCode = [string]$taxonomy.pauseReasonCodes.resumeCircuitBreaker
         } elseif ($state.phase -eq "paused" -and $state.lastSummary) {
-            $origin = "unknown"
+            $origin = [string]$taxonomy.pauseOrigins.unknown
         }
         $state | Add-Member -NotePropertyName pauseOrigin -NotePropertyValue $origin
         $state | Add-Member -NotePropertyName pauseReasonCode -NotePropertyValue $reasonCode
@@ -853,8 +874,8 @@ try {
         if ($state.pauseAfterTurn) {
             $state.phase = "paused"
             $state.pausedFromPhase = "idle"
-            $state.pauseOrigin = "human"
-            $state.pauseReasonCode = "explicit-human-pause"
+            $state.pauseOrigin = [string]$taxonomy.pauseOrigins.human
+            $state.pauseReasonCode = [string]$taxonomy.pauseReasonCodes.explicitHumanPause
             $state.pauseAfterTurn = $false
         } else {
             $state.phase = "idle"
@@ -882,8 +903,8 @@ try {
         $previousPhase = $state.phase
         $state.phase = "paused"
         $state.pausedFromPhase = $previousPhase
-        $state.pauseOrigin = "machine"
-        $state.pauseReasonCode = "repeated-genuine-blocker"
+        $state.pauseOrigin = [string]$taxonomy.pauseOrigins.machine
+        $state.pauseReasonCode = [string]$taxonomy.pauseReasonCodes.resumeCircuitBreaker
         $state.pauseAfterTurn = $false
         $state.lastSummary = "Auto-paused turn $($state.turn): executor $SelectedRole received $($state.resumeCount) consecutive RESUME claims without completing. Human attention is required before resuming."
         Save-State
@@ -918,8 +939,8 @@ try {
                     $state.activeRole = $null
                     $state.phase = "paused"
                     $state.pausedFromPhase = "idle"
-                    $state.pauseOrigin = "human"
-                    $state.pauseReasonCode = "explicit-human-pause"
+                    $state.pauseOrigin = [string]$taxonomy.pauseOrigins.human
+                    $state.pauseReasonCode = [string]$taxonomy.pauseReasonCodes.explicitHumanPause
                     $state.pauseAfterTurn = $false
                     $state.baseCommit = $null
                     $state.startedAt = $null
@@ -938,8 +959,8 @@ try {
         }
         $state.pausedFromPhase = $state.phase
         $state.phase = "paused"
-        $state.pauseOrigin = "human"
-        $state.pauseReasonCode = "explicit-human-pause"
+        $state.pauseOrigin = [string]$taxonomy.pauseOrigins.human
+        $state.pauseReasonCode = [string]$taxonomy.pauseReasonCodes.explicitHumanPause
         $state.lastSummary = $Summary.Trim()
         Save-State
         Write-Result "PAUSED"
@@ -1108,8 +1129,8 @@ try {
         if ($state.pauseAfterTurn) {
             $state.phase = "paused"
             $state.pausedFromPhase = "idle"
-            $state.pauseOrigin = "human"
-            $state.pauseReasonCode = "explicit-human-pause"
+            $state.pauseOrigin = [string]$taxonomy.pauseOrigins.human
+            $state.pauseReasonCode = [string]$taxonomy.pauseReasonCodes.explicitHumanPause
             $state.pauseAfterTurn = $false
             Save-State
             Write-Result "PAUSED"
@@ -1196,8 +1217,8 @@ try {
         if ($failed.Count -gt 0) {
             $state.phase = "paused"
             $state.pausedFromPhase = "passive-testing"
-            $state.pauseOrigin = "machine"
-            $state.pauseReasonCode = "candidate-failure"
+            $state.pauseOrigin = [string]$taxonomy.pauseOrigins.machine
+            $state.pauseReasonCode = [string]$taxonomy.pauseReasonCodes.candidateFailure
             $state.activeRole = $null
             $state.lastSummary = "Passive build/test failed for candidate $($state.candidateCommit): $((@($failed | ForEach-Object { $_.command })) -join ', ')"
             Save-State
@@ -1229,8 +1250,8 @@ try {
         if ($failed.Count -gt 0) {
             $state.phase = "paused"
             $state.pausedFromPhase = "passive-testing"
-            $state.pauseOrigin = "machine"
-            $state.pauseReasonCode = "candidate-failure"
+            $state.pauseOrigin = [string]$taxonomy.pauseOrigins.machine
+            $state.pauseReasonCode = [string]$taxonomy.pauseReasonCodes.candidateFailure
             $state.activeRole = $null
             $state.lastSummary = "Passive package failed for candidate $($state.candidateCommit): $((@($failed | ForEach-Object { $_.command })) -join ', ')"
             Save-State
@@ -1456,8 +1477,8 @@ try {
     $state.activeRole = $null
     $state.phase = if ($state.pauseAfterTurn) { "paused" } else { "passive-testing" }
     $state.pausedFromPhase = if ($state.pauseAfterTurn) { "passive-testing" } else { $null }
-    $state.pauseOrigin = if ($state.pauseAfterTurn) { "human" } else { $null }
-    $state.pauseReasonCode = if ($state.pauseAfterTurn) { "explicit-human-pause" } else { $null }
+    $state.pauseOrigin = if ($state.pauseAfterTurn) { [string]$taxonomy.pauseOrigins.human } else { $null }
+    $state.pauseReasonCode = if ($state.pauseAfterTurn) { [string]$taxonomy.pauseReasonCodes.explicitHumanPause } else { $null }
     $state.pauseAfterTurn = $false
     $state.baseCommit = $null
     $state.candidateCommit = $head

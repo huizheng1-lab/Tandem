@@ -125,7 +125,10 @@ const explicitAuthorityKinds = new Set(["credentials", "authentication", "pairin
 
 export function classifyReciprocalGate({ reason = "", state = {}, item = null, attemptCount = 0 } = {}) {
   const metadata = detailMetadata(item?.detail);
-  const explicitAuthority = metadata.authority && explicitAuthorityKinds.has(String(metadata.authority).toLowerCase());
+  const explicitAuthority = metadata.authority
+    && metadata.authorityStatus !== "approved"
+    && metadata.authorityStatus !== "consumed"
+    && explicitAuthorityKinds.has(String(metadata.authority).toLowerCase());
   const text = [reason, state?.lastSummary].filter(Boolean).join(" ");
   const pauseOrigin = String(state?.pauseOrigin || "").toLowerCase();
   const pauseReasonCode = String(state?.pauseReasonCode || "");

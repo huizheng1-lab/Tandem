@@ -19,6 +19,18 @@ function Invoke-JsonCommand([string]$File, [string[]]$Arguments, [string]$Workin
     return ConvertFrom-JsonOutput (($output | Out-String).Trim())
 }
 
+function Invoke-TextCommand([string]$File, [string[]]$Arguments, [string]$WorkingDirectory) {
+    Push-Location -LiteralPath $WorkingDirectory
+    try {
+        $output = & $File @Arguments 2>&1
+        $text = (($output | Out-String).Trim())
+        if ($LASTEXITCODE -ne 0) { throw $text }
+        return $text
+    } finally {
+        Pop-Location
+    }
+}
+
 function Read-JsonFile([string]$Path) {
     if (-not (Test-Path -LiteralPath $Path)) { return $null }
     return (Get-Content -LiteralPath $Path -Raw) | ConvertFrom-Json
@@ -238,6 +250,55 @@ function Update-SourceReconciliationPrerequisite([object]$RelayState) {
     return [pscustomobject]$pending
 }
 
+function Invoke-SourceReconciliationIfReady([object]$RelayState, [object]$Pending) {
+    if (-not $Pending -or $Pending.status -ne "ready") { return $null }
+    $fresh = Read-JsonFile $statePath
+    $freshPending = Update-SourceReconciliationPrerequisite $fresh
+    if (-not $freshPending -or $freshPending.status -ne "ready") {
+        return [pscustomobject]@{
+            kind = "source-reconciliation-pending"
+            category = if ($freshPending) { $freshPending.category } else { [string]$taxonomy.categories.autoRecoverablePrerequisite }
+            code = if ($freshPending) { $freshPending.reasonCode } else { [string]$taxonomy.codes.sourceReconciliationPending }
+            skipped = $true
+            reason = "safe-boundary-changed"
+        }
+    }
+    $script = Join-Path $PSScriptRoot "reciprocal-main-update.mjs"
+    $comment = "system:auto-source-reconciliation:$($freshPending.sourceHead):$($freshPending.stableCommit)"
+    try {
+        $text = Invoke-TextCommand "node" @(
+            $script,
+            "--repo", $adminRepo,
+            "--relay-root", $relayRootFull,
+            "--comment", $comment
+        ) $adminRepo
+        $result = $text | ConvertFrom-Json
+        $after = Read-JsonFile $statePath
+        $remaining = Update-SourceReconciliationPrerequisite $after
+        Reset-BlockerState $SupervisorState
+        return [pscustomobject]@{
+            kind = "source-reconciliation-executed"
+            category = [string]$taxonomy.categories.autoRecoverablePrerequisite
+            code = [string]$taxonomy.codes.sourceReconciliationPending
+            sourceHead = $freshPending.sourceHead
+            stableCommit = $after.stableCommit
+            cleared = -not $remaining
+            updater = $result
+        }
+    } catch {
+        $message = $_.Exception.Message
+        Update-BlockerState $SupervisorState ([string]$taxonomy.categories.autoRecoverablePrerequisite) ([string]$taxonomy.codes.sourceReconciliationPending) $message
+        return [pscustomobject]@{
+            kind = "source-reconciliation-failed"
+            category = $SupervisorState.blocker.category
+            code = $SupervisorState.blocker.code
+            error = $message
+            attemptCount = $SupervisorState.blocker.attemptCount
+            nextAttemptAt = $SupervisorState.blocker.nextAttemptAt
+        }
+    }
+}
+
 function Read-SupervisorState([string]$Path) {
     $state = Read-JsonFile $Path
     if ($state) {
@@ -448,6 +509,11 @@ if ($sourcePrerequisite -and $sourcePrerequisite.status -eq "pending") {
         stableCommit = $sourcePrerequisite.stableCommit
         trigger = $sourcePrerequisite.trigger
     }
+}
+if ($sourcePrerequisite -and $sourcePrerequisite.status -eq "ready" -and $transitionCount -lt $MaxTransitions) {
+    $transitionCount += 1
+    $reconciliation = Invoke-SourceReconciliationIfReady $state $sourcePrerequisite
+    if ($reconciliation) { $actions += $reconciliation }
 }
 
 if (-not (Test-BackoffReady $supervisorState)) {

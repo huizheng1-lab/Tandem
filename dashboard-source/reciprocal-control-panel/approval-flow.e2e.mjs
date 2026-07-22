@@ -103,7 +103,9 @@ async function makeFixture(t) {
   const copyA = path.join(relayRoot, "worktrees", "copy-a");
   const copyB = path.join(relayRoot, "worktrees", "copy-b");
   await mkdir(path.join(repoRoot, "scripts"), { recursive: true });
+  await mkdir(path.join(repoRoot, "process", "reciprocal"), { recursive: true });
   await copyFile(relayScript, path.join(repoRoot, "scripts", "reciprocal-relay.ps1"));
+  await copyFile(path.join(adminRepo, "process", "reciprocal", "gate-taxonomy.json"), path.join(repoRoot, "process", "reciprocal", "gate-taxonomy.json"));
   await writeFile(path.join(repoRoot, "package.json"), "{\"name\":\"fixture\",\"version\":\"0.0.0\"}\n", "utf8");
   await git(repoRoot, "init", "-b", "master");
   await git(repoRoot, "config", "user.email", "fixture@example.invalid");

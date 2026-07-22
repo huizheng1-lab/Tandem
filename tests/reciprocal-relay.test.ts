@@ -12,8 +12,14 @@ describe("reciprocal relay script", () => {
     await execa("git", ["config", "user.email", "relay@example.test"], { cwd: repo });
     await execa("git", ["config", "user.name", "Relay Test"], { cwd: repo });
     await mkdir(path.join(repo, "scripts"), { recursive: true });
+    await mkdir(path.join(repo, "process", "reciprocal"), { recursive: true });
     await writeFile(path.join(repo, "README.md"), "initial\n", "utf8");
     await writeFile(path.join(repo, ".gitignore"), ".tandem/\nrelease/\nrelease*/\n", "utf8");
+    await writeFile(
+      path.join(repo, "process", "reciprocal", "gate-taxonomy.json"),
+      await readFile(path.resolve("process/reciprocal/gate-taxonomy.json"), "utf8"),
+      "utf8",
+    );
     await writeFile(
       path.join(repo, "scripts", "reciprocal-direction.ps1"),
       await readFile(path.resolve("scripts/reciprocal-direction.ps1"), "utf8"),
@@ -29,7 +35,7 @@ describe("reciprocal relay script", () => {
       await readFile(path.resolve("scripts/package-passive-runtime.ps1"), "utf8"),
       "utf8",
     );
-    await execa("git", ["add", "README.md", ".gitignore", "scripts/reciprocal-direction.ps1", "scripts/promote-reciprocal-runtime.ps1", "scripts/package-passive-runtime.ps1"], { cwd: repo });
+    await execa("git", ["add", "README.md", ".gitignore", "process/reciprocal/gate-taxonomy.json", "scripts/reciprocal-direction.ps1", "scripts/promote-reciprocal-runtime.ps1", "scripts/package-passive-runtime.ps1"], { cwd: repo });
     await execa("git", ["commit", "-m", "initial"], { cwd: repo });
     await execa("git", ["branch", "codex/reciprocal-a"], { cwd: repo });
     await execa("git", ["branch", "codex/reciprocal-b"], { cwd: repo });
@@ -250,6 +256,53 @@ describe("reciprocal relay script", () => {
       expect(abandoned).toMatchObject({ outcome: "ABANDONED", resumeCount: 0, activeRole: null });
     } finally {
       await rm(repo, { recursive: true, force: true });
+    }
+  }, 30_000);
+
+  windowsIt("D178: relay pause metadata comes from the canonical taxonomy fixture", async () => {
+    const repo = await mkdtemp(path.join(tmpdir(), "tandem-relay-d178-taxonomy-"));
+    let taxonomyDir = "";
+    try {
+      await initRepo(repo);
+      taxonomyDir = await mkdtemp(path.join(tmpdir(), "tandem-relay-taxonomy-fixture-"));
+      const taxonomy = path.join(taxonomyDir, "gate-taxonomy.json");
+      await writeFile(taxonomy, JSON.stringify({
+        version: 1,
+        categories: {
+          autoRecoverablePrerequisite: "fixture-auto",
+          hardBlocked: "fixture-hard",
+          hardHumanGate: "fixture-human",
+          waitingNotBlocked: "fixture-wait",
+        },
+        pauseOrigins: { human: "fixture-human", machine: "fixture-machine", unknown: "fixture-unknown" },
+        pauseReasonCodes: {
+          explicitHumanPause: "fixture-human-pause",
+          resumeCircuitBreaker: "fixture-repeat",
+          candidateFailure: "fixture-candidate",
+        },
+      }), "utf8");
+
+      const env = { TANDEM_RECIPROCAL_TAXONOMY: taxonomy };
+      await relayWithEnv(repo, env, "-Action", "Reset", "-Force");
+      await relayWithEnv(repo, env, "-Action", "Claim", "-Role", "A");
+      await mkdir(path.join(repo, ".tandem"), { recursive: true });
+      await writeFile(path.join(repo, ".tandem", "reciprocal-checkpoint.md"), "resume checkpoint\n", "utf8");
+
+      await relayWithEnv(repo, env, "-Action", "Claim", "-Role", "A");
+      await relayWithEnv(repo, env, "-Action", "Claim", "-Role", "A");
+      const paused = await relayWithEnv(repo, env, "-Action", "Claim", "-Role", "A");
+
+      expect(paused).toMatchObject({
+        outcome: "PAUSED",
+        pauseOrigin: "fixture-machine",
+        pauseReasonCode: "fixture-repeat",
+      });
+      const state = JSON.parse(await readFile(path.join(repo, ".git", "tandem-relay", "state.json"), "utf8"));
+      expect(state.pauseOrigin).toBe("fixture-machine");
+      expect(state.pauseReasonCode).toBe("fixture-repeat");
+    } finally {
+      await rm(repo, { recursive: true, force: true });
+      if (taxonomyDir) await rm(taxonomyDir, { recursive: true, force: true });
     }
   }, 30_000);
 
