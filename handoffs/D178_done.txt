@@ -1,0 +1,32 @@
+Round: D178
+
+Commits:
+- 4499983 D178-1: complete reciprocal control recovery paths
+
+Verification:
+- node --check scripts\reciprocal-main-update.mjs: passed
+- PowerShell parser checks for scripts\continue-reciprocal-automation.ps1, scripts\reciprocal-relay.ps1, scripts\reciprocal-direction.ps1: passed
+- node dashboard-source\reciprocal-control-panel\lib.nodecheck.mjs: 15 passed
+- node dashboard-source\reciprocal-control-panel\approval-flow.e2e.mjs: 2 passed
+- npx vitest run tests\reciprocal-direction.test.ts --configLoader runner --reporter verbose: 23 passed
+- npx vitest run tests\reciprocal-relay.test.ts --configLoader runner --reporter verbose: 17 passed
+- npx vitest run tests\reciprocal-supervisor.test.ts --configLoader runner --reporter verbose: 2 passed
+- npx vitest run tests\reciprocal-main-update.test.ts --configLoader runner --reporter verbose: 1 passed
+- npm run typecheck: passed
+- npm test: 520 passed, 1 skipped
+- git diff --check: passed
+- powershell -NoProfile -ExecutionPolicy Bypass -File scripts\deploy-reciprocal-dashboard.ps1: deployed 16 managed files and restarted dashboard
+- powershell -NoProfile -ExecutionPolicy Bypass -File scripts\deploy-reciprocal-dashboard.ps1 -VerifyOnly: passed
+
+Implementation summary:
+- Direction, relay, supervisor fixtures, and dashboard checks now validate/load the canonical reciprocal gate taxonomy instead of relying on scattered literal pause metadata.
+- Authority metadata no longer hard-gates the dashboard once approved or consumed, and approved step authority is marked consumed when the step candidate is produced.
+- The continuation supervisor now executes ready source-reconciliation markers automatically at the safe boundary, rechecks safety first, records success/failure actions, and routes failures through blocker retry/backoff.
+- Main-update recovery rejects malformed transaction JSON and resumes all tracked transaction stages: merged-not-pushed, tagged-not-pushed, and pushed-not-synced.
+- Added focused tests for taxonomy fixture propagation, authority consumption, malformed main-update transactions, and fixture schema coverage.
+
+Safety:
+- Preserved live W0027 board item, owner, plan path, status, and dirty copy-b plan content.
+- W0027 plan hash after D178: 7021A3635A10B1F9B5D7C62CD8FA43E8F31F9291CC6E3BC931B8A4A1637589B2
+- Live copy-b checkpoint hash after D178: D1D1D9D1AFC8DDB9DDA66E8320777E61210B4F33D89BEEE6837B7A37DD0967AF
+- Left unrelated pre-existing scripts\setup-reciprocal-tandem.ps1 modification and untracked handoff backlog untouched.
