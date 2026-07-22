@@ -1,0 +1,87 @@
+Round: D175
+Completed: 2026-07-22T03:29:00Z
+
+Commits:
+- 946b32dd26fe3f2a10a208ff5db402cd9b88632d D175-1: make reciprocal progress-first
+- 8722239258549b40e86d849656d85c892482a757 D175-2: reconcile stable into progress-first source
+- 974d64c67c75d27151d9776d2c2b88888d820038 D175-3: refresh dashboard manifest hashes
+
+Scope:
+- Added reciprocal gate taxonomy and progress-first normalization for broad queued work.
+- Added NormalizeQueued to reciprocal-direction, preserving ID/text/priority and adding epic plan metadata.
+- Sensitive authority surfaces normalize as plan-gated/security-surface instead of proceeding unsafely.
+- Updated the continuation supervisor to recover paused-from-idle broad/planning stops, lease itself, normalize the next queued item, and prompt Executor A.
+- Updated dashboard kickstart to run the supervisor first, falling back to the old endpoint path only when the supervisor made no transition.
+- Replaced dirty-admin filename allowlist reconciliation with dirty snapshot verification and isolated temp worktree merge.
+- Updated protocol/shared-direction/executor docs so normal broad work plans first; only hard gates stop progress.
+- Refreshed dashboard manifest hashes and deployed the dashboard.
+
+Gate inventory removed or automated:
+- Broad/architectural/missing-epic metadata now normalizes into a plan epic instead of pausing.
+- Paused-from-idle breadth/planning stops are auto-recovered by the continuation supervisor.
+- Manual dashboard kickstart is no longer the only path for ordinary queued work.
+- Dirty admin checkout filename allowlist is removed; reconciliation happens in an isolated temp worktree and verifies the admin dirty snapshot before/after.
+- Plan-only and non-final source-changing steps continue without runtime promotion.
+
+Hard gates retained:
+- Explicit human pause/cancel/reject.
+- Credentials, auth, pairing, permission/sandbox weakening, paid/public publication, and destructive data/history changes.
+- Final live runtime replacement/promotion.
+- Uncorrectable deterministic candidate/test failures.
+- Real merge conflicts.
+
+W0027 dispatch proof:
+- Before: W0027 was P0 QUEUED, and relay was paused from idle with summary that W0027/W0023 were too broad or missing epic metadata.
+- Supervisor normalized W0027 to: QUEUED epic=true autonomy=plan-gated safety=security-surface phase=PLAN revision=1 completed=0 plan=process/reciprocal/epics/W0027-plan.md normalized=2026-07-22T03:23:52Z.
+- Executor A accepted the planning prompt at 2026-07-22T03:23:52.598Z, session 78ed17dd-6659-4258-b076-c407289d8c1a.
+- After claim: relay phase=working activeRole=A nextRole=A.
+- Current W0027 line: IN_PROGRESS epic=true autonomy=plan-gated safety=security-surface phase=PLAN revision=1 completed=0 plan=process/reciprocal/epics/W0027-plan.md role=A started=2026-07-22T03:25:39Z.
+- W0023 remains queued behind W0027.
+- No W0027 product implementation was performed in D175.
+
+Isolated reconciliation evidence:
+- First reciprocal-main-update run after D175-1 reached the isolated merge and surfaced real conflicts instead of blocking on unrelated dirty admin files.
+- Real conflicts were resolved in temp worktree C:\Users\huizh\AppData\Local\Temp\d175-integration-c365dd5da1454e72a6c4abff2fd9c967.
+- Stable/theirs was used for product/remote-control conflicts:
+  app/main/tandem-service.ts; src/remote-control/bridge.ts; src/remote-control/streaming-session.ts; src/remote-control/telegram.ts; tests/desktop-service.test.ts; tests/remote-control-bridge-prompt.test.ts; tests/remote-control-streaming-session.test.ts; tests/remote-control-telegram-session-stream.test.ts; tests/remote-control.test.ts.
+- D175/ours was used for control-plane conflicts:
+  process/reciprocal/PROTOCOL.md; process/reciprocal/SHARED_DIRECTION_TEMPLATE.md; scripts/reciprocal-direction.ps1.
+- Temp worktree validation passed npm run typecheck and npm test.
+- Admin checkout fast-forwarded to 8722239, then 974d64c, with unrelated dirty admin state preserved.
+- The temp worktree was removed after final verification; git worktree list now contains only the admin checkout and reciprocal copy-a/copy-b worktrees.
+
+Dirty admin preservation:
+- Pre-existing tracked dirty file remained untouched: scripts/setup-reciprocal-tandem.ps1.
+- Its SHA-256 before/after reconciliation stayed 8615D8A9806E0E7A2B101FD13CCB7D9695FA9AF073865D3E5B90E3298CA2A674.
+- Pre-existing untracked handoff docs, process docs, helper scripts, reviewer scratch files, and tmp/ remained untracked and were not staged.
+
+Heads and runtimes:
+- Before D175: master=143cdc29b157e8b2d10ec15782546c3dea5cd9f6; stable/copy-a/copy-b=ead38ad2692d2a5641ce3cdaed684ab75ebf2db1.
+- After D175 source reconciliation: master=974d64c67c75d27151d9776d2c2b88888d820038; refs/tandem-relay/stable=974d64c67c75d27151d9776d2c2b88888d820038; codex/reciprocal-a=974d64c67c75d27151d9776d2c2b88888d820038; codex/reciprocal-b=974d64c67c75d27151d9776d2c2b88888d820038.
+- Executor runtimes were not promoted or replaced.
+- Runtime A BUILD_INFO: sourceSha=ead38ad2692d2a5641ce3cdaed684ab75ebf2db1 sourceShortSha=ead38ad promotedRound=D123 promotedAt=2026-07-21T20:22:31.2950294-04:00.
+- Runtime B BUILD_INFO: sourceSha=ead38ad2692d2a5641ce3cdaed684ab75ebf2db1 sourceShortSha=ead38ad promotedRound=D123 promotedAt=2026-07-21T20:22:32.2318597-04:00.
+
+Dashboard deployment:
+- Deploy command passed and restarted the dashboard.
+- Deployed staging root: C:\Users\huizh\Apps\Tandem Reciprocal\dashboard\.deploy-staging\20260722T032114Z.
+- Deployed backup root: C:\Users\huizh\Apps\Tandem Reciprocal\dashboard\.deploy-backups\20260722T032114Z.
+- Final VerifyOnly passed: ok=true, mode=verify, verificationOk=true, managedFileCount=16, targetRoot=C:\Users\huizh\Apps\Tandem Reciprocal\dashboard.
+- Live status after dispatch: phase=working activeRole=A nextRole=A stableCommit=974d64c67c75d27151d9776d2c2b88888d820038 lastCompletedCommit=974d64c67c75d27151d9776d2c2b88888d820038.
+
+Verification:
+- node --check dashboard-source\reciprocal-control-panel\lib.mjs: PASS
+- node --check dashboard-source\reciprocal-control-panel\server.mjs: PASS
+- node --check scripts\reciprocal-main-update.mjs: PASS
+- PowerShell parse checks for scripts\reciprocal-direction.ps1 and scripts\continue-reciprocal-automation.ps1: PASS
+- node --test dashboard-source\reciprocal-control-panel\lib.nodecheck.mjs: PASS, 14 tests
+- node --test dashboard-source\reciprocal-control-panel\approval-flow.e2e.mjs: PASS, 2 tests
+- npm test -- tests/reciprocal-direction.test.ts: PASS, 20 tests
+- npm run typecheck: PASS
+- npm test: PASS, 50 files passed, 1 skipped; 513 tests passed, 1 skipped
+- git diff --check: PASS
+- powershell -NoProfile -ExecutionPolicy Bypass -File scripts\deploy-reciprocal-dashboard.ps1 -VerifyOnly: PASS
+
+Notes:
+- An early full npm test run exposed Windows suite-load timeouts in old 5s tests plus one transient direction timeout; D175 increased the relevant deterministic Windows timeouts and the full rerun passed.
+- No unrelated moved handoff/done files were staged.
