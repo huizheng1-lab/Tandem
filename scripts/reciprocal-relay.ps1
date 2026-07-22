@@ -189,16 +189,18 @@ try {
         $state | Add-Member -NotePropertyName resumeTurn -NotePropertyValue $null
     }
     if (-not $state.PSObject.Properties["pauseOrigin"]) {
-        $origin = $null
-        $reasonCode = $null
-        if ($state.phase -eq "paused" -and $state.lastSummary -match 'Auto-paused.*consecutive RESUME claims') {
-            $origin = [string]$taxonomy.pauseOrigins.machine
-            $reasonCode = [string]$taxonomy.pauseReasonCodes.resumeCircuitBreaker
-        } elseif ($state.phase -eq "paused" -and $state.lastSummary) {
-            $origin = [string]$taxonomy.pauseOrigins.unknown
+        $state | Add-Member -NotePropertyName pauseOrigin -NotePropertyValue $null
+    }
+    if (-not $state.PSObject.Properties["pauseReasonCode"]) {
+        $state | Add-Member -NotePropertyName pauseReasonCode -NotePropertyValue $null
+    }
+    if ($state.phase -eq "paused" -and -not $state.pauseOrigin) {
+        if ($state.lastSummary -match '^Auto-paused turn \d+: executor [AB] received \d+ consecutive RESUME claims without completing\.') {
+            $state.pauseOrigin = [string]$taxonomy.pauseOrigins.machine
+            $state.pauseReasonCode = [string]$taxonomy.pauseReasonCodes.resumeCircuitBreaker
+        } elseif ($state.lastSummary) {
+            $state.pauseOrigin = [string]$taxonomy.pauseOrigins.unknown
         }
-        $state | Add-Member -NotePropertyName pauseOrigin -NotePropertyValue $origin
-        $state | Add-Member -NotePropertyName pauseReasonCode -NotePropertyValue $reasonCode
     }
     if (-not $state.PSObject.Properties["authorityRequest"]) {
         $state | Add-Member -NotePropertyName authorityRequest -NotePropertyValue $null
@@ -721,7 +723,13 @@ try {
 
     function Complete-AcceptedDirectionCandidate([string]$AcceptedCommit, [string]$AcceptedKind) {
         if ($AcceptedKind -ne "improvement") { return $null }
-        $directionScript = Join-Path $Workspace "scripts\reciprocal-direction.ps1"
+        # Relay and direction are one control-plane protocol. When an admin relay
+        # intentionally operates on a worktree, do not mix it with that worktree's
+        # potentially older direction implementation during the acceptance commit.
+        $directionScript = Join-Path $PSScriptRoot "reciprocal-direction.ps1"
+        if (-not (Test-Path -LiteralPath $directionScript)) {
+            $directionScript = Join-Path $Workspace "scripts\reciprocal-direction.ps1"
+        }
         if (-not (Test-Path -LiteralPath $directionScript)) { return $null }
         $boardPath = Get-SharedDirectionPath
         if (-not (Test-Path -LiteralPath $boardPath)) { return $null }
@@ -1067,6 +1075,46 @@ try {
         exit 0
     }
 
+    function Get-PendingAppFinalization([string]$SelectedRole) {
+        $relayRoot = if ($env:TANDEM_RECIPROCAL_ROOT) { $env:TANDEM_RECIPROCAL_ROOT } else { $defaultRelayRoot }
+        $path = Join-Path $relayRoot "state\finalization-$($SelectedRole.ToLowerInvariant()).json"
+        if (-not (Test-Path -LiteralPath $path)) { return $null }
+        try {
+            $pending = Get-Content -LiteralPath $path -Raw | ConvertFrom-Json
+        } catch {
+            throw "Pending app-layer finalization is unreadable at $path."
+        }
+        if ($pending.schemaVersion -ne 1 -or $pending.role -ne $SelectedRole -or -not $pending.wishlistId) {
+            throw "Pending app-layer finalization is invalid at $path."
+        }
+        return [pscustomobject]@{
+            path = $path
+            wishlistId = [string]$pending.wishlistId
+            stage = [string]$pending.stage
+            commit = if ($pending.commit) { [string]$pending.commit } else { $null }
+            files = @($pending.files | ForEach-Object { ([string]$_).Replace('\', '/').Trim() } | Where-Object { $_ })
+        }
+    }
+
+    function Assert-PendingAppFinalizationRange([string]$SelectedRole, [string]$BaseCommit, [string]$HeadCommit, [int]$CommitCount) {
+        $pending = Get-PendingAppFinalization $SelectedRole
+        if (-not $pending -or $pending.commit -ne $HeadCommit -or $pending.stage -notin @("committed", "board-recorded")) {
+            throw "Complete requires exactly one new verified commit; found $CommitCount."
+        }
+        $merges = @(Invoke-Git rev-list --merges "$BaseCommit..$HeadCommit")
+        $subjects = @(Invoke-Git log --format=%s "$BaseCommit..$HeadCommit")
+        $changed = @(Invoke-Git diff --name-only $BaseCommit $HeadCommit -- | ForEach-Object { ([string]$_).Replace('\', '/').Trim() } | Where-Object { $_ })
+        $touched = @(Invoke-Git log --format= --name-only "$BaseCommit..$HeadCommit" -- | ForEach-Object { ([string]$_).Replace('\', '/').Trim() } | Where-Object { $_ })
+        $reported = @($pending.files | Sort-Object -Unique)
+        $net = @($changed | Sort-Object -Unique)
+        $unexpected = @($touched | Where-Object { $_ -notin $reported } | Sort-Object -Unique)
+        $missing = @($reported | Where-Object { $_ -notin $net })
+        $extra = @($net | Where-Object { $_ -notin $reported })
+        if ($merges.Count -gt 0 -or $subjects.Count -ne $CommitCount -or @($subjects | Where-Object { -not ([string]$_).StartsWith("relay:") }).Count -gt 0 -or $unexpected.Count -gt 0 -or $missing.Count -gt 0 -or $extra.Count -gt 0) {
+            throw "Complete refuses the pending multi-commit finalization because its history is not linear app-layer work limited exactly to the reported files."
+        }
+    }
+
     if ($Action -eq "DeclareAuthority") {
         if (-not $Role) { throw "DeclareAuthority requires -Role." }
         if (-not $Id -or $Id -notmatch '^W\d{4}$') { throw "DeclareAuthority requires a wishlist item -Id." }
@@ -1338,6 +1386,20 @@ try {
         }
         if ($state.activeRole) {
             if ($state.activeRole -eq $Role) {
+                $pendingFinalization = Get-PendingAppFinalization $Role
+                if ($pendingFinalization) {
+                    Reset-ResumeCounter
+                    Save-State
+                    Write-Result "RESUME" ([pscustomobject]@{
+                        reason = "app-layer-finalization-pending"
+                        finalizationPending = $true
+                        wishlistId = $pendingFinalization.wishlistId
+                        finalizationStage = $pendingFinalization.stage
+                        finalizationCommit = $pendingFinalization.commit
+                        instruction = "Do not start another agent turn. Tandem's app layer must replay the durable candidate finalization before another Claim."
+                    })
+                    exit 0
+                }
                 if (Test-GenuineResumeState) {
                     $count = Increment-ResumeCounter
                     if ($count -ge $ResumePauseThreshold) {
@@ -1694,9 +1756,12 @@ try {
     $head = (@(Invoke-Git rev-parse HEAD))[0].Trim()
     if ($state.baseCommit -ne $state.stableCommit) { throw "Working base no longer matches the stable commit." }
     $commits = @(Invoke-Git rev-list "$($state.baseCommit)..$head")
-    if ($commits.Count -ne 1) { throw "Complete requires exactly one new verified commit; found $($commits.Count)." }
-    $parent = (@(Invoke-Git rev-parse "$head^"))[0].Trim()
-    if ($parent -ne $state.baseCommit) { throw "The improvement commit is not a direct child of the stable base." }
+    if ($commits.Count -ne 1) {
+        Assert-PendingAppFinalizationRange $Role $state.baseCommit $head $commits.Count
+    } else {
+        $parent = (@(Invoke-Git rev-parse "$head^"))[0].Trim()
+        if ($parent -ne $state.baseCommit) { throw "The improvement commit is not a direct child of the stable base." }
+    }
     if (-not (Test-Git merge-base --is-ancestor $roleConfig.Peer HEAD)) {
         throw "Peer branch $($roleConfig.Peer) is not an ancestor of HEAD; history diverged."
     }

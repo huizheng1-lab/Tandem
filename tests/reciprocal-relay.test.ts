@@ -351,6 +351,32 @@ describe("reciprocal relay script", () => {
     }
   }, 30_000);
 
+  windowsIt("migrates legacy null pause metadata only for the exact machine circuit-breaker signature", async () => {
+    const repo = await mkdtemp(path.join(tmpdir(), "tandem-relay-legacy-pause-"));
+    try {
+      await initRepo(repo);
+      await relay(repo, "-Action", "Reset", "-Force");
+      await relay(repo, "-Action", "Claim", "-Role", "A");
+      const statePath = path.join(repo, ".git", "tandem-relay", "state.json");
+      const state = JSON.parse(await readFile(statePath, "utf8"));
+      state.phase = "paused";
+      state.pausedFromPhase = "working";
+      state.pauseOrigin = null;
+      state.pauseReasonCode = null;
+      state.lastSummary = "Auto-paused turn 1: executor A received 3 consecutive RESUME claims without completing. Human attention is required before resuming.";
+      await writeFile(statePath, `${JSON.stringify(state, null, 2)}\n`, "utf8");
+
+      const migrated = await relay(repo, "-Action", "Status");
+      expect(migrated).toMatchObject({
+        phase: "paused",
+        pauseOrigin: "machine",
+        pauseReasonCode: "repeated-genuine-blocker"
+      });
+    } finally {
+      await rm(repo, { recursive: true, force: true });
+    }
+  }, 30_000);
+
   windowsIt("D179: trusted authority checkpoint resumes once and consumes on completion", async () => {
     const repo = await mkdtemp(path.join(tmpdir(), "tandem-relay-d179-authority-"));
     try {
@@ -564,6 +590,75 @@ describe("reciprocal relay script", () => {
     }
   }, 30_000);
 
+  windowsIt("does not trip the resume circuit breaker while app-layer finalization is pending", async () => {
+    const repo = await mkdtemp(path.join(tmpdir(), "tandem-relay-finalization-pending-"));
+    const reciprocalRoot = path.join(repo, ".reciprocal-root");
+    try {
+      await initRepo(repo);
+      await relay(repo, "-Action", "Reset", "-Force");
+      await relay(repo, "-Action", "Claim", "-Role", "A");
+      await mkdir(path.join(reciprocalRoot, "state"), { recursive: true });
+      await writeFile(
+        path.join(reciprocalRoot, "state", "finalization-a.json"),
+        JSON.stringify({ schemaVersion: 1, role: "A", wishlistId: "W0027", stage: "committed", commit: "abc123" }),
+        "utf8",
+      );
+
+      for (let attempt = 0; attempt < 4; attempt += 1) {
+        const resumed = await relayWithEnv(repo, { TANDEM_RECIPROCAL_ROOT: reciprocalRoot }, "-Action", "Claim", "-Role", "A");
+        expect(resumed).toMatchObject({
+          outcome: "RESUME",
+          phase: "working",
+          activeRole: "A",
+          resumeCount: 0,
+          reason: "app-layer-finalization-pending",
+          finalizationPending: true,
+          wishlistId: "W0027",
+        });
+      }
+    } finally {
+      await rm(repo, { recursive: true, force: true });
+    }
+  }, 30_000);
+
+  windowsIt("completes a legacy multi-commit app-layer range only with matching durable finalization proof", async () => {
+    const repo = await mkdtemp(path.join(tmpdir(), "tandem-relay-finalization-range-"));
+    const reciprocalRoot = await mkdtemp(path.join(tmpdir(), "tandem-relay-finalization-state-"));
+    try {
+      await initRepo(repo);
+      await relay(repo, "-Action", "Reset", "-Force");
+      await relay(repo, "-Action", "Claim", "-Role", "A");
+      await writeFile(path.join(repo, "README.md"), "initial\nfirst app-layer pass\n", "utf8");
+      await execa("git", ["add", "README.md"], { cwd: repo });
+      await execa("git", ["commit", "-m", "relay: first interrupted finalization"], { cwd: repo });
+      await writeFile(path.join(repo, "README.md"), "initial\nfirst app-layer pass\nsecond app-layer pass\n", "utf8");
+      await execa("git", ["add", "README.md"], { cwd: repo });
+      await execa("git", ["commit", "-m", "relay: second interrupted finalization"], { cwd: repo });
+      const head = (await execa("git", ["rev-parse", "HEAD"], { cwd: repo })).stdout.trim();
+      await mkdir(path.join(reciprocalRoot, "state"), { recursive: true });
+      await writeFile(
+        path.join(reciprocalRoot, "state", "finalization-a.json"),
+        JSON.stringify({ schemaVersion: 1, role: "A", wishlistId: "W0027", stage: "committed", commit: head, files: ["README.md"] }),
+        "utf8",
+      );
+
+      const completed = await relayWithEnv(
+        repo,
+        { TANDEM_RECIPROCAL_ROOT: reciprocalRoot },
+        "-Action",
+        "Complete",
+        "-Role",
+        "A",
+        "-Summary",
+        "recovered durable app-layer finalization",
+      );
+      expect(completed).toMatchObject({ outcome: "COMPLETED", phase: "passive-testing", candidateCommit: head, activeRole: null });
+    } finally {
+      await rm(repo, { recursive: true, force: true });
+      await rm(reciprocalRoot, { recursive: true, force: true });
+    }
+  }, 30_000);
+
   windowsIt("D151: B never receives an agentic claim and A routes candidates to passive testing", async () => {
     const repo = await mkdtemp(path.join(tmpdir(), "tandem-relay-d151-claim-"));
     try {
@@ -618,6 +713,37 @@ describe("reciprocal relay script", () => {
 
       const completed = await relay(repo, "-Action", "CompleteAUpgrade", "-Role", "A", "-Force", "-Summary", "human confirmed A rebuild");
       expect(completed).toMatchObject({ outcome: "A_UPGRADE_COMPLETED", phase: "idle", nextRole: "A" });
+    } finally {
+      await rm(repo, { recursive: true, force: true });
+    }
+  }, 30_000);
+
+  windowsIt("uses the relay's paired direction controller when accepting an external worktree candidate", async () => {
+    const repo = await mkdtemp(path.join(tmpdir(), "tandem-relay-paired-control-"));
+    try {
+      await initRepo(repo);
+      await writeFile(
+        path.join(repo, "scripts", "reciprocal-direction.ps1"),
+        [
+          "param([string]$Action)",
+          "# Compatibility markers: Get-WishlistPath WISHLIST.md",
+          "if ($Action -eq 'Show') { '<!-- wishlist-items -->' } else { throw 'stale direction controller must not finalize an admin relay acceptance' }",
+        ].join("\n"),
+        "utf8",
+      );
+      await execa("git", ["add", "scripts/reciprocal-direction.ps1"], { cwd: repo });
+      await execa("git", ["commit", "-m", "simulate stale but claim-compatible direction controller"], { cwd: repo });
+
+      const candidateCommit = await createCandidate(repo);
+      await execa("git", ["switch", "codex/reciprocal-a"], { cwd: repo });
+      const boardPath = await writeSharedBoard(
+        repo,
+        `- [ ] W0001 | P1 | autonomous plan | CANDIDATE epic=true autonomy=full candidate=PLAN revision=1 completed=0 steps=1 plan=process/reciprocal/epics/W0001-plan.md commit=${candidateCommit} updated=now`,
+      );
+
+      const accepted = await passiveAccept(repo);
+      expect(accepted).toMatchObject({ outcome: "PASSIVE_ACCEPTED", phase: "idle", stableCommit: candidateCommit });
+      expect(await readFile(boardPath, "utf8")).toContain("PLAN_APPROVED epic=true autonomy=full");
     } finally {
       await rm(repo, { recursive: true, force: true });
     }

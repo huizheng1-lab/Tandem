@@ -1,8 +1,8 @@
-import { mkdir, writeFile } from "node:fs/promises";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { commitReciprocalCandidate, prepareReciprocalWorktree } from "../src/reciprocal/candidate-commit.js";
+import { commitReciprocalCandidate, prepareReciprocalWorktree, recoverReciprocalFinalization } from "../src/reciprocal/candidate-commit.js";
 import type { CompletionReport } from "../src/orchestrator/artifacts.js";
 
 async function relayWorktree(): Promise<string> {
@@ -136,6 +136,7 @@ describe("reciprocal candidate commit", () => {
         if (file === "git" && args.join(" ") === "branch --show-current") return { stdout: "codex/reciprocal-a\n", stderr: "" };
         if (file === "git" && args[0] === "status") return { stdout: " M docs/scratch.md\n", stderr: "" };
         if (file === "git" && args[0] === "rev-parse") return { stdout: "abc123\n", stderr: "" };
+        if (file === "powershell" && args.includes("Status")) return { stdout: JSON.stringify({ phase: "working", activeRole: "B", stableCommit: "base123" }), stderr: "" };
         return { stdout: "", stderr: "" };
       }
     });
@@ -147,6 +148,138 @@ describe("reciprocal candidate commit", () => {
     expect(calls.some((call) => call.file === "powershell" && call.args.some((arg) => arg.endsWith("scripts\\continue-reciprocal-automation.ps1")) && call.args.includes("-MaxTransitions") && call.args.includes("3"))).toBe(true);
     expect(result.summary).toContain("abc123");
     expect(result.summary).toContain("Immediate reciprocal continuation attempted");
+  });
+
+  it("finalizes an epic planning turn with its durable ordered-step metadata", async () => {
+    const cwd = await relayWorktree();
+    const relayRoot = path.dirname(path.dirname(cwd));
+    const planPath = "process/reciprocal/epics/W1234-plan.md";
+    await mkdir(path.join(cwd, "process", "reciprocal", "epics"), { recursive: true });
+    await writeFile(
+      path.join(cwd, ...planPath.split("/")),
+      "# Plan\n\n## Ordered Steps\n\n- [ ] Step 1: discover\n- [ ] Step 2: propagate\n- [ ] Step 3: recover\n\n## Verification\n\nRun tests.\n",
+      "utf8"
+    );
+    await writeFile(
+      path.join(relayRoot, "control", "WISHLIST.md"),
+      `# Board\n\n<!-- wishlist-items -->\n- [ ] W1234 | P0 | Environment resolver | IN_PROGRESS epic=true autonomy=full phase=PLAN revision=1 completed=0 plan=${planPath} role=B started=now\n`,
+      "utf8"
+    );
+    const calls: Array<{ file: string; args: string[] }> = [];
+    await commitReciprocalCandidate({
+      cwd,
+      role: "B",
+      report: { ...report, filesChanged: [planPath] },
+      commandRunner: async (file, args) => {
+        calls.push({ file, args });
+        if (file === "git" && args.join(" ") === "branch --show-current") return { stdout: "codex/reciprocal-a\n", stderr: "" };
+        if (file === "git" && args[0] === "status") return { stdout: ` M ${planPath}\n`, stderr: "" };
+        if (file === "git" && args[0] === "rev-parse") return { stdout: "abc123\n", stderr: "" };
+        if (file === "powershell" && args.includes("Status")) return { stdout: JSON.stringify({ phase: "working", activeRole: "B", stableCommit: "base123" }), stderr: "" };
+        return { stdout: "", stderr: "" };
+      }
+    });
+
+    const candidate = calls.find((call) => call.file === "powershell" && call.args.includes("Candidate"));
+    expect(candidate?.args).toEqual(expect.arrayContaining(["-Steps", "3", "-Plan", planPath]));
+  });
+
+  it("durably recovers a commit when board finalization fails after git commit", async () => {
+    const cwd = await relayWorktree();
+    const relayRoot = path.dirname(path.dirname(cwd));
+    let dirty = true;
+    const firstCalls: Array<{ file: string; args: string[] }> = [];
+    await expect(
+      commitReciprocalCandidate({
+        cwd,
+        role: "B",
+        report,
+        commandRunner: async (file, args) => {
+          firstCalls.push({ file, args });
+          if (file === "git" && args.join(" ") === "branch --show-current") return { stdout: "codex/reciprocal-a\n", stderr: "" };
+          if (file === "git" && args[0] === "status") return { stdout: dirty ? " M docs/scratch.md\n" : "", stderr: "" };
+          if (file === "git" && args[0] === "commit") { dirty = false; return { stdout: "committed\n", stderr: "" }; }
+          if (file === "git" && args[0] === "rev-parse") return { stdout: "abc123\n", stderr: "" };
+          if (file === "powershell" && args.includes("Status")) return { stdout: JSON.stringify({ phase: "working", activeRole: "B", stableCommit: "base123" }), stderr: "" };
+          if (file === "powershell" && args.includes("Candidate")) throw new Error("simulated board write interruption");
+          return { stdout: "", stderr: "" };
+        }
+      })
+    ).rejects.toThrow(/board write interruption/);
+
+    const pendingPath = path.join(relayRoot, "state", "finalization-b.json");
+    expect(JSON.parse(await readFile(pendingPath, "utf8"))).toMatchObject({ stage: "committed", commit: "abc123", wishlistId: "W1234" });
+
+    const recoveryCalls: Array<{ file: string; args: string[] }> = [];
+    let relayState: Record<string, unknown> = {
+      phase: "paused",
+      pausedFromPhase: "working",
+      pauseOrigin: null,
+      pauseReasonCode: null,
+      lastSummary: "Auto-paused turn 2: executor B received 3 consecutive RESUME claims without completing. Human attention is required before resuming.",
+      activeRole: "B",
+      stableCommit: "base123"
+    };
+    const recovered = await recoverReciprocalFinalization({
+      cwd,
+      role: "B",
+      commandRunner: async (file, args) => {
+        recoveryCalls.push({ file, args });
+        if (file === "git" && args.join(" ") === "branch --show-current") return { stdout: "codex/reciprocal-a\n", stderr: "" };
+        if (file === "git" && args[0] === "status") return { stdout: "", stderr: "" };
+        if (file === "git" && args[0] === "rev-parse") return { stdout: "abc123\n", stderr: "" };
+        if (file === "powershell" && args.includes("Status")) return { stdout: JSON.stringify(relayState), stderr: "" };
+        if (file === "powershell" && args.includes("Resume")) {
+          relayState = { ...relayState, phase: "working", pausedFromPhase: null, pauseOrigin: null, pauseReasonCode: null };
+          return { stdout: JSON.stringify({ outcome: "RESUMED", ...relayState }), stderr: "" };
+        }
+        return { stdout: "", stderr: "" };
+      }
+    });
+
+    expect(recovered?.summary).toContain("abc123");
+    expect(recoveryCalls.filter((call) => call.file === "git" && call.args[0] === "commit")).toHaveLength(0);
+    expect(recoveryCalls.some((call) => call.file === "powershell" && call.args.includes("Resume"))).toBe(true);
+    expect(recoveryCalls.some((call) => call.file === "powershell" && call.args.includes("Candidate") && call.args.includes("abc123"))).toBe(true);
+    expect(recoveryCalls.some((call) => call.file === "powershell" && call.args.includes("Complete"))).toBe(true);
+    await expect(readFile(pendingPath, "utf8")).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("does not auto-resume an explicit human pause while finalization is pending", async () => {
+    const cwd = await relayWorktree();
+    const relayRoot = path.dirname(path.dirname(cwd));
+    const pendingPath = path.join(relayRoot, "state", "finalization-b.json");
+    await mkdir(path.dirname(pendingPath), { recursive: true });
+    const now = new Date().toISOString();
+    await writeFile(pendingPath, JSON.stringify({
+      schemaVersion: 1,
+      role: "B",
+      cwd,
+      wishlistId: "W1234",
+      files: report.filesChanged,
+      report,
+      summary: report.summary,
+      stage: "committed",
+      commit: "abc123",
+      createdAt: now,
+      updatedAt: now,
+    }), "utf8");
+    const calls: Array<{ file: string; args: string[] }> = [];
+
+    await expect(recoverReciprocalFinalization({
+      cwd,
+      role: "B",
+      commandRunner: async (file, args) => {
+        calls.push({ file, args });
+        if (file === "git" && args.join(" ") === "branch --show-current") return { stdout: "codex/reciprocal-a\n", stderr: "" };
+        if (file === "git" && args[0] === "status") return { stdout: "", stderr: "" };
+        if (file === "git" && args[0] === "rev-parse") return { stdout: "abc123\n", stderr: "" };
+        if (file === "powershell" && args.includes("Status")) return { stdout: JSON.stringify({ phase: "paused", pausedFromPhase: "working", pauseOrigin: "human", pauseReasonCode: "explicit-human-pause", activeRole: "B", stableCommit: "base123" }), stderr: "" };
+        return { stdout: "", stderr: "" };
+      }
+    })).rejects.toThrow(/requires its working owner/);
+    expect(calls.some((call) => call.file === "powershell" && call.args.includes("Resume"))).toBe(false);
+    expect(JSON.parse(await readFile(pendingPath, "utf8"))).toMatchObject({ stage: "committed", commit: "abc123" });
   });
 
   it("D163: completes distinct-topology artifact work from a trusted admin release without creating a source candidate commit", async () => {

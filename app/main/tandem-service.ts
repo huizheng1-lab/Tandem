@@ -14,7 +14,7 @@ import { createDiffTracker } from "../../src/orchestrator/diff.js";
 import { runOrchestration, type MachineEvent, type OrchestrationCheckpoint } from "../../src/orchestrator/machine.js";
 import type { CompletionReport } from "../../src/orchestrator/artifacts.js";
 import { createVerificationRunner } from "../../src/orchestrator/verification.js";
-import { commitReciprocalCandidate, prepareReciprocalWorktree } from "../../src/reciprocal/candidate-commit.js";
+import { commitReciprocalCandidate, prepareReciprocalWorktree, recoverReciprocalFinalization } from "../../src/reciprocal/candidate-commit.js";
 import { modelRegistry } from "../../src/providers/registry.js";
 import { withConfiguredCliModel } from "../../src/providers/cli-models.js";
 import { tandemStateDir } from "../../src/paths.js";
@@ -324,8 +324,9 @@ export class TandemService {
       await session.append("done", done);
       this.lastCheckpoint = undefined;
     } finally {
+      this.currentPhase = "IDLE";
       this.emitRemoteSessionEvent({
-        phase: this.currentPhase === "IDLE" ? "completed" : this.currentPhase.toLowerCase(),
+        phase: "completed",
         health: "healthy",
         lastEventKind: "done",
         ended: true
@@ -748,6 +749,10 @@ export class TandemService {
   }
 
   private async prepareReciprocalRun(): Promise<void> {
+    await recoverReciprocalFinalization({
+      cwd: this.projectDir,
+      role: this.env.TANDEM_INSTANCE_ID
+    });
     await prepareReciprocalWorktree({
       cwd: this.projectDir,
       role: this.env.TANDEM_INSTANCE_ID

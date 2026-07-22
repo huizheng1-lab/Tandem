@@ -33,6 +33,10 @@ const statePath = path.join(repoRoot, ".git", "tandem-relay", "state.json");
 const auditPath = path.join(relayRoot, "control", "CONTROL_PANEL_AUDIT.jsonl");
 const supervisorStatePath = path.join(relayRoot, "control", "continuation-supervisor-state.json");
 const sourceReconciliationPendingPath = path.join(relayRoot, "control", "source-reconciliation-pending.json");
+const finalizationPaths = {
+  A: path.join(relayRoot, "state", "finalization-a.json"),
+  B: path.join(relayRoot, "state", "finalization-b.json"),
+};
 const serverLogPath = path.join(relayRoot, "control", "dashboard-server.log");
 const updateReviewPath = path.join(relayRoot, "control", "UPDATE_REVIEWS.md");
 const updateReviewIndexPath = path.join(relayRoot, "control", "UPDATE_REVIEW_INDEX.json");
@@ -818,12 +822,14 @@ async function getMainVersionStatus(masterHead, stableSha, candidate, runtimeA, 
 }
 
 async function getStatus() {
-  const [state, directionText, wishlistText, supervisorState, sourceReconciliationPending, a, b, runtimeA, runtimeB, producerRelay, historyText, stableExists, masterHead, updateReviewIndex] = await Promise.all([
+  const [state, directionText, wishlistText, supervisorState, sourceReconciliationPending, finalizationA, finalizationB, a, b, runtimeA, runtimeB, producerRelay, historyText, stableExists, masterHead, updateReviewIndex] = await Promise.all([
     jsonFile(statePath, {}),
     textFile(controlPath),
     textFile(wishlistPath),
     jsonFile(supervisorStatePath, {}),
     jsonFile(sourceReconciliationPendingPath, null),
+    jsonFile(finalizationPaths.A, null),
+    jsonFile(finalizationPaths.B, null),
     getWorktree("a"),
     getWorktree("b"),
     getRuntime("A"),
@@ -872,6 +878,7 @@ async function getStatus() {
     attemptCount: supervisorState?.blocker?.attemptCount || 0,
     reason: supervisorState?.blocker?.message || "",
   });
+  const pendingFinalization = finalizationA || finalizationB || null;
   candidateUpdate.reviewNote = reviewNoteForRelay(state, direction, candidateUpdate, updateReviewIndex);
   const history = historyText.split(/\r?\n/).filter(Boolean).map((line) => {
     const [sha, short, date, subject] = line.split("\x1f");
@@ -894,6 +901,7 @@ async function getStatus() {
     { label: "Runtime builds vs master", ok: !runtimeA.lagsMaster && !runtimeB.lagsMaster, detail: `A ${runtimeA.buildShortSha}, B ${runtimeB.buildShortSha}` },
     { label: "Candidate update", ok: !candidateUpdate.unknownProvenance, detail: candidateUpdate.reviewNote?.visible ? `${candidateUpdate.reviewNote.shortSha} awaits review` : candidateUpdate.message },
     { label: "Source reconciliation", ok: !sourceReconciliationPending, detail: sourceReconciliationPending ? `${sourceReconciliationPending.status}: ${sourceReconciliationPending.reasonCode}` : "No pending source reconciliation" },
+    { label: "Candidate finalization", ok: true, detail: pendingFinalization ? `${pendingFinalization.wishlistId || "candidate"}: ${pendingFinalization.stage || "pending"}${pendingFinalization.commit ? ` ${shortSha(pendingFinalization.commit)}` : ""}` : "No pending finalization" },
   ];
   const driftWarnings = [
     a.drift.upToDate ? null : `Copy A branch is ${a.drift.behindMaster} behind / ${a.drift.aheadOfMaster} ahead master`,
@@ -910,7 +918,7 @@ async function getStatus() {
     supervisor: {
       ...supervisorState,
       gate: supervisorGate,
-      displayState: supervisorState?.displayState || supervisorGate.nextAction,
+      displayState: pendingFinalization ? "finalizing candidate" : supervisorState?.displayState || supervisorGate.nextAction,
     },
     reciprocalCapabilities: { candidatePreviewArtifactLifecycle: artifactCapability },
     worktrees: { a, b },
@@ -918,6 +926,7 @@ async function getStatus() {
     candidateUpdate,
     mainVersion,
     sourceReconciliationPending,
+    pendingFinalization,
     models: { a: modelsA, b: modelsB },
     history,
     health,

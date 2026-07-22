@@ -79,7 +79,11 @@ if ($PreparedWinUnpacked.Trim()) {
     New-Item -ItemType Directory -Path $buildRoot -Force | Out-Null
     Invoke-Native "npm.cmd" @("run", "build") $Workspace | Out-Null
     Invoke-Native "npx.cmd" @("electron-vite", "build") $Workspace | Out-Null
-    Invoke-Native "npx.cmd" @("electron-builder", "--dir", "-c.directories.output=$buildRoot") $Workspace | Out-Null
+    Invoke-WithRetry "package passive Electron runtime" {
+        Invoke-WithRetry "remove partial passive package output" { Remove-Item -LiteralPath $buildRoot -Recurse -Force -ErrorAction SilentlyContinue } 4
+        New-Item -ItemType Directory -Path $buildRoot -Force | Out-Null
+        Invoke-Native "npx.cmd" @("electron-builder", "--dir", "-c.directories.output=$buildRoot") $Workspace | Out-Null
+    } 3
     $freshWinUnpacked = Join-Path $buildRoot "win-unpacked"
 }
 

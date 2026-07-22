@@ -1,6 +1,6 @@
 import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
-import { readFile, stat } from "node:fs/promises";
+import { mkdir, readFile, rename, stat, unlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
 import type { CompletionReport } from "../orchestrator/artifacts.js";
@@ -115,6 +115,24 @@ function wishlistItem(board: string, id: string): WishlistItem | undefined {
   return undefined;
 }
 
+async function planCandidateArguments(cwd: string, item: WishlistItem): Promise<string[]> {
+  if (item.metadata.epic !== "true" || item.metadata.phase !== "PLAN") return [];
+  const planPath = item.metadata.plan?.replace(/\\/g, "/");
+  if (!planPath || !/^process\/reciprocal\/epics\/W\d{4}-plan\.md$/.test(planPath)) {
+    throw new Error(`Epic ${item.id} has an invalid plan path.`);
+  }
+  const plan = await readFile(path.join(cwd, ...planPath.split("/")), "utf8");
+  const lines = plan.split(/\r?\n/);
+  const sectionStart = lines.findIndex((line) => line.trim() === "## Ordered Steps");
+  const sectionEnd = sectionStart < 0 ? sectionStart : lines.findIndex((line, index) => index > sectionStart && /^##\s/.test(line));
+  const section = sectionStart < 0 ? "" : lines.slice(sectionStart + 1, sectionEnd < 0 ? undefined : sectionEnd).join("\n");
+  const stepNumbers = [...section.matchAll(/^- \[ \] Step (\d+):\s+.+$/gm)].map((match) => Number(match[1]));
+  if (stepNumbers.length === 0 || stepNumbers.some((value, index) => value !== index + 1)) {
+    throw new Error(`Epic ${item.id} plan must contain contiguous unchecked Ordered Steps starting at Step 1.`);
+  }
+  return ["-Steps", String(stepNumbers.length), "-Plan", planPath];
+}
+
 function shaPrefixEqual(left: string, right: string): boolean {
   const a = left.toLowerCase();
   const b = right.toLowerCase();
@@ -149,12 +167,60 @@ function artifactEvidenceId(values: { kind: string; wishlistId: string; sourceSh
 interface RelayStatus {
   phase?: string | null;
   pausedFromPhase?: string | null;
+  pauseOrigin?: string | null;
+  pauseReasonCode?: string | null;
   activeRole?: string | null;
   baseCommit?: string | null;
   stableCommit?: string | null;
   candidateCommit?: string | null;
   rollbackCommit?: string | null;
   lastCompletedCommit?: string | null;
+  lastSummary?: string | null;
+}
+
+interface PendingFinalization {
+  schemaVersion: 1;
+  role: "A" | "B";
+  cwd: string;
+  wishlistId: string;
+  files: string[];
+  report: CompletionReport;
+  summary: string;
+  stage: "reported" | "committed" | "board-recorded";
+  commit?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+function pendingFinalizationPath(relayRoot: string, role: "A" | "B"): string {
+  return path.join(relayRoot, "state", `finalization-${role.toLowerCase()}.json`);
+}
+
+async function readPendingFinalization(relayRoot: string, role: "A" | "B"): Promise<PendingFinalization | undefined> {
+  try {
+    const value = JSON.parse(await readFile(pendingFinalizationPath(relayRoot, role), "utf8")) as PendingFinalization;
+    if (value.schemaVersion !== 1 || value.role !== role || !Array.isArray(value.files) || !value.report) {
+      throw new Error(`Invalid reciprocal finalization record for role ${role}.`);
+    }
+    return value;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
+    throw error;
+  }
+}
+
+async function writePendingFinalization(relayRoot: string, value: PendingFinalization): Promise<void> {
+  const target = pendingFinalizationPath(relayRoot, value.role);
+  await mkdir(path.dirname(target), { recursive: true });
+  const temporary = `${target}.${process.pid}.${Date.now()}.tmp`;
+  await writeFile(temporary, `${JSON.stringify({ ...value, updatedAt: new Date().toISOString() }, null, 2)}\n`, "utf8");
+  await rename(temporary, target);
+}
+
+async function clearPendingFinalization(relayRoot: string, role: "A" | "B"): Promise<void> {
+  await unlink(pendingFinalizationPath(relayRoot, role)).catch((error: NodeJS.ErrnoException) => {
+    if (error.code !== "ENOENT") throw error;
+  });
 }
 
 function canCloseArtifactRelay(state: RelayStatus, head: string): boolean {
@@ -255,6 +321,221 @@ async function currentBranchOrUndefined(
   }
 }
 
+function samePaths(left: string[], right: string[]): boolean {
+  const a = [...new Set(left)].sort();
+  const b = [...new Set(right)].sort();
+  return a.length === b.length && a.every((value, index) => value === b[index]);
+}
+
+function isRecoverableMachinePause(state: RelayStatus): boolean {
+  if (state.pauseOrigin === "machine" && state.pauseReasonCode === "repeated-genuine-blocker") return true;
+  return Boolean(
+    !state.pauseOrigin &&
+      !state.pauseReasonCode &&
+      state.lastSummary &&
+      /^Auto-paused turn \d+: executor [AB] received \d+ consecutive RESUME claims without completing\./.test(state.lastSummary)
+  );
+}
+
+async function runRelay(
+  runner: NonNullable<ReciprocalCandidateCommitOptions["commandRunner"]>,
+  cwd: string,
+  args: string[]
+): Promise<string> {
+  return run(runner, cwd, "powershell", [
+    "-NoProfile",
+    "-ExecutionPolicy",
+    "Bypass",
+    "-File",
+    path.join(cwd, "scripts", "reciprocal-relay.ps1"),
+    ...args
+  ]);
+}
+
+async function runDirection(
+  runner: NonNullable<ReciprocalCandidateCommitOptions["commandRunner"]>,
+  cwd: string,
+  args: string[]
+): Promise<string> {
+  return run(runner, cwd, "powershell", [
+    "-NoProfile",
+    "-ExecutionPolicy",
+    "Bypass",
+    "-File",
+    path.join(cwd, "scripts", "reciprocal-direction.ps1"),
+    ...args
+  ]);
+}
+
+async function ensurePendingCommit(
+  pending: PendingFinalization,
+  relayRoot: string,
+  runner: NonNullable<ReciprocalCandidateCommitOptions["commandRunner"]>
+): Promise<PendingFinalization> {
+  const statusLines = (await runRaw(runner, pending.cwd, "git", ["status", "--porcelain", "--untracked-files=all"]))
+    .split(/\r?\n/)
+    .map((line) => line.trimEnd())
+    .filter(Boolean);
+  if (statusLines.length > 0) {
+    const dirty = statusLines.map(statusPath).filter((value): value is string => Boolean(value));
+    const unexpected = dirty.filter((file) => !pending.files.includes(file));
+    if (unexpected.length > 0) throw new Error(`Reciprocal candidate has unreported dirty paths: ${unexpected.join(", ")}`);
+    const missing = pending.files.filter((file) => !dirty.includes(file));
+    if (missing.length > 0) throw new Error(`Reciprocal candidate reported unchanged paths: ${missing.join(", ")}`);
+    if (pending.commit) throw new Error(`Reciprocal finalization ${pending.commit} has new dirty paths and cannot be replayed safely.`);
+    await run(runner, pending.cwd, "git", ["add", "--", ...pending.files]);
+    await run(runner, pending.cwd, "git", ["commit", "-m", commitMessage(pending.report)]);
+    pending.commit = await run(runner, pending.cwd, "git", ["rev-parse", "HEAD"]);
+    pending.stage = "committed";
+    await writePendingFinalization(relayRoot, pending);
+    return pending;
+  }
+
+  const head = await run(runner, pending.cwd, "git", ["rev-parse", "HEAD"]);
+  if (pending.commit) {
+    if (head !== pending.commit) throw new Error(`Pending reciprocal finalization expected HEAD ${pending.commit}, but found ${head}.`);
+    return pending;
+  }
+
+  const state = await readRelayStatus(runner, pending.cwd);
+  if (!state.stableCommit) throw new Error("Pending reciprocal finalization cannot recover without a stable relay commit.");
+  const commits = (await runRaw(runner, pending.cwd, "git", ["rev-list", `${state.stableCommit}..${head}`]))
+    .split(/\r?\n/)
+    .filter(Boolean);
+  if (commits.length < 1) {
+    throw new Error(`Pending reciprocal finalization found no app-layer commit above stable ${state.stableCommit}.`);
+  }
+  const changed = (await runRaw(runner, pending.cwd, "git", ["diff", "--name-only", state.stableCommit, head, "--"]))
+    .split(/\r?\n/)
+    .map((value) => value.replace(/\\/g, "/").trim())
+    .filter(Boolean);
+  if (!samePaths(changed, pending.files)) {
+    throw new Error("Pending reciprocal finalization found commits that do not exactly match the reported files.");
+  }
+  if (commits.length === 1) {
+    const parent = await run(runner, pending.cwd, "git", ["rev-parse", `${head}^`]);
+    if (parent !== state.stableCommit) throw new Error("Pending reciprocal finalization commit is not a direct child of the stable base.");
+  } else {
+    const merges = (await runRaw(runner, pending.cwd, "git", ["rev-list", "--merges", `${state.stableCommit}..${head}`])).trim();
+    const subjects = (await runRaw(runner, pending.cwd, "git", ["log", "--format=%s", `${state.stableCommit}..${head}`]))
+      .split(/\r?\n/)
+      .filter(Boolean);
+    const touched = (await runRaw(runner, pending.cwd, "git", ["log", "--format=", "--name-only", `${state.stableCommit}..${head}`, "--"]))
+      .split(/\r?\n/)
+      .map((value) => value.replace(/\\/g, "/").trim())
+      .filter(Boolean);
+    if (merges || subjects.length !== commits.length || subjects.some((subject) => !subject.startsWith("relay:")) || touched.some((file) => !pending.files.includes(file))) {
+      throw new Error("Pending reciprocal finalization refuses a multi-commit range unless every commit is linear, app-layer-authored, and limited to the reported files.");
+    }
+  }
+  pending.commit = head;
+  pending.stage = "committed";
+  await writePendingFinalization(relayRoot, pending);
+  return pending;
+}
+
+async function finalizePendingCandidate(
+  pending: PendingFinalization,
+  relayRoot: string,
+  runner: NonNullable<ReciprocalCandidateCommitOptions["commandRunner"]>
+): Promise<CompletionReport> {
+  pending = await ensurePendingCommit(pending, relayRoot, runner);
+  const commit = pending.commit as string;
+  let state = await readRelayStatus(runner, pending.cwd);
+
+  if (state.candidateCommit === commit && state.phase === "passive-testing") {
+    await clearPendingFinalization(relayRoot, pending.role);
+    return {
+      ...pending.report,
+      summary: `${pending.report.summary}\n\nReciprocal relay candidate finalization was already complete: ${commit}`,
+      deviationsFromPlan: [...pending.report.deviationsFromPlan, `Tandem app layer recovered already-completed reciprocal relay commit ${commit}`]
+    };
+  }
+
+  if (
+    state.phase === "paused" &&
+    state.pausedFromPhase === "working" &&
+    isRecoverableMachinePause(state) &&
+    state.activeRole === pending.role
+  ) {
+    await runRelay(runner, pending.cwd, [
+      "-Action",
+      "Resume",
+      "-Summary",
+      `App-layer recovery is finalizing durable candidate ${commit}; no new agent turn is required.`
+    ]);
+    state = await readRelayStatus(runner, pending.cwd);
+  }
+
+  if (state.phase !== "working" || state.activeRole !== pending.role) {
+    throw new Error(`Pending reciprocal finalization requires its working owner; phase=${state.phase ?? "unknown"}, owner=${state.activeRole ?? "none"}.`);
+  }
+
+  const boardPath = path.join(relayRoot, "control", "WISHLIST.md");
+  const item = wishlistItem(await readFile(boardPath, "utf8"), pending.wishlistId);
+  if (!item) throw new Error(`Pending reciprocal wishlist item was not found: ${pending.wishlistId}`);
+  if (item.status === "IN_PROGRESS") {
+    const planArgs = await planCandidateArguments(pending.cwd, item);
+    await runDirection(runner, pending.cwd, ["-Action", "Candidate", "-Id", pending.wishlistId, "-Commit", commit, ...planArgs]);
+    pending.stage = "board-recorded";
+    await writePendingFinalization(relayRoot, pending);
+  } else if (item.status !== "CANDIDATE" || !item.metadata.commit || !shaPrefixEqual(item.metadata.commit, commit)) {
+    throw new Error(`Pending reciprocal wishlist item ${pending.wishlistId} is ${item.status} with incompatible candidate metadata.`);
+  }
+
+  await runRelay(runner, pending.cwd, [
+    "-Action",
+    "Complete",
+    "-Role",
+    pending.role,
+    "-Summary",
+    pending.summary
+  ]);
+  await clearPendingFinalization(relayRoot, pending.role);
+
+  let continuationNote = "";
+  try {
+    const continuationOutput = await runRaw(runner, pending.cwd, "powershell", [
+      "-NoProfile",
+      "-ExecutionPolicy",
+      "Bypass",
+      "-File",
+      path.join(pending.cwd, "scripts", "continue-reciprocal-automation.ps1"),
+      "-Workspace",
+      pending.cwd,
+      "-MaxTransitions",
+      "3"
+    ]);
+    continuationNote = `\nImmediate reciprocal continuation attempted: ${continuationOutput.trim()}`;
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    continuationNote = `\nImmediate reciprocal continuation unavailable; scheduled tick fallback remains active: ${message}`;
+  }
+
+  return {
+    ...pending.report,
+    summary: `${pending.report.summary}\n\nReciprocal relay candidate committed by Tandem app layer: ${commit}${continuationNote}`,
+    deviationsFromPlan: [...pending.report.deviationsFromPlan, `Tandem app layer created reciprocal relay commit ${commit}`]
+  };
+}
+
+export async function recoverReciprocalFinalization(
+  options: Omit<ReciprocalCandidateCommitOptions, "report">
+): Promise<CompletionReport | undefined> {
+  if (!isRole(options.role)) return undefined;
+  const runner = options.commandRunner ?? defaultRunner;
+  const branch = await currentBranchOrUndefined(runner, options.cwd);
+  if (branch !== roleBranch[options.role]) return undefined;
+  const relayRoot = relayRootForWorktree(options.cwd);
+  if (!relayRoot) return undefined;
+  const pending = await readPendingFinalization(relayRoot, options.role);
+  if (!pending) return undefined;
+  if (path.resolve(pending.cwd).toLowerCase() !== path.resolve(options.cwd).toLowerCase()) {
+    throw new Error(`Pending reciprocal finalization belongs to ${pending.cwd}, not ${options.cwd}.`);
+  }
+  return finalizePendingCandidate(pending, relayRoot, runner);
+}
+
 export async function commitReciprocalCandidate(options: ReciprocalCandidateCommitOptions): Promise<CompletionReport> {
   if (!isRole(options.role) || options.report.status !== "complete") return options.report;
   const expectedBranch = roleBranch[options.role];
@@ -272,84 +553,31 @@ export async function commitReciprocalCandidate(options: ReciprocalCandidateComm
   const files = [...new Set(options.report.filesChanged.map(normalizeReportedPath))];
   for (const file of files) assertAllowedCandidatePath(file);
 
-  const statusLines = (await runRaw(runner, options.cwd, "git", ["status", "--porcelain", "--untracked-files=all"]))
-    .split(/\r?\n/)
-    .map((line) => line.trimEnd())
-    .filter(Boolean);
-  if (statusLines.length === 0) return options.report;
-
-  const allowed = new Set(files);
-  const dirty = statusLines.map(statusPath).filter((value): value is string => Boolean(value));
-  const unexpected = dirty.filter((file) => !allowed.has(file));
-  if (unexpected.length > 0) {
-    throw new Error(`Reciprocal candidate has unreported dirty paths: ${unexpected.join(", ")}`);
-  }
-  const missing = files.filter((file) => !dirty.includes(file));
-  if (missing.length > 0) {
-    throw new Error(`Reciprocal candidate reported unchanged paths: ${missing.join(", ")}`);
-  }
-
-  await run(runner, options.cwd, "git", ["add", "--", ...files]);
-  await run(runner, options.cwd, "git", ["commit", "-m", commitMessage(options.report)]);
-  const commit = await run(runner, options.cwd, "git", ["rev-parse", "HEAD"]);
-
   const relayRoot = relayRootForWorktree(options.cwd);
   if (!relayRoot) throw new Error(`Reciprocal candidate cwd is not under a relay worktrees directory: ${options.cwd}`);
   const boardPath = path.join(relayRoot, "control", "WISHLIST.md");
   const id = activeWishlistId(await readFile(boardPath, "utf8"), options.role);
-  if (id) {
-    await run(runner, options.cwd, "powershell", [
-      "-NoProfile",
-      "-ExecutionPolicy",
-      "Bypass",
-      "-File",
-      path.join(options.cwd, "scripts", "reciprocal-direction.ps1"),
-      "-Action",
-      "Candidate",
-      "-Id",
-      id,
-      "-Commit",
-      commit
-    ]);
+  if (!id) throw new Error(`Reciprocal candidate has no active wishlist item owned by role ${options.role}.`);
+  const existing = await readPendingFinalization(relayRoot, options.role);
+  if (existing) {
+    if (!samePaths(existing.files, files)) throw new Error("A different reciprocal app-layer finalization is already pending.");
+    return finalizePendingCandidate(existing, relayRoot, runner);
   }
-  await run(runner, options.cwd, "powershell", [
-    "-NoProfile",
-    "-ExecutionPolicy",
-    "Bypass",
-    "-File",
-    path.join(options.cwd, "scripts", "reciprocal-relay.ps1"),
-    "-Action",
-    "Complete",
-    "-Role",
-    options.role,
-    "-Summary",
-    options.summary ?? options.report.summary
-  ]);
-
-  let continuationNote = "";
-  try {
-    const continuationOutput = await runRaw(runner, options.cwd, "powershell", [
-      "-NoProfile",
-      "-ExecutionPolicy",
-      "Bypass",
-      "-File",
-      path.join(options.cwd, "scripts", "continue-reciprocal-automation.ps1"),
-      "-Workspace",
-      options.cwd,
-      "-MaxTransitions",
-      "3"
-    ]);
-    continuationNote = `\nImmediate reciprocal continuation attempted: ${continuationOutput.trim()}`;
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    continuationNote = `\nImmediate reciprocal continuation unavailable; scheduled tick fallback remains active: ${message}`;
-  }
-
-  return {
-    ...options.report,
-    summary: `${options.report.summary}\n\nReciprocal relay candidate committed by Tandem app layer: ${commit}${continuationNote}`,
-    deviationsFromPlan: [...options.report.deviationsFromPlan, `Tandem app layer created reciprocal relay commit ${commit}`]
+  const now = new Date().toISOString();
+  const pending: PendingFinalization = {
+    schemaVersion: 1,
+    role: options.role,
+    cwd: path.resolve(options.cwd),
+    wishlistId: id,
+    files,
+    report: options.report,
+    summary: options.summary ?? options.report.summary,
+    stage: "reported",
+    createdAt: now,
+    updatedAt: now
   };
+  await writePendingFinalization(relayRoot, pending);
+  return finalizePendingCandidate(pending, relayRoot, runner);
 }
 
 async function completeReciprocalArtifact(

@@ -1,6 +1,6 @@
 ﻿{
     "schemaVersion":  1,
-    "generatedAtUtc":  "2026-07-22T06:25:35.6310891Z",
+    "generatedAtUtc":  "2026-07-22T12:30:29.8250113Z",
     "files":  [
                   {
                       "path":  "approval-flow.e2e.mjs",
@@ -64,8 +64,8 @@
                   },
                   {
                       "path":  "server.mjs",
-                      "sha256":  "A43FD2E96443473339E2960D948B97377825A147E375FC1C018E67E2C52E3511",
-                      "bytes":  98870
+                      "sha256":  "7A42B23599ABF1862155177D93A09A555AD87A5921D388BBE5A6AFDE8BF1338D",
+                      "bytes":  99556
                   },
                   {
                       "path":  "start-dashboard.ps1",
