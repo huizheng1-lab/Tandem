@@ -1,6 +1,7 @@
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { createHmac } from "node:crypto";
 import { execa } from "execa";
 import { describe, expect, it } from "vitest";
 
@@ -52,6 +53,37 @@ describe("reciprocal relay script", () => {
     const script = path.resolve("scripts/reciprocal-relay.ps1");
     const result = await execa("powershell", ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", script, ...args], { cwd: repo, env });
     return JSON.parse(result.stdout);
+  }
+
+  function signedAuthorityEnv(request: Record<string, string>, decision: "approve" | "deny", secret = "dashboard-secret") {
+    const expiresAtUtc = new Date(Date.now() + 120_000).toISOString();
+    const binding = [
+      decision,
+      request.requestId,
+      request.id,
+      request.owner,
+      request.authority,
+      request.action,
+      request.checkpoint,
+      request.resume,
+      expiresAtUtc,
+    ].join("\n");
+    const packet = {
+      decision,
+      requestId: request.requestId,
+      id: request.id,
+      owner: request.owner,
+      authority: request.authority,
+      action: request.action,
+      checkpoint: request.checkpoint,
+      resume: request.resume,
+      expiresAtUtc,
+      signature: createHmac("sha256", secret).update(binding).digest("hex"),
+    };
+    return {
+      TANDEM_AUTHORITY_DECISION_SECRET: secret,
+      TANDEM_AUTHORITY_DECISION_PACKET: JSON.stringify(packet),
+    };
   }
 
   async function writeSharedBoard(repo: string, line: string) {
@@ -340,10 +372,14 @@ describe("reciprocal relay script", () => {
       expect(declared.authorityRequest.decisionProof).toBeUndefined();
       expect(await readFile(boardPath, "utf8")).toContain("authorityStatus=pending");
 
-      await expect(relay(repo, "-Action", "ApproveAuthority")).rejects.toThrow(/trusted dashboard decision proof/);
+      await expect(relay(repo, "-Action", "ApproveAuthority")).rejects.toThrow(/authenticated dashboard decision packet/);
       const statePath = path.join(repo, ".git", "tandem-relay", "state.json");
       const state = JSON.parse(await readFile(statePath, "utf8"));
-      const approved = await relay(repo, "-Action", "ApproveAuthority", "-AuthorityProof", state.authorityRequest.decisionProof);
+      expect(state.authorityRequest.decisionProof).toBeUndefined();
+      expect(state.authorityRequest.requestDigest).toMatch(/^[a-f0-9]{64}$/);
+      const forgedPacket = signedAuthorityEnv({ ...state.authorityRequest, checkpoint: "wrongStep" }, "approve");
+      await expect(relayWithEnv(repo, forgedPacket, "-Action", "ApproveAuthority")).rejects.toThrow(/checkpoint mismatch/);
+      const approved = await relayWithEnv(repo, signedAuthorityEnv(state.authorityRequest, "approve"), "-Action", "ApproveAuthority");
       expect(approved).toMatchObject({
         outcome: "AUTHORITY_APPROVED",
         phase: "working",

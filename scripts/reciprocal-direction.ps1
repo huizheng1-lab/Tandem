@@ -77,6 +77,8 @@ $taxonomy = Get-ReciprocalTaxonomy
 function Assert-AuthorityProof([string]$ExpectedDecision, [string]$WishlistId, [hashtable]$Metadata) {
     if (-not $AuthorityProofPath) { throw "$ExpectedDecision requires a trusted relay authority proof." }
     if (-not (Test-Path -LiteralPath $AuthorityProofPath -PathType Leaf)) { throw "$ExpectedDecision authority proof is missing." }
+    $secret = [string]$env:TANDEM_AUTHORITY_DECISION_SECRET
+    if (-not $secret) { throw "$ExpectedDecision requires a trusted relay authority signing secret." }
     try {
         $proof = Get-Content -LiteralPath $AuthorityProofPath -Raw | ConvertFrom-Json
     } catch {
@@ -89,7 +91,34 @@ function Assert-AuthorityProof([string]$ExpectedDecision, [string]$WishlistId, [
     foreach ($name in @("authority", "action", "checkpoint", "resume")) {
         if ([string]$proof.$name -ne [string]$Metadata[$name]) { throw "$ExpectedDecision authority proof $name mismatch." }
     }
-    if (-not $proof.requestId -or -not $proof.proof) { throw "$ExpectedDecision authority proof is incomplete." }
+    if (-not $proof.requestId -or -not $proof.signature) { throw "$ExpectedDecision authority proof is incomplete." }
+    $binding = @(
+        [string]$proof.decision,
+        [string]$proof.requestId,
+        [string]$proof.id,
+        [string]$proof.owner,
+        [string]$proof.authority,
+        [string]$proof.action,
+        [string]$proof.checkpoint,
+        [string]$proof.resume,
+        [string]$proof.expiresAtUtc
+    ) -join "`n"
+    $hmac = [Security.Cryptography.HMACSHA256]::new([Text.UTF8Encoding]::new($false).GetBytes($secret))
+    try {
+        $expected = [BitConverter]::ToString($hmac.ComputeHash([Text.UTF8Encoding]::new($false).GetBytes($binding))).Replace("-", "").ToLowerInvariant()
+    } finally {
+        $hmac.Dispose()
+    }
+    $left = [Text.UTF8Encoding]::new($false).GetBytes($expected)
+    $right = [Text.UTF8Encoding]::new($false).GetBytes(([string]$proof.signature).ToLowerInvariant())
+    $diff = $left.Length -bxor $right.Length
+    $max = [Math]::Max($left.Length, $right.Length)
+    for ($i = 0; $i -lt $max; $i++) {
+        $a = if ($i -lt $left.Length) { $left[$i] } else { 0 }
+        $b = if ($i -lt $right.Length) { $right[$i] } else { 0 }
+        $diff = $diff -bor ($a -bxor $b)
+    }
+    if ($diff -ne 0) { throw "$ExpectedDecision authority proof signature mismatch." }
 }
 
 function Get-GitValue([string[]]$Arguments) {

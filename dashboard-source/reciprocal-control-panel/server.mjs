@@ -1,6 +1,6 @@
 import { createServer } from "node:http";
 import { spawn } from "node:child_process";
-import { createHash, randomBytes } from "node:crypto";
+import { createHash, createHmac, randomBytes } from "node:crypto";
 import { appendFile, mkdir, readFile, stat, writeFile } from "node:fs/promises";
 import { appendFileSync, existsSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import path from "node:path";
@@ -43,6 +43,7 @@ const candidateHome = path.join(relayRoot, "state", "candidate-preview");
 const candidateUserData = path.join(relayRoot, "user-data", "candidate-preview");
 const candidateProject = path.join(relayRoot, "candidate-preview-project");
 const token = randomBytes(24).toString("hex");
+const authorityDecisionSecret = randomBytes(32).toString("hex");
 const port = Number(process.env.PORT || process.argv.find((value) => value.startsWith("--port="))?.split("=")[1] || 4782);
 const stopSignalPath = path.join(relayRoot, "control", `dashboard-stop-${port}.signal`);
 
@@ -97,9 +98,9 @@ process.on("unhandledRejection", (reason) => {
   serverLog("unhandledRejection", errorText(reason));
 });
 
-function run(command, args, cwd = repoRoot) {
+function run(command, args, cwd = repoRoot, env = process.env) {
   return new Promise((resolve, reject) => {
-    const child = spawn(command, args, { cwd, windowsHide: true });
+    const child = spawn(command, args, { cwd, windowsHide: true, env });
     let stdout = "";
     let stderr = "";
     child.stdout.on("data", (chunk) => { stdout += chunk; });
@@ -111,9 +112,9 @@ function run(command, args, cwd = repoRoot) {
   });
 }
 
-function runResult(command, args, cwd = repoRoot) {
+function runResult(command, args, cwd = repoRoot, env = process.env) {
   return new Promise((resolve) => {
-    const child = spawn(command, args, { cwd, windowsHide: true });
+    const child = spawn(command, args, { cwd, windowsHide: true, env });
     let stdout = "";
     let stderr = "";
     child.stdout.on("data", (chunk) => { stdout += chunk; });
@@ -134,6 +135,11 @@ const git = (cwd, ...args) => run("git", args, cwd);
 async function recordHarnessCommand(args, cwd = repoRoot) {
   if (!testCommandLogPath) return;
   await appendFile(testCommandLogPath, `${JSON.stringify({ at: new Date().toISOString(), cwd, args })}\n`, "utf8");
+}
+
+async function powershellWithEnv(env, ...args) {
+  await recordHarnessCommand(args);
+  return run("powershell", ["-NoProfile", "-ExecutionPolicy", "Bypass", ...args], repoRoot, env);
 }
 
 async function powershell(...args) {
@@ -160,6 +166,39 @@ async function powershell(...args) {
     }
   }
   return run("powershell", ["-NoProfile", "-ExecutionPolicy", "Bypass", ...args]);
+}
+
+function authorityDecisionBinding(request, decision, expiresAtUtc) {
+  return [
+    decision,
+    request.requestId,
+    request.id,
+    request.owner,
+    request.authority,
+    request.action,
+    request.checkpoint,
+    request.resume,
+    expiresAtUtc,
+  ].join("\n");
+}
+
+function signedAuthorityDecisionPacket(request, decision) {
+  const expiresAtUtc = new Date(Date.now() + 120_000).toISOString();
+  const packet = {
+    decision,
+    requestId: request.requestId,
+    id: request.id,
+    owner: request.owner,
+    authority: request.authority,
+    action: request.action,
+    checkpoint: request.checkpoint,
+    resume: request.resume,
+    expiresAtUtc,
+  };
+  packet.signature = createHmac("sha256", authorityDecisionSecret)
+    .update(authorityDecisionBinding(request, decision, expiresAtUtc))
+    .digest("hex");
+  return packet;
 }
 
 function readErrorFallback(file, fallback, error) {
@@ -1339,7 +1378,7 @@ function send(response, status, payload, type = "application/json; charset=utf-8
 
 function sanitizedRelayState(state) {
   const authorityRequest = state?.authorityRequest
-    ? Object.fromEntries(Object.entries(state.authorityRequest).filter(([key]) => key !== "decisionProof"))
+    ? Object.fromEntries(Object.entries(state.authorityRequest).filter(([key]) => !["decisionProof", "decisionSecret", "signature"].includes(key)))
     : null;
   return { ...state, authorityRequest };
 }
@@ -1418,13 +1457,13 @@ async function handle(request, response) {
         return send(response, 200, { ok: true, decision, noop: true, request: sanitizedRelayState(currentState).authorityRequest });
       }
       if (request.status !== "pending") throw new Error(`Authority request is not pending; status=${request.status}`);
-      if (!request.decisionProof) throw new Error("Authority request is missing its trusted decision proof");
       const note = String(input.note || "").replace(/\s+/g, " ").trim();
       if (decision === "deny" && (!note || note.length > 500)) throw new Error("Authority denial requires a note between 1 and 500 characters");
-      const output = await powershell(
+      const packet = signedAuthorityDecisionPacket(request, decision);
+      const output = await powershellWithEnv(
+        { ...process.env, TANDEM_AUTHORITY_DECISION_SECRET: authorityDecisionSecret, TANDEM_AUTHORITY_DECISION_PACKET: JSON.stringify(packet) },
         "-File", path.join(repoRoot, "scripts", "reciprocal-relay.ps1"),
         "-Action", decision === "approve" ? "ApproveAuthority" : "DenyAuthority",
-        "-AuthorityProof", request.decisionProof,
         ...(decision === "deny" ? ["-Summary", note] : []),
         "-Workspace", worktrees.b.path,
       );

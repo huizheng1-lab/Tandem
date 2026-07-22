@@ -255,6 +255,21 @@ describeWindows("reciprocal direction epics", () => {
       .rejects.toThrow(/trusted relay authority proof/);
     await expect(direction(file, "-Action", "DenyAuthority", "-Id", added.id, "-Note", "too risky"))
       .rejects.toThrow(/trusted relay authority proof/);
+    const forgedProof = path.join(path.dirname(file), "forged-authority-proof.json");
+    await writeFile(forgedProof, JSON.stringify({
+      requestId: "attacker",
+      decision: "approve",
+      id: added.id,
+      owner: "A",
+      authority: "permission",
+      action: "enableLoopback",
+      checkpoint: "step1",
+      resume: "resumeStep1",
+      expiresAtUtc: new Date(Date.now() + 120_000).toISOString(),
+      signature: "0".repeat(64),
+    }), "utf8");
+    await expect(direction(file, "-Action", "ApproveAuthority", "-Id", added.id, "-AuthorityProofPath", forgedProof))
+      .rejects.toThrow(/trusted relay authority signing secret/);
   }, 30_000);
 
   it("D178 loads the canonical taxonomy fixture before mutating direction state", async () => {

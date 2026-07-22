@@ -363,8 +363,6 @@ function Reset-BlockerState([object]$SupervisorState) {
 
 function Test-LiveLease([object]$Lease) {
     if (-not $Lease -or -not $Lease.pid -or -not $Lease.processStartedAtUtc -or -not $Lease.expiresAtUtc) { return $false }
-    $expires = [datetime]::Parse([string]$Lease.expiresAtUtc).ToUniversalTime()
-    if ($expires -lt (Get-Date).ToUniversalTime()) { return $false }
     $actualStart = Get-ProcessStartedAtUtc ([int]$Lease.pid)
     return ($actualStart -and $actualStart -eq [string]$Lease.processStartedAtUtc)
 }

@@ -19,8 +19,6 @@ param(
 
     [string]$ResumeToken,
 
-    [string]$AuthorityProof,
-
     [string]$NewStableCommit,
 
     [string]$Workspace = (Get-Location).Path,
@@ -262,7 +260,7 @@ try {
         if ($state.authorityRequest) {
             $authority = [ordered]@{}
             foreach ($property in $state.authorityRequest.PSObject.Properties) {
-                if ($property.Name -ne "decisionProof") { $authority[$property.Name] = $property.Value }
+                if ($property.Name -notin @("decisionProof", "decisionSecret", "signature")) { $authority[$property.Name] = $property.Value }
             }
         }
         $result = [ordered]@{
@@ -568,27 +566,95 @@ try {
         return $clean
     }
 
-    function New-AuthorityProofFile([object]$Request, [string]$Decision) {
+    function Get-Sha256Hex([string]$Value) {
+        $sha = [Security.Cryptography.SHA256]::Create()
+        try {
+            return [BitConverter]::ToString($sha.ComputeHash([Text.UTF8Encoding]::new($false).GetBytes($Value))).Replace("-", "").ToLowerInvariant()
+        } finally {
+            $sha.Dispose()
+        }
+    }
+
+    function Get-AuthorityBinding([object]$Request, [string]$Decision, [string]$ExpiresAtUtc) {
+        return @(
+            $Decision,
+            [string]$Request.requestId,
+            [string]$Request.id,
+            [string]$Request.owner,
+            [string]$Request.authority,
+            [string]$Request.action,
+            [string]$Request.checkpoint,
+            [string]$Request.resume,
+            $ExpiresAtUtc
+        ) -join "`n"
+    }
+
+    function Get-HmacHex([string]$Secret, [string]$Value) {
+        $hmac = [Security.Cryptography.HMACSHA256]::new([Text.UTF8Encoding]::new($false).GetBytes($Secret))
+        try {
+            return [BitConverter]::ToString($hmac.ComputeHash([Text.UTF8Encoding]::new($false).GetBytes($Value))).Replace("-", "").ToLowerInvariant()
+        } finally {
+            $hmac.Dispose()
+        }
+    }
+
+    function Assert-FixedEqual([string]$Expected, [string]$Actual, [string]$Message) {
+        $left = [Text.UTF8Encoding]::new($false).GetBytes($Expected.ToLowerInvariant())
+        $right = [Text.UTF8Encoding]::new($false).GetBytes($Actual.ToLowerInvariant())
+        $diff = $left.Length -bxor $right.Length
+        $max = [Math]::Max($left.Length, $right.Length)
+        for ($i = 0; $i -lt $max; $i++) {
+            $a = if ($i -lt $left.Length) { $left[$i] } else { 0 }
+            $b = if ($i -lt $right.Length) { $right[$i] } else { 0 }
+            $diff = $diff -bor ($a -bxor $b)
+        }
+        if ($diff -ne 0) {
+            throw $Message
+        }
+    }
+
+    function Assert-DashboardAuthorityDecision([object]$Request, [string]$Decision) {
+        $secret = [string]$env:TANDEM_AUTHORITY_DECISION_SECRET
+        $packetJson = [string]$env:TANDEM_AUTHORITY_DECISION_PACKET
+        if (-not $secret -or -not $packetJson) { throw "$Decision authority requires an authenticated dashboard decision packet." }
+        try {
+            $packet = $packetJson | ConvertFrom-Json
+        } catch {
+            throw "$Decision authority decision packet is invalid JSON."
+        }
+        if ([string]$packet.decision -ne $Decision) { throw "$Decision authority decision mismatch." }
+        foreach ($name in @("requestId", "id", "owner", "authority", "action", "checkpoint", "resume")) {
+            if ([string]$packet.$name -ne [string]$Request.$name) { throw "$Decision authority decision $name mismatch." }
+        }
+        $expires = [datetime]::Parse([string]$packet.expiresAtUtc).ToUniversalTime()
+        if ($expires -lt (Get-Date).ToUniversalTime()) { throw "$Decision authority decision packet expired." }
+        $binding = Get-AuthorityBinding $Request $Decision ([string]$packet.expiresAtUtc)
+        Assert-FixedEqual (Get-HmacHex $secret $binding) ([string]$packet.signature) "$Decision authority decision signature mismatch."
+        return $packet
+    }
+
+    function New-AuthorityProofFile([object]$Request, [string]$Decision, [object]$Packet) {
         $proofPath = Join-Path $relayDir "authority-proof-$($Request.requestId)-$Decision.json"
         $payload = [ordered]@{
             requestId = $Request.requestId
-            proof = $Request.decisionProof
             decision = $Decision
             id = $Request.id
+            owner = $Request.owner
             authority = $Request.authority
             action = $Request.action
             checkpoint = $Request.checkpoint
             resume = $Request.resume
-            expiresAtUtc = (Get-Date).ToUniversalTime().AddMinutes(2).ToString("o")
+            expiresAtUtc = [string]$Packet.expiresAtUtc
+            signature = [string]$Packet.signature
         }
         $payload | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath $proofPath -Encoding UTF8
         return $proofPath
     }
 
-    function Invoke-DirectionAuthorityDecision([object]$Request, [string]$Decision, [string]$NoteText = "") {
+    function Invoke-DirectionAuthorityDecision([object]$Request, [string]$Decision, [object]$Packet, [string]$NoteText = "") {
         $directionScript = Join-Path $Workspace "scripts\reciprocal-direction.ps1"
         $boardPath = Get-SharedDirectionPath
-        $proofPath = New-AuthorityProofFile $Request $Decision
+        $proofPath = New-AuthorityProofFile $Request $Decision $Packet
         try {
             $directionAction = if ($Decision -eq "approve") { "ApproveAuthority" } else { "DenyAuthority" }
             $directionArgs = @(
@@ -1015,9 +1081,11 @@ try {
         $declareText = "$AuthKind`__$verb`__$checkpointValue`__$resumeValue"
         $output = @(& $directionScript -Action DeclareAuthority -Id $Id -Text $declareText -ControlPath $boardPath 2>&1)
         if ($LASTEXITCODE -ne 0 -or -not $?) { throw "Direction authority declaration failed: $($output -join ' ')" }
+        $requestId = [guid]::NewGuid().ToString("n")
+        $requestDigest = Get-Sha256Hex (@($requestId, $Id, $Role, $AuthKind, $verb, $checkpointValue, $resumeValue) -join "`n")
         $state.authorityRequest = [pscustomobject]@{
-            requestId = [guid]::NewGuid().ToString("n")
-            decisionProof = [guid]::NewGuid().ToString("n")
+            requestId = $requestId
+            requestDigest = $requestDigest
             id = $Id
             owner = $Role
             authority = $AuthKind
@@ -1048,8 +1116,8 @@ try {
             exit 0
         }
         if ($request.status -ne "pending") { throw "Authority request is not pending; status=$($request.status)." }
-        if (-not $AuthorityProof -or $AuthorityProof -ne $request.decisionProof) { throw "ApproveAuthority requires the trusted dashboard decision proof." }
-        Invoke-DirectionAuthorityDecision $request "approve" | Out-Null
+        $packet = Assert-DashboardAuthorityDecision $request "approve"
+        Invoke-DirectionAuthorityDecision $request "approve" $packet | Out-Null
         $request.status = "approved"
         $request.approvedAtUtc = (Get-Date).ToUniversalTime().ToString("o")
         if ($state.phase -eq "paused" -and $state.pausedFromPhase -eq "working" -and $state.activeRole -eq $request.owner) {
@@ -1073,9 +1141,9 @@ try {
             exit 0
         }
         if ($request.status -ne "pending") { throw "Authority request is not pending; status=$($request.status)." }
-        if (-not $AuthorityProof -or $AuthorityProof -ne $request.decisionProof) { throw "DenyAuthority requires the trusted dashboard decision proof." }
+        $packet = Assert-DashboardAuthorityDecision $request "deny"
         $noteText = if ($Summary.Trim()) { $Summary.Trim() } else { "authority denied" }
-        Invoke-DirectionAuthorityDecision $request "deny" $noteText | Out-Null
+        Invoke-DirectionAuthorityDecision $request "deny" $packet $noteText | Out-Null
         $request.status = "denied"
         $request.deniedAtUtc = (Get-Date).ToUniversalTime().ToString("o")
         $state.phase = "paused"

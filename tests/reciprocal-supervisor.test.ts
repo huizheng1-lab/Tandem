@@ -117,6 +117,19 @@ describeWindows("reciprocal continuation supervisor", () => {
     expect(heldState.displayState).toBe("waiting-not-blocked");
 
     await writeFile(lock, JSON.stringify({
+      token: "long-operation",
+      pid: currentPid,
+      processStartedAtUtc: currentStart,
+      acquiredAtUtc: new Date(Date.now() - 240_000).toISOString(),
+      heartbeatAtUtc: new Date(Date.now() - 180_000).toISOString(),
+      expiresAtUtc: new Date(Date.now() - 60_000).toISOString(),
+    }), "utf8");
+
+    const expiredButLive = await supervisor(repo, relay);
+    expect(expiredButLive.actions[0]).toMatchObject({ kind: "lease-held", code: "lease-held" });
+    expect((await readJson(lock)).token).toBe("long-operation");
+
+    await writeFile(lock, JSON.stringify({
       token: "dead",
       pid: 999999,
       processStartedAtUtc: "2000-01-01T00:00:00.0000000Z",
