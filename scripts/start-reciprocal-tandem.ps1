@@ -1,6 +1,6 @@
 param(
     [ValidateSet("A", "B", "Both")]
-    [string]$Role = "Both",
+    [string]$Role = "A",
     [string]$RelayRoot = (Join-Path (Split-Path (Resolve-Path (Join-Path $PSScriptRoot "..")).Path -Parent) "Tandem Reciprocal"),
     [int]$AutomationPortA = 4783,
     [int]$AutomationPortB = 4784
@@ -8,6 +8,7 @@ param(
 
 $ErrorActionPreference = "Stop"
 $adminRepo = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
+$statePath = Join-Path $adminRepo ".git\tandem-relay\state.json"
 
 Add-Type -TypeDefinition @"
 using System;
@@ -166,5 +167,29 @@ function Start-Executor([string]$SelectedRole) {
     Write-Host "Started executor $SelectedRole hidden as breakaway PID $launchedPid ($mode); automation endpoint 127.0.0.1:$automationPort targets $targetWorktree."
 }
 
-if ($Role -in @("A", "Both")) { Start-Executor "A" }
-if ($Role -in @("B", "Both")) { Start-Executor "B" }
+function Get-PhaseAwareStartRoles {
+    if ($Role -ne "Both") { return @($Role) }
+    $phase = "unknown"
+    if (Test-Path -LiteralPath $statePath) {
+        try {
+            $state = Get-Content -LiteralPath $statePath -Raw | ConvertFrom-Json
+            $phase = [string]$state.phase
+        } catch {
+            $phase = "unknown"
+        }
+    }
+    if ($phase -eq "a-upgrade-pending") {
+        Write-Host "Phase-aware start: relay is a-upgrade-pending; starting Executor B as recovery authority."
+        return @("B")
+    }
+    if ($phase -in @("passive-testing", "validating")) {
+        Write-Host "Phase-aware start: relay is $phase; no agentic executor is started by Role=Both."
+        return @()
+    }
+    Write-Host "Phase-aware start: relay is $phase; starting only Executor A and keeping Executor B dormant."
+    return @("A")
+}
+
+foreach ($selected in (Get-PhaseAwareStartRoles)) {
+    Start-Executor $selected
+}

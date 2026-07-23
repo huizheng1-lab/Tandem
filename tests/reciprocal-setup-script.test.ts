@@ -10,4 +10,16 @@ describe("reciprocal setup script", () => {
     expect(script).toContain("-not (Test-Path -LiteralPath $targetConfig)");
     expect(script).toContain("$config.maxStepsPerAgentTurn = $reciprocalMaxStepsPerAgentTurn");
   });
+
+  it("D181: launcher defaults to A and makes Role=Both phase-aware", async () => {
+    const script = await readFile(path.resolve("scripts", "start-reciprocal-tandem.ps1"), "utf8");
+
+    expect(script).toContain('[string]$Role = "A"');
+    expect(script).toContain("function Get-PhaseAwareStartRoles");
+    expect(script).toContain('$phase -eq "a-upgrade-pending"');
+    expect(script).toContain('return @("B")');
+    expect(script).toContain('$phase -in @("passive-testing", "validating")');
+    expect(script).toContain('return @("A")');
+    expect(script).not.toContain('if ($Role -in @("B", "Both")) { Start-Executor "B" }');
+  });
 });

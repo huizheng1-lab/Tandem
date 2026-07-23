@@ -22,15 +22,15 @@ The default root is `C:\Users\huizh\Apps\Tandem Reciprocal`. Setup creates both 
 
 ## Start and Kickstart
 
-The dashboard **Kickstart** button starts both hidden runtimes, waits for their loopback automation endpoints, and injects the producer prompt only into executor A. B may be running as a passive process, but it is not prompted on a cadence.
+The dashboard **Kickstart** button starts only Executor A during normal idle work, waits for A's loopback automation endpoint, and injects the producer prompt only into executor A. Executor B is intentionally dormant during A's claim, plan, implementation, and review work.
 
 Manual hidden launch:
 
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File scripts/start-reciprocal-tandem.ps1 -Role Both
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts/start-reciprocal-tandem.ps1 -Role A
 ```
 
-A targets `...\worktrees\copy-b`. B targets `...\worktrees\copy-a` only for passive build/launch checks.
+`-Role Both` is phase-aware legacy syntax: it starts A in normal phases, starts B only when durable relay state requires B as the verified recovery authority, and starts neither during mechanical candidate-check phases. A targets `...\worktrees\copy-b`. B targets `...\worktrees\copy-a` only for passive build/launch checks and recovery verification.
 
 Fallback prompt for A only:
 

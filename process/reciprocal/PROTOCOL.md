@@ -10,8 +10,8 @@ Normal lifecycle:
 
 1. `idle`, `nextRole=A`: A may `Claim`.
 2. `working`, `activeRole=A`: A claims a human wishlist item, plans, implements, runs its internal Tandem leader/worker/review lifecycle, verifies, and reports the exact changed files. Tandem's unsandboxed app layer stages only those files, creates one `relay:` commit, marks the wishlist item `CANDIDATE`, and runs `Complete`.
-3. `passive-testing`, no active owner: A's candidate is pending. No executor may start new wishlist work. `Claim -Role A` reports `PASSIVE_TEST`; `Claim -Role B` reports passive `WAIT`. Run `PassiveTest -Role A` from copy A (`codex/reciprocal-a`). It fast-forwards the passive copy to the candidate, runs mechanical checks, packages the Electron app into the admin repo's canonical `release/win-unpacked`, and refuses to call a model.
-4. `a-upgrade-pending`, no active owner: the passive copy accepted a final source-changing candidate and the stable ref now points at it, but A's running runtime has not been promoted from that same verified build. `PrepareAUpgrade -Role A -DryRun` exposes the exact `promote-reciprocal-runtime.ps1 -TargetRole A` command and records the human gate. `CompleteAUpgrade -Role A -Force` is valid only after a human confirms the A runtime promotion. Plan-only candidates and accepted non-final epic steps return to `idle` and continue automatically; they do not require live runtime replacement.
+3. `passive-testing`, no active owner: A's candidate is pending. No executor may start new wishlist work. `Claim -Role A` reports `PASSIVE_TEST`; `Claim -Role B` reports passive `WAIT`. Run `PassiveTest -Role A` from copy A (`codex/reciprocal-a`). It fast-forwards the passive copy to the candidate, runs mechanical checks, packages the Electron app into the admin repo's canonical `release/win-unpacked`, and refuses to call a model. Executor B is not kept online merely for this mechanical phase.
+4. `a-upgrade-pending`, no active owner: the passive copy accepted a final source-changing candidate and the stable ref now points at it, but A's running runtime has not been promoted from that same verified build. B is the on-demand recovery authority for this phase and may be started from the verified passive runtime; A is upgraded only after the existing human runtime-promotion confirmation. `PrepareAUpgrade -Role A -DryRun` exposes the exact `promote-reciprocal-runtime.ps1 -TargetRole A` command and records the human gate. `CompleteAUpgrade -Role A -Force` is valid only after a human confirms the A runtime promotion. Plan-only candidates and accepted non-final epic steps return to `idle` and continue automatically; they do not require live runtime replacement.
 5. Back to `idle`, `nextRole=A`.
 
 Failure and recovery:
@@ -81,6 +81,8 @@ Self-modification safety also means A must not redeploy its own live runtime. Af
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts/promote-reciprocal-runtime.ps1 -TargetRole A -SourceSha <stable-commit>
 ```
+
+Normal startup uses only Executor A. `scripts/start-reciprocal-tandem.ps1 -Role Both` is phase-aware compatibility syntax: it starts A in normal idle/working phases, starts B only for the durable `a-upgrade-pending` recovery-authority phase, and starts no agentic executor during mechanical candidate-check phases.
 
 Use `-DryRun` to demonstrate the target and source without changing runtime files. Only after human confirmation may the relay be released:
 

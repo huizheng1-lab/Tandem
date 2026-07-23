@@ -1,11 +1,11 @@
 ﻿{
     "schemaVersion":  1,
-    "generatedAtUtc":  "2026-07-22T12:30:29.8250113Z",
+    "generatedAtUtc":  "2026-07-23T02:06:37.2734953Z",
     "files":  [
                   {
                       "path":  "approval-flow.e2e.mjs",
-                      "sha256":  "4B9A654CCEEB021712F2760E3C9AB88324ED6D569795CBC42017D695712EA43D",
-                      "bytes":  18089
+                      "sha256":  "20F291251CCA3351A610E23630B7050D46CC8AB780D92ACC609CCDA6EFBB0DE8",
+                      "bytes":  19793
                   },
                   {
                       "path":  "dashboard-watchdog.ps1",
@@ -19,23 +19,23 @@
                   },
                   {
                       "path":  "lib.mjs",
-                      "sha256":  "55A42EE7ABDF771B4655599E8976DF8BA1CE50B538981683609453E48925821D",
-                      "bytes":  18865
+                      "sha256":  "13FA12BB0E71AE4A5BE1EC01DC28B86BF7A2F9A3CD3EB1EEEBBABC5902DDD776",
+                      "bytes":  21613
                   },
                   {
                       "path":  "lib.nodecheck.mjs",
-                      "sha256":  "A95521F3DF41BFFE63F41B72C52C60B79F00764E25A4AB27D66CC39F562BA5FB",
-                      "bytes":  14808
+                      "sha256":  "4F21B9675E0029316891BE38253D854B6D96FCB3FBF42A2D8F4429861D738040",
+                      "bytes":  16635
                   },
                   {
                       "path":  "public/app.js",
-                      "sha256":  "B2EE577346547499BA6BAD095188D7A7CED0DF97621D502CD78990EB77F7B091",
-                      "bytes":  42196
+                      "sha256":  "DB806E96765DCD29639E2BCECA22ACC3772F42A23AED2F26748234385DBFFC12",
+                      "bytes":  42607
                   },
                   {
                       "path":  "public/index.html",
-                      "sha256":  "52B997E893F51F54207106901D050CAA78F5864335E5C8BE40F742D694B67B84",
-                      "bytes":  15913
+                      "sha256":  "0FC0B6DDF9E3124D06855FF8B5CD83A9003B93FD17ECBA7E81679E9C0661F0A4",
+                      "bytes":  15922
                   },
                   {
                       "path":  "public/mobile.css",
@@ -54,8 +54,8 @@
                   },
                   {
                       "path":  "README.md",
-                      "sha256":  "095185486CA14F1E3F78F817A6545E2593C10177320FE439DB2896D84CBB610F",
-                      "bytes":  3640
+                      "sha256":  "747B8A39B93D12542BC3401B10C350D4606042AA40C9C4F7F69BC8F22ACE1D4F",
+                      "bytes":  3817
                   },
                   {
                       "path":  "register-dashboard-watchdog-task.ps1",
@@ -64,8 +64,8 @@
                   },
                   {
                       "path":  "server.mjs",
-                      "sha256":  "7A42B23599ABF1862155177D93A09A555AD87A5921D388BBE5A6AFDE8BF1338D",
-                      "bytes":  99556
+                      "sha256":  "74E41BBA78615E4CDB24773B2892B9D5D599C2615D0F63EAC739F837654EE467",
+                      "bytes":  101587
                   },
                   {
                       "path":  "start-dashboard.ps1",

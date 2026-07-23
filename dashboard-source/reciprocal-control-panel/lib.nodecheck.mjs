@@ -7,6 +7,7 @@ import {
   approvalRemainingActions,
   candidatePreviewArtifactCapabilityStatus,
   classifyReciprocalGate,
+  expectedRuntimeTopology,
   loadReciprocalTaxonomy,
   nextQueuedHumanItem,
   parseDirection,
@@ -17,6 +18,7 @@ import {
   queuedItemNeedsPlanning,
   reciprocalGateTaxonomy,
   reviewOriginItem,
+  runtimeTopologyHealth,
   validateAlreadyPromotedAUpgradeRecovery,
 } from "./lib.mjs";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
@@ -147,6 +149,42 @@ test("builds an auditable rollback plan for a failed candidate", () => {
   assert.equal(plan.workspace, "copy-a");
   assert.match(plan.commands[0], /-Action Rollback -Role B/);
   assert.ok(plan.commands.includes("npm test"));
+});
+
+test("D181 expected runtime topology keeps B dormant during normal A work", () => {
+  const idle = expectedRuntimeTopology({ phase: "idle", activeRole: null });
+  assert.equal(idle.key, "a-ready");
+  assert.deepEqual(idle.expectedOnline, { A: true, B: false });
+  assert.equal(idle.startRole, "A");
+  assert.deepEqual(runtimeTopologyHealth(idle, { a: { running: true }, b: { running: false } }), {
+    ok: true,
+    online: { A: true, B: false },
+    expectedOnline: { A: true, B: false },
+    expectedCount: 1,
+    onlineCount: 1,
+    problems: [],
+    detail: "A online, B dormant",
+  });
+  const staleB = runtimeTopologyHealth(idle, { a: { running: true }, b: { running: true } });
+  assert.equal(staleB.ok, false);
+  assert.match(staleB.detail, /Executor B is online while topology expects it dormant/);
+
+  const working = expectedRuntimeTopology({ phase: "working", activeRole: "A" });
+  assert.equal(working.label, "A producing / B dormant");
+  assert.deepEqual(working.expectedOnline, { A: true, B: false });
+});
+
+test("D181 expected runtime topology starts B only as recovery authority", () => {
+  const passive = expectedRuntimeTopology({ phase: "passive-testing", activeRole: null });
+  assert.equal(passive.startRole, null);
+  assert.deepEqual(passive.expectedOnline, { A: false, B: false });
+
+  const pending = expectedRuntimeTopology({ phase: "a-upgrade-pending", activeRole: null });
+  assert.equal(pending.key, "b-recovery-authority");
+  assert.equal(pending.startRole, "B");
+  assert.deepEqual(pending.expectedOnline, { A: false, B: true });
+  assert.equal(runtimeTopologyHealth(pending, { a: { running: false }, b: { running: true } }).ok, true);
+  assert.equal(runtimeTopologyHealth(pending, { a: { running: true }, b: { running: true } }).ok, false);
 });
 
 test("approval completion closes the A-upgrade gate instead of resuming it", () => {

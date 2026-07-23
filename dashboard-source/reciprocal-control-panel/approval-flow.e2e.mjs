@@ -188,6 +188,7 @@ async function withServer(t, fixture, runTest) {
       TANDEM_DASHBOARD_TEST_HARNESS: "1",
       TANDEM_DASHBOARD_COMMAND_LOG: fixture.commandLog,
       TANDEM_APPROVAL_WAIT_TIMEOUT_MS: "5000",
+      TANDEM_DASHBOARD_TEST_REQUIRE_STARTED_AUTOMATION: process.env.TANDEM_DASHBOARD_TEST_REQUIRE_STARTED_AUTOMATION || "",
     },
   });
   let stderr = "";
@@ -231,6 +232,34 @@ async function withServer(t, fixture, runTest) {
 
   return runTest({ post, get, postWithoutToken });
 }
+
+test("D181 Kickstart starts only Executor A and treats B dormant as healthy", async (t) => {
+  const fixture = await makeFixture(t);
+  await fixture.setState({ phase: "idle", activeRole: null });
+  const old = process.env.TANDEM_DASHBOARD_TEST_REQUIRE_STARTED_AUTOMATION;
+  process.env.TANDEM_DASHBOARD_TEST_REQUIRE_STARTED_AUTOMATION = "1";
+  try {
+    await withServer(t, fixture, async ({ post }) => {
+      const { response, result } = await post("/api/executor/kickstart", {});
+      assert.equal(response.status, 200, JSON.stringify(result));
+      assert.equal(result.ok, true);
+      assert.equal(result.result.executor, "A");
+      assert.match(result.result.steps.find((step) => step.step === "endpoint-ready")?.detail || "", /B dormant by phase policy/);
+    });
+  } finally {
+    if (old === undefined) delete process.env.TANDEM_DASHBOARD_TEST_REQUIRE_STARTED_AUTOMATION;
+    else process.env.TANDEM_DASHBOARD_TEST_REQUIRE_STARTED_AUTOMATION = old;
+  }
+
+  const commands = await readJsonl(fixture.commandLog);
+  const startCommands = commands.filter((entry) => String(entry.args[1]).endsWith("start-reciprocal-tandem.ps1"));
+  assert.equal(startCommands.length, 1);
+  assert.equal(startCommands[0].args.includes("-Role"), true);
+  assert.equal(startCommands[0].args[startCommands[0].args.indexOf("-Role") + 1], "A");
+  assert.equal(commands.some((entry) => entry.args.includes("B") && String(entry.args[1]).endsWith("start-reciprocal-tandem.ps1")), false);
+  const actions = commandActions(commands);
+  assert.deepEqual(actions.map((entry) => entry.action), []);
+});
 
 test("approval flow uses the real relay to complete an inactive A-upgrade boundary", async (t) => {
   const fixture = await makeFixture(t);

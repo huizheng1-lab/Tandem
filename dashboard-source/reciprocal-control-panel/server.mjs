@@ -14,11 +14,13 @@ import {
   capabilityVersion,
   classifyReciprocalGate,
   detailMetadata,
+  expectedRuntimeTopology,
   parseDirection,
   recoveryPlan,
   rejectedCandidateOriginRetirement,
   rejectedCandidateRelayAction,
   rejectedCandidateWishlist,
+  runtimeTopologyHealth,
   reviewOriginItem,
   shortSha,
   validateAlreadyPromotedAUpgradeRecovery,
@@ -64,6 +66,7 @@ const activeRelayPhases = new Set(["working", "validating", "rollback-verificati
 const approvalWaitTimeoutMs = Number(process.env.TANDEM_APPROVAL_WAIT_TIMEOUT_MS || 18_000_000);
 const testHarness = process.env.TANDEM_DASHBOARD_TEST_HARNESS === "1";
 const testCommandLogPath = process.env.TANDEM_DASHBOARD_COMMAND_LOG || "";
+const testHarnessStartedRoles = new Set();
 let approvalFlow = null;
 let supervisorTickRunning = false;
 
@@ -154,7 +157,19 @@ async function powershell(...args) {
       return "TEST stopped executor A.\nTEST stopped executor B.";
     }
     if (scriptName === "start-reciprocal-tandem.ps1") {
-      return "TEST started executor A.\nTEST started executor B.";
+      const roleIndex = args.findIndex((value) => value === "-Role");
+      const role = roleIndex >= 0 ? args[roleIndex + 1] : "A";
+      const roles = role === "Both" ? ["A"] : [role];
+      for (const item of roles) {
+        if (!["A", "B"].includes(item)) continue;
+        await mkdir(path.dirname(automation[item].tokenFile), { recursive: true });
+        await writeFile(automation[item].tokenFile, `${JSON.stringify({ port: item === "A" ? 4101 : 4102, token: `test-token-${item}` }, null, 2)}\n`, "utf8");
+      }
+      if (role === "Both") testHarnessStartedRoles.add("A");
+      else {
+        testHarnessStartedRoles.add(role);
+      }
+      return role === "Both" ? "TEST started expected topology." : `TEST started executor ${role}.`;
     }
     if (scriptName === "promote-reciprocal-runtime.ps1") {
       const sourceIndex = args.findIndex((value) => value === "-Source");
@@ -226,6 +241,25 @@ const delay = (milliseconds) => new Promise((resolve) => setTimeout(resolve, mil
 
 async function automationRequest(role, pathname, method = "GET", payload) {
   const config = automation[role];
+  if (testHarness && process.env.TANDEM_DASHBOARD_TEST_REQUIRE_STARTED_AUTOMATION === "1") {
+    if (!testHarnessStartedRoles.has(role)) throw new Error(`TEST executor ${role} automation is not started.`);
+    if (pathname === "/status") {
+      return { ok: true, running: false, pid: role === "A" ? 4101 : 4102, projectDir: config.projectDir, allowedProjectDir: config.projectDir };
+    }
+    if (pathname === "/prompt" && method === "POST") {
+      if (role === "A") {
+        const current = await jsonFile(statePath, {});
+        await writeFile(statePath, `${JSON.stringify({
+          ...current,
+          phase: "working",
+          activeRole: "A",
+          startedAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+        }, null, 2)}\n`, "utf8");
+      }
+      return { ok: true, accepted: true, projectDir: payload?.projectDir || config.projectDir, allowedProjectDir: config.projectDir };
+    }
+  }
   const credentials = await jsonFile(config.tokenFile, null);
   if (!credentials?.port || !credentials?.token) throw new Error(`Executor ${role} automation token is not ready.`);
   const controller = new AbortController();
@@ -247,6 +281,9 @@ async function automationRequest(role, pathname, method = "GET", payload) {
 
 async function waitForAutomation(role, timeoutMs = 30_000) {
   if (testHarness) {
+    if (process.env.TANDEM_DASHBOARD_TEST_REQUIRE_STARTED_AUTOMATION === "1" && !testHarnessStartedRoles.has(role)) {
+      throw new Error(`TEST executor ${role} automation is not started.`);
+    }
     return { pid: role === "A" ? 4101 : 4102, allowedProjectDir: automation[role].projectDir };
   }
   const deadline = Date.now() + timeoutMs;
@@ -846,6 +883,8 @@ async function getStatus() {
     runtime.lagsMaster = Boolean(!sourceSha || (masterHead && sourceSha !== masterHead));
   }
   const candidateUpdate = await getCandidateUpdate(runtimeA, runtimeB, state, updateReviewIndex);
+  const runtimeTopology = expectedRuntimeTopology(state);
+  const topologyHealth = runtimeTopologyHealth(runtimeTopology, { a: runtimeA, b: runtimeB });
   const artifactCapability = await getArtifactCapabilityStatus(runtimeA, runtimeB, producerRelay);
   artifactCapability.activationPlan = artifactCapabilityActivationPlan({ masterHead, relayState: state, candidateUpdate, runtimeA, runtimeB, capability: artifactCapability });
   if (!artifactCapability.compatible) {
@@ -896,6 +935,7 @@ async function getStatus() {
     { label: "Copy A worktree", ok: a.branch === worktrees.a.branch, detail: a.dirtyCount ? `${a.dirtyCount} local changes` : "Clean" },
     { label: "Copy B worktree", ok: b.branch === worktrees.b.branch, detail: b.dirtyCount ? `${b.dirtyCount} local changes` : "Clean" },
     { label: "Pinned runtimes", ok: runtimeA.exists && runtimeB.exists, detail: `${Number(runtimeA.exists) + Number(runtimeB.exists)}/2 available` },
+    { label: "Runtime topology", ok: topologyHealth.ok, detail: topologyHealth.detail },
     { label: "Preview artifact protocol", ok: artifactCapability.compatible, detail: artifactCapability.compatible ? "Ready" : artifactCapability.message },
     { label: "Branches vs master", ok: a.drift.upToDate && b.drift.upToDate, detail: `A ${a.drift.behindMaster}/${a.drift.aheadOfMaster}, B ${b.drift.behindMaster}/${b.drift.aheadOfMaster}` },
     { label: "Runtime builds vs master", ok: !runtimeA.lagsMaster && !runtimeB.lagsMaster, detail: `A ${runtimeA.buildShortSha}, B ${runtimeB.buildShortSha}` },
@@ -923,6 +963,7 @@ async function getStatus() {
     reciprocalCapabilities: { candidatePreviewArtifactLifecycle: artifactCapability },
     worktrees: { a, b },
     runtimes: { a: runtimeA, b: runtimeB },
+    runtimeTopology: { ...runtimeTopology, health: topologyHealth },
     candidateUpdate,
     mainVersion,
     sourceReconciliationPending,
@@ -1790,18 +1831,16 @@ async function handle(request, response) {
         }
         let endpointsReady = false;
         try {
-          await Promise.all([waitForAutomation("A", 1000), waitForAutomation("B", 1000)]);
+          await waitForAutomation("A", 1000);
           endpointsReady = true;
-          steps.push({ step: "start", ok: true, detail: "Executor A and passive target B were already running with authenticated automation endpoints." });
+          steps.push({ step: "start", ok: true, detail: "Executor A was already running with an authenticated automation endpoint; Executor B is intentionally dormant." });
         } catch {
           const stopOutput = await powershell("-File", path.join(here, "stop-reciprocal-tandem.ps1"), "-Role", "Both", "-RelayRoot", relayRoot);
-          const startOutput = await powershell("-File", path.join(repoRoot, "scripts", "start-reciprocal-tandem.ps1"), "-Role", "Both", "-RelayRoot", relayRoot);
+          const startOutput = await powershell("-File", path.join(repoRoot, "scripts", "start-reciprocal-tandem.ps1"), "-Role", "A", "-RelayRoot", relayRoot);
           steps.push({ step: "start", ok: true, detail: [stopOutput, startOutput].filter(Boolean).join(" ") });
         }
-        const [statusA, statusB] = endpointsReady
-          ? await Promise.all([automationRequest("A", "/status"), automationRequest("B", "/status")])
-          : await Promise.all([waitForAutomation("A"), waitForAutomation("B")]);
-        steps.push({ step: "endpoint-ready", ok: true, detail: `Producer A PID ${statusA.pid || "ready"} -> ${statusA.allowedProjectDir}; passive B PID ${statusB.pid || "ready"} -> ${statusB.allowedProjectDir}` });
+        const statusA = endpointsReady ? await automationRequest("A", "/status") : await waitForAutomation("A");
+        steps.push({ step: "endpoint-ready", ok: true, detail: `Producer A PID ${statusA.pid || "ready"} -> ${statusA.allowedProjectDir}; B dormant by phase policy.` });
         const accepted = await automationRequest("A", "/prompt", "POST", { projectDir: worktrees.b.path, prompt: kickstartPrompt });
         steps.push({ step: "prompt-accepted", ok: true, detail: `Executor A accepted the first-turn prompt for ${accepted.projectDir}.` });
         const claimed = await waitForRelayClaim();

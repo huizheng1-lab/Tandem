@@ -70,6 +70,69 @@ export function candidatePreviewArtifactCapabilityStatus({ producer = null, runt
   };
 }
 
+export function expectedRuntimeTopology(state = {}) {
+  const phase = String(state?.phase || "unknown");
+  const activeRole = state?.activeRole || null;
+  if (phase === "a-upgrade-pending") {
+    return {
+      key: "b-recovery-authority",
+      label: "B recovery authority / A awaiting upgrade",
+      expectedOnline: { A: false, B: true },
+      startRole: "B",
+      normalOnlineText: "B online as recovery authority",
+      detail: "Executor B must be the verified passive runtime that can recover and promote Executor A.",
+    };
+  }
+  if (phase === "passive-testing" || phase === "validating") {
+    return {
+      key: "mechanical-candidate-checks",
+      label: "Mechanical candidate checks",
+      expectedOnline: { A: false, B: false },
+      startRole: null,
+      normalOnlineText: "No agentic runtime required",
+      detail: "Candidate checks run mechanically from isolated worktrees; B is launched only after an exact package is ready for recovery verification.",
+    };
+  }
+  if (phase === "working" && activeRole === "A") {
+    return {
+      key: "a-producing",
+      label: "A producing / B dormant",
+      expectedOnline: { A: true, B: false },
+      startRole: "A",
+      normalOnlineText: "A online, B dormant",
+      detail: "Executor A is the sole agentic producer; Executor B must not claim, plan, implement, review, or receive prompts.",
+    };
+  }
+  return {
+    key: "a-ready",
+    label: "A ready / B dormant",
+    expectedOnline: { A: true, B: false },
+    startRole: "A",
+    normalOnlineText: "A online, B dormant",
+    detail: "Normal reciprocal operation keeps only Executor A available for producer prompts.",
+  };
+}
+
+export function runtimeTopologyHealth(topology, runtimes = {}) {
+  const aRunning = Boolean(runtimes.a?.running ?? runtimes.A?.running);
+  const bRunning = Boolean(runtimes.b?.running ?? runtimes.B?.running);
+  const expected = topology?.expectedOnline || { A: true, B: false };
+  const problems = [];
+  if (expected.A && !aRunning) problems.push("Executor A expected online");
+  if (!expected.A && aRunning && topology?.key === "b-recovery-authority") problems.push("Executor A should be stopped while B is recovery authority");
+  if (expected.B && !bRunning) problems.push("Executor B expected online");
+  if (!expected.B && bRunning) problems.push("Executor B is online while topology expects it dormant");
+  return {
+    ok: problems.length === 0,
+    online: { A: aRunning, B: bRunning },
+    expectedOnline: expected,
+    expectedCount: Number(Boolean(expected.A)) + Number(Boolean(expected.B)),
+    onlineCount: Number(aRunning) + Number(bRunning),
+    problems,
+    detail: problems.length ? problems.join("; ") : topology?.normalOnlineText || "Runtime topology matches phase",
+  };
+}
+
 export function detailMetadata(value) {
   return Object.fromEntries([...String(value || "").matchAll(/(?:^|\s)([A-Za-z][A-Za-z0-9]*)=([^\s]+)/g)].map((match) => [match[1], match[2]]));
 }

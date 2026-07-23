@@ -65,9 +65,12 @@ function render(data, audit) {
   const resumeSuffix = resumeCount ? ` · resumes ${resumeCount}/${resumeThreshold}` : "";
   $("#active-role").textContent = relay.activeRole ? `Active owner: ${relay.activeRole}${resumeSuffix}` : "No active owner";
   $("#stable").textContent = relay.shortStable || "Missing";
-  const online = Number(data.runtimes.a.running) + Number(data.runtimes.b.running);
-  $("#online").textContent = `${online} / 2`;
-  $("#runtime-note").textContent = online === 2 ? "Both pinned apps running" : online ? "One executor running" : "Both executors stopped";
+  const topology = data.runtimeTopology || {};
+  const topologyHealth = topology.health || {};
+  const online = topologyHealth.onlineCount ?? (Number(data.runtimes.a.running) + Number(data.runtimes.b.running));
+  const expected = topologyHealth.expectedCount ?? 1;
+  $("#online").textContent = `${online} / ${expected}`;
+  $("#runtime-note").textContent = topologyHealth.detail || topology.label || "Checking runtime topology";
   $("#cycle-chip").textContent = relay.activeRole ? `${supervisorDisplay} · ${relay.activeRole}${resumeSuffix}` : `${supervisorDisplay} · next ${relay.nextRole || "--"}`;
   $("#gate-sha").textContent = relay.shortStable || "missing";
   $("#gate-copy").textContent = relay.candidateCommit ? `Candidate ${relay.shortCandidate} awaits ${relay.phase}` : "Passive-verified work advances";
@@ -93,12 +96,13 @@ function render(data, audit) {
 function renderExecutor(key, runtime, target) {
   const card = $(`#executor-${key}`);
   const status = card.querySelector(".runtime-state");
-  status.textContent = runtime.running ? `Online · PID ${runtime.pid}` : "Offline";
+  const expected = state.data?.runtimeTopology?.expectedOnline?.[key.toUpperCase()];
+  status.textContent = runtime.running ? `Online · PID ${runtime.pid}` : expected === false ? "Dormant" : "Offline";
   status.classList.toggle("online", runtime.running);
   card.querySelector(".branch").textContent = target.branch;
   const drift = target.drift?.upToDate ? "" : ` · ${target.drift?.behindMaster ?? "?"} behind / ${target.drift?.aheadOfMaster ?? "?"} ahead master`;
   card.querySelector(".head").textContent = `${target.shortHead || "--"}${target.dirtyCount ? ` · ${target.dirtyCount} changes` : " · clean"}${drift}`;
-  card.querySelector(".start-one").disabled = runtime.running;
+  card.querySelector(".start-one").disabled = runtime.running || expected === false;
   card.querySelector(".stop-one").disabled = !runtime.running;
 }
 
@@ -286,7 +290,8 @@ function renderVersions(data) {
   ];
   $("#version-grid").innerHTML = cards.map(({ title, subtitle, value, stable, runtime }) => {
     if (runtime) {
-      return `<article class="version-card ${value.lagsMaster ? "lagging" : "stable"}"><p class="eyebrow">${escapeHtml(subtitle)}</p><h2>${title}</h2><dl><div><dt>Build</dt><dd><code>${escapeHtml(value.buildShortSha || "--")}</code></dd></div><div><dt>Compared to master</dt><dd>${value.lagsMaster ? "lags master" : "current"}</dd></div><div><dt>Promoted</dt><dd>${escapeHtml(value.buildInfo?.promotedRound || "--")}</dd></div><div><dt>Built at</dt><dd>${escapeHtml(value.builtAt ? relative(value.builtAt) : "missing")}</dd></div><div><dt>Runtime</dt><dd>${value.running ? `online PID ${value.pid}` : "offline"}</dd></div></dl></article>`;
+      const expected = state.data?.runtimeTopology?.expectedOnline?.[value.role];
+      return `<article class="version-card ${value.lagsMaster ? "lagging" : "stable"}"><p class="eyebrow">${escapeHtml(subtitle)}</p><h2>${title}</h2><dl><div><dt>Build</dt><dd><code>${escapeHtml(value.buildShortSha || "--")}</code></dd></div><div><dt>Compared to master</dt><dd>${value.lagsMaster ? "lags master" : "current"}</dd></div><div><dt>Promoted</dt><dd>${escapeHtml(value.buildInfo?.promotedRound || "--")}</dd></div><div><dt>Built at</dt><dd>${escapeHtml(value.builtAt ? relative(value.builtAt) : "missing")}</dd></div><div><dt>Runtime</dt><dd>${value.running ? `online PID ${value.pid}` : expected === false ? "dormant" : "offline"}</dd></div></dl></article>`;
     }
     const branchDrift = value.drift ? `${value.drift.behindMaster} behind / ${value.drift.aheadOfMaster} ahead master` : "n/a";
     return `<article class="version-card ${stable ? "stable" : value.drift?.upToDate ? "" : "lagging"}"><p class="eyebrow">${escapeHtml(subtitle)}</p><h2>${title}</h2><dl><div><dt>Commit</dt><dd><code>${escapeHtml(value.shortHead || "--")}</code></dd></div><div><dt>Branch/ref</dt><dd>${escapeHtml(value.branch)}</dd></div><div><dt>Vs master</dt><dd>${escapeHtml(branchDrift)}</dd></div><div><dt>Package</dt><dd>v${escapeHtml(value.version)}</dd></div><div><dt>Worktree</dt><dd>${value.dirtyCount ? `${value.dirtyCount} changes` : "clean"}</dd></div><div><dt>Latest</dt><dd>${escapeHtml(value.subject)}</dd></div></dl></article>`;
@@ -355,7 +360,7 @@ $("#kickstart").addEventListener("click", async () => {
   const status = $("#kickstart-status");
   $("#kickstart").disabled = true;
   status.hidden = false;
-  status.textContent = "Starting hidden executors and waiting for authenticated endpoints...";
+  status.textContent = "Starting Executor A and waiting for its authenticated endpoint...";
   try {
     const response = await api("/api/executor/kickstart", { method: "POST", body: JSON.stringify({}) });
     const result = response.result;

@@ -30,7 +30,7 @@ On Windows, you can double-click `Launch Reciprocal Control Panel.bat` in this d
 - Model controls mirror Tandem's leader/worker picker, including media badges, unavailable-provider labels, Claude CLI variants, and Codex reasoning variants. Updates to each stopped executor's isolated config are atomic and never expose credential values.
 - Start and stop actions affect only the selected pinned Tandem runtime. Stopping preserves relay state, checkpoints, refs, and stashes.
 - Pause and resume actions affect only relay turn-claiming. They do not stop executor apps, clean worktrees, regenerate tokens, or move refs.
-- Kickstart is token-gated and audited. Because the current Tandem desktop app exposes no safe local IPC/CLI trigger for an immediate prompt, the panel provides the exact first-turn prompt for Executor A as a copy-paste fallback instead of synthesizing fragile UI keystrokes.
+- Kickstart is token-gated and audited. It starts and waits for Executor A only during normal idle work; Executor B being dormant is the healthy topology until the relay reaches the verified recovery-authority phase. Because the current Tandem desktop app exposes no safe local IPC/CLI trigger for an immediate prompt, the panel provides the exact first-turn prompt for Executor A as a copy-paste fallback instead of synthesizing fragile UI keystrokes.
 - Recovery is an instruction generator. It does not reset branches or execute rollback commits from the browser.
 - Mutation requests require an in-memory control token and the server listens only on `127.0.0.1`.
 - Human panel actions and rejected mutations are recorded in `C:\Users\huizh\Apps\Tandem Reciprocal\control\CONTROL_PANEL_AUDIT.jsonl`.
