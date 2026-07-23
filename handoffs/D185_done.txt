@@ -1,0 +1,45 @@
+Round: D185
+
+Commits:
+- 8273a68 D185-1: distinguish passive environment failures
+- 0a34a96 D185-2: audit stable baseline command rewrites
+- 0188afe D185-3: prefer authoritative passive gate helpers
+- aa46be1 D185-4: clear stale passive failure on retry
+
+Implementation summary:
+- Replaced the console-dependent `timeout /t 60 /nobreak >nul` GUI hang simulation in `tests/candidate-preview-smoke.test.ts` with `powershell -NoProfile -Command Start-Sleep -Seconds 60`, preserving the ready/crash/timeout/missing-exe assertions.
+- Added passive-gate stable-baseline control classification in `scripts/reciprocal-relay.ps1`.
+- Failing test files are parsed from Vitest output by looking for `tests/...` spec/test paths. When paths are found, the baseline command is narrowed to `npm test -- "<files>"`; otherwise it falls back to the original failed command.
+- The stable baseline is checked out with an isolated detached `git worktree` under the temp directory, with `node_modules` junctioned from the active workspace when available. The relay worktrees are not checked out or mutated for the control run.
+- Baseline control command text is rewritten from candidate SHA/workspace to stable SHA/temp worktree for audit accuracy.
+- Results are recorded in `stableBaseline` on the `PASSIVE_FAILED` response and durably in `state.passiveFailure`. If stable reproduces the failure, `pauseReasonCode` is `environment-failure`; if stable passes, the existing `candidate-failure` hard gate remains. The candidate is never auto-accepted by the control run.
+- `passiveFailure` is cleared on `Resume`, at the beginning of a fresh `PassiveTest`, and after `PASSIVE_ACCEPTED`, so dashboard/status output does not carry stale failure evidence across retry boundaries.
+
+Regression coverage:
+- `tests/reciprocal-relay.test.ts` proves a candidate-only failure remains `candidate-failure`.
+- `tests/reciprocal-relay.test.ts` proves a stable-reproducing failure is classified as `environment-failure`, leaves the candidate pending, and persists the baseline proof in status.
+- `tests/reciprocal-relay.test.ts` proves `Resume` clears stale `passiveFailure`.
+- `tests/candidate-preview-smoke.test.ts` passes with the repaired console-independent long-running process.
+
+Live W0027 recovery proof:
+- Stopped the stale dashboard/supervisor retry loop that was holding the relay lock; no live W0027 runtimes, relay refs, control-board data, or reciprocal worktrees were deployed or manually rewritten.
+- Restored the missing `node_modules` shims in `copy-a` with `npm ci` after stopping only the executor-B process that held Electron files open.
+- Retried W0027 candidate `83421bbc0cd5a8dd2832f194b66e8bf8e9d72eb1` with the D185 passive gate.
+- The live state transitioned from paused `candidate-failure` to `passive-testing` with `passiveFailure: null`, then back to paused `candidate-failure` only after a genuine new candidate-only failure:
+  - failing command: `npm test`
+  - failing parsed test: `tests\reciprocal-direction.test.ts`
+  - candidate failure: `canonicalizes an accepted abbreviated plan commit during auto-approval` timed out
+  - stable baseline command: `npm test -- "tests\reciprocal-direction.test.ts"`
+  - stable baseline result: passed 24/24 in the isolated temp worktree
+  - final live pause: `pauseReasonCode: candidate-failure`, `classification: candidate-failure`, `reproducedOnStable: false`
+
+Verification:
+- `npx vitest run tests\candidate-preview-smoke.test.ts` passed.
+- `cmd.exe /d /s /c "npx vitest run tests\reciprocal-relay.test.ts"` passed: 23/23.
+- `node dashboard-source\reciprocal-control-panel\lib.nodecheck.mjs` passed: 19/19.
+- `node dashboard-source\reciprocal-control-panel\approval-flow.e2e.mjs` passed: 8/8.
+- `npm run typecheck` passed.
+- `cmd.exe /d /s /c "npm test"` passed: 53 files passed, 1 skipped; 546 tests passed, 1 skipped.
+- `git diff --check` passed.
+- `scripts\deploy-reciprocal-dashboard.ps1 -VerifyOnly` was intentionally non-mutating and reported the live dashboard target is out of sync with source for 7 managed files.
+- `scripts\deploy-reciprocal-dashboard.ps1 -DryRun` passed and listed the same 7 planned updates without deploying.
