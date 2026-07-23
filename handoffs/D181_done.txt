@@ -1,0 +1,36 @@
+Round: D181
+Status: complete
+
+Commits:
+- 981de987b36c75494669fd090947660ed2bd82e1 D181-1: make reciprocal startup phase-aware
+- 02465b0514d30aa09d6f57deaa31ce0faae678d9 D181-2: keep recovery promotion A-only
+- 6468fb6d23e441e1d96c3cc7189f52a09a89f457 D181-3: verify B recovery authority before A upgrade
+- f539f1134604e38bfd1e0bb1c0d5117cc3f840cf D181-4: show recovery approval topology
+- 78052b7ca8590efdaf9b2b3b83e22db92eb23f13 D181-5: make approval recovery retry idempotent
+
+Summary:
+- Normal startup and Kickstart now start/wait for Executor A only; B dormant is a healthy state.
+- Role=Both startup is phase-aware: A for normal phases, B only for a-upgrade-pending recovery authority, and no agentic executor for mechanical candidate checks.
+- PassiveTest now records runtimeRecoveryStage boundaries, packages the exact candidate, promotes Executor B from that package, verifies B BUILD_INFO/candidatePreviewArtifactLifecycle, and exposes B recovery evidence with the A-upgrade gate.
+- Dashboard approval prepares B as recovery authority before stopping A: promotes B from exact candidate, starts B, verifies B endpoint target and BUILD_INFO/capability, and never sends B /prompt.
+- Approval promotion stops A, promotes A only with the exact SourceSha, restarts/verifies A, completes the existing A-upgrade gate, then stops B.
+- Failed A restart leaves B online and relay state at a-upgrade-pending; retrying the already-recorded approval converges without a duplicate review.
+- Dashboard topology now reports A producing / B dormant, B launch verification, B recovery authority / upgrading A, and A healthy / stopping B.
+- Stale dormant B no longer blocks preview capability; a started B with stale capability still fails closed.
+
+Verification:
+- powershell parser check for reciprocal relay and promotion scripts: passed
+- node dashboard-source\reciprocal-control-panel\lib.nodecheck.mjs: passed
+- node dashboard-source\reciprocal-control-panel\approval-flow.e2e.mjs: passed
+- npx vitest run tests\reciprocal-supervisor.test.ts tests\reciprocal-relay.test.ts tests\reciprocal-setup-script.test.ts --configLoader runner: passed
+- npx vitest run tests\reciprocal-relay.test.ts --configLoader runner: passed
+- powershell -NoProfile -ExecutionPolicy Bypass -File scripts\deploy-reciprocal-dashboard.ps1 -DryRun: passed; target mismatch is expected because D181 was not deployed to live pinned dashboard/runtime while W0027/candidate was active
+- npm run typecheck: passed
+- npm test: passed, 52 files passed and 1 skipped; 542 tests passed and 1 skipped
+- npx vitest run --configLoader runner --maxWorkers=1: passed, used once to confirm full-suite stability after a transient parallel worker exit
+- git diff --check: passed
+
+Live safety:
+- Did not deploy or replace pinned runtimes.
+- Did not touch live W0027 executors, live relay state, live control board, or reciprocal worktrees.
+- Left unrelated modified scripts/setup-reciprocal-tandem.ps1 and untracked handoff/backlog files untouched.
