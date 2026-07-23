@@ -280,6 +280,23 @@ export function classifyReciprocalGate({ reason = "", state = {}, item = null, a
   const pauseOrigin = String(state?.pauseOrigin || "").toLowerCase();
   const pauseReasonCode = String(state?.pauseReasonCode || "");
   const escalatedAttempts = Number(attemptCount || state?.resumeCount || 0) >= Number(reciprocalGateTaxonomy.retry.escalateAfterIdenticalAttempts || 3);
+  if (state?.phase === "paused" && pauseReasonCode === reciprocalGateTaxonomy.pauseReasonCodes.candidateFailure) {
+    return {
+      category: reciprocalGateTaxonomy.hardHumanGate,
+      code: reciprocalGateTaxonomy.pauseReasonCodes.candidateFailure,
+      retryable: false,
+      nextAction: "review-candidate-failure",
+    };
+  }
+  if (state?.phase === "paused" && pauseOrigin === reciprocalGateTaxonomy.pauseOrigins.machine && pauseReasonCode === reciprocalGateTaxonomy.pauseReasonCodes.environmentFailure && state?.candidateCommit) {
+    const escalates = escalatedAttempts;
+    return {
+      category: escalates ? reciprocalGateTaxonomy.hardBlocked : reciprocalGateTaxonomy.autoRecoverablePrerequisite,
+      code: escalates ? reciprocalGateTaxonomy.codes.repeatedGenuineBlocker : reciprocalGateTaxonomy.pauseReasonCodes.environmentFailure,
+      retryable: !escalates,
+      nextAction: escalates ? "surface-actionable-blocker" : "resume-and-rerun-passive-test",
+    };
+  }
   if (state?.phase === "paused" && pauseOrigin === reciprocalGateTaxonomy.pauseOrigins.machine && pauseReasonCode === reciprocalGateTaxonomy.codes.repeatedGenuineBlocker) {
     return {
       category: reciprocalGateTaxonomy.hardBlocked,

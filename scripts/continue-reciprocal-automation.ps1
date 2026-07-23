@@ -436,6 +436,15 @@ function Reset-WaitingState([object]$SupervisorState) {
     $SupervisorState.waiting = $null
 }
 
+function Test-EnvironmentFailurePause([object]$RelayState) {
+    return [bool](
+        $RelayState.phase -eq "paused" -and
+        $RelayState.pauseOrigin -eq [string]$taxonomy.pauseOrigins.machine -and
+        $RelayState.pauseReasonCode -eq [string]$taxonomy.pauseReasonCodes.environmentFailure -and
+        $RelayState.candidateCommit
+    )
+}
+
 function Test-LiveLease([object]$Lease) {
     if (-not $Lease -or -not $Lease.pid -or -not $Lease.processStartedAtUtc -or -not $Lease.expiresAtUtc) { return $false }
     $actualStart = Get-ProcessStartedAtUtc ([int]$Lease.pid)
@@ -649,7 +658,76 @@ if ($sourcePrerequisite -and $sourcePrerequisite.status -eq "ready" -and $transi
     if ($reconciliation) { $actions += $reconciliation }
 }
 
-if (($state.phase -eq "passive-testing" -or $state.candidateCommit) -and $transitionCount -lt $MaxTransitions) {
+if ((Test-EnvironmentFailurePause $state) -and $transitionCount -lt $MaxTransitions) {
+    $candidate = [string]$state.candidateCommit
+    $transitionCount += 1
+    $retryStart = (Get-Date).ToUniversalTime().ToString("o")
+    try {
+        Update-LeaseHeartbeat $leasePath
+        $resumed = Invoke-JsonCommand "powershell" @(
+            "-NoProfile",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-File",
+            $relayScript,
+            "-Action",
+            "Resume",
+            "-Workspace",
+            $copyA,
+            "-Summary",
+            "D186 bounded retry after machine environment failure for candidate $candidate"
+        ) $adminRepo
+        $passive = Invoke-JsonCommand "powershell" @(
+            "-NoProfile",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-File",
+            $relayScript,
+            "-Action",
+            "PassiveTest",
+            "-Role",
+            "A",
+            "-Workspace",
+            $copyA,
+            "-Summary",
+            "D186 bounded PassiveTest retry after environment failure for candidate $candidate"
+        ) $adminRepo
+        if ($passive.outcome -eq "PASSIVE_FAILED" -and $passive.pauseReasonCode -eq [string]$taxonomy.pauseReasonCodes.environmentFailure) {
+            Update-BlockerState $supervisorState ([string]$taxonomy.categories.autoRecoverablePrerequisite) ([string]$taxonomy.pauseReasonCodes.environmentFailure) "environment failure reproduced during bounded passive retry"
+        } else {
+            Reset-BlockerState $supervisorState
+        }
+        $actions += [pscustomobject]@{
+            kind = "environment-failure-retry"
+            category = [string]$taxonomy.categories.autoRecoverablePrerequisite
+            code = [string]$taxonomy.pauseReasonCodes.environmentFailure
+            startedAt = $retryStart
+            endedAt = (Get-Date).ToUniversalTime().ToString("o")
+            candidate = $candidate
+            resumeOutcome = $resumed.outcome
+            passiveOutcome = $passive.outcome
+            phase = $passive.phase
+        }
+    } catch {
+        $message = $_.Exception.Message
+        Update-BlockerState $supervisorState ([string]$taxonomy.categories.autoRecoverablePrerequisite) ([string]$taxonomy.codes.endpointUnavailable) $message
+        $actions += [pscustomobject]@{
+            kind = "environment-failure-retry-failed"
+            category = $supervisorState.blocker.category
+            code = $supervisorState.blocker.code
+            startedAt = $retryStart
+            endedAt = (Get-Date).ToUniversalTime().ToString("o")
+            candidate = $candidate
+            error = $message
+            attemptCount = $supervisorState.blocker.attemptCount
+            nextAttemptAt = $supervisorState.blocker.nextAttemptAt
+        }
+    }
+}
+
+$state = Read-JsonFile $statePath
+
+if ($state.phase -eq "passive-testing" -and $state.candidateCommit -and $transitionCount -lt $MaxTransitions) {
     $candidate = [string]$state.candidateCommit
     $transitionCount += 1
     $passiveStart = (Get-Date).ToUniversalTime().ToString("o")
@@ -670,7 +748,11 @@ if (($state.phase -eq "passive-testing" -or $state.candidateCommit) -and $transi
             "-Summary",
             "D156 immediate automatic PassiveTest for candidate $candidate"
         ) $adminRepo
-        Reset-BlockerState $supervisorState
+        if ($passive.outcome -eq "PASSIVE_FAILED" -and $passive.pauseReasonCode -eq [string]$taxonomy.pauseReasonCodes.environmentFailure) {
+            Update-BlockerState $supervisorState ([string]$taxonomy.categories.autoRecoverablePrerequisite) ([string]$taxonomy.pauseReasonCodes.environmentFailure) "environment failure reproduced during passive test"
+        } else {
+            Reset-BlockerState $supervisorState
+        }
         $actions += [pscustomobject]@{
             kind = "passive-test"
             startedAt = $passiveStart

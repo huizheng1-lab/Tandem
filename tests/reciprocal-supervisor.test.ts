@@ -54,6 +54,7 @@ async function fixture() {
       explicitHumanPause: "explicit-human-pause",
       resumeCircuitBreaker: "repeated-genuine-blocker",
       candidateFailure: "candidate-failure",
+      environmentFailure: "environment-failure",
     },
     displayStates: {
       working: "working",
@@ -171,6 +172,49 @@ describeWindows("reciprocal continuation supervisor", () => {
     const hard = await supervisor(repo, relay);
     expect(hard.actions[0]).toMatchObject({ kind: "retry-backoff", retryable: false });
     expect((await readJson(state)).displayState).toBe("hard blocked");
+  }, 30_000);
+
+  it("D186 never sends paused candidate failures directly to PassiveTest", async () => {
+    const { repo, relay, state } = await fixture();
+    await writeFile(path.join(repo, ".git", "tandem-relay", "state.json"), JSON.stringify({
+      schemaVersion: 2,
+      phase: "paused",
+      pausedFromPhase: "passive-testing",
+      pauseOrigin: "machine",
+      pauseReasonCode: "candidate-failure",
+      activeRole: null,
+      nextRole: "A",
+      stableCommit: "0123456789012345678901234567890123456789",
+      candidateCommit: "abcdefabcdefabcdefabcdefabcdefabcdefabcd",
+    }), "utf8");
+
+    const result = await supervisor(repo, relay);
+    expect(result.transitionsUsed).toBe(0);
+    expect(result.actions.map((action: { kind: string }) => action.kind)).not.toContain("passive-test");
+    expect(result.finalPhase).toBe("paused");
+    expect((await readJson(state)).blocker).toBeNull();
+  }, 30_000);
+
+  it("D186 does not auto-resume human or unknown-origin paused candidates", async () => {
+    for (const [pauseOrigin, pauseReasonCode] of [["human", "explicit-human-pause"], ["unknown", "environment-failure"]]) {
+      const { repo, relay } = await fixture();
+      await writeFile(path.join(repo, ".git", "tandem-relay", "state.json"), JSON.stringify({
+        schemaVersion: 2,
+        phase: "paused",
+        pausedFromPhase: "passive-testing",
+        pauseOrigin,
+        pauseReasonCode,
+        activeRole: null,
+        nextRole: "A",
+        stableCommit: "0123456789012345678901234567890123456789",
+        candidateCommit: "abcdefabcdefabcdefabcdefabcdefabcdefabcd",
+      }), "utf8");
+
+      const result = await supervisor(repo, relay);
+      expect(result.transitionsUsed).toBe(0);
+      expect(result.actions).toHaveLength(0);
+      expect(result.finalPhase).toBe("paused");
+    }
   }, 30_000);
 
   it("D179 checks stored backoff before ready source reconciliation", async () => {

@@ -492,6 +492,48 @@ try {
         return $files
     }
 
+    function Normalize-FailureIdentityText([string]$Value) {
+        if (-not $Value) { return "" }
+        return ([regex]::Replace($Value.Trim(), '\s+', ' ')).ToLowerInvariant()
+    }
+
+    function Get-FailingTestIdentitiesFromOutput([string]$Output) {
+        if (-not $Output) { return @() }
+        $identities = @()
+        $currentFile = $null
+        foreach ($line in ($Output -split "\r?\n")) {
+            $fileMatch = [regex]::Match($line, '(?:FAIL|❯)\s+(tests[\\/][^\s:"''<>|]+?\.(?:test|spec)\.[cm]?[tj]sx?)')
+            if ($fileMatch.Success) {
+                $currentFile = $fileMatch.Groups[1].Value.Replace('/', '\')
+            }
+            $failMatch = [regex]::Match($line, '^\s*(?:×|x)\s+(.+?)(?:\s+\d+(?:\.\d+)?ms)?\s*$')
+            if ($failMatch.Success -and $currentFile) {
+                $identities += [pscustomobject]@{
+                    file = $currentFile
+                    name = (Normalize-FailureIdentityText $failMatch.Groups[1].Value)
+                    key = ((Normalize-FailureIdentityText $currentFile) + "::" + (Normalize-FailureIdentityText $failMatch.Groups[1].Value))
+                }
+                continue
+            }
+            $fullMatch = [regex]::Match($line, 'FAIL\s+(tests[\\/][^\s:"''<>|]+?\.(?:test|spec)\.[cm]?[tj]sx?)\s+>\s+(.+)$')
+            if ($fullMatch.Success) {
+                $file = $fullMatch.Groups[1].Value.Replace('/', '\')
+                $name = Normalize-FailureIdentityText $fullMatch.Groups[2].Value
+                $identities += [pscustomobject]@{
+                    file = $file
+                    name = $name
+                    key = ((Normalize-FailureIdentityText $file) + "::" + $name)
+                }
+            }
+        }
+        $seen = @{}
+        return @($identities | Where-Object {
+            if ($seen.ContainsKey($_.key)) { return $false }
+            $seen[$_.key] = $true
+            return $true
+        })
+    }
+
     function Join-CmdQuotedArgs([string[]]$Values) {
         return (($Values | ForEach-Object { '"' + ($_.Replace('"', '\"')) + '"' }) -join " ")
     }
@@ -527,11 +569,26 @@ try {
         return $baselineCommand
     }
 
+    function Test-StableBaselineControlAllowed([object]$FailedCheck) {
+        $command = [string]$FailedCheck.command
+        if ($command -match '^\s*npm(\.cmd)?\s+test(\s|$)') { return $true }
+        if ($command -match '^\s*npx(\.cmd)?\s+vitest\s+run(\s|$)') { return $true }
+        if ($command -match '(^|\s)vitest\s+run(\s|$)') { return $true }
+        if ($command -match '^\s*node(\.exe)?\s+') {
+            $output = [string]$FailedCheck.output
+            return [bool]([regex]::IsMatch($output, 'FAIL\s+tests[\\/].+?>') -or [regex]::IsMatch($output, '^\s*(?:×|x)\s+', [Text.RegularExpressions.RegexOptions]::Multiline))
+        }
+        return $false
+    }
+
     function Invoke-StableBaselineControl([object[]]$FailedChecks) {
         $baselineRoot = Join-Path ([IO.Path]::GetTempPath()) ("tandem-stable-baseline-" + [guid]::NewGuid().ToString("N"))
         $failingFiles = @()
+        $candidateIdentities = @()
+        $stableIdentities = @()
         $baselineChecks = @()
         $classification = [string]$taxonomy.pauseReasonCodes.candidateFailure
+        $skippedControls = @()
         try {
             Invoke-Git worktree add --detach $baselineRoot $state.stableCommit | Out-Null
             $sourceNodeModules = Join-Path $Workspace "node_modules"
@@ -544,10 +601,22 @@ try {
                 foreach ($file in $files) {
                     if ($failingFiles -notcontains $file) { $failingFiles += $file }
                 }
+                $candidateIdentities += @(Get-FailingTestIdentitiesFromOutput ([string]$failed.output))
+                if (-not (Test-StableBaselineControlAllowed $failed)) {
+                    $skippedControls += [pscustomobject]@{ command = [string]$failed.command; reason = "not-read-only-validation-control" }
+                    continue
+                }
                 $baselineCommand = ConvertTo-StableBaselineCommand (Get-StableBaselineCommand $failed $files) $baselineRoot
-                $baselineChecks += Invoke-ValidationCommandInWorkspace $baselineCommand $baselineRoot
+                $baselineResult = Invoke-ValidationCommandInWorkspace $baselineCommand $baselineRoot
+                $baselineChecks += $baselineResult
+                $stableIdentities += @(Get-FailingTestIdentitiesFromOutput ([string]$baselineResult.output))
             }
-            $reproduced = @($baselineChecks | Where-Object { -not $_.passed }).Count -gt 0
+            $candidateKeys = @{}
+            foreach ($identity in $candidateIdentities) {
+                $candidateKeys[[string]$identity.key] = $true
+            }
+            $matchingIdentities = @($stableIdentities | Where-Object { $candidateKeys.ContainsKey([string]$_.key) })
+            $reproduced = $matchingIdentities.Count -gt 0
             if ($reproduced) { $classification = [string]$taxonomy.pauseReasonCodes.environmentFailure }
             return [pscustomobject]@{
                 classifier = "stable-baseline-control"
@@ -556,6 +625,10 @@ try {
                 candidateCommit = [string]$state.candidateCommit
                 stableCommit = [string]$state.stableCommit
                 failingTestFiles = @($failingFiles)
+                candidateFailureIdentities = @($candidateIdentities)
+                stableFailureIdentities = @($stableIdentities)
+                matchingFailureIdentities = @($matchingIdentities)
+                skippedControls = @($skippedControls)
                 failedCandidateCommands = @($FailedChecks | ForEach-Object {
                     [ordered]@{
                         command = [string]$_.command
@@ -583,22 +656,54 @@ try {
         }
     }
 
+    function New-OperationalFailureRecord([object[]]$FailedChecks, [string]$OperationKind) {
+        return [pscustomobject]@{
+            classifier = "lifecycle-operation"
+            classification = [string]$taxonomy.pauseReasonCodes.environmentFailure
+            reproducedOnStable = $false
+            baselineControlSkipped = $true
+            skipReason = "mutating-lifecycle-command"
+            operationKind = $OperationKind
+            candidateCommit = [string]$state.candidateCommit
+            stableCommit = [string]$state.stableCommit
+            failedCandidateCommands = @($FailedChecks | ForEach-Object {
+                [ordered]@{
+                    command = [string]$_.command
+                    exitCode = [int]$_.exitCode
+                    output = (Limit-Text ([string]$_.output) 3000)
+                }
+            })
+            baselineChecks = @()
+        }
+    }
+
     function Pause-PassiveFailure([object[]]$FailedChecks, [object[]]$CheckSummary, [string]$SummaryPrefix) {
         $baseline = Invoke-StableBaselineControl $FailedChecks
+        Pause-PassiveWithFailureRecord $FailedChecks $CheckSummary $SummaryPrefix $baseline
+    }
+
+    function Pause-PassiveLifecycleFailure([object[]]$FailedChecks, [object[]]$CheckSummary, [string]$SummaryPrefix, [string]$OperationKind) {
+        $failure = New-OperationalFailureRecord $FailedChecks $OperationKind
+        Pause-PassiveWithFailureRecord $FailedChecks $CheckSummary $SummaryPrefix $failure
+    }
+
+    function Pause-PassiveWithFailureRecord([object[]]$FailedChecks, [object[]]$CheckSummary, [string]$SummaryPrefix, [object]$FailureRecord) {
         $state.phase = "paused"
         $state.pausedFromPhase = "passive-testing"
         $state.pauseOrigin = [string]$taxonomy.pauseOrigins.machine
-        $state.pauseReasonCode = [string]$baseline.classification
+        $state.pauseReasonCode = [string]$FailureRecord.classification
         $state.activeRole = $null
-        $state.passiveFailure = $baseline
+        $state.passiveFailure = $FailureRecord
         $failedNames = ((@($FailedChecks | ForEach-Object { $_.command })) -join ', ')
-        if ($baseline.classification -eq [string]$taxonomy.pauseReasonCodes.environmentFailure) {
-            $state.lastSummary = "$SummaryPrefix for candidate $($state.candidateCommit), but the same failure reproduced on stable $($state.stableCommit): $failedNames"
+        if ($FailureRecord.classifier -eq "lifecycle-operation") {
+            $state.lastSummary = "$SummaryPrefix for candidate $($state.candidateCommit); baseline replay skipped because the failed operation is mutating: $failedNames"
+        } elseif ($FailureRecord.classification -eq [string]$taxonomy.pauseReasonCodes.environmentFailure) {
+            $state.lastSummary = "$SummaryPrefix for candidate $($state.candidateCommit), and the same failing test identity reproduced on stable $($state.stableCommit): $failedNames"
         } else {
             $state.lastSummary = "$SummaryPrefix for candidate $($state.candidateCommit): $failedNames"
         }
         Save-State
-        Write-Result "PASSIVE_FAILED" ([pscustomobject]@{ passiveChecks = $CheckSummary; stableBaseline = $baseline })
+        Write-Result "PASSIVE_FAILED" ([pscustomobject]@{ passiveChecks = $CheckSummary; stableBaseline = $FailureRecord })
     }
 
     function Invoke-PowerShellFileCommand([string[]]$Arguments, [string]$DisplayCommand) {
@@ -1858,7 +1963,7 @@ try {
             }
         })
         if ($failed.Count -gt 0) {
-            Pause-PassiveFailure $failed $checkSummary "Passive package failed"
+            Pause-PassiveLifecycleFailure $failed $checkSummary "Passive package failed" "package"
             exit 0
         }
         $runtimePackage = $null
@@ -1903,7 +2008,7 @@ try {
             }
         })
         if ($failed.Count -gt 0) {
-            Pause-PassiveFailure $failed $checkSummary "Executor B recovery runtime promotion failed"
+            Pause-PassiveLifecycleFailure $failed $checkSummary "Executor B recovery runtime promotion failed" "b-runtime-promotion"
             exit 0
         }
         $bBuildInfoPath = Join-Path $defaultRelayRoot "runtimes\executor-b\BUILD_INFO.json"
@@ -1940,7 +2045,7 @@ try {
             }
         })
         if ($failed.Count -gt 0) {
-            Pause-PassiveFailure $failed $checkSummary "Executor B recovery launch failed"
+            Pause-PassiveLifecycleFailure $failed $checkSummary "Executor B recovery launch failed" "b-runtime-launch"
             exit 0
         }
         $state.runtimeRecoveryStage = "b-runtime-started"

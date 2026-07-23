@@ -1010,7 +1010,7 @@ server.listen(port, "127.0.0.1");
         "-Role",
         "A",
         "-ValidationChecks",
-        "git rev-parse --verify refs/heads/definitely-missing-d185",
+        "node -e \"console.log('FAIL tests/example.test.ts > suite > same failure'); process.exit(1)\"",
       );
       expect(result).toMatchObject({
         outcome: "PASSIVE_FAILED",
@@ -1030,6 +1030,10 @@ server.listen(port, "127.0.0.1");
       expect(result.passiveFailure).toMatchObject({
         classification: "environment-failure",
         reproducedOnStable: true,
+      });
+      expect(result.passiveFailure.matchingFailureIdentities[0]).toMatchObject({
+        file: "tests\\example.test.ts",
+        name: "suite > same failure",
       });
 
       const status = await relay(repo, "-Action", "Status");
@@ -1054,4 +1058,76 @@ server.listen(port, "127.0.0.1");
       await rm(repo, { recursive: true, force: true });
     }
   }, 30_000);
+
+  windowsIt("D186: a different stable failure in the same file is not an environment failure", async () => {
+    const repo = await mkdtemp(path.join(tmpdir(), "tandem-relay-d186-different-fail-"));
+    try {
+      await initRepo(repo);
+      const candidateCommit = await createCandidate(repo);
+      await execa("git", ["switch", "codex/reciprocal-a"], { cwd: repo });
+
+      const result = await relay(
+        repo,
+        "-Action",
+        "PassiveTest",
+        "-Role",
+        "A",
+        "-ValidationChecks",
+        "node -e \"const fs=require('fs'); const candidate=fs.readFileSync('README.md','utf8').includes('candidate'); console.log('FAIL tests/example.test.ts > suite > ' + (candidate ? 'candidate-only failure' : 'stable-only failure')); process.exit(1)\"",
+      );
+      expect(result).toMatchObject({
+        outcome: "PASSIVE_FAILED",
+        phase: "paused",
+        pauseReasonCode: "candidate-failure",
+        candidateCommit,
+      });
+      expect(result.stableBaseline).toMatchObject({
+        classification: "candidate-failure",
+        reproducedOnStable: false,
+      });
+      expect(result.stableBaseline.candidateFailureIdentities[0]).toMatchObject({ name: "suite > candidate-only failure" });
+      expect(result.stableBaseline.stableFailureIdentities[0]).toMatchObject({ name: "suite > stable-only failure" });
+      expect(result.stableBaseline.matchingFailureIdentities).toHaveLength(0);
+    } finally {
+      await rm(repo, { recursive: true, force: true });
+    }
+  }, 30_000);
+
+  windowsIt("D186: package lifecycle failures are not replayed as stable baseline controls", async () => {
+    const repo = await mkdtemp(path.join(tmpdir(), "tandem-relay-d186-package-fail-"));
+    try {
+      await initRepo(repo);
+      const candidateCommit = await createCandidate(repo);
+      await execa("git", ["switch", "codex/reciprocal-a"], { cwd: repo });
+      const missingPreparedRuntime = path.join(repo, ".tandem", "missing-runtime", "win-unpacked");
+
+      const result = await relayWithEnv(
+        repo,
+        { ...process.env, TANDEM_PASSIVE_PACKAGE_PREPARED_WIN_UNPACKED: missingPreparedRuntime },
+        "-Action",
+        "PassiveTest",
+        "-Role",
+        "A",
+        "-ValidationChecks",
+        "git diff --check refs/tandem-relay/stable refs/tandem-relay/candidate --",
+      );
+      expect(result).toMatchObject({
+        outcome: "PASSIVE_FAILED",
+        phase: "paused",
+        pauseReasonCode: "environment-failure",
+        candidateCommit,
+      });
+      expect(result.stableBaseline).toMatchObject({
+        classifier: "lifecycle-operation",
+        classification: "environment-failure",
+        baselineControlSkipped: true,
+        skipReason: "mutating-lifecycle-command",
+        operationKind: "package",
+        baselineChecks: [],
+      });
+      expect(result.stableBaseline.failedCandidateCommands).toHaveLength(1);
+    } finally {
+      await rm(repo, { recursive: true, force: true });
+    }
+  }, 45_000);
 });

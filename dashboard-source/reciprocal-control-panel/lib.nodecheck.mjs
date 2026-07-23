@@ -145,6 +145,54 @@ test("D177 loads canonical taxonomy fixtures and classifies machine pauses disti
   }).code, reciprocalGateTaxonomy.codes.explicitHumanPause);
 });
 
+test("D186 classifies passive failure reason codes explicitly", () => {
+  assert.deepEqual(classifyReciprocalGate({
+    state: {
+      phase: "paused",
+      pausedFromPhase: "passive-testing",
+      pauseOrigin: "machine",
+      pauseReasonCode: "candidate-failure",
+      candidateCommit: "abc123",
+    },
+  }), {
+    category: reciprocalGateTaxonomy.hardHumanGate,
+    code: reciprocalGateTaxonomy.pauseReasonCodes.candidateFailure,
+    retryable: false,
+    nextAction: "review-candidate-failure",
+  });
+
+  assert.deepEqual(classifyReciprocalGate({
+    state: {
+      phase: "paused",
+      pausedFromPhase: "passive-testing",
+      pauseOrigin: "machine",
+      pauseReasonCode: "environment-failure",
+      candidateCommit: "abc123",
+    },
+  }), {
+    category: reciprocalGateTaxonomy.autoRecoverablePrerequisite,
+    code: reciprocalGateTaxonomy.pauseReasonCodes.environmentFailure,
+    retryable: true,
+    nextAction: "resume-and-rerun-passive-test",
+  });
+
+  assert.deepEqual(classifyReciprocalGate({
+    attemptCount: 3,
+    state: {
+      phase: "paused",
+      pausedFromPhase: "passive-testing",
+      pauseOrigin: "machine",
+      pauseReasonCode: "environment-failure",
+      candidateCommit: "abc123",
+    },
+  }), {
+    category: reciprocalGateTaxonomy.hardBlocked,
+    code: reciprocalGateTaxonomy.codes.repeatedGenuineBlocker,
+    retryable: false,
+    nextAction: "surface-actionable-blocker",
+  });
+});
+
 test("builds an auditable rollback plan for a failed candidate", () => {
   const plan = recoveryPlan({ phase: "validating", candidateKind: "improvement", activeRole: "B" }, { a: { path: "copy-a" }, b: { path: "copy-b" } });
   assert.equal(plan.workspace, "copy-a");
