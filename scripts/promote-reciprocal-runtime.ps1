@@ -140,7 +140,17 @@ foreach ($role in $roles) {
     if (Test-Path -LiteralPath $operationPath) {
         $operation = Get-Content -LiteralPath $operationPath -Raw | ConvertFrom-Json
         if ([string]$operation.sourceSha -ne $SourceSha -or [string]$operation.packageIdentity -ne $sourcePackageIdentity) {
-            throw "Existing executor-$role promotion operation targets a different package; inspect $operationPath."
+            if ([string]$operation.stage -eq "target-verified") {
+                $null = Get-PackageIntegrity $targetDir ([string]$operation.sourceSha) ([string]$operation.packageIdentity)
+                $completedRoot = Assert-UnderRoot (Join-Path $operationRoot "completed") $operationRoot
+                New-Item -ItemType Directory -Force -Path $completedRoot | Out-Null
+                $operationIdForArchive = if ($operation.operationId) { [string]$operation.operationId } else { "unknown-$(Get-Date -Format yyyyMMddHHmmss)" }
+                $completedPath = Assert-UnderRoot (Join-Path $completedRoot "executor-$role-$operationIdForArchive.json") $completedRoot
+                Move-Item -LiteralPath $operationPath -Destination $completedPath -Force
+                $operation = $null
+            } else {
+                throw "Existing executor-$role promotion operation targets a different package; inspect $operationPath."
+            }
         }
     }
 

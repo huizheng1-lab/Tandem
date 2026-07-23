@@ -128,4 +128,42 @@ describe("runtime package integrity", () => {
       await rm(relayRoot, { recursive: true, force: true });
     }
   }, 60_000);
+
+  windowsIt("D193 retires completed promotion operations before promoting a different package", async () => {
+    const relayRoot = path.join(tmpdir(), `runtime-promote-completed-${randomUUID()}`);
+    const sourceOne = path.join(relayRoot, "packages", "one");
+    const sourceTwo = path.join(relayRoot, "packages", "two");
+    const target = path.join(relayRoot, "runtimes", "executor-b");
+    try {
+      await mkdir(sourceOne, { recursive: true });
+      await writeFile(path.join(sourceOne, "Tandem.exe"), "first runtime\n", "utf8");
+      await writeFile(path.join(sourceOne, "resources.bin"), "first resources\n", "utf8");
+      const sourceOneSha = "1111111111111111111111111111111111111111";
+      const sourceOneProof = await writeBuildInfo(sourceOne, sourceOneSha);
+
+      await mkdir(sourceTwo, { recursive: true });
+      await writeFile(path.join(sourceTwo, "Tandem.exe"), "second runtime\n", "utf8");
+      await writeFile(path.join(sourceTwo, "resources.bin"), "second resources\n", "utf8");
+      const sourceTwoSha = "2222222222222222222222222222222222222222";
+      const sourceTwoProof = await writeBuildInfo(sourceTwo, sourceTwoSha);
+
+      const script = path.resolve("scripts/promote-reciprocal-runtime.ps1");
+      const firstArgs = ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", script, "-RelayRoot", relayRoot, "-Source", sourceOne, "-SourceSha", sourceOneSha, "-TargetRole", "B", "-BuildRound", "D193", "-PromotedRound", "D193"];
+      const secondArgs = ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", script, "-RelayRoot", relayRoot, "-Source", sourceTwo, "-SourceSha", sourceTwoSha, "-TargetRole", "B", "-BuildRound", "D193", "-PromotedRound", "D193"];
+      await execa("powershell", firstArgs);
+
+      const operationPath = path.join(relayRoot, "state", "promotion-operations", "executor-b.json");
+      const firstOperation = JSON.parse(await readFile(operationPath, "utf8"));
+      expect(firstOperation).toMatchObject({ stage: "target-verified", packageIdentity: sourceOneProof.identity });
+
+      await execa("powershell", secondArgs);
+
+      const secondOperation = JSON.parse(await readFile(operationPath, "utf8"));
+      expect(secondOperation).toMatchObject({ stage: "target-verified", packageIdentity: sourceTwoProof.identity });
+      expect(existsSync(path.join(relayRoot, "state", "promotion-operations", "completed", `executor-b-${firstOperation.operationId}.json`))).toBe(true);
+      await expect(verifyPackage(target, { sourceSha: sourceTwoSha, packageIdentity: sourceTwoProof.identity })).resolves.toMatchObject({ packageIdentity: sourceTwoProof.identity });
+    } finally {
+      await rm(relayRoot, { recursive: true, force: true });
+    }
+  }, 60_000);
 });
