@@ -7,6 +7,21 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
+$Utf8StrictNoBom = [Text.UTF8Encoding]::new($false, $true)
+$MaxRelayStateBytes = 5MB
+
+function Read-StrictJsonFile([string]$Path, [Int64]$MaxBytes = 0) {
+    if (-not (Test-Path -LiteralPath $Path)) { return $null }
+    $item = Get-Item -LiteralPath $Path
+    if ($MaxBytes -gt 0 -and $item.Length -gt $MaxBytes) {
+        throw "Refusing to read oversized JSON file $Path ($($item.Length) bytes; limit $MaxBytes)."
+    }
+    try {
+        return ($Utf8StrictNoBom.GetString([IO.File]::ReadAllBytes($Path))) | ConvertFrom-Json
+    } catch {
+        throw "Failed to read strict UTF-8 JSON file $Path`: $($_.Exception.Message)"
+    }
+}
 $adminRepo = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 $statePath = Join-Path $adminRepo ".git\tandem-relay\state.json"
 
@@ -122,7 +137,7 @@ function Start-Executor([string]$SelectedRole) {
     $automationTokenFile = Join-Path $stateHome "automation.json"
     if (-not (Test-Path -LiteralPath $exe)) { throw "Executor $SelectedRole runtime is missing: $exe" }
     if (-not (Test-Path -LiteralPath $buildInfoPath)) { throw "Executor $SelectedRole BUILD_INFO is missing: $buildInfoPath" }
-    $buildInfo = Get-Content -LiteralPath $buildInfoPath -Raw | ConvertFrom-Json
+    $buildInfo = Read-StrictJsonFile $buildInfoPath
     New-Item -ItemType Directory -Force -Path $stateHome, $userData | Out-Null
 
     $alreadyRunning = Get-Process -Name Tandem -ErrorAction SilentlyContinue | Where-Object {
@@ -208,7 +223,7 @@ function Get-RecoveryStage([object]$RelayState) {
         return $null
     }
     try {
-        $journal = Get-Content -LiteralPath $journalPath -Raw | ConvertFrom-Json
+        $journal = Read-StrictJsonFile $journalPath
         if ([string]$journal.status -eq "completed" -or [string]$journal.stage -eq "b-stopped") { return $null }
         return [string]$journal.stage
     } catch {
@@ -222,7 +237,7 @@ function Get-PhaseAwareStartRoles {
     $state = $null
     if (Test-Path -LiteralPath $statePath) {
         try {
-            $state = Get-Content -LiteralPath $statePath -Raw | ConvertFrom-Json
+            $state = Read-StrictJsonFile $statePath $MaxRelayStateBytes
             $phase = [string]$state.phase
         } catch {
             $phase = "unknown"

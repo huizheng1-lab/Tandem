@@ -6,6 +6,8 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
+$Utf8StrictNoBom = [Text.UTF8Encoding]::new($false, $true)
+$MaxRelayStateBytes = 5MB
 
 function ConvertFrom-JsonOutput([string]$Text) {
     return ($Text -replace "^\uFEFF", "") | ConvertFrom-Json
@@ -33,7 +35,21 @@ function Invoke-TextCommand([string]$File, [string[]]$Arguments, [string]$Workin
 
 function Read-JsonFile([string]$Path) {
     if (-not (Test-Path -LiteralPath $Path)) { return $null }
-    return (Get-Content -LiteralPath $Path -Raw) | ConvertFrom-Json
+    $item = Get-Item -LiteralPath $Path
+    $fileName = [IO.Path]::GetFileName($Path)
+    if ($fileName -eq "state.json" -and $item.Length -gt $MaxRelayStateBytes) {
+        throw "Refusing to read oversized relay state $Path ($($item.Length) bytes; limit $MaxRelayStateBytes)."
+    }
+    try {
+        return ($Utf8StrictNoBom.GetString([IO.File]::ReadAllBytes($Path))) | ConvertFrom-Json
+    } catch {
+        throw "Failed to read strict UTF-8 JSON file $Path`: $($_.Exception.Message)"
+    }
+}
+
+function Write-JsonFile([string]$Path, [object]$Value, [int]$Depth = 12) {
+    $json = $Value | ConvertTo-Json -Depth $Depth
+    [IO.File]::WriteAllBytes($Path, $Utf8StrictNoBom.GetBytes($json + [Environment]::NewLine))
 }
 
 function Get-AdminRepo([string]$Path) {
@@ -212,13 +228,13 @@ function Get-PlanningContinuationFromBoard([string]$BoardPath) {
 }
 
 function Save-RelayState([string]$Path, [object]$State) {
-    $State | ConvertTo-Json -Depth 20 | Set-Content -LiteralPath $Path -Encoding UTF8
+    Write-JsonFile $Path $State 20
 }
 
 function Get-ReciprocalTaxonomy([string]$RepoRoot) {
     $path = Join-Path $RepoRoot "process\reciprocal\gate-taxonomy.json"
     if (-not (Test-Path -LiteralPath $path)) { throw "Canonical reciprocal taxonomy is missing at $path." }
-    $taxonomy = Get-Content -LiteralPath $path -Raw | ConvertFrom-Json
+    $taxonomy = Read-JsonFile $path
     foreach ($name in @("autoRecoverablePrerequisite", "hardBlocked", "hardHumanGate", "waitingNotBlocked")) {
         if (-not $taxonomy.categories.$name) { throw "Canonical reciprocal taxonomy is missing categories.$name." }
     }
@@ -318,7 +334,7 @@ function Update-SourceReconciliationPrerequisite([object]$RelayState) {
         updatedAt = (Get-Date).ToUniversalTime().ToString("o")
     }
     New-Item -ItemType Directory -Path (Split-Path $sourceReconciliationPendingPath -Parent) -Force | Out-Null
-    $pending | ConvertTo-Json -Depth 10 | Set-Content -LiteralPath $sourceReconciliationPendingPath -Encoding UTF8
+    Write-JsonFile $sourceReconciliationPendingPath $pending 10
     return [pscustomobject]$pending
 }
 
@@ -392,7 +408,7 @@ function Read-SupervisorState([string]$Path) {
 }
 
 function Save-SupervisorState([string]$Path, [object]$State) {
-    $State | ConvertTo-Json -Depth 20 | Set-Content -LiteralPath $Path -Encoding UTF8
+    Write-JsonFile $Path $State 20
 }
 
 function Get-Fingerprint([string]$Category, [string]$Code, [string]$Message) {
@@ -487,7 +503,7 @@ function Update-LeaseHeartbeat([string]$Path) {
     $now = (Get-Date).ToUniversalTime()
     $lease.heartbeatAtUtc = $now.ToString("o")
     $lease.expiresAtUtc = $now.AddSeconds($leaseTtlSeconds).ToString("o")
-    $lease | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $Path -Encoding UTF8
+    Write-JsonFile $Path $lease 8
 }
 
 function Exit-Lease([string]$Path) {

@@ -651,7 +651,7 @@ async function getRuntime(role) {
 }
 
 async function getProducerRelayStatus(worktree = worktrees.b) {
-  const output = await powershell("-File", path.join(worktree.path, "scripts", "reciprocal-relay.ps1"), "-Action", "Status", "-Workspace", worktree.path)
+  const output = await powershell("-File", path.join(repoRoot, "scripts", "reciprocal-relay.ps1"), "-Action", "Status", "-Workspace", worktree.path)
     .catch((error) => JSON.stringify({ capabilities: {}, error: error.message }));
   try {
     const status = JSON.parse(output.replace(/^\uFEFF/, ""));

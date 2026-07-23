@@ -39,6 +39,34 @@ param(
 $ErrorActionPreference = "Stop"
 $ResumePauseThreshold = 3
 $CandidatePreviewArtifactCapability = 1
+$MaxRelayStateBytes = 5MB
+$Utf8StrictNoBom = [Text.UTF8Encoding]::new($false, $true)
+
+function Read-Utf8JsonFile([string]$Path, [Int64]$MaxBytes = 0) {
+    if (-not (Test-Path -LiteralPath $Path)) { return $null }
+    $item = Get-Item -LiteralPath $Path
+    if ($MaxBytes -gt 0 -and $item.Length -gt $MaxBytes) {
+        throw "Refusing to read oversized JSON file $Path ($($item.Length) bytes; limit $MaxBytes). Run reviewed recovery instead of whole-file parsing."
+    }
+    try {
+        $bytes = [IO.File]::ReadAllBytes($Path)
+        $text = $Utf8StrictNoBom.GetString($bytes)
+        return $text | ConvertFrom-Json
+    } catch {
+        throw "Failed to read strict UTF-8 JSON file $Path`: $($_.Exception.Message)"
+    }
+}
+
+function Write-Utf8JsonFileAtomic([string]$Path, [object]$Value, [int]$Depth = 12, [Int64]$MaxBytes = 0) {
+    $json = $Value | ConvertTo-Json -Depth $Depth
+    $bytes = $Utf8StrictNoBom.GetBytes($json + [Environment]::NewLine)
+    if ($MaxBytes -gt 0 -and $bytes.Length -gt $MaxBytes) {
+        throw "Refusing to write oversized JSON file $Path ($($bytes.Length) bytes; limit $MaxBytes)."
+    }
+    $tempPath = "$Path.tmp-$PID"
+    [IO.File]::WriteAllBytes($tempPath, $bytes)
+    Move-Item -LiteralPath $tempPath -Destination $Path -Force
+}
 
 function Get-ReciprocalTaxonomy {
     $path = $env:TANDEM_RECIPROCAL_TAXONOMY
@@ -46,7 +74,7 @@ function Get-ReciprocalTaxonomy {
         $path = Join-Path (Split-Path $PSScriptRoot -Parent) "process\reciprocal\gate-taxonomy.json"
     }
     if (-not (Test-Path -LiteralPath $path)) { throw "Canonical reciprocal taxonomy is missing at $path." }
-    $taxonomy = Get-Content -LiteralPath $path -Raw | ConvertFrom-Json
+    $taxonomy = Read-Utf8JsonFile $path
     foreach ($name in @("autoRecoverablePrerequisite", "hardBlocked", "hardHumanGate", "waitingNotBlocked")) {
         if (-not $taxonomy.categories.$name) { throw "Canonical reciprocal taxonomy is missing categories.$name." }
     }
@@ -170,7 +198,7 @@ if (-not $mutex.WaitOne(5000)) { throw "Timed out waiting for the reciprocal rel
 
 try {
     $state = if (Test-Path -LiteralPath $statePath) {
-        Get-Content -LiteralPath $statePath -Raw | ConvertFrom-Json
+        Read-Utf8JsonFile $statePath $MaxRelayStateBytes
     } else {
         [pscustomobject](New-RelayState $currentHead)
     }
@@ -252,7 +280,7 @@ try {
         $existing = $null
         if (Test-Path -LiteralPath $runtimeRecoveryJournalPath) {
             try {
-                $existing = Get-Content -LiteralPath $runtimeRecoveryJournalPath -Raw | ConvertFrom-Json
+                $existing = Read-Utf8JsonFile $runtimeRecoveryJournalPath
             } catch {
                 throw "Runtime recovery journal is unreadable: $($_.Exception.Message)"
             }
@@ -380,10 +408,7 @@ try {
 
     function Save-State {
         $state.updatedAt = (Get-Date).ToUniversalTime().ToString("o")
-        $tempPath = "$statePath.tmp-$PID"
-        $json = $state | ConvertTo-Json -Depth 5
-        [IO.File]::WriteAllText($tempPath, $json + [Environment]::NewLine, [Text.UTF8Encoding]::new($false))
-        Move-Item -LiteralPath $tempPath -Destination $statePath -Force
+        Write-Utf8JsonFileAtomic $statePath $state 12 $MaxRelayStateBytes
         Update-RelayRefs
     }
 
@@ -444,8 +469,20 @@ try {
 
     function Limit-Text([string]$Value, [int]$Limit = 6000) {
         if (-not $Value) { return "" }
-        if ($Value.Length -le $Limit) { return $Value }
-        return $Value.Substring(0, $Limit) + "`n...[truncated $($Value.Length - $Limit) chars]"
+        $bytes = $Utf8StrictNoBom.GetBytes($Value)
+        if ($bytes.Length -le $Limit) { return $Value }
+        $suffix = "`n...[truncated to $Limit UTF-8 bytes]"
+        $suffixBytes = $Utf8StrictNoBom.GetByteCount($suffix)
+        $builder = [Text.StringBuilder]::new()
+        $used = 0
+        foreach ($char in $Value.ToCharArray()) {
+            $charText = [string]$char
+            $charBytes = $Utf8StrictNoBom.GetByteCount($charText)
+            if (($used + $charBytes + $suffixBytes) -gt $Limit) { break }
+            [void]$builder.Append($charText)
+            $used += $charBytes
+        }
+        return $builder.ToString() + $suffix
     }
 
     function Write-ValidationTrace([string]$Message) {
@@ -502,11 +539,23 @@ try {
         $identities = @()
         $currentFile = $null
         foreach ($line in ($Output -split "\r?\n")) {
-            $fileMatch = [regex]::Match($line, '(?:FAIL|❯)\s+(tests[\\/][^\s:"''<>|]+?\.(?:test|spec)\.[cm]?[tj]sx?)')
+            $caseLineMatch = [regex]::Match($line, '^\s*(?:×|x|Ã—|âœ—)\s+(tests[\\/][^\s:"''<>|]+?\.(?:test|spec)\.[cm]?[tj]sx?)\s+>\s+(.+?)(?:\s+\d+(?:\.\d+)?ms)?\s*$')
+            if ($caseLineMatch.Success) {
+                $file = $caseLineMatch.Groups[1].Value.Replace('/', '\')
+                $name = Normalize-FailureIdentityText $caseLineMatch.Groups[2].Value
+                $identities += [pscustomobject]@{
+                    file = $file
+                    name = $name
+                    key = ((Normalize-FailureIdentityText $file) + "::" + $name)
+                }
+                $currentFile = $file
+                continue
+            }
+            $fileMatch = [regex]::Match($line, '(?:FAIL|❯|â¯)\s+(tests[\\/][^\s:"''<>|]+?\.(?:test|spec)\.[cm]?[tj]sx?)')
             if ($fileMatch.Success) {
                 $currentFile = $fileMatch.Groups[1].Value.Replace('/', '\')
             }
-            $failMatch = [regex]::Match($line, '^\s*(?:×|x)\s+(.+?)(?:\s+\d+(?:\.\d+)?ms)?\s*$')
+            $failMatch = [regex]::Match($line, '^\s*(?:×|x|Ã—|âœ—)\s+(.+?)(?:\s+\d+(?:\.\d+)?ms)?\s*$')
             if ($failMatch.Success -and $currentFile) {
                 $identities += [pscustomobject]@{
                     file = $currentFile
@@ -519,6 +568,16 @@ try {
             if ($fullMatch.Success) {
                 $file = $fullMatch.Groups[1].Value.Replace('/', '\')
                 $name = Normalize-FailureIdentityText $fullMatch.Groups[2].Value
+                $identities += [pscustomobject]@{
+                    file = $file
+                    name = $name
+                    key = ((Normalize-FailureIdentityText $file) + "::" + $name)
+                }
+            }
+        }
+        if ($identities.Count -eq 0) {
+            foreach ($file in (Get-FailingTestFilesFromOutput $Output)) {
+                $name = "unidentified failure"
                 $identities += [pscustomobject]@{
                     file = $file
                     name = $name
@@ -571,13 +630,13 @@ try {
 
     function Test-StableBaselineControlAllowed([object]$FailedCheck) {
         $command = [string]$FailedCheck.command
-        if ($command -match '^\s*npm(\.cmd)?\s+test(\s|$)') { return $true }
-        if ($command -match '^\s*npx(\.cmd)?\s+vitest\s+run(\s|$)') { return $true }
-        if ($command -match '(^|\s)vitest\s+run(\s|$)') { return $true }
-        if ($command -match '^\s*node(\.exe)?\s+') {
-            $output = [string]$FailedCheck.output
-            return [bool]([regex]::IsMatch($output, 'FAIL\s+tests[\\/].+?>') -or [regex]::IsMatch($output, '^\s*(?:×|x)\s+', [Text.RegularExpressions.RegexOptions]::Multiline))
-        }
+        if ($command -match '[;&|<>]') { return $false }
+        if ($command -match '(?i)\b(node|powershell|pwsh|cmd|bash|python|wscript|cscript)(\.exe)?\b') { return $false }
+        if ($command -match '(?i)(package-passive-runtime|promote-reciprocal-runtime|start-reciprocal-tandem|stop-reciprocal-tandem|deploy-reciprocal-dashboard|reciprocal-relay\.ps1)') { return $false }
+        if ($command -match '(?i)(Tandem Reciprocal|tandem-relay|\.git[\\/]|[A-Z]:[\\/])') { return $false }
+        if ($command -match '^\s*npm(\.cmd)?\s+test(?:\s+--(?:\s+"?tests[\\/][^"&|;<>]+"?)*)?\s*$') { return $true }
+        if ($command -match '^\s*npx(\.cmd)?\s+vitest\s+run(?:\s+"?tests[\\/][^"&|;<>]+"?)*\s*$') { return $true }
+        if ($command -match '^\s*vitest\s+run(?:\s+"?tests[\\/][^"&|;<>]+"?)*\s*$') { return $true }
         return $false
     }
 
@@ -1496,7 +1555,6 @@ try {
     }
 
     if ($Action -eq "Status") {
-        Save-State
         Write-Result "STATUS"
         exit 0
     }
@@ -1506,7 +1564,7 @@ try {
         $path = Join-Path $relayRoot "state\finalization-$($SelectedRole.ToLowerInvariant()).json"
         if (-not (Test-Path -LiteralPath $path)) { return $null }
         try {
-            $pending = Get-Content -LiteralPath $path -Raw | ConvertFrom-Json
+            $pending = Read-Utf8JsonFile $path
         } catch {
             throw "Pending app-layer finalization is unreadable at $path."
         }
@@ -1978,7 +2036,7 @@ try {
         if (-not $packageIdentity) {
             $packageBuildInfoPath = if ($runtimePackage -and $runtimePackage.buildInfoPath) { [string]$runtimePackage.buildInfoPath } else { Join-Path $adminRepo "release\win-unpacked\BUILD_INFO.json" }
             if (-not (Test-Path -LiteralPath $packageBuildInfoPath)) { throw "Passive package BUILD_INFO is missing package identity: $packageBuildInfoPath" }
-            $packageBuildInfo = Get-Content -LiteralPath $packageBuildInfoPath -Raw | ConvertFrom-Json
+            $packageBuildInfo = Read-Utf8JsonFile $packageBuildInfoPath
             $packageIdentity = [string]$packageBuildInfo.packageIdentity
         }
         if (-not $packageIdentity) { throw "Passive package did not produce a cryptographic package identity." }
@@ -2013,7 +2071,7 @@ try {
         }
         $bBuildInfoPath = Join-Path $defaultRelayRoot "runtimes\executor-b\BUILD_INFO.json"
         if (-not (Test-Path -LiteralPath $bBuildInfoPath)) { throw "Executor B recovery runtime BUILD_INFO is missing: $bBuildInfoPath" }
-        $bBuildInfo = Get-Content -LiteralPath $bBuildInfoPath -Raw | ConvertFrom-Json
+        $bBuildInfo = Read-Utf8JsonFile $bBuildInfoPath
         if ([string]$bBuildInfo.sourceSha -ne $head) { throw "Executor B recovery runtime BUILD_INFO sourceSha mismatch: $($bBuildInfo.sourceSha) != $head" }
         if ([string]$bBuildInfo.packageIdentity -ne $packageIdentity) { throw "Executor B recovery runtime package identity mismatch: $($bBuildInfo.packageIdentity) != $packageIdentity" }
         if (-not $bBuildInfo.reciprocalCapabilities -or [int]$bBuildInfo.reciprocalCapabilities.candidatePreviewArtifactLifecycle -lt 1) {
@@ -2058,7 +2116,7 @@ try {
             Start-Sleep -Milliseconds 200
         }
         if (-not (Test-Path -LiteralPath $bAutomationPath)) { throw "Executor B automation token is missing after recovery start: $bAutomationPath" }
-        $bAutomation = Get-Content -LiteralPath $bAutomationPath -Raw | ConvertFrom-Json
+        $bAutomation = Read-Utf8JsonFile $bAutomationPath
         if (-not $bAutomation.port -or -not $bAutomation.token -or -not $bAutomation.pid) { throw "Executor B automation token is incomplete after recovery start." }
         $bStatus = $null
         $deadline = (Get-Date).AddSeconds(30)

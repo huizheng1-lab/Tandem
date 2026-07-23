@@ -17,7 +17,7 @@ describe("reciprocal relay script", () => {
     await mkdir(path.join(repo, "scripts"), { recursive: true });
     await mkdir(path.join(repo, "process", "reciprocal"), { recursive: true });
     await writeFile(path.join(repo, "README.md"), "initial\n", "utf8");
-    await writeFile(path.join(repo, ".gitignore"), ".tandem/\nrelease/\nrelease*/\n", "utf8");
+    await writeFile(path.join(repo, ".gitignore"), ".tandem/\nrelease/\nrelease*/\nnode_modules/\n", "utf8");
     await writeFile(
       path.join(repo, "process", "reciprocal", "gate-taxonomy.json"),
       await readFile(path.resolve("process/reciprocal/gate-taxonomy.json"), "utf8"),
@@ -48,7 +48,12 @@ describe("reciprocal relay script", () => {
       await readFile(path.resolve("scripts/runtime-package-integrity.mjs"), "utf8"),
       "utf8",
     );
-    await execa("git", ["add", "README.md", ".gitignore", "process/reciprocal/gate-taxonomy.json", "scripts/reciprocal-direction.ps1", "scripts/promote-reciprocal-runtime.ps1", "scripts/package-passive-runtime.ps1", "scripts/start-reciprocal-tandem.ps1", "scripts/runtime-package-integrity.mjs"], { cwd: repo });
+    await writeFile(
+      path.join(repo, "scripts", "recover-reciprocal-relay-state.ps1"),
+      await readFile(path.resolve("scripts/recover-reciprocal-relay-state.ps1"), "utf8"),
+      "utf8",
+    );
+    await execa("git", ["add", "README.md", ".gitignore", "process/reciprocal/gate-taxonomy.json", "scripts/reciprocal-direction.ps1", "scripts/promote-reciprocal-runtime.ps1", "scripts/package-passive-runtime.ps1", "scripts/start-reciprocal-tandem.ps1", "scripts/runtime-package-integrity.mjs", "scripts/recover-reciprocal-relay-state.ps1"], { cwd: repo });
     await execa("git", ["commit", "-m", "initial"], { cwd: repo });
     await execa("git", ["branch", "codex/reciprocal-a"], { cwd: repo });
     await execa("git", ["branch", "codex/reciprocal-b"], { cwd: repo });
@@ -73,6 +78,19 @@ describe("reciprocal relay script", () => {
 
   function relayEnv(repo: string) {
     return { ...process.env, TANDEM_RECIPROCAL_ROOT: relayRoot(repo) };
+  }
+
+  async function enableVitestFixture(repo: string, source: string) {
+    await mkdir(path.join(repo, "tests"), { recursive: true });
+    const vitestEntry = path.resolve("node_modules", "vitest", "vitest.mjs").replaceAll("\\", "/");
+    await writeFile(
+      path.join(repo, "package.json"),
+      JSON.stringify({ type: "module", scripts: { test: `node "${vitestEntry}" run --configLoader runner` } }, null, 2),
+      "utf8",
+    );
+    await writeFile(path.join(repo, "tests", "example.test.ts"), source, "utf8");
+    await execa("git", ["add", "package.json", "tests/example.test.ts"], { cwd: repo });
+    await execa("git", ["commit", "-m", "add vitest fixture"], { cwd: repo });
   }
 
   async function freePort() {
@@ -409,7 +427,7 @@ server.listen(port, "127.0.0.1");
     } finally {
       await rm(repo, { recursive: true, force: true });
     }
-  }, 30_000);
+  }, 120_000);
 
   windowsIt("D178: relay pause metadata comes from the canonical taxonomy fixture", async () => {
     const repo = await mkdtemp(path.join(tmpdir(), "tandem-relay-d178-taxonomy-"));
@@ -470,7 +488,7 @@ server.listen(port, "127.0.0.1");
       await rm(repo, { recursive: true, force: true });
       if (taxonomyDir) await rm(taxonomyDir, { recursive: true, force: true });
     }
-  }, 30_000);
+  }, 60_000);
 
   windowsIt("migrates legacy null pause metadata only for the exact machine circuit-breaker signature", async () => {
     const repo = await mkdtemp(path.join(tmpdir(), "tandem-relay-legacy-pause-"));
@@ -1000,6 +1018,13 @@ server.listen(port, "127.0.0.1");
     const repo = await mkdtemp(path.join(tmpdir(), "tandem-relay-d185-env-fail-"));
     try {
       await initRepo(repo);
+      await enableVitestFixture(repo, `
+import { expect, it } from "vitest";
+
+it("suite > same failure", () => {
+  expect("❯ × 智能路径").toBe("stable");
+});
+`);
       const candidateCommit = await createCandidate(repo);
       await execa("git", ["switch", "codex/reciprocal-a"], { cwd: repo });
 
@@ -1010,7 +1035,7 @@ server.listen(port, "127.0.0.1");
         "-Role",
         "A",
         "-ValidationChecks",
-        "node -e \"console.log('FAIL tests/example.test.ts > suite > same failure'); process.exit(1)\"",
+        "npm test -- tests/example.test.ts",
       );
       expect(result).toMatchObject({
         outcome: "PASSIVE_FAILED",
@@ -1035,6 +1060,13 @@ server.listen(port, "127.0.0.1");
         file: "tests\\example.test.ts",
         name: "suite > same failure",
       });
+      const statePath = path.join(repo, ".git", "tandem-relay", "state.json");
+      const beforeStatus = await readFile(statePath);
+      for (let index = 0; index < 100; index += 1) {
+        await relay(repo, "-Action", "Status");
+      }
+      const afterStatus = await readFile(statePath);
+      expect(afterStatus.equals(beforeStatus)).toBe(true);
 
       const status = await relay(repo, "-Action", "Status");
       expect(status).toMatchObject({
@@ -1057,12 +1089,21 @@ server.listen(port, "127.0.0.1");
     } finally {
       await rm(repo, { recursive: true, force: true });
     }
-  }, 30_000);
+  }, 120_000);
 
   windowsIt("D186: a different stable failure in the same file is not an environment failure", async () => {
     const repo = await mkdtemp(path.join(tmpdir(), "tandem-relay-d186-different-fail-"));
     try {
       await initRepo(repo);
+      await enableVitestFixture(repo, `
+import { readFileSync } from "node:fs";
+import { expect, it } from "vitest";
+
+const candidate = readFileSync("README.md", "utf8").includes("candidate");
+it("suite > " + (candidate ? "candidate-only failure" : "stable-only failure"), () => {
+  expect(candidate ? "❯ candidate" : "× stable").toBe("pass");
+});
+`);
       const candidateCommit = await createCandidate(repo);
       await execa("git", ["switch", "codex/reciprocal-a"], { cwd: repo });
 
@@ -1073,7 +1114,7 @@ server.listen(port, "127.0.0.1");
         "-Role",
         "A",
         "-ValidationChecks",
-        "node -e \"const fs=require('fs'); const candidate=fs.readFileSync('README.md','utf8').includes('candidate'); console.log('FAIL tests/example.test.ts > suite > ' + (candidate ? 'candidate-only failure' : 'stable-only failure')); process.exit(1)\"",
+        "npm test -- tests/example.test.ts",
       );
       expect(result).toMatchObject({
         outcome: "PASSIVE_FAILED",
@@ -1088,6 +1129,37 @@ server.listen(port, "127.0.0.1");
       expect(result.stableBaseline.candidateFailureIdentities[0]).toMatchObject({ name: "suite > candidate-only failure" });
       expect(result.stableBaseline.stableFailureIdentities[0]).toMatchObject({ name: "suite > stable-only failure" });
       expect(result.stableBaseline.matchingFailureIdentities).toHaveLength(0);
+    } finally {
+      await rm(repo, { recursive: true, force: true });
+    }
+  }, 30_000);
+
+  windowsIt("D187: spoofed node and chained validation commands are not stable-baseline replayed", async () => {
+    const repo = await mkdtemp(path.join(tmpdir(), "tandem-relay-d187-spoof-"));
+    try {
+      await initRepo(repo);
+      const candidateCommit = await createCandidate(repo);
+      await execa("git", ["switch", "codex/reciprocal-a"], { cwd: repo });
+
+      const result = await relay(
+        repo,
+        "-Action",
+        "PassiveTest",
+        "-Role",
+        "A",
+        "-ValidationChecks",
+        "node -e \"console.log('FAIL tests/example.test.ts > suite > fake'); process.exit(1)\" & exit /b 1",
+      );
+      expect(result).toMatchObject({
+        outcome: "PASSIVE_FAILED",
+        phase: "paused",
+        pauseReasonCode: "candidate-failure",
+        candidateCommit,
+      });
+      expect(result.stableBaseline.baselineChecks).toHaveLength(0);
+      expect(result.stableBaseline.skippedControls[0]).toMatchObject({
+        reason: "not-read-only-validation-control",
+      });
     } finally {
       await rm(repo, { recursive: true, force: true });
     }
@@ -1126,6 +1198,67 @@ server.listen(port, "127.0.0.1");
         baselineChecks: [],
       });
       expect(result.stableBaseline.failedCandidateCommands).toHaveLength(1);
+    } finally {
+      await rm(repo, { recursive: true, force: true });
+    }
+  }, 45_000);
+
+  windowsIt("D187: oversized relay state fails closed before whole-file parsing", async () => {
+    const repo = await mkdtemp(path.join(tmpdir(), "tandem-relay-d187-oversized-"));
+    try {
+      await initRepo(repo);
+      await relay(repo, "-Action", "Reset", "-Force");
+      const statePath = path.join(repo, ".git", "tandem-relay", "state.json");
+      await writeFile(statePath, `{"phase":"paused","padding":"${"×❯".repeat(3_000_000)}"}`, "utf8");
+
+      await expect(relay(repo, "-Action", "Status")).rejects.toThrow(/oversized JSON file|Refusing to read oversized/i);
+    } finally {
+      await rm(repo, { recursive: true, force: true });
+    }
+  }, 30_000);
+
+  windowsIt("D187: recovery compacts amplified state and is idempotent", async () => {
+    const repo = await mkdtemp(path.join(tmpdir(), "tandem-relay-d187-recovery-"));
+    try {
+      await initRepo(repo);
+      const candidateCommit = await createCandidate(repo);
+      const stableCommit = (await execa("git", ["rev-parse", "refs/tandem-relay/stable"], { cwd: repo })).stdout.trim();
+      const statePath = path.join(repo, ".git", "tandem-relay", "state.json");
+      const amplified = {
+        schemaVersion: 2,
+        phase: "paused",
+        pausedFromPhase: "passive-testing",
+        pauseOrigin: "machine",
+        pauseReasonCode: "candidate-failure",
+        stableCommit,
+        candidateCommit,
+        passiveFailure: {
+          candidateFailureIdentities: [{ file: "tests/example.test.ts", name: "suite > ❯ × 智能路径" }],
+          output: "❯ × 智能路径 ".repeat(10_000),
+        },
+      };
+      await writeFile(statePath, JSON.stringify(amplified), "utf8");
+
+      const script = path.resolve("scripts/recover-reciprocal-relay-state.ps1");
+      const first = await execa("powershell", ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", script, "-MaxStateBytes", "32768", "-Force"], { cwd: repo });
+      const recovered = JSON.parse(first.stdout);
+      expect(recovered).toMatchObject({
+        ok: true,
+        alreadyCompact: false,
+        phase: "paused",
+        pauseOrigin: "machine",
+        pauseReasonCode: "candidate-failure",
+        candidateCommit,
+        stableCommit,
+      });
+      expect(recovered.oldSizeBytes).toBeGreaterThan(recovered.newSizeBytes);
+      expect(recovered.quarantinePath).toMatch(/state\.quarantine-D187-/);
+      const compactState = JSON.parse(await readFile(statePath, "utf8"));
+      expect(compactState.passiveFailure.recovery.oldSizeBytes).toBe(recovered.oldSizeBytes);
+      expect(compactState.passiveFailure.failedCandidateCommands[0].output.length).toBeLessThan(1000);
+
+      const second = await execa("powershell", ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", script, "-MaxStateBytes", "32768"], { cwd: repo });
+      expect(JSON.parse(second.stdout)).toMatchObject({ ok: true, alreadyCompact: true, candidateCommit });
     } finally {
       await rm(repo, { recursive: true, force: true });
     }
