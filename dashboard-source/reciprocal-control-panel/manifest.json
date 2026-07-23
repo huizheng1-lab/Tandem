@@ -19,13 +19,13 @@
                   },
                   {
                       "path":  "lib.mjs",
-                      "sha256":  "B182BE53975976662B93B4A6D8AD23F506AD66200F73DE3C693AEEF9D6344D32",
-                      "bytes":  26153
+                      "sha256":  "8606383D22A94F1633221717CDA700D86BE1822DA2BFEA5CBF411162CD4C8210",
+                      "bytes":  27135
                   },
                   {
                       "path":  "lib.nodecheck.mjs",
-                      "sha256":  "200DBE55B672782D511EFC64558F4B9A015D35C1D644057A34505C982D532776",
-                      "bytes":  19023
+                      "sha256":  "7F5551C95913DC68151872B09773EE8E656403634F5C5E4FABB129BA4BD81D4E",
+                      "bytes":  20450
                   },
                   {
                       "path":  "public/app.js",
