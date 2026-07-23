@@ -175,6 +175,7 @@ const server = createServer((request, response) => {
     response.end(JSON.stringify({
       ok: true,
       pid: process.pid,
+      port,
       instanceId: process.env.TANDEM_INSTANCE_ID || null,
       allowedProjectDir: projectDir,
       projectDir,

@@ -314,6 +314,24 @@ try {
         Move-Item -LiteralPath $temp -Destination $runtimeRecoveryJournalPath -Force
     }
 
+    function Get-RuntimePackageIntegrity {
+        param(
+            [string]$RuntimeRoot,
+            [string]$ExpectedSourceSha,
+            [string]$ExpectedPackageIdentity
+        )
+        $integrityScript = Join-Path $Workspace "scripts\runtime-package-integrity.mjs"
+        if (-not (Test-Path -LiteralPath $integrityScript)) {
+            $integrityScript = Join-Path $PSScriptRoot "runtime-package-integrity.mjs"
+        }
+        if (-not (Test-Path -LiteralPath $integrityScript)) { throw "Runtime package integrity helper is missing: $integrityScript" }
+        $output = @(& node.exe $integrityScript verify $RuntimeRoot --source-sha $ExpectedSourceSha --package-identity $ExpectedPackageIdentity 2>&1)
+        $exitCode = $LASTEXITCODE
+        $text = ($output | ForEach-Object { $_.ToString() }) -join [Environment]::NewLine
+        if ($exitCode -ne 0) { throw "Runtime package verification failed for ${RuntimeRoot}: $text" }
+        return $text | ConvertFrom-Json
+    }
+
     function Update-RelayRefs {
         function Get-RelayRef([string]$RefName) {
             $oldErrorAction = $ErrorActionPreference
@@ -1782,6 +1800,7 @@ try {
         if (-not $bBuildInfo.reciprocalCapabilities -or [int]$bBuildInfo.reciprocalCapabilities.candidatePreviewArtifactLifecycle -lt 1) {
             throw "Executor B recovery runtime does not advertise candidatePreviewArtifactLifecycle v1."
         }
+        $bPackageProof = Get-RuntimePackageIntegrity (Join-Path $defaultRelayRoot "runtimes\executor-b") $head $packageIdentity
         $state.runtimeRecoveryStage = "b-runtime-promoted"
         Save-State
         Save-RuntimeRecoveryJournal -Stage "b-promoted" -SourceSha $head -PackageIdentity $packageIdentity -ImmutablePackagePath $immutablePackagePath -Proof ([pscustomobject]@{ bBuildInfo = $bBuildInfo })
@@ -1841,6 +1860,18 @@ try {
             }
         } while ((Get-Date) -lt $deadline)
         if (-not $bStatus) { throw "Executor B recovery endpoint did not become ready before approval gate." }
+        if (-not $bStatus.pid -or [int]$bStatus.pid -ne [int]$bAutomation.pid) {
+            throw "Executor B recovery endpoint PID mismatch: endpoint=$($bStatus.pid), token=$($bAutomation.pid)"
+        }
+        if (-not $bStatus.port -or [int]$bStatus.port -ne [int]$bAutomation.port) {
+            throw "Executor B recovery endpoint port mismatch: endpoint=$($bStatus.port), token=$($bAutomation.port)"
+        }
+        if (-not $bStatus.tokenFile -or ([IO.Path]::GetFullPath([string]$bStatus.tokenFile) -ine [IO.Path]::GetFullPath($bAutomationPath))) {
+            throw "Executor B recovery endpoint token file mismatch: $($bStatus.tokenFile) != $bAutomationPath"
+        }
+        if ([string]$bStatus.instanceId -ne "B") {
+            throw "Executor B recovery endpoint instance mismatch: $($bStatus.instanceId)"
+        }
         $expectedBTarget = (Join-Path $defaultRelayRoot "worktrees\copy-a")
         $actualBTarget = if ($bStatus.allowedProjectDir) { [string]$bStatus.allowedProjectDir } else { [string]$bStatus.projectDir }
         if (([IO.Path]::GetFullPath($actualBTarget)).TrimEnd('\') -ine ([IO.Path]::GetFullPath($expectedBTarget)).TrimEnd('\')) {
@@ -1863,6 +1894,7 @@ try {
             bEndpoint = $bStatus
             bAutomation = $bAutomation
             bProcess = [ordered]@{ pid = [int]$bAutomation.pid; path = $bProcess.Path }
+            bPackageProof = $bPackageProof
         })
 
         $acceptedKind = $state.candidateKind
