@@ -1831,9 +1831,9 @@ try {
             exit 0
         }
 
-        $packageScript = Join-Path $Workspace "scripts\package-passive-runtime.ps1"
+        $packageScript = Join-Path $PSScriptRoot "package-passive-runtime.ps1"
         if (-not (Test-Path -LiteralPath $packageScript)) {
-            $packageScript = Join-Path $PSScriptRoot "package-passive-runtime.ps1"
+            $packageScript = Join-Path $Workspace "scripts\package-passive-runtime.ps1"
         }
         if (-not (Test-Path -LiteralPath $packageScript)) { throw "Passive package helper is missing: $packageScript" }
         $state.runtimeRecoveryStage = "passive-package-started"
@@ -1878,9 +1878,9 @@ try {
         if (-not (Test-Path -LiteralPath $immutablePackagePath)) { throw "Immutable passive runtime package is missing: $immutablePackagePath" }
         Save-RuntimeRecoveryJournal -Stage "package-ready" -SourceSha $head -PackageIdentity $packageIdentity -ImmutablePackagePath $immutablePackagePath -Proof ([pscustomobject]@{ package = $runtimePackage })
 
-        $promotionScript = Join-Path $Workspace "scripts\promote-reciprocal-runtime.ps1"
+        $promotionScript = Join-Path $PSScriptRoot "promote-reciprocal-runtime.ps1"
         if (-not (Test-Path -LiteralPath $promotionScript)) {
-            $promotionScript = Join-Path $PSScriptRoot "promote-reciprocal-runtime.ps1"
+            $promotionScript = Join-Path $Workspace "scripts\promote-reciprocal-runtime.ps1"
         }
         if (-not (Test-Path -LiteralPath $promotionScript)) { throw "Passive recovery promotion helper is missing: $promotionScript" }
         $state.runtimeRecoveryStage = "b-runtime-promote-started"
@@ -1916,9 +1916,9 @@ try {
         Save-State
         Save-RuntimeRecoveryJournal -Stage "b-promoted" -SourceSha $head -PackageIdentity $packageIdentity -ImmutablePackagePath $immutablePackagePath -Proof ([pscustomobject]@{ bBuildInfo = $bBuildInfo })
 
-        $startScript = Join-Path $Workspace "scripts\start-reciprocal-tandem.ps1"
+        $startScript = Join-Path $PSScriptRoot "start-reciprocal-tandem.ps1"
         if (-not (Test-Path -LiteralPath $startScript)) {
-            $startScript = Join-Path $PSScriptRoot "start-reciprocal-tandem.ps1"
+            $startScript = Join-Path $Workspace "scripts\start-reciprocal-tandem.ps1"
         }
         if (-not (Test-Path -LiteralPath $startScript)) { throw "Passive recovery start helper is missing: $startScript" }
         $state.runtimeRecoveryStage = "b-runtime-start-started"
