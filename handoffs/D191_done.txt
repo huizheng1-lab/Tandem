@@ -1,0 +1,45 @@
+Round: D191
+
+Commits:
+- b43e0c4 D191-1: surface scheduler load failures
+
+Live repair:
+- Repaired C:\Users\huizh\Apps\Tandem Reciprocal\worktrees\copy-b\.tandem\schedules.json from a bare object to this array shape, preserving the D190-correct admin relay prompt and lastRunAt:
+  [
+    {
+      "id": "relay-a",
+      "cron": "7,37 * * * *",
+      "prompt": "Follow the injected TANDEM.md and execute one reciprocal improvement invocation as Executor A. Begin with the admin relay Claim command: powershell -NoProfile -ExecutionPolicy Bypass -File \"C:\\Users\\huizh\\Apps\\HZ code\\scripts\\reciprocal-relay.ps1\" -Action Claim -Role A. If the relay reports PASSIVE_TEST, run the returned admin-script passive test command instead of starting new work. If it reports A_UPGRADE_PENDING, stop for the human gate.",
+      "createdAt": "2026-07-18T19:02:19.2261840Z",
+      "lastRunAt": "2026-07-23T16:37:00.001Z"
+    }
+  ]
+- Verified C:\Users\huizh\Apps\Tandem Reciprocal\worktrees\copy-a\.tandem\schedules.json was already a valid one-entry array for relay-b and did not require repair.
+- Restarted Executor A after the repair so the desktop scheduler reloaded the fixed file. Executor A /status reported ok, instance A, projectDir C:\Users\huizh\Apps\Tandem Reciprocal\worktrees\copy-b.
+
+Code changes:
+- listSchedules now throws ScheduleLoadError with the malformed file path and Zod issue details when schedules.json is not an array of valid schedule entries.
+- Desktop scheduler startup catches schedule-load failures, emits a visible machine error, records scheduleStatus, and exposes that state through automation /status.
+- TUI schedule startup catches and reports malformed schedule files in the system stream instead of silently losing schedules.
+- Added scripts/update-tandem-schedule.ps1 as the shared PowerShell schedule-edit helper. It requires an existing JSON array and writes with ConvertTo-Json -InputObject ([object[]]...) so single-entry schedule files stay arrays.
+
+Regressions:
+- tests/schedule.test.ts: D191 rejects a bare schedules object with an identifiable load failure.
+- tests/schedule.test.ts: D191 rejects invalid schedule entries with the schedules file path.
+- tests/schedule.test.ts: D191 accepts valid schedule arrays.
+- tests/schedule.test.ts: D191 PowerShell schedule edits preserve single-entry array shape.
+- tests/desktop-service.test.ts: D191 reports malformed persisted schedules at launch.
+- tests/automation-server.test.ts asserts scheduleStatus is included in automation /status.
+
+Live tick and claim proof:
+- After repair/restart, relay-a lastRunAt advanced to 2026-07-23T18:07:00.015Z.
+- At 2026-07-23T18:08:18Z, relay state was phase=working, activeRole=A.
+- reciprocal-direction Show reported W0027 IN_PROGRESS epic=true autonomy=full phase=STEP revision=1 completed=2 step=3/3 role=A started=2026-07-23T18:08:30Z.
+- Executor A /status reported running=true, instanceId=A, projectDir C:\Users\huizh\Apps\Tandem Reciprocal\worktrees\copy-b, sessionId=63aa4e43-0738-415f-a9b4-86308c07afa8.
+
+Verification:
+- npm test -- tests/schedule.test.ts tests/desktop-service.test.ts tests/automation-server.test.ts -- --reporter=dot
+- npm run typecheck
+- git diff --check
+- npm test initially found one unrelated flaky tests/tools.test.ts timeout-output assertion; focused rerun passed.
+- npm test rerun passed: 53 files passed, 1 skipped; 573 tests passed, 1 skipped.
