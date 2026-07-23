@@ -38,8 +38,8 @@ import { searchSessionsStream } from "../../src/session/search.js";
 import { safeDefaultProjectDir } from "../../src/tools/protection.js";
 import { readJsonFileSync } from "../../src/json.js";
 import type { PermissionBridge, PermissionRequest } from "../../src/tools/permissions.js";
-import { addSchedule, listSchedules, markScheduleRun, removeSchedule } from "../../src/commands/schedule.js";
-import type { Schedule } from "../../src/commands/schedule.js";
+import { addSchedule, listSchedules, markScheduleRun, removeSchedule, schedulesPath, ScheduleLoadError } from "../../src/commands/schedule.js";
+import type { Schedule, ScheduleLoadStatus } from "../../src/commands/schedule.js";
 import {
   ipcChannels,
   type CostTotals,
@@ -139,6 +139,7 @@ export class TandemService {
   private readonly pendingPermissions = new Map<string, PendingResolver>();
   private readonly pendingPlans = new Map<string, PendingResolver>();
   private readonly cronTasks = new Map<string, ScheduledTask>();
+  private scheduleStatus: ScheduleLoadStatus;
   private readonly sessionSearchControllers = new Map<string, AbortController>();
   private sessionAutoApprove: SessionAutoApproveMode = "none";
   private lastPersistedCostKey?: string;
@@ -153,6 +154,7 @@ export class TandemService {
     this.homeDir = deps.homeDir;
     this.lastProjectDir = readDesktopAppState(this.homeDir).lastProjectDir;
     this.projectDir = this.lastProjectDir ?? safeDefaultProjectDir(this.homeDir);
+    this.scheduleStatus = { ok: true, path: schedulesPath(this.projectDir), count: 0 };
     this.env = this.loadProjectEnv(this.projectDir);
     this.config = loadConfig({ cwd: this.projectDir, homeDir: this.homeDir, env: this.env });
     const remoteStateDir = tandemStateDir(this.homeDir);
@@ -188,8 +190,8 @@ export class TandemService {
     });
   }
 
-  getAutomationState(): { projectDir: string; sessionId?: string; running: boolean } {
-    return { projectDir: this.projectDir, sessionId: this.session?.id, running: Boolean(this.controller) };
+  getAutomationState(): { projectDir: string; sessionId?: string; running: boolean; scheduleStatus: ScheduleLoadStatus } {
+    return { projectDir: this.projectDir, sessionId: this.session?.id, running: Boolean(this.controller), scheduleStatus: this.scheduleStatus };
   }
 
   async startSession(request: SessionStartRequest): Promise<SessionStartResponse> {
@@ -959,7 +961,16 @@ export class TandemService {
   private async refreshCronTasks(): Promise<void> {
     for (const task of this.cronTasks.values()) task.stop();
     this.cronTasks.clear();
-    const schedules = await listSchedules(this.projectDir);
+    let schedules: Schedule[];
+    try {
+      schedules = await listSchedules(this.projectDir);
+      this.scheduleStatus = { ok: true, path: schedulesPath(this.projectDir), count: schedules.length };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      this.scheduleStatus = { ok: false, path: error instanceof ScheduleLoadError ? error.filePath : schedulesPath(this.projectDir), error: message };
+      await this.emitMachine({ type: "error", message });
+      return;
+    }
     for (const schedule of schedules) {
       if (!cron.validate(schedule.cron)) continue;
       const task = cron.schedule(schedule.cron, () => {

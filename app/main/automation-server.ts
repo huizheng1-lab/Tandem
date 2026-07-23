@@ -8,7 +8,7 @@ export interface AutomationService {
   startSession(request: { projectDir?: string }): Promise<SessionStartResponse>;
   resumeSession(id: string): Promise<SessionResumeResponse>;
   run(prompt: string): Promise<void>;
-  getAutomationState(): { projectDir: string; sessionId?: string; running: boolean };
+  getAutomationState(): { projectDir: string; sessionId?: string; running: boolean; scheduleStatus?: unknown };
 }
 
 export interface AutomationServerOptions {

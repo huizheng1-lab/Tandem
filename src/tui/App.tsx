@@ -126,13 +126,17 @@ export function App({ config: initialConfig, env, cwd, initialError }: { config:
         if (instructions) addMessage("SYSTEM", `project instructions: ${instructions.fileName} (${instructions.chars} chars${instructions.truncated ? ", truncated" : ""})`);
       });
     });
-    void listSchedules(cwd).then((schedules) => {
-      for (const schedule of schedules) registerSchedule(schedule.id, schedule.cron, schedule.prompt);
-      const missed = schedules.filter((schedule) => missedSchedule(schedule.cron, schedule.lastRunAt));
-      missedScheduleQueueRef.current = missed;
-      if (schedules.length > 0) addMessage("SYSTEM", `${schedules.length} schedule(s) loaded.`);
-      if (missed.length > 0) promptNextMissedSchedule();
-    });
+    void listSchedules(cwd)
+      .then((schedules) => {
+        for (const schedule of schedules) registerSchedule(schedule.id, schedule.cron, schedule.prompt);
+        const missed = schedules.filter((schedule) => missedSchedule(schedule.cron, schedule.lastRunAt));
+        missedScheduleQueueRef.current = missed;
+        if (schedules.length > 0) addMessage("SYSTEM", `${schedules.length} schedule(s) loaded.`);
+        if (missed.length > 0) promptNextMissedSchedule();
+      })
+      .catch((error: unknown) => {
+        addMessage("SYSTEM", error instanceof Error ? error.message : String(error));
+      });
     return () => {
       loopTimerRef.current && clearInterval(loopTimerRef.current);
       for (const task of cronJobsRef.current.values()) task.stop();

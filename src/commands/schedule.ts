@@ -10,6 +10,22 @@ export const ScheduleSchema = z.object({ id: z.string(), cron: z.string(), promp
 export type Schedule = z.infer<typeof ScheduleSchema>;
 const SchedulesSchema = z.array(ScheduleSchema);
 
+export class ScheduleLoadError extends Error {
+  readonly code = "SCHEDULE_LOAD_FAILED";
+
+  constructor(readonly filePath: string, readonly cause: z.ZodError) {
+    super(`Malformed schedules.json at ${filePath}: expected an array of schedule entries. ${cause.issues.map((issue) => `${issue.path.join(".") || "(root)"}: ${issue.message}`).join("; ")}`);
+    this.name = "ScheduleLoadError";
+  }
+}
+
+export interface ScheduleLoadStatus {
+  ok: boolean;
+  path: string;
+  count?: number;
+  error?: string;
+}
+
 export function schedulesPath(cwd = process.cwd()): string {
   return path.join(cwd, ".tandem", "schedules.json");
 }
@@ -17,10 +33,12 @@ export function schedulesPath(cwd = process.cwd()): string {
 export async function listSchedules(cwd = process.cwd()): Promise<Schedule[]> {
   const filePath = schedulesPath(cwd);
   if (!existsSync(filePath)) return [];
-  return SchedulesSchema.parse(await readJsonFile(filePath));
+  const parsed = SchedulesSchema.safeParse(await readJsonFile(filePath));
+  if (!parsed.success) throw new ScheduleLoadError(filePath, parsed.error);
+  return parsed.data;
 }
 
-async function saveSchedules(schedules: Schedule[], cwd = process.cwd()): Promise<void> {
+export async function saveSchedules(schedules: Schedule[], cwd = process.cwd()): Promise<void> {
   const filePath = schedulesPath(cwd);
   await mkdir(path.dirname(filePath), { recursive: true });
   await writeFile(filePath, `${JSON.stringify(schedules, null, 2)}\n`, "utf8");

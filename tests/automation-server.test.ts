@@ -46,7 +46,7 @@ describe("desktop automation", () => {
         prompts.push(prompt);
         running = false;
       },
-      getAutomationState: () => ({ projectDir, sessionId, running })
+      getAutomationState: () => ({ projectDir, sessionId, running, scheduleStatus: { ok: false, path: path.join(projectDir, ".tandem", "schedules.json"), error: "Malformed schedules.json at test path" } })
     };
     const server = await startAutomationServer({ port: 0, tokenFile, projectDir, instanceId: "A", service });
     try {
@@ -64,6 +64,7 @@ describe("desktop automation", () => {
         instanceId: "A",
         allowedProjectDir: projectDir,
         capabilities: { candidatePreviewArtifactLifecycle: 1 },
+        scheduleStatus: { ok: false, error: "Malformed schedules.json at test path" },
       });
     } finally {
       await server.close();

@@ -153,6 +153,28 @@ describe("TandemService", () => {
     for (const task of internals.cronTasks.values()) task.stop();
   });
 
+  it("D191: reports malformed persisted schedules at launch", async () => {
+    const cwd = await tempDir();
+    const home = await tempDir();
+    await mkdir(path.join(home, ".tandem"), { recursive: true });
+    await mkdir(path.join(cwd, ".tandem"), { recursive: true });
+    await writeFile(path.join(home, ".tandem", "desktop-state.json"), `${JSON.stringify({ lastProjectDir: cwd })}\n`, "utf8");
+    await writeFile(path.join(cwd, ".tandem", "schedules.json"), `${JSON.stringify({ id: "relay-a", cron: "37 * * * *", prompt: "run", createdAt: "now" })}\n`, "utf8");
+    const { window, sent } = fakeWindow();
+
+    const service = new TandemService(window as never, { registerIpcResponses: false, homeDir: home, baseEnv: {} });
+    const deadline = Date.now() + 1000;
+    while (!sent.some((event) => event.channel === ipcChannels.machineEvent) && Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+
+    expect(sent).toContainEqual(expect.objectContaining({
+      channel: ipcChannels.machineEvent,
+      payload: expect.objectContaining({ type: "error", message: expect.stringContaining("Malformed schedules.json") })
+    }));
+    expect(service.getAutomationState().scheduleStatus).toMatchObject({ ok: false, error: expect.stringContaining("expected an array") });
+  });
+
   it("persists explicit desktop projects and pre-session config changes", async () => {
     const cwd = await tempDir();
     const home = await tempDir();
