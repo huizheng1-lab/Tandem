@@ -80,13 +80,13 @@ async function fixture() {
   return { repo, relay, lock: path.join(relay, "control", "continuation-supervisor.lock.json"), state: path.join(relay, "control", "continuation-supervisor-state.json") };
 }
 
-async function supervisor(repo: string, relay: string) {
+async function supervisor(repo: string, relay: string, env: NodeJS.ProcessEnv = process.env) {
   const result = await execa("powershell", [
     "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", scriptPath,
     "-Workspace", repo,
     "-RelayRoot", relay,
     "-MaxTransitions", "1",
-  ], { cwd: repo });
+  ], { cwd: repo, env });
   return JSON.parse(result.stdout.replace(/^\uFEFF/, ""));
 }
 
@@ -215,6 +215,137 @@ describeWindows("reciprocal continuation supervisor", () => {
       expect(result.actions).toHaveLength(0);
       expect(result.finalPhase).toBe("paused");
     }
+  }, 30_000);
+
+  it("D188 retries a machine-origin environment failure with exactly one Resume and PassiveTest", async () => {
+    const { repo, relay } = await fixture();
+    const statePath = path.join(repo, ".git", "tandem-relay", "state.json");
+    await writeFile(statePath, JSON.stringify({
+      schemaVersion: 2,
+      phase: "paused",
+      pausedFromPhase: "passive-testing",
+      pauseOrigin: "machine",
+      pauseReasonCode: "environment-failure",
+      pauseAfterTurn: false,
+      activeRole: null,
+      nextRole: "A",
+      stableCommit: "0123456789012345678901234567890123456789",
+      candidateCommit: "abcdefabcdefabcdefabcdefabcdefabcdefabcd",
+    }), "utf8");
+    const fakeRelay = path.join(relay, "control", "fake-relay.ps1");
+    const callsPath = path.join(relay, "control", "retry-calls.log");
+    await writeFile(fakeRelay, `
+param([string]$Action,[string]$Workspace,[string]$Role,[string]$Summary)
+Add-Content -LiteralPath '${callsPath.replaceAll("'", "''")}' -Value $Action
+$statePath='${statePath.replaceAll("'", "''")}'
+$utf8=[Text.UTF8Encoding]::new($false)
+if($Action -eq 'Resume'){
+  $state=Get-Content -LiteralPath $statePath -Raw | ConvertFrom-Json
+  $state.phase='passive-testing'; $state.pauseOrigin=$null; $state.pauseReasonCode=$null
+  [IO.File]::WriteAllBytes($statePath, $utf8.GetBytes(($state | ConvertTo-Json -Depth 8) + [Environment]::NewLine))
+  @{ outcome='RESUMED'; phase='passive-testing' } | ConvertTo-Json
+  exit 0
+}
+if($Action -eq 'PassiveTest'){
+  $state=Get-Content -LiteralPath $statePath -Raw | ConvertFrom-Json
+  $state.phase='paused'; $state.pausedFromPhase='passive-testing'; $state.pauseOrigin='machine'; $state.pauseReasonCode='environment-failure'
+  [IO.File]::WriteAllBytes($statePath, $utf8.GetBytes(($state | ConvertTo-Json -Depth 8) + [Environment]::NewLine))
+  @{ outcome='PASSIVE_FAILED'; phase='paused'; pauseReasonCode='environment-failure' } | ConvertTo-Json
+  exit 0
+}
+throw "unexpected action $Action"
+`, "utf8");
+
+    const result = await supervisor(repo, relay, {
+      ...process.env,
+      TANDEM_SUPERVISOR_TEST_RELAY_SCRIPT: fakeRelay,
+      TANDEM_SUPERVISOR_TEST_COPY_A: repo,
+    });
+    expect(result.transitionsUsed).toBe(1);
+    expect(result.actions).toHaveLength(1);
+    expect(result.actions[0]).toMatchObject({
+      kind: "environment-failure-retry",
+      resumeOutcome: "RESUMED",
+      passiveOutcome: "PASSIVE_FAILED",
+      phase: "paused",
+    });
+    expect((await readFile(callsPath, "utf8")).trim().split(/\r?\n/)).toEqual(["Resume", "PassiveTest"]);
+    const saved = await readJson(path.join(relay, "control", "continuation-supervisor-state.json"));
+    expect(saved.blocker).toMatchObject({ code: "environment-failure", attemptCount: 1 });
+  }, 30_000);
+
+  it("D188 backs off and hard-blocks repeated environment failures without retrying", async () => {
+    const { repo, relay, state } = await fixture();
+    await writeFile(path.join(repo, ".git", "tandem-relay", "state.json"), JSON.stringify({
+      schemaVersion: 2,
+      phase: "paused",
+      pausedFromPhase: "passive-testing",
+      pauseOrigin: "machine",
+      pauseReasonCode: "environment-failure",
+      activeRole: null,
+      nextRole: "A",
+      stableCommit: "0123456789012345678901234567890123456789",
+      candidateCommit: "abcdefabcdefabcdefabcdefabcdefabcdefabcd",
+    }), "utf8");
+    await writeFile(state, JSON.stringify({
+      schemaVersion: 1,
+      displayState: "retrying prerequisite",
+      blocker: {
+        category: "auto-recoverable-prerequisite",
+        code: "environment-failure",
+        fingerprint: "auto-recoverable-prerequisite|environment-failure|environment failure reproduced during bounded passive retry",
+        attemptCount: 2,
+        nextAttemptAt: new Date(Date.now() + 60_000).toISOString(),
+        message: "environment failure reproduced during bounded passive retry",
+      },
+      transitions: [],
+    }), "utf8");
+
+    const backoff = await supervisor(repo, relay);
+    expect(backoff.transitionsUsed).toBe(0);
+    expect(backoff.actions[0]).toMatchObject({ kind: "retry-backoff", code: "environment-failure", retryable: true });
+
+    const hardState = await readJson(state);
+    hardState.blocker.category = "hard-blocked";
+    await writeFile(state, JSON.stringify(hardState), "utf8");
+    const hard = await supervisor(repo, relay);
+    expect(hard.transitionsUsed).toBe(0);
+    expect(hard.actions[0]).toMatchObject({ kind: "retry-backoff", code: "environment-failure", retryable: false });
+  }, 30_000);
+
+  it("D188 canonical relay-state writes are atomic and size capped", async () => {
+    const { repo, relay } = await fixture();
+    const statePath = path.join(repo, ".git", "tandem-relay", "state.json");
+    const pausedState = JSON.stringify({
+      schemaVersion: 2,
+      phase: "paused",
+      pausedFromPhase: "idle",
+      pauseOrigin: "machine",
+      pauseReasonCode: "environment-failure",
+      pauseAfterTurn: false,
+      activeRole: null,
+      nextRole: "A",
+      stableCommit: "0123456789012345678901234567890123456789",
+      candidateCommit: null,
+      lastSummary: null,
+      updatedAt: "2026-07-23T00:00:00.000Z",
+    });
+    await writeFile(statePath, pausedState, "utf8");
+    await writeFile(path.join(relay, "control", "WISHLIST.md"), [
+      "# Tandem Reciprocal: Wishlist And Progress",
+      "",
+      "<!-- wishlist-items -->",
+      "- [ ] W0099 | P0 | Planning | QUEUED",
+      "",
+    ].join("\n"), "utf8");
+    const normal = await supervisor(repo, relay);
+    expect(normal.actions[0]).toMatchObject({ kind: "recover-paused-idle-prerequisite" });
+    expect(await readJson(statePath)).toMatchObject({ phase: "idle" });
+    await expect(readFile(`${statePath}.tmp-`, "utf8")).rejects.toThrow();
+
+    await writeFile(statePath, pausedState, "utf8");
+    await expect(supervisor(repo, relay, { ...process.env, TANDEM_SUPERVISOR_TEST_OVERSIZE_RELAY_SAVE: "1" })).rejects.toThrow(/Refusing to write oversized JSON file/);
+    expect(await readFile(statePath, "utf8")).toBe(pausedState);
   }, 30_000);
 
   it("D179 checks stored backoff before ready source reconciliation", async () => {

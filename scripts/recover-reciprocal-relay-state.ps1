@@ -106,8 +106,8 @@ try {
     $pauseReasonCode = Get-JsonStringFromText $prefix "pauseReasonCode"
     $candidateCommit = Get-JsonStringFromText $prefix "candidateCommit"
     $stableCommit = Get-JsonStringFromText $prefix "stableCommit"
-    if (-not $candidateCommit) { $candidateCommit = (@(Invoke-Git rev-parse refs/tandem-relay/candidate))[0].Trim() }
-    if (-not $stableCommit) { $stableCommit = (@(Invoke-Git rev-parse refs/tandem-relay/stable))[0].Trim() }
+    if (-not $candidateCommit) { throw "Bounded state prefix is missing candidateCommit; refusing to substitute relay refs." }
+    if (-not $stableCommit) { throw "Bounded state prefix is missing stableCommit; refusing to substitute relay refs." }
     $candidateRef = (@(Invoke-Git rev-parse refs/tandem-relay/candidate))[0].Trim()
     $stableRef = (@(Invoke-Git rev-parse refs/tandem-relay/stable))[0].Trim()
 

@@ -634,9 +634,32 @@ try {
         if ($command -match '(?i)\b(node|powershell|pwsh|cmd|bash|python|wscript|cscript)(\.exe)?\b') { return $false }
         if ($command -match '(?i)(package-passive-runtime|promote-reciprocal-runtime|start-reciprocal-tandem|stop-reciprocal-tandem|deploy-reciprocal-dashboard|reciprocal-relay\.ps1)') { return $false }
         if ($command -match '(?i)(Tandem Reciprocal|tandem-relay|\.git[\\/]|[A-Z]:[\\/])') { return $false }
-        if ($command -match '^\s*npm(\.cmd)?\s+test(?:\s+--(?:\s+"?tests[\\/][^"&|;<>]+"?)*)?\s*$') { return $true }
-        if ($command -match '^\s*npx(\.cmd)?\s+vitest\s+run(?:\s+"?tests[\\/][^"&|;<>]+"?)*\s*$') { return $true }
-        if ($command -match '^\s*vitest\s+run(?:\s+"?tests[\\/][^"&|;<>]+"?)*\s*$') { return $true }
+        $tokens = @([regex]::Matches($command, '"([^"\\]*(?:\\.[^"\\]*)*)"|(\S+)') | ForEach-Object {
+            if ($_.Groups[1].Success) { $_.Groups[1].Value -replace '\\"','"' } else { $_.Groups[2].Value }
+        })
+        if ($tokens.Count -eq 0) { return $false }
+        $pathPattern = '^tests[\\/](?!.*(?:^|[\\/])\.\.(?:[\\/]|$))[A-Za-z0-9_.\\/ -]+\.(?:test|spec)\.[cm]?[tj]sx?$'
+        function Test-TrustedTestPathTokens([string[]]$Values) {
+            if ($Values.Count -eq 0) { return $true }
+            foreach ($value in $Values) {
+                if ($value.StartsWith("-")) { return $false }
+                if ($value -notmatch $pathPattern) { return $false }
+            }
+            return $true
+        }
+        if ($tokens[0] -match '^npm(\.cmd)?$' -and $tokens.Count -ge 2 -and $tokens[1] -eq "test") {
+            if ($tokens.Count -eq 2) { return $true }
+            if ($tokens.Count -ge 3 -and $tokens[2] -eq "--") {
+                return (Test-TrustedTestPathTokens @($tokens | Select-Object -Skip 3))
+            }
+            return $false
+        }
+        if ($tokens[0] -match '^npx(\.cmd)?$' -and $tokens.Count -ge 3 -and $tokens[1] -eq "vitest" -and $tokens[2] -eq "run") {
+            return (Test-TrustedTestPathTokens @($tokens | Select-Object -Skip 3))
+        }
+        if ($tokens[0] -eq "vitest" -and $tokens.Count -ge 2 -and $tokens[1] -eq "run") {
+            return (Test-TrustedTestPathTokens @($tokens | Select-Object -Skip 2))
+        }
         return $false
     }
 
@@ -2054,6 +2077,11 @@ try {
         Save-RuntimeRecoveryJournal -Stage "b-promote-started" -SourceSha $head -PackageIdentity $packageIdentity -ImmutablePackagePath $immutablePackagePath
         $bSourceDir = $immutablePackagePath
         $promoteBCommand = "powershell -NoProfile -ExecutionPolicy Bypass -File `"$promotionScript`" -RelayRoot `"$defaultRelayRoot`" -Source `"$bSourceDir`" -SourceSha $head -TargetRole B -BuildRound D184 -PromotedRound D184"
+        $promotionFailureSentinel = [Environment]::GetEnvironmentVariable("TANDEM_TEST_FAIL_B_PROMOTION_SENTINEL")
+        if ($promotionFailureSentinel) {
+            $escapedSentinel = $promotionFailureSentinel.Replace("'", "''")
+            $promoteBCommand = "powershell -NoProfile -Command `"Add-Content -LiteralPath '$escapedSentinel' -Value promotion; exit 17`""
+        }
         $promoteBCheck = Invoke-ValidationCommand $promoteBCommand
         $mechanical += $promoteBCheck
         $failed = @($mechanical | Where-Object { -not $_.passed })
@@ -2091,7 +2119,14 @@ try {
         Save-State
         Save-RuntimeRecoveryJournal -Stage "b-start-started" -SourceSha $head -PackageIdentity $packageIdentity -ImmutablePackagePath $immutablePackagePath
         $startBCommand = "powershell -NoProfile -ExecutionPolicy Bypass -File `"$startScript`" -Role B -RelayRoot `"$defaultRelayRoot`""
-        $startBCheck = Start-PowerShellFileCommand @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", $startScript, "-Role", "B", "-RelayRoot", $defaultRelayRoot) $startBCommand
+        $launchFailureSentinel = [Environment]::GetEnvironmentVariable("TANDEM_TEST_FAIL_B_LAUNCH_SENTINEL")
+        if ($launchFailureSentinel) {
+            $escapedSentinel = $launchFailureSentinel.Replace("'", "''")
+            $startBCommand = "powershell -NoProfile -Command `"Add-Content -LiteralPath '$escapedSentinel' -Value launch; exit 18`""
+            $startBCheck = Invoke-ValidationCommand $startBCommand
+        } else {
+            $startBCheck = Start-PowerShellFileCommand @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", $startScript, "-Role", "B", "-RelayRoot", $defaultRelayRoot) $startBCommand
+        }
         $mechanical += $startBCheck
         $failed = @($mechanical | Where-Object { -not $_.passed })
         $checkSummary = @($mechanical | ForEach-Object {

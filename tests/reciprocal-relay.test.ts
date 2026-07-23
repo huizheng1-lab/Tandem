@@ -1203,6 +1203,163 @@ it("suite > " + (candidate ? "candidate-only failure" : "stable-only failure"), 
     }
   }, 45_000);
 
+  windowsIt("D188: B promotion lifecycle failures are not replayed as stable baseline controls", async () => {
+    const repo = await mkdtemp(path.join(tmpdir(), "tandem-relay-d188-promote-fail-"));
+    try {
+      await initRepo(repo);
+      const candidateCommit = await createCandidate(repo);
+      await execa("git", ["switch", "codex/reciprocal-a"], { cwd: repo });
+      const sentinel = path.join(repo, ".tandem", "promotion-sentinel.txt");
+
+      const result = await withPreparedRuntime(repo, () =>
+        relayWithEnv(
+          repo,
+          { ...relayEnv(repo), TANDEM_TEST_FAIL_B_PROMOTION_SENTINEL: sentinel },
+          "-Action",
+          "PassiveTest",
+          "-Role",
+          "A",
+          "-ValidationChecks",
+          "git diff --check refs/tandem-relay/stable refs/tandem-relay/candidate --",
+        ),
+      );
+
+      expect(result).toMatchObject({ outcome: "PASSIVE_FAILED", pauseReasonCode: "environment-failure", candidateCommit });
+      expect(result.stableBaseline).toMatchObject({
+        classifier: "lifecycle-operation",
+        baselineControlSkipped: true,
+        operationKind: "b-runtime-promotion",
+        baselineChecks: [],
+      });
+      expect((await readFile(sentinel, "utf8")).trim().split(/\r?\n/)).toHaveLength(1);
+      expect(JSON.parse(await readFile(path.join(relayRoot(repo), "state", "runtime-recovery-flow.json"), "utf8")).stage).toBe("b-promote-started");
+      await expect(readFile(path.join(relayRoot(repo), "runtimes", "executor-b", "BUILD_INFO.json"), "utf8")).rejects.toThrow();
+    } finally {
+      await rm(repo, { recursive: true, force: true });
+    }
+  }, 60_000);
+
+  windowsIt("D188: B launch lifecycle failures are not replayed and do not leave a running B", async () => {
+    const repo = await mkdtemp(path.join(tmpdir(), "tandem-relay-d188-launch-fail-"));
+    try {
+      await initRepo(repo);
+      const candidateCommit = await createCandidate(repo);
+      await execa("git", ["switch", "codex/reciprocal-a"], { cwd: repo });
+      const sentinel = path.join(repo, ".tandem", "launch-sentinel.txt");
+
+      const result = await withPreparedRuntime(repo, () =>
+        relayWithEnv(
+          repo,
+          { ...relayEnv(repo), TANDEM_TEST_FAIL_B_LAUNCH_SENTINEL: sentinel },
+          "-Action",
+          "PassiveTest",
+          "-Role",
+          "A",
+          "-ValidationChecks",
+          "git diff --check refs/tandem-relay/stable refs/tandem-relay/candidate --",
+        ),
+      );
+
+      expect(result).toMatchObject({ outcome: "PASSIVE_FAILED", pauseReasonCode: "environment-failure", candidateCommit });
+      expect(result.stableBaseline).toMatchObject({
+        classifier: "lifecycle-operation",
+        baselineControlSkipped: true,
+        operationKind: "b-runtime-launch",
+        baselineChecks: [],
+      });
+      expect((await readFile(sentinel, "utf8")).trim().split(/\r?\n/)).toHaveLength(1);
+      expect(JSON.parse(await readFile(path.join(relayRoot(repo), "state", "runtime-recovery-flow.json"), "utf8")).stage).toBe("b-start-started");
+      await expect(readFile(path.join(relayRoot(repo), "state", "executor-b", "automation.json"), "utf8")).rejects.toThrow();
+    } finally {
+      await stopRelayProcess(relayRoot(repo));
+      await rm(repo, { recursive: true, force: true });
+    }
+  }, 60_000);
+
+  windowsIt("D188: stable baseline command grammar rejects hidden executable options", async () => {
+    const repo = await mkdtemp(path.join(tmpdir(), "tandem-relay-d188-grammar-"));
+    try {
+      await initRepo(repo);
+      await enableVitestFixture(repo, `
+import { expect, it } from "vitest";
+it("suite > grammar failure", () => expect(1).toBe(2));
+`);
+      const candidateCommit = await createCandidate(repo);
+      await execa("git", ["switch", "codex/reciprocal-a"], { cwd: repo });
+      for (const command of [
+        "npm test -- tests/example.test.ts --config tests/side-effect.ts",
+        "npx vitest run tests/example.test.ts --setupFiles tests/side-effect.ts",
+        "vitest run tests/example.test.ts ../outside.test.ts",
+        "npm test -- tests/example.test.ts README.md",
+      ]) {
+        const result = await relay(repo, "-Action", "PassiveTest", "-Role", "A", "-ValidationChecks", command);
+        expect(result).toMatchObject({ outcome: "PASSIVE_FAILED", phase: "paused", candidateCommit });
+        expect(result.stableBaseline.baselineChecks).toHaveLength(0);
+        expect(result.stableBaseline.skippedControls[0]).toMatchObject({ command, reason: "not-read-only-validation-control" });
+        await relay(repo, "-Action", "Resume", "-Summary", "continue command grammar negative checks");
+      }
+    } finally {
+      await rm(repo, { recursive: true, force: true });
+    }
+  }, 90_000);
+
+  windowsIt("D188: persisted diagnostics are limited by UTF-8 bytes", async () => {
+    const repo = await mkdtemp(path.join(tmpdir(), "tandem-relay-d188-byte-limit-"));
+    try {
+      await initRepo(repo);
+      await createCandidate(repo);
+      await execa("git", ["switch", "codex/reciprocal-a"], { cwd: repo });
+      const result = await relay(
+        repo,
+        "-Action",
+        "PassiveTest",
+        "-Role",
+        "A",
+        "-ValidationChecks",
+        "node -e \"process.stdout.write('❯ × 智能路径'.repeat(2000)); process.exit(1)\"",
+      );
+      const output = result.stableBaseline.failedCandidateCommands[0].output;
+      expect(Buffer.byteLength(output, "utf8")).toBeLessThanOrEqual(3000);
+      expect(output).toContain("UTF-8 bytes");
+    } finally {
+      await rm(repo, { recursive: true, force: true });
+    }
+  }, 30_000);
+
+  windowsIt("D188: repeated mutating failure saves preserve non-timestamp evidence", async () => {
+    const repo = await mkdtemp(path.join(tmpdir(), "tandem-relay-d188-save-stability-"));
+    try {
+      await initRepo(repo);
+      await enableVitestFixture(repo, `
+import { expect, it } from "vitest";
+it("suite > same failure", () => expect("❯ × 智能路径").toBe("stable"));
+`);
+      await createCandidate(repo);
+      await execa("git", ["switch", "codex/reciprocal-a"], { cwd: repo });
+      const snapshots: unknown[] = [];
+      for (let index = 0; index < 3; index += 1) {
+        const result = await relay(repo, "-Action", "PassiveTest", "-Role", "A", "-ValidationChecks", "npm test -- tests/example.test.ts");
+        expect(result.stableBaseline).toMatchObject({ classification: "environment-failure", reproducedOnStable: true });
+        const persisted = JSON.parse(await readFile(path.join(repo, ".git", "tandem-relay", "state.json"), "utf8"));
+        expect(Buffer.byteLength(persisted.passiveFailure.failedCandidateCommands[0].output, "utf8")).toBeLessThanOrEqual(3000);
+        expect(Buffer.byteLength(persisted.passiveFailure.baselineChecks[0].output, "utf8")).toBeLessThanOrEqual(3000);
+        snapshots.push({
+          classification: persisted.passiveFailure.classification,
+          reproducedOnStable: persisted.passiveFailure.reproducedOnStable,
+          failingTestFiles: persisted.passiveFailure.failingTestFiles,
+          candidateFailureIdentities: persisted.passiveFailure.candidateFailureIdentities,
+          stableFailureIdentities: persisted.passiveFailure.stableFailureIdentities,
+          matchingFailureIdentities: persisted.passiveFailure.matchingFailureIdentities,
+        });
+        await relay(repo, "-Action", "Resume", "-Summary", "repeat evidence save stability check");
+      }
+      expect(snapshots[1]).toEqual(snapshots[0]);
+      expect(snapshots[2]).toEqual(snapshots[0]);
+    } finally {
+      await rm(repo, { recursive: true, force: true });
+    }
+  }, 120_000);
+
   windowsIt("D187: oversized relay state fails closed before whole-file parsing", async () => {
     const repo = await mkdtemp(path.join(tmpdir(), "tandem-relay-d187-oversized-"));
     try {
@@ -1212,6 +1369,21 @@ it("suite > " + (candidate ? "candidate-only failure" : "stable-only failure"), 
       await writeFile(statePath, `{"phase":"paused","padding":"${"×❯".repeat(3_000_000)}"}`, "utf8");
 
       await expect(relay(repo, "-Action", "Status")).rejects.toThrow(/oversized JSON file|Refusing to read oversized/i);
+    } finally {
+      await rm(repo, { recursive: true, force: true });
+    }
+  }, 30_000);
+
+  windowsIt("D188: invalid relay state fails closed without mutation", async () => {
+    const repo = await mkdtemp(path.join(tmpdir(), "tandem-relay-d188-invalid-state-"));
+    try {
+      await initRepo(repo);
+      await relay(repo, "-Action", "Reset", "-Force");
+      const statePath = path.join(repo, ".git", "tandem-relay", "state.json");
+      const invalid = Buffer.from([0xff, 0xfe, 0xfd, 0x7b, 0x22]);
+      await writeFile(statePath, invalid);
+      await expect(relay(repo, "-Action", "Status")).rejects.toThrow(/strict UTF-8 JSON|Failed to read/);
+      expect((await readFile(statePath)).equals(invalid)).toBe(true);
     } finally {
       await rm(repo, { recursive: true, force: true });
     }
@@ -1261,6 +1433,36 @@ it("suite > " + (candidate ? "candidate-only failure" : "stable-only failure"), 
       expect(JSON.parse(second.stdout)).toMatchObject({ ok: true, alreadyCompact: true, candidateCommit });
     } finally {
       await rm(repo, { recursive: true, force: true });
+    }
+  }, 45_000);
+
+  windowsIt("D188: recovery rejects missing prefix candidate or stable commits", async () => {
+    for (const missing of ["candidateCommit", "stableCommit"]) {
+      const repo = await mkdtemp(path.join(tmpdir(), `tandem-relay-d188-recovery-missing-${missing}-`));
+      try {
+        await initRepo(repo);
+        const candidateCommit = await createCandidate(repo);
+        const stableCommit = (await execa("git", ["rev-parse", "refs/tandem-relay/stable"], { cwd: repo })).stdout.trim();
+        const statePath = path.join(repo, ".git", "tandem-relay", "state.json");
+        const amplified: Record<string, unknown> = {
+          schemaVersion: 2,
+          phase: "paused",
+          pausedFromPhase: "passive-testing",
+          pauseOrigin: "machine",
+          pauseReasonCode: "candidate-failure",
+          stableCommit,
+          candidateCommit,
+          padding: "❯ ×".repeat(20_000),
+        };
+        delete amplified[missing];
+        const original = JSON.stringify(amplified);
+        await writeFile(statePath, original, "utf8");
+        const script = path.resolve("scripts/recover-reciprocal-relay-state.ps1");
+        await expect(execa("powershell", ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", script, "-MaxStateBytes", "1024", "-Force"], { cwd: repo })).rejects.toThrow(new RegExp(`missing ${missing}`));
+        expect(await readFile(statePath, "utf8")).toBe(original);
+      } finally {
+        await rm(repo, { recursive: true, force: true });
+      }
     }
   }, 45_000);
 });

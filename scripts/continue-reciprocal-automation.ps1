@@ -47,9 +47,19 @@ function Read-JsonFile([string]$Path) {
     }
 }
 
-function Write-JsonFile([string]$Path, [object]$Value, [int]$Depth = 12) {
+function Write-JsonFile([string]$Path, [object]$Value, [int]$Depth = 12, [Int64]$MaxBytes = 0, [switch]$Atomic) {
     $json = $Value | ConvertTo-Json -Depth $Depth
-    [IO.File]::WriteAllBytes($Path, $Utf8StrictNoBom.GetBytes($json + [Environment]::NewLine))
+    $bytes = $Utf8StrictNoBom.GetBytes($json + [Environment]::NewLine)
+    if ($MaxBytes -gt 0 -and $bytes.Length -gt $MaxBytes) {
+        throw "Refusing to write oversized JSON file $Path ($($bytes.Length) bytes; limit $MaxBytes)."
+    }
+    if ($Atomic) {
+        $tempPath = "$Path.tmp-$PID"
+        [IO.File]::WriteAllBytes($tempPath, $bytes)
+        Move-Item -LiteralPath $tempPath -Destination $Path -Force
+        return
+    }
+    [IO.File]::WriteAllBytes($Path, $bytes)
 }
 
 function Get-AdminRepo([string]$Path) {
@@ -228,7 +238,12 @@ function Get-PlanningContinuationFromBoard([string]$BoardPath) {
 }
 
 function Save-RelayState([string]$Path, [object]$State) {
-    Write-JsonFile $Path $State 20
+    if ($env:TANDEM_SUPERVISOR_TEST_OVERSIZE_RELAY_SAVE -eq "1") {
+        if (-not $State.PSObject.Properties["d188Oversize"]) {
+            $State | Add-Member -NotePropertyName d188Oversize -NotePropertyValue ("x" * (6MB))
+        }
+    }
+    Write-JsonFile $Path $State 20 $MaxRelayStateBytes -Atomic
 }
 
 function Get-ReciprocalTaxonomy([string]$RepoRoot) {
@@ -259,6 +274,8 @@ $copyA = Join-Path $relayRootFull "worktrees\copy-a"
 $copyB = Join-Path $relayRootFull "worktrees\copy-b"
 $statePath = Join-Path $adminRepo ".git\tandem-relay\state.json"
 $relayScript = Join-Path $PSScriptRoot "reciprocal-relay.ps1"
+if ($env:TANDEM_SUPERVISOR_TEST_COPY_A) { $copyA = $env:TANDEM_SUPERVISOR_TEST_COPY_A }
+if ($env:TANDEM_SUPERVISOR_TEST_RELAY_SCRIPT) { $relayScript = $env:TANDEM_SUPERVISOR_TEST_RELAY_SCRIPT }
 $leasePath = Join-Path $relayRootFull "control\continuation-supervisor.lock.json"
 $supervisorStatePath = Join-Path $relayRootFull "control\continuation-supervisor-state.json"
 $auditPath = Join-Path $relayRootFull "control\CONTROL_PANEL_AUDIT.jsonl"
