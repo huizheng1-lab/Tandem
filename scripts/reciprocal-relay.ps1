@@ -53,7 +53,7 @@ function Get-ReciprocalTaxonomy {
     foreach ($name in @("human", "machine", "unknown")) {
         if (-not $taxonomy.pauseOrigins.$name) { throw "Canonical reciprocal taxonomy is missing pauseOrigins.$name." }
     }
-    foreach ($name in @("explicitHumanPause", "resumeCircuitBreaker", "candidateFailure")) {
+    foreach ($name in @("explicitHumanPause", "resumeCircuitBreaker", "candidateFailure", "environmentFailure")) {
         if (-not $taxonomy.pauseReasonCodes.$name) { throw "Canonical reciprocal taxonomy is missing pauseReasonCodes.$name." }
     }
     foreach ($name in @("working", "testing", "waitingForReview", "humanPaused", "machineBlocked", "hardBlocked", "retryBackoff", "retryingPrerequisite", "planning", "unknown", "waitingNotBlocked")) {
@@ -142,6 +142,7 @@ function New-RelayState([string]$StableCommit) {
         lastRecoveryStash = $null
         runtimeRecoveryStage = $null
         authorityRequest = $null
+        passiveFailure = $null
     }
 }
 
@@ -208,6 +209,9 @@ try {
     }
     if (-not $state.PSObject.Properties["runtimeRecoveryStage"]) {
         $state | Add-Member -NotePropertyName runtimeRecoveryStage -NotePropertyValue $null
+    }
+    if (-not $state.PSObject.Properties["passiveFailure"]) {
+        $state | Add-Member -NotePropertyName passiveFailure -NotePropertyValue $null
     }
 
     $runtimeRecoveryJournalPath = Join-Path $defaultRelayRoot "state\runtime-recovery-flow.json"
@@ -412,6 +416,7 @@ try {
             lastCompletedCommit = $state.lastCompletedCommit
             lastSummary = $state.lastSummary
             lastRecoveryStash = $state.lastRecoveryStash
+            passiveFailure = $state.passiveFailure
             authorityRequest = $authority
             capabilities = Get-ReciprocalCapabilities
             statePath = $statePath
@@ -449,9 +454,9 @@ try {
         [IO.File]::AppendAllText($ValidationTracePath, $line + [Environment]::NewLine, [Text.UTF8Encoding]::new($false))
     }
 
-    function Invoke-ValidationCommand([string]$Command) {
+    function Invoke-ValidationCommandInWorkspace([string]$Command, [string]$CommandWorkspace) {
         $oldErrorAction = $ErrorActionPreference
-        Push-Location -LiteralPath $Workspace
+        Push-Location -LiteralPath $CommandWorkspace
         try {
             $ErrorActionPreference = "Continue"
             $output = @(& cmd.exe /d /s /c $Command 2>&1)
@@ -467,6 +472,118 @@ try {
             passed = ($exitCode -eq 0)
             output = $text
         }
+    }
+
+    function Invoke-ValidationCommand([string]$Command) {
+        return Invoke-ValidationCommandInWorkspace $Command $Workspace
+    }
+
+    function Get-FailingTestFilesFromOutput([string]$Output) {
+        if (-not $Output) { return @() }
+        $matches = [regex]::Matches($Output, 'tests[\\/][^\s:"''<>|]+?\.(?:test|spec)\.[cm]?[tj]sx?')
+        $seen = @{}
+        $files = @()
+        foreach ($match in $matches) {
+            $candidate = $match.Value.Replace('/', '\')
+            if ($seen.ContainsKey($candidate.ToLowerInvariant())) { continue }
+            $seen[$candidate.ToLowerInvariant()] = $true
+            $files += $candidate
+        }
+        return $files
+    }
+
+    function Join-CmdQuotedArgs([string[]]$Values) {
+        return (($Values | ForEach-Object { '"' + ($_.Replace('"', '\"')) + '"' }) -join " ")
+    }
+
+    function Get-StableBaselineCommand([object]$FailedCheck, [string[]]$FailingTestFiles) {
+        $command = [string]$FailedCheck.command
+        if ($FailingTestFiles.Count -eq 0) { return $command }
+        $quotedFiles = Join-CmdQuotedArgs $FailingTestFiles
+        if ($command -match '^\s*npm(\.cmd)?\s+test(\s|$)') {
+            return "npm test -- $quotedFiles"
+        }
+        if ($command -match '^\s*npx(\.cmd)?\s+vitest\s+run(\s|$)') {
+            return "npx vitest run $quotedFiles"
+        }
+        if ($command -match '(^|\s)vitest\s+run(\s|$)') {
+            return "npx vitest run $quotedFiles"
+        }
+        return $command
+    }
+
+    function Invoke-StableBaselineControl([object[]]$FailedChecks) {
+        $baselineRoot = Join-Path ([IO.Path]::GetTempPath()) ("tandem-stable-baseline-" + [guid]::NewGuid().ToString("N"))
+        $failingFiles = @()
+        $baselineChecks = @()
+        $classification = [string]$taxonomy.pauseReasonCodes.candidateFailure
+        try {
+            Invoke-Git worktree add --detach $baselineRoot $state.stableCommit | Out-Null
+            $sourceNodeModules = Join-Path $Workspace "node_modules"
+            $baselineNodeModules = Join-Path $baselineRoot "node_modules"
+            if ((Test-Path -LiteralPath $sourceNodeModules) -and -not (Test-Path -LiteralPath $baselineNodeModules)) {
+                New-Item -ItemType Junction -Path $baselineNodeModules -Target $sourceNodeModules | Out-Null
+            }
+            foreach ($failed in $FailedChecks) {
+                $files = @(Get-FailingTestFilesFromOutput ([string]$failed.output))
+                foreach ($file in $files) {
+                    if ($failingFiles -notcontains $file) { $failingFiles += $file }
+                }
+                $baselineCommand = Get-StableBaselineCommand $failed $files
+                $baselineChecks += Invoke-ValidationCommandInWorkspace $baselineCommand $baselineRoot
+            }
+            $reproduced = @($baselineChecks | Where-Object { -not $_.passed }).Count -gt 0
+            if ($reproduced) { $classification = [string]$taxonomy.pauseReasonCodes.environmentFailure }
+            return [pscustomobject]@{
+                classifier = "stable-baseline-control"
+                classification = $classification
+                reproducedOnStable = $reproduced
+                candidateCommit = [string]$state.candidateCommit
+                stableCommit = [string]$state.stableCommit
+                failingTestFiles = @($failingFiles)
+                failedCandidateCommands = @($FailedChecks | ForEach-Object {
+                    [ordered]@{
+                        command = [string]$_.command
+                        exitCode = [int]$_.exitCode
+                        output = (Limit-Text ([string]$_.output) 3000)
+                    }
+                })
+                baselineChecks = @($baselineChecks | ForEach-Object {
+                    [ordered]@{
+                        command = [string]$_.command
+                        exitCode = [int]$_.exitCode
+                        passed = [bool]$_.passed
+                        output = (Limit-Text ([string]$_.output) 3000)
+                    }
+                })
+            }
+        } finally {
+            if (Test-Path -LiteralPath $baselineRoot) {
+                try {
+                    Invoke-Git worktree remove --force $baselineRoot | Out-Null
+                } catch {
+                    Remove-Item -LiteralPath $baselineRoot -Recurse -Force -ErrorAction SilentlyContinue
+                }
+            }
+        }
+    }
+
+    function Pause-PassiveFailure([object[]]$FailedChecks, [object[]]$CheckSummary, [string]$SummaryPrefix) {
+        $baseline = Invoke-StableBaselineControl $FailedChecks
+        $state.phase = "paused"
+        $state.pausedFromPhase = "passive-testing"
+        $state.pauseOrigin = [string]$taxonomy.pauseOrigins.machine
+        $state.pauseReasonCode = [string]$baseline.classification
+        $state.activeRole = $null
+        $state.passiveFailure = $baseline
+        $failedNames = ((@($FailedChecks | ForEach-Object { $_.command })) -join ', ')
+        if ($baseline.classification -eq [string]$taxonomy.pauseReasonCodes.environmentFailure) {
+            $state.lastSummary = "$SummaryPrefix for candidate $($state.candidateCommit), but the same failure reproduced on stable $($state.stableCommit): $failedNames"
+        } else {
+            $state.lastSummary = "$SummaryPrefix for candidate $($state.candidateCommit): $failedNames"
+        }
+        Save-State
+        Write-Result "PASSIVE_FAILED" ([pscustomobject]@{ passiveChecks = $CheckSummary; stableBaseline = $baseline })
     }
 
     function Invoke-PowerShellFileCommand([string[]]$Arguments, [string]$DisplayCommand) {
@@ -1695,14 +1812,7 @@ try {
             }
         })
         if ($failed.Count -gt 0) {
-            $state.phase = "paused"
-            $state.pausedFromPhase = "passive-testing"
-            $state.pauseOrigin = [string]$taxonomy.pauseOrigins.machine
-            $state.pauseReasonCode = [string]$taxonomy.pauseReasonCodes.candidateFailure
-            $state.activeRole = $null
-            $state.lastSummary = "Passive build/test failed for candidate $($state.candidateCommit): $((@($failed | ForEach-Object { $_.command })) -join ', ')"
-            Save-State
-            Write-Result "PASSIVE_FAILED" ([pscustomobject]@{ passiveChecks = $checkSummary })
+            Pause-PassiveFailure $failed $checkSummary "Passive build/test failed"
             exit 0
         }
 
@@ -1730,14 +1840,7 @@ try {
             }
         })
         if ($failed.Count -gt 0) {
-            $state.phase = "paused"
-            $state.pausedFromPhase = "passive-testing"
-            $state.pauseOrigin = [string]$taxonomy.pauseOrigins.machine
-            $state.pauseReasonCode = [string]$taxonomy.pauseReasonCodes.candidateFailure
-            $state.activeRole = $null
-            $state.lastSummary = "Passive package failed for candidate $($state.candidateCommit): $((@($failed | ForEach-Object { $_.command })) -join ', ')"
-            Save-State
-            Write-Result "PASSIVE_FAILED" ([pscustomobject]@{ passiveChecks = $checkSummary })
+            Pause-PassiveFailure $failed $checkSummary "Passive package failed"
             exit 0
         }
         $runtimePackage = $null
@@ -1782,14 +1885,7 @@ try {
             }
         })
         if ($failed.Count -gt 0) {
-            $state.phase = "paused"
-            $state.pausedFromPhase = "passive-testing"
-            $state.pauseOrigin = [string]$taxonomy.pauseOrigins.machine
-            $state.pauseReasonCode = [string]$taxonomy.pauseReasonCodes.candidateFailure
-            $state.activeRole = $null
-            $state.lastSummary = "Executor B recovery runtime promotion failed for candidate $($state.candidateCommit): $((@($failed | ForEach-Object { $_.command })) -join ', ')"
-            Save-State
-            Write-Result "PASSIVE_FAILED" ([pscustomobject]@{ passiveChecks = $checkSummary })
+            Pause-PassiveFailure $failed $checkSummary "Executor B recovery runtime promotion failed"
             exit 0
         }
         $bBuildInfoPath = Join-Path $defaultRelayRoot "runtimes\executor-b\BUILD_INFO.json"
@@ -1826,14 +1922,7 @@ try {
             }
         })
         if ($failed.Count -gt 0) {
-            $state.phase = "paused"
-            $state.pausedFromPhase = "passive-testing"
-            $state.pauseOrigin = [string]$taxonomy.pauseOrigins.machine
-            $state.pauseReasonCode = [string]$taxonomy.pauseReasonCodes.candidateFailure
-            $state.activeRole = $null
-            $state.lastSummary = "Executor B recovery launch failed for candidate $($state.candidateCommit): $((@($failed | ForEach-Object { $_.command })) -join ', ')"
-            Save-State
-            Write-Result "PASSIVE_FAILED" ([pscustomobject]@{ passiveChecks = $checkSummary })
+            Pause-PassiveFailure $failed $checkSummary "Executor B recovery launch failed"
             exit 0
         }
         $state.runtimeRecoveryStage = "b-runtime-started"

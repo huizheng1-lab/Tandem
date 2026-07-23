@@ -38,7 +38,7 @@ describeWindows("candidate preview GUI smoke", () => {
     const root = await scratch();
     const readyFile = path.join(root, "ready.txt");
     const command = path.join(root, "ready.cmd");
-    await writeFile(command, `@echo off\r\necho ready>"${readyFile}"\r\ntimeout /t 60 /nobreak >nul\r\n`, "utf8");
+    await writeFile(command, `@echo off\r\necho ready>"${readyFile}"\r\npowershell -NoProfile -Command Start-Sleep -Seconds 60\r\n`, "utf8");
     const result = await runSmoke([
       "-ExecutablePath", command,
       "-StateRoot", path.join(root, "state"),
@@ -74,7 +74,7 @@ describeWindows("candidate preview GUI smoke", () => {
   it("D164: times out readiness and cleans up the launched process", async () => {
     const root = await scratch();
     const command = path.join(root, "hang.cmd");
-    await writeFile(command, "@echo off\r\ntimeout /t 60 /nobreak >nul\r\n", "utf8");
+    await writeFile(command, "@echo off\r\npowershell -NoProfile -Command Start-Sleep -Seconds 60\r\n", "utf8");
     const result = await runSmoke([
       "-ExecutablePath", command,
       "-StateRoot", path.join(root, "state"),

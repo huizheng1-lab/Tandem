@@ -29,6 +29,7 @@
     "retryExhausted": "retry-exhausted",
     "machinePlanningPause": "machine-planning-pause",
     "candidateFailure": "candidate-failure",
+    "environmentFailure": "environment-failure",
     "runtimeReview": "runtime-review"
   },
   "displayStates": {

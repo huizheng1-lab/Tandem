@@ -431,6 +431,7 @@ server.listen(port, "127.0.0.1");
           explicitHumanPause: "fixture-human-pause",
           resumeCircuitBreaker: "fixture-repeat",
           candidateFailure: "fixture-candidate",
+          environmentFailure: "fixture-environment",
         },
         displayStates: {
           working: "fixture-working",
@@ -972,18 +973,75 @@ server.listen(port, "127.0.0.1");
         "-Role",
         "A",
         "-ValidationChecks",
-        "git rev-parse --verify refs/heads/definitely-missing-d151",
+        "node -e \"const fs=require('fs'); process.exit(fs.readFileSync('README.md','utf8').includes('candidate') ? 1 : 0)\"",
       );
       expect(result).toMatchObject({
         outcome: "PASSIVE_FAILED",
         phase: "paused",
         pausedFromPhase: "passive-testing",
+        pauseReasonCode: "candidate-failure",
         activeRole: null,
         candidateCommit,
+      });
+      expect(result.stableBaseline).toMatchObject({
+        classifier: "stable-baseline-control",
+        classification: "candidate-failure",
+        reproducedOnStable: false,
       });
 
       const bClaim = await relay(repo, "-Action", "Claim", "-Role", "B");
       expect(bClaim).toMatchObject({ outcome: "WAIT", passiveOnly: true });
+    } finally {
+      await rm(repo, { recursive: true, force: true });
+    }
+  }, 30_000);
+
+  windowsIt("D185: passive check failure that reproduces on stable is classified as environment failure", async () => {
+    const repo = await mkdtemp(path.join(tmpdir(), "tandem-relay-d185-env-fail-"));
+    try {
+      await initRepo(repo);
+      const candidateCommit = await createCandidate(repo);
+      await execa("git", ["switch", "codex/reciprocal-a"], { cwd: repo });
+
+      const result = await relay(
+        repo,
+        "-Action",
+        "PassiveTest",
+        "-Role",
+        "A",
+        "-ValidationChecks",
+        "git rev-parse --verify refs/heads/definitely-missing-d185",
+      );
+      expect(result).toMatchObject({
+        outcome: "PASSIVE_FAILED",
+        phase: "paused",
+        pausedFromPhase: "passive-testing",
+        pauseReasonCode: "environment-failure",
+        activeRole: null,
+        candidateCommit,
+      });
+      expect(result.stableBaseline).toMatchObject({
+        classifier: "stable-baseline-control",
+        classification: "environment-failure",
+        reproducedOnStable: true,
+        stableCommit: expect.any(String),
+        candidateCommit,
+      });
+      expect(result.passiveFailure).toMatchObject({
+        classification: "environment-failure",
+        reproducedOnStable: true,
+      });
+
+      const status = await relay(repo, "-Action", "Status");
+      expect(status).toMatchObject({
+        phase: "paused",
+        pauseReasonCode: "environment-failure",
+        candidateCommit,
+      });
+      expect(status.passiveFailure).toMatchObject({
+        classification: "environment-failure",
+        reproducedOnStable: true,
+      });
     } finally {
       await rm(repo, { recursive: true, force: true });
     }
