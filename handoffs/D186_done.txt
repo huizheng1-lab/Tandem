@@ -1,0 +1,43 @@
+Round: D186
+
+Commits:
+- 91a4bb3 D186-1: harden passive failure classification
+- ef71c21 D186-2: update dashboard manifest hashes
+
+Safety and classification summary:
+- Stable-baseline replay is now allowed only for read-only validation commands (`npm test`, `npx vitest run`, `vitest run`, or Vitest-like `node` test commands in regression fixtures).
+- Package, recovery-runtime promotion, and recovery-runtime launch failures no longer call the stable-baseline worktree control. They pause as `environment-failure` with `passiveFailure.classifier = lifecycle-operation`, `baselineControlSkipped = true`, `skipReason = mutating-lifecycle-command`, and an `operationKind` of `package`, `b-runtime-promotion`, or `b-runtime-launch`.
+- Vitest-like failure equivalence is now based on failed identity (`file` plus normalized test name), not just a shared file path. `environment-failure` with `reproducedOnStable=true` is set only when a stable-baseline failure identity matches a candidate failure identity.
+- If the baseline command fails differently, or if no safe comparable identity is available, the classifier remains conservative as `candidate-failure`.
+- The detached stable worktree behavior from D185 remains, and skipped/matching identity evidence is included in `stableBaseline`/`passiveFailure`.
+
+Supervisor/dashboard routing:
+- `continue-reciprocal-automation.ps1` no longer invokes `PassiveTest` just because `candidateCommit` is populated while paused.
+- The only paused-candidate auto path is machine-origin `environment-failure`; it performs a bounded `Resume` then `PassiveTest` retry and records backoff on repeated environment failures.
+- Candidate failures, human pauses, unknown-origin pauses, and backoff/hard-blocked states are not auto-resumed.
+- Dashboard classification now routes `candidate-failure` to a non-retryable review gate and machine `environment-failure` with a pending candidate to the retryable `resume-and-rerun-passive-test` action, escalating through the existing retry threshold.
+
+Regression coverage:
+- Candidate-only read-only failure remains `candidate-failure`.
+- Same failing test identity on candidate and stable becomes `environment-failure`.
+- Different failing tests in the same file remain `candidate-failure`.
+- Package lifecycle failure records `lifecycle-operation` and does not run any stable-baseline replay.
+- Supervisor tests prove paused candidate failures are not sent directly to `PassiveTest`, and human/unknown paused candidates are not auto-resumed.
+- Dashboard nodecheck asserts exact classification and next action for both `candidate-failure` and `environment-failure`.
+
+Live-state evidence:
+- W0027 candidate `83421bbc0cd5a8dd2832f194b66e8bf8e9d72eb1` remains paused.
+- Live relay status after D186: `phase=paused`, `pausedFromPhase=passive-testing`, `pauseOrigin=machine`, `pauseReasonCode=candidate-failure`, `candidateCommit=83421bbc0cd5a8dd2832f194b66e8bf8e9d72eb1`.
+- No D186 action resumed, exonerated, accepted, or rewrote that candidate/state.
+
+Verification:
+- `cmd.exe /d /s /c "npx vitest run tests\reciprocal-relay.test.ts"` passed: 25/25.
+- `cmd.exe /d /s /c "npx vitest run tests\reciprocal-supervisor.test.ts"` passed: 8/8.
+- `node dashboard-source\reciprocal-control-panel\lib.nodecheck.mjs` passed: 20/20.
+- `node dashboard-source\reciprocal-control-panel\approval-flow.e2e.mjs` passed: 8/8.
+- `npx vitest run tests\candidate-preview-smoke.test.ts` passed: 4/4.
+- `npm run typecheck` passed.
+- Initial parallel full `npm test` had two 5s timeouts while dashboard E2E was running; the two failed files then passed together, 28/28.
+- Final `cmd.exe /d /s /c "npm test"` passed: 53 files passed, 1 skipped; 550 tests passed, 1 skipped.
+- `git diff --check` passed.
+- Dashboard deploy was performed only with `scripts\deploy-reciprocal-dashboard.ps1`; deploy verification passed and `-VerifyOnly` afterwards returned `ok: true` with no planned updates.
