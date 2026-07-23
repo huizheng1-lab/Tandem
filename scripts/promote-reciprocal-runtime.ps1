@@ -80,6 +80,11 @@ function Write-JsonAtomic([string]$Path, [object]$Value) {
     Move-Item -LiteralPath $tmp -Destination $Path -Force
 }
 
+function Test-TerminalPromotionStage([object]$Operation) {
+    $stage = [string]$Operation.stage
+    return $stage -eq "completed" -or $stage -eq "target-verified"
+}
+
 $sourceDir = [IO.Path]::GetFullPath($Source)
 if (-not (Test-Path -LiteralPath $sourceDir)) {
     if ($DryRun) {
@@ -140,7 +145,7 @@ foreach ($role in $roles) {
     if (Test-Path -LiteralPath $operationPath) {
         $operation = Get-Content -LiteralPath $operationPath -Raw | ConvertFrom-Json
         if ([string]$operation.sourceSha -ne $SourceSha -or [string]$operation.packageIdentity -ne $sourcePackageIdentity) {
-            if ([string]$operation.stage -eq "target-verified") {
+            if (Test-TerminalPromotionStage $operation) {
                 $null = Get-PackageIntegrity $targetDir ([string]$operation.sourceSha) ([string]$operation.packageIdentity)
                 $completedRoot = Assert-UnderRoot (Join-Path $operationRoot "completed") $operationRoot
                 New-Item -ItemType Directory -Force -Path $completedRoot | Out-Null
@@ -230,8 +235,9 @@ foreach ($role in $roles) {
         throw "Promoted runtime for executor $role is missing Tandem.exe."
     }
     $targetIntegrity = Get-PackageIntegrity $targetDir $SourceSha $sourcePackageIdentity
-    $operationRecord.stage = "target-verified"
+    $operationRecord.stage = "completed"
     $operationRecord.targetProof = $targetIntegrity
+    $operationRecord.completedAt = (Get-Date).ToUniversalTime().ToString("o")
     $operationRecord.updatedAt = (Get-Date).ToUniversalTime().ToString("o")
     Write-JsonAtomic $operationPath $operationRecord
     Write-Host "Promoted executor-$role runtime to $sourceShortSha with package $sourcePackageIdentity; backup retained at $backupDir."

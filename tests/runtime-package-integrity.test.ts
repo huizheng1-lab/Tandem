@@ -115,13 +115,14 @@ describe("runtime package integrity", () => {
       await execa("powershell", args);
       const operationPath = path.join(relayRoot, "state", "promotion-operations", "executor-a.json");
       const firstOperation = JSON.parse(await readFile(operationPath, "utf8"));
-      expect(firstOperation).toMatchObject({ stage: "target-verified", packageIdentity: sourceProof.identity });
+      expect(firstOperation).toMatchObject({ stage: "completed", packageIdentity: sourceProof.identity });
       expect(existsSync(firstOperation.backupPath)).toBe(true);
       expect(await readFile(path.join(firstOperation.backupPath, "Tandem.exe"), "utf8")).toBe("old runtime\n");
 
       await execa("powershell", args);
       const secondOperation = JSON.parse(await readFile(operationPath, "utf8"));
       expect(secondOperation.backupPath).toBe(firstOperation.backupPath);
+      expect(secondOperation).toMatchObject({ stage: "completed", packageIdentity: sourceProof.identity });
       expect(await readFile(path.join(secondOperation.backupPath, "Tandem.exe"), "utf8")).toBe("old runtime\n");
       await expect(verifyPackage(target, { sourceSha, packageIdentity: sourceProof.identity })).resolves.toMatchObject({ packageIdentity: sourceProof.identity });
     } finally {
@@ -154,14 +155,55 @@ describe("runtime package integrity", () => {
 
       const operationPath = path.join(relayRoot, "state", "promotion-operations", "executor-b.json");
       const firstOperation = JSON.parse(await readFile(operationPath, "utf8"));
-      expect(firstOperation).toMatchObject({ stage: "target-verified", packageIdentity: sourceOneProof.identity });
+      expect(firstOperation).toMatchObject({ stage: "completed", packageIdentity: sourceOneProof.identity });
 
       await execa("powershell", secondArgs);
 
       const secondOperation = JSON.parse(await readFile(operationPath, "utf8"));
-      expect(secondOperation).toMatchObject({ stage: "target-verified", packageIdentity: sourceTwoProof.identity });
+      expect(secondOperation).toMatchObject({ stage: "completed", packageIdentity: sourceTwoProof.identity });
       expect(existsSync(path.join(relayRoot, "state", "promotion-operations", "completed", `executor-b-${firstOperation.operationId}.json`))).toBe(true);
       await expect(verifyPackage(target, { sourceSha: sourceTwoSha, packageIdentity: sourceTwoProof.identity })).resolves.toMatchObject({ packageIdentity: sourceTwoProof.identity });
+    } finally {
+      await rm(relayRoot, { recursive: true, force: true });
+    }
+  }, 60_000);
+
+  windowsIt("D194 keeps in-flight promotion operations fail-closed for different packages", async () => {
+    const relayRoot = path.join(tmpdir(), `runtime-promote-inflight-${randomUUID()}`);
+    const sourceOne = path.join(relayRoot, "packages", "one");
+    const sourceTwo = path.join(relayRoot, "packages", "two");
+    const operationRoot = path.join(relayRoot, "state", "promotion-operations");
+    try {
+      await mkdir(sourceOne, { recursive: true });
+      await writeFile(path.join(sourceOne, "Tandem.exe"), "first runtime\n", "utf8");
+      await writeFile(path.join(sourceOne, "resources.bin"), "first resources\n", "utf8");
+      const sourceOneSha = "1111111111111111111111111111111111111111";
+      const sourceOneProof = await writeBuildInfo(sourceOne, sourceOneSha);
+
+      await mkdir(sourceTwo, { recursive: true });
+      await writeFile(path.join(sourceTwo, "Tandem.exe"), "second runtime\n", "utf8");
+      await writeFile(path.join(sourceTwo, "resources.bin"), "second resources\n", "utf8");
+      const sourceTwoSha = "2222222222222222222222222222222222222222";
+      await writeBuildInfo(sourceTwo, sourceTwoSha);
+
+      await mkdir(operationRoot, { recursive: true });
+      await writeFile(path.join(operationRoot, "executor-b.json"), `${JSON.stringify({
+        schemaVersion: 1,
+        operationId: "promote-b-inflight",
+        role: "b",
+        sourceSha: sourceOneSha,
+        packageIdentity: sourceOneProof.identity,
+        sourcePath: sourceOne,
+        targetPath: path.join(relayRoot, "runtimes", "executor-b"),
+        stagingPath: path.join(relayRoot, "runtimes", ".promote-staging-executor-b-promote-b-inflight"),
+        backupPath: path.join(relayRoot, "runtimes", "backups", "executor-b-promote-b-inflight"),
+        stage: "backup-created",
+        updatedAt: new Date().toISOString(),
+      }, null, 2)}\n`, "utf8");
+
+      const script = path.resolve("scripts/promote-reciprocal-runtime.ps1");
+      await expect(execa("powershell", ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", script, "-RelayRoot", relayRoot, "-Source", sourceTwo, "-SourceSha", sourceTwoSha, "-TargetRole", "B", "-BuildRound", "D194", "-PromotedRound", "D194"]))
+        .rejects.toThrow(/targets a different package/);
     } finally {
       await rm(relayRoot, { recursive: true, force: true });
     }

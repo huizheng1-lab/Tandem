@@ -74,6 +74,8 @@ B has no schedule and no wishlist prompt loop. It may be launched so copy A can 
 
 Passing passive checks advances `refs/tandem-relay/stable`, updates the shared direction item when a matching candidate is found, clears the candidate, and enters `a-upgrade-pending`. Failing checks pause from `passive-testing`.
 
+Runtime promotion operation journals are crash-recovery records, not permanent locks. Non-terminal stages such as staging, backup, and swap remain fail-closed when a different package is requested. A promotion reaches terminal success only after the target runtime verifies against the source SHA and package identity; successful operations are recorded with `stage: "completed"`, and legacy `target-verified` records are treated as terminal only if the installed target still verifies. A later package may archive a verified terminal record and start a fresh operation for the same executor.
+
 ## A Runtime Upgrade Gate
 
 Self-modification safety also means A must not redeploy its own live runtime. After `PassiveTest` packages the verified candidate and the human confirms the candidate preview's functional behavior, a human uses the existing promotion helper to promote A from that same verified canonical build:
