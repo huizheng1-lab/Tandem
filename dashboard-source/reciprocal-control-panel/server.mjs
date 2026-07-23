@@ -37,6 +37,7 @@ const statePath = path.join(repoRoot, ".git", "tandem-relay", "state.json");
 const auditPath = path.join(relayRoot, "control", "CONTROL_PANEL_AUDIT.jsonl");
 const supervisorStatePath = path.join(relayRoot, "control", "continuation-supervisor-state.json");
 const sourceReconciliationPendingPath = path.join(relayRoot, "control", "source-reconciliation-pending.json");
+const runtimeRecoveryJournalPath = path.join(relayRoot, "state", "runtime-recovery-flow.json");
 const finalizationPaths = {
   A: path.join(relayRoot, "state", "finalization-a.json"),
   B: path.join(relayRoot, "state", "finalization-b.json"),
@@ -71,6 +72,26 @@ const testCommandLogPath = process.env.TANDEM_DASHBOARD_COMMAND_LOG || "";
 const testHarnessStartedRoles = new Set();
 let approvalFlow = null;
 let supervisorTickRunning = false;
+
+const durableRecoveryStages = [
+  "package-ready",
+  "b-promote-started",
+  "b-promoted",
+  "b-start-started",
+  "b-started",
+  "b-verified",
+  "approval-recorded",
+  "a-stop-started",
+  "a-stopped",
+  "a-promote-started",
+  "a-promoted",
+  "a-start-started",
+  "a-started",
+  "a-verified",
+  "relay-completed",
+  "b-stop-started",
+  "b-stopped",
+];
 
 function rotateServerLog() {
   try {
@@ -246,12 +267,99 @@ async function jsonFile(file, fallback = null, maxBytes = 256 * 1024) {
   }
 }
 
+async function writeJsonAtomic(file, value) {
+  await mkdir(path.dirname(file), { recursive: true });
+  const temporary = `${file}.${process.pid}.${Date.now()}.tmp`;
+  await writeFile(temporary, `${JSON.stringify(value, null, 2)}\n`, "utf8");
+  renameSync(temporary, file);
+}
+
+async function loadRuntimeRecoveryJournal() {
+  const journal = await jsonFile(runtimeRecoveryJournalPath, null);
+  if (!journal || typeof journal !== "object" || journal._readError) return null;
+  return journal;
+}
+
+async function saveRuntimeRecoveryJournal(flow, durableStage = null, proof = {}) {
+  if (!flow?.sourceSha) return null;
+  const existing = await loadRuntimeRecoveryJournal();
+  const stage = durableStage || flow.durableStage || existing?.stage || "package-ready";
+  const journal = {
+    schemaVersion: 1,
+    id: flow.id,
+    status: flow.status || existing?.status || "running",
+    stage,
+    durableStages: durableRecoveryStages,
+    sourceSha: flow.sourceSha,
+    candidateShortSha: shortSha(flow.sourceSha),
+    packageIdentity: flow.packageIdentity || existing?.packageIdentity || null,
+    approvalReviewKey: flow.sourceSha,
+    expected: {
+      worktrees: { A: automation.A.projectDir, B: automation.B.projectDir },
+      endpoints: { A: automation.A.tokenFile, B: automation.B.tokenFile },
+    },
+    previousStableA: flow.previousStableA || existing?.previousStableA || null,
+    interruptedPhase: flow.interruptedPhase || existing?.interruptedPhase || null,
+    interruptedRole: flow.interruptedRole || existing?.interruptedRole || null,
+    flags: {
+      pausedByFlow: Boolean(flow.pausedByFlow ?? existing?.flags?.pausedByFlow),
+      relayResumed: Boolean(flow.relayResumed ?? existing?.flags?.relayResumed),
+      recoveryAuthorityReady: Boolean(flow.recoveryAuthorityReady ?? existing?.flags?.recoveryAuthorityReady),
+      executorsStopped: Boolean(flow.executorsStopped ?? existing?.flags?.executorsStopped),
+      promoted: Boolean(flow.promoted ?? existing?.flags?.promoted),
+      executorsRestarted: Boolean(flow.executorsRestarted ?? existing?.flags?.executorsRestarted),
+    },
+    steps: flow.steps || existing?.steps || [],
+    proof: { ...(existing?.proof || {}), ...proof },
+    updatedAt: new Date().toISOString(),
+    completedAt: flow.completedAt || existing?.completedAt || null,
+    error: flow.error || existing?.error || null,
+  };
+  flow.durableStage = stage;
+  await writeJsonAtomic(runtimeRecoveryJournalPath, journal);
+  return journal;
+}
+
+function flowFromRuntimeRecoveryJournal(journal, candidate) {
+  if (!journal || journal.sourceSha !== candidate.sourceSha) return null;
+  return {
+    id: journal.id || `approval-recovery-${Date.now()}`,
+    status: journal.status === "completed" ? "completed" : "running",
+    current: journal.steps?.at?.(-1)?.step || "durable-recovery",
+    sourceSha: journal.sourceSha,
+    startedAt: journal.startedAt || journal.updatedAt || new Date().toISOString(),
+    steps: Array.isArray(journal.steps) ? journal.steps : [],
+    pausedByFlow: Boolean(journal.flags?.pausedByFlow),
+    relayResumed: Boolean(journal.flags?.relayResumed),
+    recoveryAuthorityReady: Boolean(journal.flags?.recoveryAuthorityReady || durableRecoveryStages.indexOf(journal.stage) >= durableRecoveryStages.indexOf("b-verified")),
+    executorsStopped: Boolean(journal.flags?.executorsStopped || durableRecoveryStages.indexOf(journal.stage) >= durableRecoveryStages.indexOf("a-stopped")),
+    promoted: Boolean(journal.flags?.promoted || durableRecoveryStages.indexOf(journal.stage) >= durableRecoveryStages.indexOf("a-promoted")),
+    executorsRestarted: Boolean(journal.flags?.executorsRestarted || durableRecoveryStages.indexOf(journal.stage) >= durableRecoveryStages.indexOf("a-started")),
+    interruptedPhase: journal.interruptedPhase || "a-upgrade-pending",
+    interruptedRole: journal.interruptedRole || null,
+    packageIdentity: journal.packageIdentity || null,
+    previousStableA: journal.previousStableA || null,
+    durableStage: journal.stage || "package-ready",
+    cancelRequested: false,
+    forceRequested: false,
+  };
+}
+
+function durableStageReached(flow, stage) {
+  const current = durableRecoveryStages.indexOf(flow?.durableStage || "");
+  const target = durableRecoveryStages.indexOf(stage);
+  return current >= 0 && target >= 0 && current >= target;
+}
+
 const delay = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds));
 
 async function automationRequest(role, pathname, method = "GET", payload) {
   const config = automation[role];
   if (testHarness) await recordHarnessCommand(["AUTOMATION", role, method, pathname]);
   if (testHarness && testHarnessStartedRoles.has(role) && pathname === "/status") {
+    return { ok: true, running: false, pid: role === "A" ? 4101 : 4102, projectDir: config.projectDir, allowedProjectDir: config.projectDir };
+  }
+  if (testHarness && pathname === "/status" && existsSync(config.tokenFile)) {
     return { ok: true, running: false, pid: role === "A" ? 4101 : 4102, projectDir: config.projectDir, allowedProjectDir: config.projectDir };
   }
   if (testHarness && process.env.TANDEM_DASHBOARD_TEST_REQUIRE_STARTED_AUTOMATION === "1") {
@@ -876,7 +984,7 @@ async function getMainVersionStatus(masterHead, stableSha, candidate, runtimeA, 
 }
 
 async function getStatus() {
-  const [state, directionText, wishlistText, supervisorState, sourceReconciliationPending, finalizationA, finalizationB, a, b, runtimeA, runtimeB, producerRelay, historyText, stableExists, masterHead, updateReviewIndex] = await Promise.all([
+  const [state, directionText, wishlistText, supervisorState, sourceReconciliationPending, finalizationA, finalizationB, a, b, runtimeA, runtimeB, producerRelay, historyText, stableExists, masterHead, updateReviewIndex, recoveryJournal] = await Promise.all([
     jsonFile(statePath, {}),
     textFile(controlPath),
     textFile(wishlistPath),
@@ -893,6 +1001,7 @@ async function getStatus() {
     git(repoRoot, "show-ref", "--verify", "--quiet", "refs/tandem-relay/stable").then(() => true).catch(() => false),
     git(repoRoot, "rev-parse", "master").catch(() => ""),
     getUpdateReviewIndex(),
+    loadRuntimeRecoveryJournal(),
   ]);
   for (const runtime of [runtimeA, runtimeB]) {
     const sourceSha = runtime.buildInfo?.sourceSha || "";
@@ -900,7 +1009,7 @@ async function getStatus() {
     runtime.lagsMaster = Boolean(!sourceSha || (masterHead && sourceSha !== masterHead));
   }
   const candidateUpdate = await getCandidateUpdate(runtimeA, runtimeB, state, updateReviewIndex);
-  const runtimeTopology = approvalFlowRuntimeTopology(approvalFlow) || expectedRuntimeTopology(state);
+  const runtimeTopology = approvalFlowRuntimeTopology(approvalFlow || recoveryJournal) || expectedRuntimeTopology(state, recoveryJournal);
   const topologyHealth = runtimeTopologyHealth(runtimeTopology, { a: runtimeA, b: runtimeB });
   const artifactCapability = await getArtifactCapabilityStatus(runtimeA, runtimeB, producerRelay, runtimeTopology);
   artifactCapability.activationPlan = artifactCapabilityActivationPlan({ masterHead, relayState: state, candidateUpdate, runtimeA, runtimeB, capability: artifactCapability });
@@ -1213,7 +1322,12 @@ async function approvalStep(flow, step, detail) {
   const entry = { step, ok: true, detail, at: new Date().toISOString() };
   flow.current = step;
   flow.steps.push(entry);
+  await saveRuntimeRecoveryJournal(flow, flow.durableStage, { [`step:${step}`]: entry });
   await audit("update.approvalStep", { id: flow.id, ...entry });
+  if (testHarness && process.env.TANDEM_DASHBOARD_TEST_CRASH_AFTER_STEP === step) {
+    serverLog("test.crashAfterStep", step);
+    process.exit(87);
+  }
 }
 
 async function resumeApprovalPause(flow, summary) {
@@ -1290,34 +1404,69 @@ function approvalRemaining(flow) {
 async function runApprovalFlow(comment, candidate) {
   const flow = approvalFlow;
   try {
-    const boundary = await waitForApprovalBoundary(flow);
-    flow.forcedBoundary = boundary.forced;
-    await prepareRecoveryAuthority(flow, candidate);
-    if (candidate.reviewed?.decision === "approve") {
-      await approvalStep(flow, "review-recorded", `Approved candidate ${candidate.shortSha}; review was already recorded, continuing idempotent recovery.`);
-    } else {
-      await recordUpdateReview("approve", comment, candidate);
-      await approvalStep(flow, "review-recorded", `Approved candidate ${candidate.shortSha}.`);
+    if (!durableStageReached(flow, "package-ready")) {
+      const candidateBuild = await jsonFile(path.join(candidateSource, "BUILD_INFO.json"), {});
+      flow.packageIdentity = `${candidate.sourceSha}:${candidateBuild.builtAt || "unknown"}:${candidateBuild.packageId || "release-win-unpacked"}`;
+      flow.previousStableA = (await jsonFile(path.join(relayRoot, "runtimes", "executor-a", "BUILD_INFO.json"), {}))?.sourceSha || null;
+      await saveRuntimeRecoveryJournal(flow, "package-ready", { candidateBuild });
     }
 
-    const stopOutput = await powershell("-File", path.join(here, "stop-reciprocal-tandem.ps1"), "-Role", "A", "-RelayRoot", relayRoot);
-    flow.executorsStopped = true;
-    await approvalStep(flow, "executor-a-stopped", stopOutput || "Executor A stopped; verified B remains the recovery authority.");
+    if (!durableStageReached(flow, "b-verified")) {
+      await prepareRecoveryAuthority(flow, candidate);
+    }
 
-    const promoteOutput = await powershell("-File", path.join(repoRoot, "scripts", "promote-reciprocal-runtime.ps1"), "-RelayRoot", relayRoot, "-Source", candidateSource, "-SourceSha", candidate.sourceSha, "-TargetRole", "A", "-BuildRound", "D123", "-PromotedRound", "D123");
-    flow.promoted = true;
-    const [buildA, buildB, listing] = await Promise.all([
-      jsonFile(path.join(relayRoot, "runtimes", "executor-a", "BUILD_INFO.json"), {}),
-      jsonFile(path.join(relayRoot, "runtimes", "executor-b", "BUILD_INFO.json"), {}),
-      powershell("-Command", `$root='${relayRoot.replaceAll("'", "''")}'; Get-ChildItem (Join-Path $root 'runtimes\\executor-a') -Filter Tandem.exe | Select-Object FullName,Length,LastWriteTime | ConvertTo-Json -Compress`),
-    ]);
-    flow.proof = { buildA, buildB, listing };
-    await approvalStep(flow, "runtime-a-promoted", `${promoteOutput} BUILD_INFO A=${shortSha(buildA.sourceSha)}; verified B source remains ${shortSha(buildB.sourceSha)}. ${listing}`);
+    if (!durableStageReached(flow, "approval-recorded")) {
+      const reviews = await getUpdateReviewIndex();
+      if (candidate.reviewed?.decision === "approve" || reviews[candidate.sourceSha]?.decision === "approve") {
+        flow.durableStage = "approval-recorded";
+        await approvalStep(flow, "review-recorded", `Approved candidate ${candidate.shortSha}; review was already recorded, continuing idempotent recovery.`);
+      } else {
+        await recordUpdateReview("approve", comment, candidate);
+        flow.durableStage = "approval-recorded";
+        await approvalStep(flow, "review-recorded", `Approved candidate ${candidate.shortSha}.`);
+      }
+    }
 
-    const startOutput = await powershell("-File", path.join(repoRoot, "scripts", "start-reciprocal-tandem.ps1"), "-Role", "A", "-RelayRoot", relayRoot);
-    const statusA = await waitForAutomation("A");
-    flow.executorsRestarted = true;
-    await approvalStep(flow, "executor-a-restarted", `${startOutput} Hidden endpoint ready: A PID ${statusA.pid}.`);
+    if (!flow.interruptedPhase || !durableStageReached(flow, "a-stop-started")) {
+      const boundary = await waitForApprovalBoundary(flow);
+      flow.forcedBoundary = boundary.forced;
+    }
+
+    if (!durableStageReached(flow, "a-stopped")) {
+      await saveRuntimeRecoveryJournal(flow, "a-stop-started");
+      const stopOutput = await powershell("-File", path.join(here, "stop-reciprocal-tandem.ps1"), "-Role", "A", "-RelayRoot", relayRoot);
+      flow.executorsStopped = true;
+      flow.durableStage = "a-stopped";
+      await approvalStep(flow, "executor-a-stopped", stopOutput || "Executor A stopped; verified B remains the recovery authority.");
+    }
+
+    if (!durableStageReached(flow, "a-promoted")) {
+      await verifyRecoveryAuthority(candidate);
+      await saveRuntimeRecoveryJournal(flow, "a-promote-started");
+      const promoteOutput = await powershell("-File", path.join(repoRoot, "scripts", "promote-reciprocal-runtime.ps1"), "-RelayRoot", relayRoot, "-Source", candidateSource, "-SourceSha", candidate.sourceSha, "-TargetRole", "A", "-BuildRound", "D182", "-PromotedRound", "D182");
+      flow.promoted = true;
+      const [buildA, buildB, listing] = await Promise.all([
+        jsonFile(path.join(relayRoot, "runtimes", "executor-a", "BUILD_INFO.json"), {}),
+        jsonFile(path.join(relayRoot, "runtimes", "executor-b", "BUILD_INFO.json"), {}),
+        powershell("-Command", `$root='${relayRoot.replaceAll("'", "''")}'; Get-ChildItem (Join-Path $root 'runtimes\\executor-a') -Filter Tandem.exe | Select-Object FullName,Length,LastWriteTime | ConvertTo-Json -Compress`),
+      ]);
+      flow.proof = { buildA, buildB, listing };
+      if (buildA.sourceSha !== candidate.sourceSha) throw new Error(`Executor A runtime BUILD_INFO mismatch: A=${shortSha(buildA.sourceSha)}, candidate=${candidate.shortSha}.`);
+      flow.durableStage = "a-promoted";
+      await approvalStep(flow, "runtime-a-promoted", `${promoteOutput} BUILD_INFO A=${shortSha(buildA.sourceSha)}; verified B source remains ${shortSha(buildB.sourceSha)}. ${listing}`);
+    }
+
+    if (!durableStageReached(flow, "a-verified")) {
+      await saveRuntimeRecoveryJournal(flow, "a-start-started");
+      const startOutput = await powershell("-File", path.join(repoRoot, "scripts", "start-reciprocal-tandem.ps1"), "-Role", "A", "-RelayRoot", relayRoot);
+      flow.durableStage = "a-started";
+      await saveRuntimeRecoveryJournal(flow, "a-started", { startAOutput: startOutput });
+      const statusA = await waitForAutomation("A");
+      await verifyRuntimeEndpoint("A", candidate);
+      flow.executorsRestarted = true;
+      flow.durableStage = "a-verified";
+      await approvalStep(flow, "executor-a-restarted", `${startOutput} Hidden endpoint ready: A PID ${statusA.pid}.`);
+    }
 
     if (flow.forcedBoundary && flow.interruptedRole) {
       const role = flow.interruptedRole;
@@ -1328,13 +1477,22 @@ async function runApprovalFlow(comment, candidate) {
       await approvalStep(flow, "checkpoint-resume-injected", `Executor ${role} accepted checkpoint resume for ${resumedPrompt.projectDir}.`);
     }
 
-    await resumeApprovalPause(flow, `Completed runtime approval ${flow.id}; Executor A restarted from verified candidate`);
-    const stopBOutput = await powershell("-File", path.join(here, "stop-reciprocal-tandem.ps1"), "-Role", "B", "-RelayRoot", relayRoot);
-    await approvalStep(flow, "recovery-authority-stopped", stopBOutput || "Executor B stopped after A returned healthy.");
+    if (!durableStageReached(flow, "relay-completed")) {
+      await resumeApprovalPause(flow, `Completed runtime approval ${flow.id}; Executor A restarted from verified candidate`);
+      flow.durableStage = "relay-completed";
+      await saveRuntimeRecoveryJournal(flow, "relay-completed");
+    }
+    if (!durableStageReached(flow, "b-stopped")) {
+      await saveRuntimeRecoveryJournal(flow, "b-stop-started");
+      const stopBOutput = await powershell("-File", path.join(here, "stop-reciprocal-tandem.ps1"), "-Role", "B", "-RelayRoot", relayRoot);
+      flow.durableStage = "b-stopped";
+      await approvalStep(flow, "recovery-authority-stopped", stopBOutput || "Executor B stopped after A returned healthy.");
+    }
     flow.status = "completed";
     flow.current = "complete";
     flow.completedAt = new Date().toISOString();
     flow.remaining = [];
+    await saveRuntimeRecoveryJournal(flow, "b-stopped");
     await audit("update.approvePromote", { ok: true, ...approvalSnapshot(), sourceSha: candidate.sourceSha });
     return approvalSnapshot();
   } catch (error) {
@@ -1342,31 +1500,78 @@ async function runApprovalFlow(comment, candidate) {
     flow.remaining = error.code === "APPROVAL_CANCELLED" ? [] : approvalRemaining(flow);
     flow.error = error.code === "APPROVAL_CANCELLED" ? error.message : approvalFailureDetail(flow, error.message);
     flow.completedAt = new Date().toISOString();
+    await saveRuntimeRecoveryJournal(flow, flow.durableStage);
     await audit("update.approvePromote", { ok: false, ...approvalSnapshot(), sourceSha: candidate.sourceSha });
     throw error;
   }
 }
 
 async function prepareRecoveryAuthority(flow, candidate) {
-  flow.recoveryStage = "b-runtime-promote";
-  const promoteBOutput = await powershell("-File", path.join(repoRoot, "scripts", "promote-reciprocal-runtime.ps1"), "-RelayRoot", relayRoot, "-Source", candidateSource, "-SourceSha", candidate.sourceSha, "-TargetRole", "B", "-BuildRound", "D123", "-PromotedRound", "D123");
-  const buildB = await jsonFile(path.join(relayRoot, "runtimes", "executor-b", "BUILD_INFO.json"), {});
-  if (buildB.sourceSha !== candidate.sourceSha) throw new Error(`Executor B recovery runtime BUILD_INFO mismatch: B=${shortSha(buildB.sourceSha)}, candidate=${candidate.shortSha}.`);
-  if (capabilityVersion(buildB, "candidatePreviewArtifactLifecycle") < requiredReciprocalCapabilities.candidatePreviewArtifactLifecycle) {
-    throw new Error("Executor B recovery runtime lacks candidatePreviewArtifactLifecycle capability.");
+  if (!durableStageReached(flow, "b-promoted")) {
+    flow.recoveryStage = "b-runtime-promote";
+    await saveRuntimeRecoveryJournal(flow, "b-promote-started");
+    const promoteBOutput = await powershell("-File", path.join(repoRoot, "scripts", "promote-reciprocal-runtime.ps1"), "-RelayRoot", relayRoot, "-Source", candidateSource, "-SourceSha", candidate.sourceSha, "-TargetRole", "B", "-BuildRound", "D182", "-PromotedRound", "D182");
+    const buildB = await jsonFile(path.join(relayRoot, "runtimes", "executor-b", "BUILD_INFO.json"), {});
+    if (buildB.sourceSha !== candidate.sourceSha) throw new Error(`Executor B recovery runtime BUILD_INFO mismatch: B=${shortSha(buildB.sourceSha)}, candidate=${candidate.shortSha}.`);
+    if (capabilityVersion(buildB, "candidatePreviewArtifactLifecycle") < requiredReciprocalCapabilities.candidatePreviewArtifactLifecycle) {
+      throw new Error("Executor B recovery runtime lacks candidatePreviewArtifactLifecycle capability.");
+    }
+    flow.durableStage = "b-promoted";
+    await approvalStep(flow, "recovery-authority-promoted", `${promoteBOutput} BUILD_INFO B=${shortSha(buildB.sourceSha)}.`);
   }
-  await approvalStep(flow, "recovery-authority-promoted", `${promoteBOutput} BUILD_INFO B=${shortSha(buildB.sourceSha)}.`);
 
-  flow.recoveryStage = "b-runtime-start";
-  const startBOutput = await powershell("-File", path.join(repoRoot, "scripts", "start-reciprocal-tandem.ps1"), "-Role", "B", "-RelayRoot", relayRoot);
-  const statusB = await waitForAutomation("B");
-  const endpointB = await automationRequest("B", "/status");
-  const target = path.resolve(endpointB.allowedProjectDir || endpointB.projectDir || statusB.allowedProjectDir || "");
-  const expectedTarget = path.resolve(automation.B.projectDir);
-  if (target !== expectedTarget) throw new Error(`Executor B recovery endpoint target mismatch: ${target} != ${expectedTarget}.`);
-  flow.recoveryAuthorityReady = true;
-  flow.recoveryStage = "b-runtime-verified";
-  await approvalStep(flow, "recovery-authority-ready", `${startBOutput} B PID ${statusB.pid || endpointB.pid || "ready"} targets ${target}; source ${shortSha(buildB.sourceSha)}.`);
+  if (!durableStageReached(flow, "b-verified")) {
+    flow.recoveryStage = "b-runtime-start";
+    await saveRuntimeRecoveryJournal(flow, "b-start-started");
+    const startBOutput = await powershell("-File", path.join(repoRoot, "scripts", "start-reciprocal-tandem.ps1"), "-Role", "B", "-RelayRoot", relayRoot);
+    flow.durableStage = "b-started";
+    await saveRuntimeRecoveryJournal(flow, "b-started", { startBOutput });
+    const statusB = await waitForAutomation("B");
+    const proof = await verifyRuntimeEndpoint("B", candidate);
+    flow.recoveryAuthorityReady = true;
+    flow.recoveryStage = "b-runtime-verified";
+    flow.durableStage = "b-verified";
+    await approvalStep(flow, "recovery-authority-ready", `${startBOutput} B PID ${statusB.pid || proof.endpoint.pid || "ready"} targets ${proof.target}; source ${candidate.shortSha}.`);
+  }
+}
+
+async function verifyRuntimeEndpoint(role, candidate) {
+  const build = await jsonFile(path.join(relayRoot, "runtimes", `executor-${role.toLowerCase()}`, "BUILD_INFO.json"), {});
+  if (build.sourceSha !== candidate.sourceSha) throw new Error(`Executor ${role} runtime BUILD_INFO mismatch: ${shortSha(build.sourceSha)} != ${candidate.shortSha}.`);
+  if (capabilityVersion(build, "candidatePreviewArtifactLifecycle") < requiredReciprocalCapabilities.candidatePreviewArtifactLifecycle) {
+    throw new Error(`Executor ${role} runtime lacks candidatePreviewArtifactLifecycle capability.`);
+  }
+  const status = await waitForAutomation(role);
+  const endpoint = await automationRequest(role, "/status");
+  const target = path.resolve(endpoint.allowedProjectDir || endpoint.projectDir || status.allowedProjectDir || "");
+  const expectedTarget = path.resolve(automation[role].projectDir);
+  if (target !== expectedTarget) throw new Error(`Executor ${role} endpoint target mismatch: ${target} != ${expectedTarget}.`);
+  return { build, status, endpoint, target };
+}
+
+async function verifyRecoveryAuthority(candidate) {
+  const proof = await verifyRuntimeEndpoint("B", candidate);
+  if (!proof.endpoint && !proof.status) {
+    throw new Error("Executor B recovery endpoint is not available.");
+  }
+  return proof;
+}
+
+async function reviveApprovalFlow(candidate) {
+  const journal = await loadRuntimeRecoveryJournal();
+  const revived = flowFromRuntimeRecoveryJournal(journal, candidate);
+  if (!revived) return null;
+  const reviews = await getUpdateReviewIndex();
+  if (durableStageReached(revived, "approval-recorded") && reviews[candidate.sourceSha]?.decision !== "approve") {
+    throw new Error(`Durable recovery journal says approval was recorded for ${candidate.shortSha}, but the review index does not contain a matching approval.`);
+  }
+  if (durableStageReached(revived, "b-verified")) {
+    await verifyRecoveryAuthority(candidate);
+  }
+  if (durableStageReached(revived, "a-verified")) {
+    await verifyRuntimeEndpoint("A", candidate);
+  }
+  return revived;
 }
 
 async function recoverAlreadyPromotedAUpgrade(comment, sourceSha) {
@@ -1790,7 +1995,7 @@ async function handle(request, response) {
       if (approvalFlow && ["running", "waiting"].includes(approvalFlow.status)) throw new Error("A runtime approval is already in progress.");
       const { candidate } = await currentCandidateOrThrow({ allowReviewed: true });
       if (candidate.reviewed && candidate.reviewed.decision !== "approve") throw new Error(`Candidate ${candidate.shortSha} was already reviewed as ${candidate.reviewed.decision}.`);
-      approvalFlow = {
+      approvalFlow = await reviveApprovalFlow(candidate) || {
         id: `approval-${Date.now()}`,
         status: "running",
         current: "boundary-check",

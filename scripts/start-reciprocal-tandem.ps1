@@ -167,9 +167,34 @@ function Start-Executor([string]$SelectedRole) {
     Write-Host "Started executor $SelectedRole hidden as breakaway PID $launchedPid ($mode); automation endpoint 127.0.0.1:$automationPort targets $targetWorktree."
 }
 
+function Stop-ExecutorIfRunning([string]$SelectedRole, [string]$Reason) {
+    $slug = $SelectedRole.ToLowerInvariant()
+    $runtimeDir = Join-Path $RelayRoot "runtimes\executor-$slug"
+    $running = @(Get-Process -Name Tandem -ErrorAction SilentlyContinue | Where-Object {
+        try { $_.Path -and $_.Path.StartsWith($runtimeDir, [StringComparison]::OrdinalIgnoreCase) } catch { $false }
+    })
+    foreach ($process in $running) {
+        Write-Host "Stopping stale executor $SelectedRole PID $($process.Id): $Reason"
+        Stop-Process -Id $process.Id -Force
+    }
+}
+
+function Get-RecoveryStage {
+    $journalPath = Join-Path $RelayRoot "state\runtime-recovery-flow.json"
+    if (-not (Test-Path -LiteralPath $journalPath)) { return $null }
+    try {
+        $journal = Get-Content -LiteralPath $journalPath -Raw | ConvertFrom-Json
+        if ([string]$journal.status -eq "completed" -or [string]$journal.stage -eq "b-stopped") { return $null }
+        return [string]$journal.stage
+    } catch {
+        throw "Refusing phase-aware start because the runtime recovery journal is unreadable: $($_.Exception.Message)"
+    }
+}
+
 function Get-PhaseAwareStartRoles {
     if ($Role -ne "Both") { return @($Role) }
     $phase = "unknown"
+    $recoveryStage = Get-RecoveryStage
     if (Test-Path -LiteralPath $statePath) {
         try {
             $state = Get-Content -LiteralPath $statePath -Raw | ConvertFrom-Json
@@ -178,14 +203,20 @@ function Get-PhaseAwareStartRoles {
             $phase = "unknown"
         }
     }
-    if ($phase -eq "a-upgrade-pending") {
-        Write-Host "Phase-aware start: relay is a-upgrade-pending; starting Executor B as recovery authority."
+    if ($recoveryStage -in @("a-stop-started", "a-stopped", "a-promote-started", "a-promoted", "a-start-started", "a-started")) {
+        Write-Host "Phase-aware start: recovery stage is $recoveryStage; starting/preserving Executor B as recovery authority."
         return @("B")
     }
-    if ($phase -in @("passive-testing", "validating")) {
-        Write-Host "Phase-aware start: relay is $phase; no agentic executor is started by Role=Both."
-        return @()
+    if ($phase -eq "a-upgrade-pending" -and $recoveryStage -in @("package-ready", "b-promote-started", "b-promoted", "b-start-started", "b-started", "b-verified", "approval-recorded", "a-verified", "relay-completed", "b-stop-started")) {
+        Write-Host "Phase-aware start: relay is a-upgrade-pending with recovery stage $recoveryStage; preserving both endpoints for recovery reconciliation."
+        return @("A", "B")
     }
+    if ($phase -in @("passive-testing", "validating")) {
+        Stop-ExecutorIfRunning "B" "known-good Executor A remains online while candidate checks run"
+        Write-Host "Phase-aware start: relay is $phase; starting/preserving Executor A and keeping Executor B dormant."
+        return @("A")
+    }
+    Stop-ExecutorIfRunning "B" "normal A-only reciprocal operation"
     Write-Host "Phase-aware start: relay is $phase; starting only Executor A and keeping Executor B dormant."
     return @("A")
 }

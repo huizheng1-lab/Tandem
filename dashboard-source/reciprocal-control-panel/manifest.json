@@ -4,8 +4,8 @@
     "files":  [
                   {
                       "path":  "approval-flow.e2e.mjs",
-                      "sha256":  "C42BE0C87BF1D2548D278B8965750EF573FE6C119A466848D968F50078472D53",
-                      "bytes":  23856
+                      "sha256":  "C33F3BA0C21156A0F462B10C96B31C4D58DAEA60C6C6A6268045594CB93088A2",
+                      "bytes":  26849
                   },
                   {
                       "path":  "dashboard-watchdog.ps1",
@@ -19,13 +19,13 @@
                   },
                   {
                       "path":  "lib.mjs",
-                      "sha256":  "078E8E5D333C8E8F4BDBFE7F32BB064500B8941AB9AF557913DE4BC36B42E4EE",
-                      "bytes":  23932
+                      "sha256":  "B182BE53975976662B93B4A6D8AD23F506AD66200F73DE3C693AEEF9D6344D32",
+                      "bytes":  26153
                   },
                   {
                       "path":  "lib.nodecheck.mjs",
-                      "sha256":  "631EE29AC8464BC586CFCFB6E21757AD7BE3D4DCCB8810A3ACF2EF9B5ED76351",
-                      "bytes":  18738
+                      "sha256":  "200DBE55B672782D511EFC64558F4B9A015D35C1D644057A34505C982D532776",
+                      "bytes":  19023
                   },
                   {
                       "path":  "public/app.js",
@@ -64,8 +64,8 @@
                   },
                   {
                       "path":  "server.mjs",
-                      "sha256":  "8D6004A75B6CF1BAA2FF12F55BE033BA775271DFDF7F287325449594E1490AC6",
-                      "bytes":  105406
+                      "sha256":  "1E0BA75673A8B54DE23EA7C07ADB99C6E8DE237F7CC88B17AB2376386B1C3C03",
+                      "bytes":  115331
                   },
                   {
                       "path":  "start-dashboard.ps1",

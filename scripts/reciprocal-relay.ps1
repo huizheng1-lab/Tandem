@@ -1611,6 +1611,78 @@ try {
         $state.runtimeRecoveryStage = "b-runtime-promoted"
         Save-State
 
+        $startScript = Join-Path $Workspace "scripts\start-reciprocal-tandem.ps1"
+        if (-not (Test-Path -LiteralPath $startScript)) {
+            $startScript = Join-Path $PSScriptRoot "start-reciprocal-tandem.ps1"
+        }
+        if (-not (Test-Path -LiteralPath $startScript)) { throw "Passive recovery start helper is missing: $startScript" }
+        $state.runtimeRecoveryStage = "b-runtime-start-started"
+        Save-State
+        $testHarnessBReady = [Environment]::GetEnvironmentVariable("TANDEM_RECIPROCAL_TEST_B_READY") -eq "1"
+        if ($testHarnessBReady) {
+            $bStateDir = Join-Path $defaultRelayRoot "state\executor-b"
+            New-Item -ItemType Directory -Force -Path $bStateDir | Out-Null
+            Set-Content -LiteralPath (Join-Path $bStateDir "automation.json") -Value (@{ port = 1; token = "test-token-b" } | ConvertTo-Json -Depth 4) -Encoding UTF8
+            $startBCheck = [pscustomobject]@{
+                command = "TANDEM_RECIPROCAL_TEST_B_READY=1 start Executor B"
+                exitCode = 0
+                passed = $true
+                output = "Test harness marked Executor B recovery endpoint ready."
+            }
+        } else {
+            $startBCommand = "powershell -NoProfile -ExecutionPolicy Bypass -File `"$startScript`" -Role B -RelayRoot `"$defaultRelayRoot`""
+            $startBCheck = Invoke-ValidationCommand $startBCommand
+        }
+        $mechanical += $startBCheck
+        $failed = @($mechanical | Where-Object { -not $_.passed })
+        $checkSummary = @($mechanical | ForEach-Object {
+            [ordered]@{
+                command = $_.command
+                exitCode = [int]$_.exitCode
+                passed = [bool]$_.passed
+                output = (Limit-Text $_.output 6000)
+            }
+        })
+        if ($failed.Count -gt 0) {
+            $state.phase = "paused"
+            $state.pausedFromPhase = "passive-testing"
+            $state.pauseOrigin = [string]$taxonomy.pauseOrigins.machine
+            $state.pauseReasonCode = [string]$taxonomy.pauseReasonCodes.candidateFailure
+            $state.activeRole = $null
+            $state.lastSummary = "Executor B recovery launch failed for candidate $($state.candidateCommit): $((@($failed | ForEach-Object { $_.command })) -join ', ')"
+            Save-State
+            Write-Result "PASSIVE_FAILED" ([pscustomobject]@{ passiveChecks = $checkSummary })
+            exit 0
+        }
+        $state.runtimeRecoveryStage = "b-runtime-started"
+        Save-State
+
+        if (-not $testHarnessBReady) {
+            $bAutomationPath = Join-Path $defaultRelayRoot "state\executor-b\automation.json"
+            if (-not (Test-Path -LiteralPath $bAutomationPath)) { throw "Executor B automation token is missing after recovery start: $bAutomationPath" }
+            $bAutomation = Get-Content -LiteralPath $bAutomationPath -Raw | ConvertFrom-Json
+            if (-not $bAutomation.port -or -not $bAutomation.token) { throw "Executor B automation token is incomplete after recovery start." }
+            $bStatus = $null
+            $deadline = (Get-Date).AddSeconds(30)
+            do {
+                try {
+                    $headers = @{ Authorization = "Bearer $($bAutomation.token)" }
+                    $bStatus = Invoke-RestMethod -Method Get -Uri "http://127.0.0.1:$($bAutomation.port)/status" -Headers $headers -TimeoutSec 3
+                    break
+                } catch {
+                    Start-Sleep -Milliseconds 300
+                }
+            } while ((Get-Date) -lt $deadline)
+            if (-not $bStatus) { throw "Executor B recovery endpoint did not become ready before approval gate." }
+            $expectedBTarget = (Join-Path $defaultRelayRoot "worktrees\copy-a")
+            $actualBTarget = if ($bStatus.allowedProjectDir) { [string]$bStatus.allowedProjectDir } else { [string]$bStatus.projectDir }
+            if (([IO.Path]::GetFullPath($actualBTarget)).TrimEnd('\') -ine ([IO.Path]::GetFullPath($expectedBTarget)).TrimEnd('\')) {
+                throw "Executor B recovery endpoint target mismatch: $actualBTarget != $expectedBTarget"
+            }
+        }
+        $state.runtimeRecoveryStage = "b-runtime-verified"
+        Save-State
+
         $acceptedKind = $state.candidateKind
         $previousStableCommit = $state.stableCommit
         $state.stableCommit = $head
@@ -1632,7 +1704,7 @@ try {
         $state.phase = if ($continuation) { "idle" } else { "a-upgrade-pending" }
         $state.baseCommit = $null
         $state.startedAt = $null
-        $state.runtimeRecoveryStage = if ($continuation) { $null } else { "b-runtime-promoted" }
+        $state.runtimeRecoveryStage = if ($continuation) { $null } else { "b-runtime-verified" }
         Reset-ResumeCounter
         $state.lastCompletedCommit = $head
         $state.lastSummary = if ($Summary.Trim()) {

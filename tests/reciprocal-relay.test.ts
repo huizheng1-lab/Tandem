@@ -36,7 +36,12 @@ describe("reciprocal relay script", () => {
       await readFile(path.resolve("scripts/package-passive-runtime.ps1"), "utf8"),
       "utf8",
     );
-    await execa("git", ["add", "README.md", ".gitignore", "process/reciprocal/gate-taxonomy.json", "scripts/reciprocal-direction.ps1", "scripts/promote-reciprocal-runtime.ps1", "scripts/package-passive-runtime.ps1"], { cwd: repo });
+    await writeFile(
+      path.join(repo, "scripts", "start-reciprocal-tandem.ps1"),
+      await readFile(path.resolve("scripts/start-reciprocal-tandem.ps1"), "utf8"),
+      "utf8",
+    );
+    await execa("git", ["add", "README.md", ".gitignore", "process/reciprocal/gate-taxonomy.json", "scripts/reciprocal-direction.ps1", "scripts/promote-reciprocal-runtime.ps1", "scripts/package-passive-runtime.ps1", "scripts/start-reciprocal-tandem.ps1"], { cwd: repo });
     await execa("git", ["commit", "-m", "initial"], { cwd: repo });
     await execa("git", ["branch", "codex/reciprocal-a"], { cwd: repo });
     await execa("git", ["branch", "codex/reciprocal-b"], { cwd: repo });
@@ -113,7 +118,9 @@ describe("reciprocal relay script", () => {
     await mkdir(preparedRuntime, { recursive: true });
     await writeFile(path.join(preparedRuntime, "Tandem.exe"), "fake exe\n", "utf8");
     const previousPrepared = process.env.TANDEM_PASSIVE_PACKAGE_PREPARED_WIN_UNPACKED;
+    const previousBReady = process.env.TANDEM_RECIPROCAL_TEST_B_READY;
     process.env.TANDEM_PASSIVE_PACKAGE_PREPARED_WIN_UNPACKED = preparedRuntime;
+    process.env.TANDEM_RECIPROCAL_TEST_B_READY = "1";
     try {
       return await run();
     } finally {
@@ -121,6 +128,11 @@ describe("reciprocal relay script", () => {
         delete process.env.TANDEM_PASSIVE_PACKAGE_PREPARED_WIN_UNPACKED;
       } else {
         process.env.TANDEM_PASSIVE_PACKAGE_PREPARED_WIN_UNPACKED = previousPrepared;
+      }
+      if (previousBReady === undefined) {
+        delete process.env.TANDEM_RECIPROCAL_TEST_B_READY;
+      } else {
+        process.env.TANDEM_RECIPROCAL_TEST_B_READY = previousBReady;
       }
     }
   }
@@ -704,7 +716,7 @@ describe("reciprocal relay script", () => {
       const buildInfo = JSON.parse(await readFile(path.join(repo, "release", "win-unpacked", "BUILD_INFO.json"), "utf8"));
       expect(buildInfo.sourceSha).toBe(candidateCommit);
       expect(await readFile(path.join(repo, "release", "win-unpacked", "Tandem.exe"), "utf8")).toContain("fake exe");
-      expect(accepted.recoveryRuntime).toMatchObject({ role: "B", sourceSha: candidateCommit, stage: "b-runtime-promoted" });
+      expect(accepted.recoveryRuntime).toMatchObject({ role: "B", sourceSha: candidateCommit, stage: "b-runtime-verified" });
       const recoveryBuildInfo = JSON.parse(await readFile(path.join(relayRoot, "runtimes", "executor-b", "BUILD_INFO.json"), "utf8"));
       expect(recoveryBuildInfo.sourceSha).toBe(candidateCommit);
       expect(recoveryBuildInfo.reciprocalCapabilities.candidatePreviewArtifactLifecycle).toBe(1);

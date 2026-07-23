@@ -79,27 +79,52 @@ export function candidatePreviewArtifactCapabilityStatus({ producer = null, runt
   };
 }
 
-export function expectedRuntimeTopology(state = {}) {
+export function expectedRuntimeTopology(state = {}, recovery = null) {
   const phase = String(state?.phase || "unknown");
   const activeRole = state?.activeRole || null;
+  const recoveryStage = String(recovery?.stage || recovery?.durableStage || "");
   if (phase === "a-upgrade-pending") {
+    if (["a-stop-started", "a-stopped", "a-promote-started", "a-promoted", "a-start-started", "a-started"].includes(recoveryStage)) {
+      return {
+        key: "b-recovery-upgrading-a",
+        label: "B recovery authority / A upgrading",
+        expectedOnline: { A: false, B: true },
+        startRole: "B",
+        normalOnlineText: "B online while A is upgraded",
+        detail: "Verified Executor B remains online as the recovery authority while Executor A is stopped, promoted, restarted, and verified.",
+      };
+    }
+    if (["a-verified", "relay-completed", "b-stop-started"].includes(recoveryStage)) {
+      return {
+        key: "a-verified-stopping-b",
+        label: "A verified / stopping B",
+        expectedOnline: { A: true, B: true },
+        startRole: null,
+        normalOnlineText: "A verified; B stopping",
+        detail: "Executor A has restarted from the verified candidate and Executor B is being stopped before returning to A-only operation.",
+      };
+    }
     return {
-      key: "b-recovery-authority",
-      label: "B recovery authority / A awaiting upgrade",
-      expectedOnline: { A: false, B: true },
+      key: recoveryStage === "b-verified" || recoveryStage === "approval-recorded"
+        ? "a-running-b-verified-awaiting-approval"
+        : "a-running-verifying-b",
+      label: recoveryStage === "b-verified" || recoveryStage === "approval-recorded"
+        ? "A running / B verified / awaiting approval"
+        : "A running / verifying B",
+      expectedOnline: { A: true, B: true },
       startRole: "B",
-      normalOnlineText: "B online as recovery authority",
-      detail: "Executor B must be the verified passive runtime that can recover and promote Executor A.",
+      normalOnlineText: "A remains online while B is verified",
+      detail: "Known-good Executor A stays online until verified Executor B is ready and the existing human A-promotion approval is recorded.",
     };
   }
   if (phase === "passive-testing" || phase === "validating") {
     return {
       key: "mechanical-candidate-checks",
       label: "Mechanical candidate checks",
-      expectedOnline: { A: false, B: false },
-      startRole: null,
-      normalOnlineText: "No agentic runtime required",
-      detail: "Candidate checks run mechanically from isolated worktrees; B is launched only after an exact package is ready for recovery verification.",
+      expectedOnline: { A: true, B: false },
+      startRole: "A",
+      normalOnlineText: "A remains online, B dormant",
+      detail: "Candidate checks run mechanically while known-good Executor A remains online; B is launched only after an exact package is ready for recovery verification.",
     };
   }
   if (phase === "working" && activeRole === "A") {
@@ -124,30 +149,41 @@ export function expectedRuntimeTopology(state = {}) {
 
 export function approvalFlowRuntimeTopology(flow = null) {
   if (!flow || !["running", "waiting"].includes(flow.status)) return null;
-  if (flow.current === "recovery-authority-promoted" || flow.recoveryStage === "b-runtime-start") {
+  const stage = String(flow.stage || flow.durableStage || "");
+  if (["package-ready", "b-promote-started", "b-promoted", "b-start-started", "b-started"].includes(stage) || flow.current === "recovery-authority-promoted" || flow.recoveryStage === "b-runtime-start") {
     return {
       key: "b-launch-verification",
-      label: "B launch verification",
+      label: "A running / verifying B",
       expectedOnline: { A: true, B: true },
       startRole: "B",
       normalOnlineText: "A remains online while B is verified",
       detail: "Executor B is being launched from the exact verified candidate while Executor A remains the known-good producer.",
     };
   }
-  if (["executor-a-stopped", "runtime-a-promoted"].includes(flow.current)) {
+  if (["b-verified", "approval-recorded"].includes(stage)) {
+    return {
+      key: "a-running-b-verified-awaiting-approval",
+      label: "A running / B verified / awaiting approval",
+      expectedOnline: { A: true, B: true },
+      startRole: null,
+      normalOnlineText: "B verified; A still online",
+      detail: "Executor B has been verified from the exact candidate and the existing human A-promotion approval can be reused or recorded.",
+    };
+  }
+  if (["a-stop-started", "a-stopped", "a-promote-started", "a-promoted", "a-start-started", "a-started"].includes(stage) || ["executor-a-stopped", "runtime-a-promoted"].includes(flow.current)) {
     return {
       key: "b-recovery-upgrading-a",
-      label: "B recovery authority / upgrading A",
+      label: "B recovery authority / A upgrading",
       expectedOnline: { A: false, B: true },
       startRole: "B",
       normalOnlineText: "B online while A is upgraded",
       detail: "Executor B is the verified recovery authority while Executor A is stopped and promoted.",
     };
   }
-  if (flow.current === "executor-a-restarted" || flow.current === "a-upgrade-completed") {
+  if (["a-verified", "relay-completed", "b-stop-started"].includes(stage) || flow.current === "executor-a-restarted" || flow.current === "a-upgrade-completed") {
     return {
       key: "a-healthy-stopping-b",
-      label: "A healthy / stopping B",
+      label: "A verified / stopping B",
       expectedOnline: { A: true, B: true },
       startRole: null,
       normalOnlineText: "A and B online briefly while B is stopped",

@@ -272,10 +272,10 @@ test("approval flow uses the real relay to complete an inactive A-upgrade bounda
     assert.equal(result.ok, true);
     assert.equal(result.result.current, "complete");
     assert.deepEqual(result.result.steps.map((step) => step.step), [
-      "a-upgrade-boundary",
       "recovery-authority-promoted",
       "recovery-authority-ready",
       "review-recorded",
+      "a-upgrade-boundary",
       "executor-a-stopped",
       "runtime-a-promoted",
       "executor-a-restarted",
@@ -315,7 +315,28 @@ test("approval flow uses the real relay to complete an inactive A-upgrade bounda
   assert.equal(state.stableCommit, fixture.fixtureSha);
   const audit = await readJsonl(fixture.auditPath);
   assert.equal(audit.some((entry) => entry.step === "a-upgrade-completed" && /a_upgrade_completed/.test(entry.detail)), true);
-  await writeEvidence("approval-flow", { commands, actions, state, auditSteps: audit.filter((entry) => entry.action === "update.approvalStep").map((entry) => ({ step: entry.step, detail: entry.detail })) });
+  const journal = await readJson(path.join(fixture.relayRoot, "state", "runtime-recovery-flow.json"));
+  assert.equal(journal.stage, "b-stopped");
+  assert.deepEqual(journal.durableStages, [
+    "package-ready",
+    "b-promote-started",
+    "b-promoted",
+    "b-start-started",
+    "b-started",
+    "b-verified",
+    "approval-recorded",
+    "a-stop-started",
+    "a-stopped",
+    "a-promote-started",
+    "a-promoted",
+    "a-start-started",
+    "a-started",
+    "a-verified",
+    "relay-completed",
+    "b-stop-started",
+    "b-stopped",
+  ]);
+  await writeEvidence("approval-flow", { commands, actions, state, journal, auditSteps: audit.filter((entry) => entry.action === "update.approvalStep").map((entry) => ({ step: entry.step, detail: entry.detail })) });
 });
 
 test("D181 failed A restart leaves B online as recovery authority", async (t) => {
@@ -353,13 +374,55 @@ test("D181 failed A restart leaves B online as recovery authority", async (t) =>
     assert.equal(response.status, 200, JSON.stringify(result));
     assert.equal(result.ok, true);
     assert.equal(result.result.current, "complete");
-    assert.match(result.result.steps.find((step) => step.step === "review-recorded")?.detail || "", /already recorded/);
+    assert.equal(result.result.steps.filter((step) => step.step === "review-recorded").length, 1);
   });
   const recoveredState = await readJson(fixture.statePath);
   assert.equal(recoveredState.phase, "idle");
   assert.equal(recoveredState.nextRole, "A");
   const audit = await readJsonl(fixture.auditPath);
   assert.equal(audit.filter((entry) => entry.action === "update.review" && entry.decision === "approve").length, 1);
+});
+
+test("D182 dashboard crash after A stop resumes from durable recovery journal", async (t) => {
+  const fixture = await makeFixture(t);
+  await fixture.setState();
+  const previousCrash = process.env.TANDEM_DASHBOARD_TEST_CRASH_AFTER_STEP;
+  process.env.TANDEM_DASHBOARD_TEST_CRASH_AFTER_STEP = "executor-a-stopped";
+  try {
+    await withServer(t, fixture, async ({ post }) => {
+      await assert.rejects(
+        () => post("/api/update/approve", { comment: "crash-boundary approval" }),
+        /fetch failed|terminated|other side closed|socket hang up/i,
+      );
+    });
+  } finally {
+    if (previousCrash === undefined) delete process.env.TANDEM_DASHBOARD_TEST_CRASH_AFTER_STEP;
+    else process.env.TANDEM_DASHBOARD_TEST_CRASH_AFTER_STEP = previousCrash;
+  }
+
+  const journalAfterCrash = await readJson(path.join(fixture.relayRoot, "state", "runtime-recovery-flow.json"));
+  assert.equal(journalAfterCrash.stage, "a-stopped");
+  assert.equal(journalAfterCrash.sourceSha, fixture.fixtureSha);
+
+  await withServer(t, fixture, async ({ post }) => {
+    const { response, result } = await post("/api/update/approve", { comment: "resume after dashboard crash" });
+    assert.equal(response.status, 200, JSON.stringify(result));
+    assert.equal(result.ok, true);
+    assert.equal(result.result.current, "complete");
+  });
+
+  const commands = await readJsonl(fixture.commandLog);
+  const promoteCommands = commands.filter((entry) => String(entry.args[1]).endsWith("promote-reciprocal-runtime.ps1"));
+  assert.deepEqual(promoteCommands.map((entry) => entry.args[entry.args.indexOf("-TargetRole") + 1]), ["B", "A"]);
+  const stopCommands = commands.filter((entry) => String(entry.args[1]).endsWith("stop-reciprocal-tandem.ps1"));
+  assert.deepEqual(stopCommands.map((entry) => entry.args[entry.args.indexOf("-Role") + 1]), ["A", "B"]);
+  const automationCalls = commands.filter((entry) => entry.args[0] === "AUTOMATION");
+  assert.equal(automationCalls.some((entry) => entry.args[1] === "B" && entry.args[3] === "/prompt"), false);
+  const audit = await readJsonl(fixture.auditPath);
+  assert.equal(audit.filter((entry) => entry.action === "update.review" && entry.decision === "approve").length, 1);
+  const finalJournal = await readJson(path.join(fixture.relayRoot, "state", "runtime-recovery-flow.json"));
+  assert.equal(finalJournal.stage, "b-stopped");
+  await writeEvidence("approval-crash-boundary", { commands, journalAfterCrash, finalJournal });
 });
 
 test("authority flow uses authenticated dashboard API to approve one relay checkpoint", async (t) => {

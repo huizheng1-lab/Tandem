@@ -175,30 +175,34 @@ test("D181 expected runtime topology keeps B dormant during normal A work", () =
   assert.deepEqual(working.expectedOnline, { A: true, B: false });
 });
 
-test("D181 expected runtime topology starts B only as recovery authority", () => {
+test("D182 expected runtime topology keeps A alive until B is recovery authority", () => {
   const passive = expectedRuntimeTopology({ phase: "passive-testing", activeRole: null });
-  assert.equal(passive.startRole, null);
-  assert.deepEqual(passive.expectedOnline, { A: false, B: false });
+  assert.equal(passive.startRole, "A");
+  assert.deepEqual(passive.expectedOnline, { A: true, B: false });
 
   const pending = expectedRuntimeTopology({ phase: "a-upgrade-pending", activeRole: null });
-  assert.equal(pending.key, "b-recovery-authority");
+  assert.equal(pending.key, "a-running-verifying-b");
   assert.equal(pending.startRole, "B");
-  assert.deepEqual(pending.expectedOnline, { A: false, B: true });
-  assert.equal(runtimeTopologyHealth(pending, { a: { running: false }, b: { running: true } }).ok, true);
-  assert.equal(runtimeTopologyHealth(pending, { a: { running: true }, b: { running: true } }).ok, false);
+  assert.deepEqual(pending.expectedOnline, { A: true, B: true });
+  assert.equal(runtimeTopologyHealth(pending, { a: { running: true }, b: { running: true } }).ok, true);
+
+  const upgrading = expectedRuntimeTopology({ phase: "a-upgrade-pending", activeRole: null }, { stage: "a-stopped" });
+  assert.equal(upgrading.key, "b-recovery-upgrading-a");
+  assert.deepEqual(upgrading.expectedOnline, { A: false, B: true });
 });
 
-test("D181 approval flow topology reports launch, upgrade, and B-stop phases", () => {
+test("D182 approval flow topology reports launch, awaiting approval, upgrade, and B-stop phases", () => {
   assert.deepEqual(approvalFlowRuntimeTopology({ status: "running", current: "recovery-authority-promoted" }), {
     key: "b-launch-verification",
-    label: "B launch verification",
+    label: "A running / verifying B",
     expectedOnline: { A: true, B: true },
     startRole: "B",
     normalOnlineText: "A remains online while B is verified",
     detail: "Executor B is being launched from the exact verified candidate while Executor A remains the known-good producer.",
   });
-  assert.equal(approvalFlowRuntimeTopology({ status: "running", current: "runtime-a-promoted" }).key, "b-recovery-upgrading-a");
-  assert.equal(approvalFlowRuntimeTopology({ status: "running", current: "a-upgrade-completed" }).key, "a-healthy-stopping-b");
+  assert.equal(approvalFlowRuntimeTopology({ status: "running", stage: "b-verified" }).key, "a-running-b-verified-awaiting-approval");
+  assert.equal(approvalFlowRuntimeTopology({ status: "running", stage: "a-promoted" }).key, "b-recovery-upgrading-a");
+  assert.equal(approvalFlowRuntimeTopology({ status: "running", stage: "relay-completed" }).key, "a-healthy-stopping-b");
   assert.equal(approvalFlowRuntimeTopology({ status: "completed", current: "complete" }), null);
 });
 
