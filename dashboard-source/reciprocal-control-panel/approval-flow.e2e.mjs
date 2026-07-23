@@ -273,10 +273,11 @@ test("approval flow uses the real relay to complete an inactive A-upgrade bounda
     assert.deepEqual(result.result.steps.map((step) => step.step), [
       "a-upgrade-boundary",
       "review-recorded",
-      "executors-stopped",
-      "runtime-promoted",
-      "executors-restarted",
+      "executor-a-stopped",
+      "runtime-a-promoted",
+      "executor-a-restarted",
       "a-upgrade-completed",
+      "recovery-authority-stopped",
     ]);
   });
 
@@ -291,7 +292,16 @@ test("approval flow uses the real relay to complete an inactive A-upgrade bounda
   assert.equal(completeArgs.includes("-Force"), true);
   assert.equal(completeArgs.includes("-Workspace") && path.resolve(completeArgs[completeArgs.indexOf("-Workspace") + 1]) === path.resolve(fixture.copyA), true);
   assert.equal(completeArgs.includes("-Summary") && completeArgs[completeArgs.indexOf("-Summary") + 1].trim().length > 0, true);
-  assert.equal(commands.filter((entry) => String(entry.args[1]).endsWith("promote-reciprocal-runtime.ps1")).length, 1);
+  const promoteCommands = commands.filter((entry) => String(entry.args[1]).endsWith("promote-reciprocal-runtime.ps1"));
+  assert.equal(promoteCommands.length, 1);
+  assert.equal(promoteCommands[0].args.includes("-TargetRole"), true);
+  assert.equal(promoteCommands[0].args[promoteCommands[0].args.indexOf("-TargetRole") + 1], "A");
+  const approvalStartCommands = commands.filter((entry) => String(entry.args[1]).endsWith("start-reciprocal-tandem.ps1"));
+  assert.equal(approvalStartCommands.length, 1);
+  assert.equal(approvalStartCommands[0].args.includes("-Role"), true);
+  assert.equal(approvalStartCommands[0].args[approvalStartCommands[0].args.indexOf("-Role") + 1], "A");
+  const stopCommands = commands.filter((entry) => String(entry.args[1]).endsWith("stop-reciprocal-tandem.ps1"));
+  assert.deepEqual(stopCommands.map((entry) => entry.args[entry.args.indexOf("-Role") + 1]), ["A", "B"]);
 
   const state = await readJson(fixture.statePath);
   assert.equal(state.phase, "idle");

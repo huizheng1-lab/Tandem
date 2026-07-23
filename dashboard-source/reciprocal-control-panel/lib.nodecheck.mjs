@@ -382,3 +382,18 @@ test("candidate preview artifacts require producer and both pinned runtimes to a
   assert.equal(oldProducer.compatible, false);
   assert.match(oldProducer.message, /Producer relay has v0/);
 });
+
+test("D181 dormant B is not a preview capability blocker unless it is started", () => {
+  const topology = { expectedOnline: { A: true, B: false } };
+  const producer = { capabilities: { candidatePreviewArtifactLifecycle: 1 }, path: "copy-b", sha: "abcdef1234567890" };
+  const upgradedA = { path: "executor-a", buildInfo: { sourceSha: "aaaaaa1234567890", reciprocalCapabilities: { candidatePreviewArtifactLifecycle: 1 } } };
+  const staleDormantB = { running: false, path: "executor-b", buildInfo: { sourceSha: "old" } };
+
+  const dormant = candidatePreviewArtifactCapabilityStatus({ producer, runtimeA: upgradedA, runtimeB: staleDormantB, topology });
+  assert.equal(dormant.compatible, true);
+  assert.match(dormant.message, /dormant Executor B/i);
+
+  const staleStartedB = candidatePreviewArtifactCapabilityStatus({ producer, runtimeA: upgradedA, runtimeB: { ...staleDormantB, running: true }, topology });
+  assert.equal(staleStartedB.compatible, false);
+  assert.match(staleStartedB.message, /Executor B runtime has v0/);
+});

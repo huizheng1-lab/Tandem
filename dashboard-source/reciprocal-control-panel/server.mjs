@@ -154,7 +154,11 @@ async function powershell(...args) {
   if (testHarness && args[0] === "-File") {
     const scriptName = path.basename(args[1] || "").toLowerCase();
     if (scriptName === "stop-reciprocal-tandem.ps1") {
-      return "TEST stopped executor A.\nTEST stopped executor B.";
+      const roleIndex = args.findIndex((value) => value === "-Role");
+      const role = roleIndex >= 0 ? args[roleIndex + 1] : "Both";
+      const roles = role === "Both" ? ["A", "B"] : [role];
+      for (const item of roles) testHarnessStartedRoles.delete(item);
+      return roles.map((item) => `TEST stopped executor ${item}.`).join("\n");
     }
     if (scriptName === "start-reciprocal-tandem.ps1") {
       const roleIndex = args.findIndex((value) => value === "-Role");
@@ -174,14 +178,17 @@ async function powershell(...args) {
     if (scriptName === "promote-reciprocal-runtime.ps1") {
       const sourceIndex = args.findIndex((value) => value === "-Source");
       const source = sourceIndex >= 0 ? args[sourceIndex + 1] : candidateSource;
+      const roleIndex = args.findIndex((value) => value === "-TargetRole");
+      const targetRole = roleIndex >= 0 ? args[roleIndex + 1] : "Both";
+      const roles = targetRole === "Both" ? ["a", "b"] : [targetRole.toLowerCase()];
       const buildInfo = await jsonFile(path.join(source, "BUILD_INFO.json"), {});
-      for (const role of ["a", "b"]) {
+      for (const role of roles) {
         const runtimeDir = path.join(relayRoot, "runtimes", `executor-${role}`);
         await mkdir(runtimeDir, { recursive: true });
         await writeFile(path.join(runtimeDir, "BUILD_INFO.json"), `${JSON.stringify({ ...buildInfo, promotedBy: "dashboard-test-harness" }, null, 2)}\n`, "utf8");
         await writeFile(path.join(runtimeDir, "Tandem.exe"), "test runtime\n", "utf8");
       }
-      return `TEST promoted executor runtimes to ${shortSha(buildInfo.sourceSha)}.`;
+      return `TEST promoted executor ${targetRole} runtime to ${shortSha(buildInfo.sourceSha)}.`;
     }
   }
   return run("powershell", ["-NoProfile", "-ExecutionPolicy", "Bypass", ...args]);
@@ -475,11 +482,12 @@ async function getProducerRelayStatus(worktree = worktrees.b) {
   }
 }
 
-async function getArtifactCapabilityStatus(runtimeA, runtimeB, producerStatus = null) {
+async function getArtifactCapabilityStatus(runtimeA, runtimeB, producerStatus = null, topology = null) {
   return candidatePreviewArtifactCapabilityStatus({
     producer: producerStatus || await getProducerRelayStatus(),
     runtimeA,
     runtimeB,
+    topology,
   });
 }
 
@@ -885,7 +893,7 @@ async function getStatus() {
   const candidateUpdate = await getCandidateUpdate(runtimeA, runtimeB, state, updateReviewIndex);
   const runtimeTopology = expectedRuntimeTopology(state);
   const topologyHealth = runtimeTopologyHealth(runtimeTopology, { a: runtimeA, b: runtimeB });
-  const artifactCapability = await getArtifactCapabilityStatus(runtimeA, runtimeB, producerRelay);
+  const artifactCapability = await getArtifactCapabilityStatus(runtimeA, runtimeB, producerRelay, runtimeTopology);
   artifactCapability.activationPlan = artifactCapabilityActivationPlan({ masterHead, relayState: state, candidateUpdate, runtimeA, runtimeB, capability: artifactCapability });
   if (!artifactCapability.compatible) {
     artifactCapability.message = `${artifactCapability.message} Next safe action: ${artifactCapability.activationPlan.nextSafeHumanAction} ${artifactCapability.activationPlan.warning}`;
@@ -1278,24 +1286,24 @@ async function runApprovalFlow(comment, candidate) {
     await recordUpdateReview("approve", comment, candidate);
     await approvalStep(flow, "review-recorded", `Approved candidate ${candidate.shortSha}.`);
 
-    const stopOutput = await powershell("-File", path.join(here, "stop-reciprocal-tandem.ps1"), "-Role", "Both", "-RelayRoot", relayRoot);
+    const stopOutput = await powershell("-File", path.join(here, "stop-reciprocal-tandem.ps1"), "-Role", "A", "-RelayRoot", relayRoot);
     flow.executorsStopped = true;
-    await approvalStep(flow, "executors-stopped", stopOutput || "Both executors stopped; checkpoints preserved.");
+    await approvalStep(flow, "executor-a-stopped", stopOutput || "Executor A stopped; verified B remains the recovery authority.");
 
-    const promoteOutput = await powershell("-File", path.join(repoRoot, "scripts", "promote-reciprocal-runtime.ps1"), "-RelayRoot", relayRoot, "-Source", candidateSource, "-BuildRound", "D123", "-PromotedRound", "D123");
+    const promoteOutput = await powershell("-File", path.join(repoRoot, "scripts", "promote-reciprocal-runtime.ps1"), "-RelayRoot", relayRoot, "-Source", candidateSource, "-TargetRole", "A", "-BuildRound", "D123", "-PromotedRound", "D123");
     flow.promoted = true;
     const [buildA, buildB, listing] = await Promise.all([
       jsonFile(path.join(relayRoot, "runtimes", "executor-a", "BUILD_INFO.json"), {}),
       jsonFile(path.join(relayRoot, "runtimes", "executor-b", "BUILD_INFO.json"), {}),
-      powershell("-Command", `$root='${relayRoot.replaceAll("'", "''")}'; Get-ChildItem (Join-Path $root 'runtimes\\executor-a'),(Join-Path $root 'runtimes\\executor-b') -Filter Tandem.exe | Select-Object FullName,Length,LastWriteTime | ConvertTo-Json -Compress`),
+      powershell("-Command", `$root='${relayRoot.replaceAll("'", "''")}'; Get-ChildItem (Join-Path $root 'runtimes\\executor-a') -Filter Tandem.exe | Select-Object FullName,Length,LastWriteTime | ConvertTo-Json -Compress`),
     ]);
     flow.proof = { buildA, buildB, listing };
-    await approvalStep(flow, "runtime-promoted", `${promoteOutput} BUILD_INFO A=${shortSha(buildA.sourceSha)}, B=${shortSha(buildB.sourceSha)}. ${listing}`);
+    await approvalStep(flow, "runtime-a-promoted", `${promoteOutput} BUILD_INFO A=${shortSha(buildA.sourceSha)}; verified B source remains ${shortSha(buildB.sourceSha)}. ${listing}`);
 
-    const startOutput = await powershell("-File", path.join(repoRoot, "scripts", "start-reciprocal-tandem.ps1"), "-Role", "Both", "-RelayRoot", relayRoot);
-    const [statusA, statusB] = await Promise.all([waitForAutomation("A"), waitForAutomation("B")]);
+    const startOutput = await powershell("-File", path.join(repoRoot, "scripts", "start-reciprocal-tandem.ps1"), "-Role", "A", "-RelayRoot", relayRoot);
+    const statusA = await waitForAutomation("A");
     flow.executorsRestarted = true;
-    await approvalStep(flow, "executors-restarted", `${startOutput} Hidden endpoints ready: A PID ${statusA.pid}, B PID ${statusB.pid}.`);
+    await approvalStep(flow, "executor-a-restarted", `${startOutput} Hidden endpoint ready: A PID ${statusA.pid}.`);
 
     if (flow.forcedBoundary && flow.interruptedRole) {
       const role = flow.interruptedRole;
@@ -1306,7 +1314,9 @@ async function runApprovalFlow(comment, candidate) {
       await approvalStep(flow, "checkpoint-resume-injected", `Executor ${role} accepted checkpoint resume for ${resumedPrompt.projectDir}.`);
     }
 
-    await resumeApprovalPause(flow, `Completed runtime approval ${flow.id}; hidden executors restarted`);
+    await resumeApprovalPause(flow, `Completed runtime approval ${flow.id}; Executor A restarted from verified candidate`);
+    const stopBOutput = await powershell("-File", path.join(here, "stop-reciprocal-tandem.ps1"), "-Role", "B", "-RelayRoot", relayRoot);
+    await approvalStep(flow, "recovery-authority-stopped", stopBOutput || "Executor B stopped after A returned healthy.");
     flow.status = "completed";
     flow.current = "complete";
     flow.completedAt = new Date().toISOString();

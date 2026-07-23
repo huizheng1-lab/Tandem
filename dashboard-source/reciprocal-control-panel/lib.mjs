@@ -45,17 +45,24 @@ export function capabilityVersion(source, name) {
   return Number.isFinite(value) ? value : 0;
 }
 
-export function candidatePreviewArtifactCapabilityStatus({ producer = null, runtimeA = null, runtimeB = null } = {}) {
+export function candidatePreviewArtifactCapabilityStatus({ producer = null, runtimeA = null, runtimeB = null, topology = null } = {}) {
   const capability = "candidatePreviewArtifactLifecycle";
   const required = requiredReciprocalCapabilities[capability];
-  const components = [
+  const bExpectedOnline = topology?.expectedOnline?.B !== false;
+  const bRunning = Boolean(runtimeB?.running);
+  const rawComponents = [
     { key: "producer", label: "Producer relay", version: capabilityVersion(producer, capability), path: producer?.path || producer?.workspace || null, sha: producer?.sha || producer?.sourceSha || null },
     { key: "runtimeA", label: "Executor A runtime", version: capabilityVersion(runtimeA?.buildInfo || runtimeA, capability), path: runtimeA?.path || null, sha: runtimeA?.buildInfo?.sourceSha || runtimeA?.sourceSha || null },
-    { key: "runtimeB", label: "Executor B runtime", version: capabilityVersion(runtimeB?.buildInfo || runtimeB, capability), path: runtimeB?.path || null, sha: runtimeB?.buildInfo?.sourceSha || runtimeB?.sourceSha || null },
-  ].map((component) => ({
+  ];
+  if (bExpectedOnline || bRunning) {
+    rawComponents.push({ key: "runtimeB", label: "Executor B runtime", version: capabilityVersion(runtimeB?.buildInfo || runtimeB, capability), path: runtimeB?.path || null, sha: runtimeB?.buildInfo?.sourceSha || runtimeB?.sourceSha || null });
+  } else {
+    rawComponents.push({ key: "runtimeB", label: "Executor B runtime", version: required, path: runtimeB?.path || null, sha: runtimeB?.buildInfo?.sourceSha || runtimeB?.sourceSha || null, dormant: true });
+  }
+  const components = rawComponents.map((component) => ({
     ...component,
     required,
-    ok: component.version >= required,
+    ok: component.dormant || component.version >= required,
     shortSha: shortSha(component.sha),
   }));
   const missing = components.filter((component) => !component.ok);
@@ -65,7 +72,9 @@ export function candidatePreviewArtifactCapabilityStatus({ producer = null, runt
     actual: { [capability]: missing.length === 0 ? required : 0 },
     components,
     message: missing.length === 0
-      ? "Artifact build workflow ready."
+      ? components.some((component) => component.dormant)
+        ? "Artifact build workflow ready; dormant Executor B will be verified when recovery authority is required."
+        : "Artifact build workflow ready."
       : `Artifact build workflow requires Reciprocal executor upgrade: ${missing.map((component) => `${component.label} has v${component.version}`).join("; ")}; required v${required}.`,
   };
 }
