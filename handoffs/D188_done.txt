@@ -1,0 +1,34 @@
+Round: D188
+
+Commits:
+- 218361fca47e2c593427f5fe4032bdc584b076c7 D188-1: cover relay safety regressions
+
+Defects found and fixed:
+- Closed the stable-baseline raw command grammar escape that allowed hidden trailing Vitest options such as --config and --setupFiles.
+- Made supervisor canonical relay-state writes atomic and capped at the same 5 MB limit used by relay state reads/writes.
+- Made recovery reject missing bounded-prefix candidateCommit or stableCommit instead of substituting relay refs.
+
+Added regression tests:
+- D188: B promotion lifecycle failures are not replayed as stable baseline controls; proves operationKind=b-runtime-promotion, baseline replay skipped, sentinel runs once, and B runtime is not promoted.
+- D188: B launch lifecycle failures are not replayed and do not leave a running B; proves operationKind=b-runtime-launch, baseline replay skipped, sentinel runs once, journal boundary is b-start-started, and no B automation token is produced.
+- D188: stable baseline command grammar rejects hidden executable options; covers --config, --setupFiles, traversal, and extra non-test tokens while existing positive npm/vitest commands remain supported.
+- D188: persisted diagnostics are limited by UTF-8 bytes; uses multibyte output and asserts the persisted diagnostic cap by byte count.
+- D188: repeated mutating failure saves preserve non-timestamp evidence; repeats Resume -> PassiveTest saves and compares semantic failure identities/classification while asserting byte caps.
+- D188: invalid relay state fails closed without mutation; writes invalid UTF-8 bytes and proves Status rejects without replacing the file.
+- D188: recovery rejects missing prefix candidate or stable commits; proves compact recovery refuses missing candidateCommit/stableCommit and leaves the original state in place.
+- D188 retries a machine-origin environment failure with exactly one Resume and PassiveTest; uses an isolated fake relay script and asserts the exact action sequence.
+- D188 backs off and hard-blocks repeated environment failures without retrying; asserts no Resume/PassiveTest while backed off or hard-blocked.
+- D188 canonical relay-state writes are atomic and size capped; proves normal state repair writes succeed and oversized serialized state fails without replacing the prior valid state.
+
+Verification:
+- npm test -- tests/reciprocal-relay.test.ts -t "D188" --reporter=dot
+- npm test -- tests/reciprocal-supervisor.test.ts -t "D188" --reporter=dot
+- npm test -- tests/reciprocal-relay.test.ts --reporter=dot
+- npm test -- tests/reciprocal-supervisor.test.ts --reporter=dot
+- npm run typecheck
+- npm test
+- git diff --check
+
+Safety notes:
+- Did not touch live relay state, the D187 quarantine file, W0027 pause state, reciprocal worktrees, or reciprocal runtimes.
+- Left unrelated modified scripts/setup-reciprocal-tandem.ps1 and untracked handoff/docs/files untouched.
