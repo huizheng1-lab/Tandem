@@ -347,6 +347,19 @@ test("D181 failed A restart leaves B online as recovery authority", async (t) =>
   const state = await readJson(fixture.statePath);
   assert.equal(state.phase, "a-upgrade-pending");
   assert.equal(state.activeRole, null);
+
+  await withServer(t, fixture, async ({ post }) => {
+    const { response, result } = await post("/api/update/approve", { comment: "retry after A restart failure" });
+    assert.equal(response.status, 200, JSON.stringify(result));
+    assert.equal(result.ok, true);
+    assert.equal(result.result.current, "complete");
+    assert.match(result.result.steps.find((step) => step.step === "review-recorded")?.detail || "", /already recorded/);
+  });
+  const recoveredState = await readJson(fixture.statePath);
+  assert.equal(recoveredState.phase, "idle");
+  assert.equal(recoveredState.nextRole, "A");
+  const audit = await readJsonl(fixture.auditPath);
+  assert.equal(audit.filter((entry) => entry.action === "update.review" && entry.decision === "approve").length, 1);
 });
 
 test("authority flow uses authenticated dashboard API to approve one relay checkpoint", async (t) => {

@@ -1293,8 +1293,12 @@ async function runApprovalFlow(comment, candidate) {
     const boundary = await waitForApprovalBoundary(flow);
     flow.forcedBoundary = boundary.forced;
     await prepareRecoveryAuthority(flow, candidate);
-    await recordUpdateReview("approve", comment, candidate);
-    await approvalStep(flow, "review-recorded", `Approved candidate ${candidate.shortSha}.`);
+    if (candidate.reviewed?.decision === "approve") {
+      await approvalStep(flow, "review-recorded", `Approved candidate ${candidate.shortSha}; review was already recorded, continuing idempotent recovery.`);
+    } else {
+      await recordUpdateReview("approve", comment, candidate);
+      await approvalStep(flow, "review-recorded", `Approved candidate ${candidate.shortSha}.`);
+    }
 
     const stopOutput = await powershell("-File", path.join(here, "stop-reciprocal-tandem.ps1"), "-Role", "A", "-RelayRoot", relayRoot);
     flow.executorsStopped = true;
@@ -1784,7 +1788,8 @@ async function handle(request, response) {
     if (url.pathname === "/api/update/approve") {
       const comment = String(input.comment || "").replace(/\r\n/g, "\n").trim();
       if (approvalFlow && ["running", "waiting"].includes(approvalFlow.status)) throw new Error("A runtime approval is already in progress.");
-      const { candidate } = await currentCandidateOrThrow();
+      const { candidate } = await currentCandidateOrThrow({ allowReviewed: true });
+      if (candidate.reviewed && candidate.reviewed.decision !== "approve") throw new Error(`Candidate ${candidate.shortSha} was already reviewed as ${candidate.reviewed.decision}.`);
       approvalFlow = {
         id: `approval-${Date.now()}`,
         status: "running",
