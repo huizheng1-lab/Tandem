@@ -1,0 +1,32 @@
+Round: D187
+
+Commits:
+- ce1de0f432ebc11e35d46c8b79bd4ddb241d2fc7 D187-1: harden relay state recovery
+
+Live state recovery:
+- Recovered .git/tandem-relay/state.json through scripts/recover-reciprocal-relay-state.ps1.
+- Quarantined oversized original at .git/tandem-relay/state.quarantine-D187-20260723-144829.json.
+- Old state: 2055230520 bytes, SHA256 6547EDAA1F64978AE45A1ED540031F701D307034BDAC419E35F6D73A5D0889F3.
+- New state: 4422 bytes, SHA256 0DE036357A0A5225855102A971E0F9BFD88CDA6EAF2F5BAB516858387FA1D33B.
+- Preserved W0027 hard gate: phase=paused, pausedFromPhase=passive-testing, pauseOrigin=machine, pauseReasonCode=candidate-failure.
+- Preserved refs/invariants: candidateCommit=83421bbc0cd5a8dd2832f194b66e8bf8e9d72eb1, stableCommit=c06f659dada66addba6d92506c5632a6cb37221e.
+- Proved 100 Status reads are byte-stable after recovery: 4422 bytes before/after, SHA256 0DE036357A0A5225855102A971E0F9BFD88CDA6EAF2F5BAB516858387FA1D33B before/after, updatedAt unchanged.
+- Deployed dashboard only through scripts/deploy-reciprocal-dashboard.ps1 after dashboard source changed; VerifyOnly passed with no planned updates.
+- Rechecked live state with dashboard and Executor A running; bytes/hash stayed unchanged and W0027 remained paused candidate-failure.
+
+Verification:
+- npm test -- tests/reciprocal-relay.test.ts -t "D187|D185|D186" --reporter=dot
+- npm test -- tests/reciprocal-supervisor.test.ts --reporter=dot
+- npm test -- tests/candidate-preview-smoke.test.ts tests/reciprocal-candidate-commit.test.ts --reporter=dot
+- npm test -- tests/reciprocal-relay.test.ts --reporter=dot
+- node dashboard-source/reciprocal-control-panel/lib.nodecheck.mjs
+- node dashboard-source/reciprocal-control-panel/approval-flow.e2e.mjs
+- powershell -NoProfile -ExecutionPolicy Bypass -File scripts/deploy-reciprocal-dashboard.ps1 -VerifyOnly
+- npm run typecheck
+- npm test
+- git diff --check
+
+Safety notes:
+- Did not Resume, PassiveTest, Accept, exonerate, approve, or advance W0027.
+- Did not modify reciprocal worktrees or W0027 runtimes.
+- Left unrelated modified scripts/setup-reciprocal-tandem.ps1 and untracked handoff docs/files untouched.
