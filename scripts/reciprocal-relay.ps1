@@ -292,6 +292,11 @@ try {
             } catch {
                 throw "Runtime recovery journal is unreadable: $($_.Exception.Message)"
             }
+            if (([string]$existing.sourceSha -ne $SourceSha -or [string]$existing.packageIdentity -ne $PackageIdentity) -and $Stage -eq "package-ready") {
+                $existing = $null
+            }
+        }
+        if ($existing) {
             if ([string]$existing.sourceSha -ne $SourceSha) { throw "Runtime recovery journal source mismatch: $($existing.sourceSha) != $SourceSha" }
             if ([string]$existing.packageIdentity -ne $PackageIdentity) { throw "Runtime recovery journal package mismatch: $($existing.packageIdentity) != $PackageIdentity" }
             if ($existing.immutablePackagePath -and ([IO.Path]::GetFullPath([string]$existing.immutablePackagePath) -ine [IO.Path]::GetFullPath($ImmutablePackagePath))) {
