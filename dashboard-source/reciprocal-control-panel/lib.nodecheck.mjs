@@ -4,6 +4,7 @@ import {
   approvalBoundaryPlan,
   approvalFailureDetail,
   approvalCompletionRelayAction,
+  approvalFlowRuntimeTopology,
   approvalRemainingActions,
   candidatePreviewArtifactCapabilityStatus,
   classifyReciprocalGate,
@@ -185,6 +186,20 @@ test("D181 expected runtime topology starts B only as recovery authority", () =>
   assert.deepEqual(pending.expectedOnline, { A: false, B: true });
   assert.equal(runtimeTopologyHealth(pending, { a: { running: false }, b: { running: true } }).ok, true);
   assert.equal(runtimeTopologyHealth(pending, { a: { running: true }, b: { running: true } }).ok, false);
+});
+
+test("D181 approval flow topology reports launch, upgrade, and B-stop phases", () => {
+  assert.deepEqual(approvalFlowRuntimeTopology({ status: "running", current: "recovery-authority-promoted" }), {
+    key: "b-launch-verification",
+    label: "B launch verification",
+    expectedOnline: { A: true, B: true },
+    startRole: "B",
+    normalOnlineText: "A remains online while B is verified",
+    detail: "Executor B is being launched from the exact verified candidate while Executor A remains the known-good producer.",
+  });
+  assert.equal(approvalFlowRuntimeTopology({ status: "running", current: "runtime-a-promoted" }).key, "b-recovery-upgrading-a");
+  assert.equal(approvalFlowRuntimeTopology({ status: "running", current: "a-upgrade-completed" }).key, "a-healthy-stopping-b");
+  assert.equal(approvalFlowRuntimeTopology({ status: "completed", current: "complete" }), null);
 });
 
 test("approval completion closes the A-upgrade gate instead of resuming it", () => {

@@ -122,6 +122,41 @@ export function expectedRuntimeTopology(state = {}) {
   };
 }
 
+export function approvalFlowRuntimeTopology(flow = null) {
+  if (!flow || !["running", "waiting"].includes(flow.status)) return null;
+  if (flow.current === "recovery-authority-promoted" || flow.recoveryStage === "b-runtime-start") {
+    return {
+      key: "b-launch-verification",
+      label: "B launch verification",
+      expectedOnline: { A: true, B: true },
+      startRole: "B",
+      normalOnlineText: "A remains online while B is verified",
+      detail: "Executor B is being launched from the exact verified candidate while Executor A remains the known-good producer.",
+    };
+  }
+  if (["executor-a-stopped", "runtime-a-promoted"].includes(flow.current)) {
+    return {
+      key: "b-recovery-upgrading-a",
+      label: "B recovery authority / upgrading A",
+      expectedOnline: { A: false, B: true },
+      startRole: "B",
+      normalOnlineText: "B online while A is upgraded",
+      detail: "Executor B is the verified recovery authority while Executor A is stopped and promoted.",
+    };
+  }
+  if (flow.current === "executor-a-restarted" || flow.current === "a-upgrade-completed") {
+    return {
+      key: "a-healthy-stopping-b",
+      label: "A healthy / stopping B",
+      expectedOnline: { A: true, B: true },
+      startRole: null,
+      normalOnlineText: "A and B online briefly while B is stopped",
+      detail: "Executor A has restarted from the verified candidate; Executor B should be stopped before normal idle resumes.",
+    };
+  }
+  return null;
+}
+
 export function runtimeTopologyHealth(topology, runtimes = {}) {
   const aRunning = Boolean(runtimes.a?.running ?? runtimes.A?.running);
   const bRunning = Boolean(runtimes.b?.running ?? runtimes.B?.running);

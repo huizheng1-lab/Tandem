@@ -9,6 +9,7 @@ import {
   approvalBoundaryPlan,
   approvalFailureDetail,
   approvalCompletionRelayAction,
+  approvalFlowRuntimeTopology,
   approvalRemainingActions,
   candidatePreviewArtifactCapabilityStatus,
   capabilityVersion,
@@ -899,7 +900,7 @@ async function getStatus() {
     runtime.lagsMaster = Boolean(!sourceSha || (masterHead && sourceSha !== masterHead));
   }
   const candidateUpdate = await getCandidateUpdate(runtimeA, runtimeB, state, updateReviewIndex);
-  const runtimeTopology = expectedRuntimeTopology(state);
+  const runtimeTopology = approvalFlowRuntimeTopology(approvalFlow) || expectedRuntimeTopology(state);
   const topologyHealth = runtimeTopologyHealth(runtimeTopology, { a: runtimeA, b: runtimeB });
   const artifactCapability = await getArtifactCapabilityStatus(runtimeA, runtimeB, producerRelay, runtimeTopology);
   artifactCapability.activationPlan = artifactCapabilityActivationPlan({ masterHead, relayState: state, candidateUpdate, runtimeA, runtimeB, capability: artifactCapability });
