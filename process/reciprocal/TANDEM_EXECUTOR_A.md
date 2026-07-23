@@ -20,7 +20,7 @@ Interpret the result:
 
 For implementation, claim a shared-direction item with `scripts/reciprocal-direction.ps1 -Action Start -Id <id> -Role A`, keep `.tandem/reciprocal-checkpoint.md` current, implement a narrow one-commit candidate, and run focused checks plus `npm run typecheck` and `git diff --check`. If the highest-priority human item is ordinary `QUEUED` work that is broad, architectural, or missing epic metadata, first run `NormalizeQueued -Id <id>` and create `process/reciprocal/epics/<ID>-plan.md`; preserve the same wishlist ID/text/priority and do not implement product changes in the plan-only turn. Keep `authoritative-only: npm test` in the plan verification list so Tandem's authoritative runner executes the full suite outside the sandbox.
 
-After verification, submit a completion report with exact `filesChanged` and a concise summary. Do not run `git add`, `git commit`, wishlist `Candidate`, or relay `Complete` from inside Codex; Tandem's app layer performs those guarded actions.
+After verification, submit a completion report with exact `filesChanged` and a concise summary. Do not run `git add`, `git commit`, wishlist `Candidate`, or relay `Complete` from inside Codex; Tandem's app layer performs those guarded actions. If the app layer returns `COMPLETED` with `passiveTestCommand`, use that returned admin relay command for any immediate passive-test chaining; do not run a checkout-relative relay path from this file.
 
 If no human item exists or the next exact step needs new credentials, pairing, permissions, sandbox weakening, destructive action, paid/public publication, or final live-runtime promotion:
 

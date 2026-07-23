@@ -313,6 +313,8 @@ server.listen(port, "127.0.0.1");
     await execa("git", ["commit", "-m", "candidate"], { cwd: repo });
     const completed = await relay(repo, "-Action", "Complete", "-Role", "A", "-Summary", "candidate ready");
     expect(completed).toMatchObject({ outcome: "COMPLETED", phase: "passive-testing", nextRole: "A", activeRole: null });
+    expect(completed.passiveTestCommand).toContain(path.resolve("scripts", "reciprocal-relay.ps1"));
+    expect(completed.passiveTestCommand).not.toContain("-File scripts/reciprocal-relay.ps1");
     return completed.candidateCommit as string;
   }
 
@@ -326,6 +328,8 @@ server.listen(port, "127.0.0.1");
     await execa("git", ["commit", "-m", "candidate"], { cwd: repo });
     const completed = await relay(repo, "-Action", "Complete", "-Role", "A", "-Summary", "candidate ready");
     expect(completed).toMatchObject({ outcome: "COMPLETED", phase: "passive-testing", nextRole: "A", activeRole: null });
+    expect(completed.passiveTestCommand).toContain(path.resolve("scripts", "reciprocal-relay.ps1"));
+    expect(completed.passiveTestCommand).not.toContain("-File scripts/reciprocal-relay.ps1");
     return completed.candidateCommit as string;
   }
 
@@ -1576,6 +1580,47 @@ it("suite > admin gate evidence", () => expect(1).toBe(2));
       await rm(repo, { recursive: true, force: true });
     }
   }, 90_000);
+
+  windowsIt("D192: stale schema-2 relay refuses schema-3 active state without evidence-free pause", async () => {
+    const repo = await mkdtemp(path.join(tmpdir(), "tandem-relay-d192-schema-boundary-"));
+    try {
+      await initRepo(repo);
+      const candidateCommit = await createCandidate(repo);
+      const statePath = path.join(repo, ".git", "tandem-relay", "state.json");
+      const downgraded = JSON.parse(await readFile(statePath, "utf8"));
+      downgraded.schemaVersion = 2;
+      delete downgraded.schemaMigratedFrom;
+      delete downgraded.schemaMigratedAtUtc;
+      delete downgraded.schemaMigrationReason;
+      await writeFile(statePath, `${JSON.stringify(downgraded, null, 2)}\n`, "utf8");
+      const migrated = await relay(repo, "-Action", "Status");
+      expect(migrated).toMatchObject({ phase: "passive-testing", candidateCommit });
+      const before = JSON.parse(await readFile(statePath, "utf8"));
+      expect(before).toMatchObject({ schemaVersion: 3, schemaMigratedFrom: 2, schemaMigrationReason: "D192 stale-relay hard boundary", phase: "passive-testing", candidateCommit, passiveFailure: null });
+
+      const staleScript = path.join(repo, "scripts", "stale-schema2-relay.ps1");
+      await writeFile(
+        staleScript,
+        `
+$statePath = Join-Path (git rev-parse --git-common-dir) "tandem-relay\\state.json"
+$state = Get-Content -LiteralPath $statePath -Raw | ConvertFrom-Json
+if ($state.schemaVersion -ne 2) {
+  if ($state.activeRole -or $state.phase -ne "idle") {
+    throw "stale relay rejected unsupported schemaVersion $($state.schemaVersion) while phase=$($state.phase)"
+  }
+}
+throw "stale relay unexpectedly continued"
+`,
+        "utf8",
+      );
+
+      await expect(execa("powershell", ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", staleScript], { cwd: repo })).rejects.toThrow(/unsupported schemaVersion 3|stale relay rejected/i);
+      const after = JSON.parse(await readFile(statePath, "utf8"));
+      expect(after).toMatchObject({ schemaVersion: 3, phase: "passive-testing", candidateCommit, passiveFailure: null });
+    } finally {
+      await rm(repo, { recursive: true, force: true });
+    }
+  }, 60_000);
 
   windowsIt("D187: oversized relay state fails closed before whole-file parsing", async () => {
     const repo = await mkdtemp(path.join(tmpdir(), "tandem-relay-d187-oversized-"));

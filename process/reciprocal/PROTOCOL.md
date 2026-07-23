@@ -4,7 +4,7 @@ This protocol keeps the two-copy self-modification safety boundary while removin
 
 ## State Machine
 
-The relay state lives in the common git directory under `tandem-relay/state.json`, with durable refs for `refs/tandem-relay/stable`, `refs/tandem-relay/candidate`, and rollback recovery.
+The relay state lives in the common git directory under `tandem-relay/state.json`, with durable refs for `refs/tandem-relay/stable`, `refs/tandem-relay/candidate`, and rollback recovery. The state schema is also a hard gate-version boundary: current admin relay scripts may explicitly migrate the previous schema once, but checkout/stale relay scripts must fail closed on an unsupported schema instead of running old passive-test logic.
 
 Normal lifecycle:
 
@@ -58,7 +58,7 @@ Run focused tests for changed behavior plus, at minimum:
 
 The plan must still list `authoritative-only: npm test`; Tandem's authoritative runner executes the full suite outside the producing Codex sandbox after the worker returns. The passive gate repeats the full suite mechanically before trust advances.
 
-Never run `git add`, `git commit`, wishlist `Candidate`, or relay `Complete` inside the sandboxed producer turn. Return a completion report with exact `filesChanged` and a concise summary. The app layer performs the guarded commit and relay completion.
+Never run `git add`, `git commit`, wishlist `Candidate`, or relay `Complete` inside the sandboxed producer turn. Return a completion report with exact `filesChanged` and a concise summary. The app layer performs the guarded commit and relay completion. If the app layer returns `COMPLETED` with a `passiveTestCommand`, that returned command is the only valid immediate passive-test chain command; it points at the current admin relay script and supersedes any checkout-injected template text.
 
 ## Passive B Gate
 

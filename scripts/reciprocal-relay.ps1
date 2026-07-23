@@ -41,6 +41,7 @@ $ResumePauseThreshold = 3
 $CandidatePreviewArtifactCapability = 1
 $MaxRelayStateBytes = 5MB
 $Utf8StrictNoBom = [Text.UTF8Encoding]::new($false, $true)
+$RelayStateSchemaVersion = 3
 
 function Read-Utf8JsonFile([string]$Path, [Int64]$MaxBytes = 0) {
     if (-not (Test-Path -LiteralPath $Path)) { return $null }
@@ -147,7 +148,7 @@ function Get-RoleConfig([string]$SelectedRole) {
 
 function New-RelayState([string]$StableCommit) {
     return [ordered]@{
-        schemaVersion = 2
+        schemaVersion = $RelayStateSchemaVersion
         turn = 1
         nextRole = "A"
         activeRole = $null
@@ -197,15 +198,22 @@ $mutex = [Threading.Mutex]::new($false, $mutexName)
 if (-not $mutex.WaitOne(5000)) { throw "Timed out waiting for the reciprocal relay lock." }
 
 try {
+    $stateSchemaMigrated = $false
     $state = if (Test-Path -LiteralPath $statePath) {
         Read-Utf8JsonFile $statePath $MaxRelayStateBytes
     } else {
         [pscustomobject](New-RelayState $currentHead)
     }
 
-    if ($state.schemaVersion -ne 2) {
+    if ($state.schemaVersion -eq 2) {
+        $state.schemaVersion = $RelayStateSchemaVersion
+        $state | Add-Member -NotePropertyName schemaMigratedFrom -NotePropertyValue 2 -Force
+        $state | Add-Member -NotePropertyName schemaMigratedAtUtc -NotePropertyValue ((Get-Date).ToUniversalTime().ToString("o")) -Force
+        $state | Add-Member -NotePropertyName schemaMigrationReason -NotePropertyValue "D192 stale-relay hard boundary" -Force
+        $stateSchemaMigrated = $true
+    } elseif ($state.schemaVersion -ne $RelayStateSchemaVersion) {
         if ($state.activeRole -or $state.phase -ne "idle") {
-            throw "Relay state predates rollback support and has active work. Inspect it, then run a human Reset only after recovery."
+            throw "Relay state schemaVersion $($state.schemaVersion) is not supported by this relay (expected $RelayStateSchemaVersion) while phase=$($state.phase). Use the current admin relay script or reviewed recovery."
         }
         $state = [pscustomobject](New-RelayState $currentHead)
     }
@@ -410,6 +418,10 @@ try {
         $state.updatedAt = (Get-Date).ToUniversalTime().ToString("o")
         Write-Utf8JsonFileAtomic $statePath $state 12 $MaxRelayStateBytes
         Update-RelayRefs
+    }
+
+    if ($stateSchemaMigrated) {
+        Save-State
     }
 
     function Write-Result([string]$Outcome, [object]$Extra) {
@@ -2489,7 +2501,10 @@ try {
     $state.lastSummary = $Summary.Trim()
     Save-State
     Remove-Item -LiteralPath (Join-Path $Workspace ".tandem\reciprocal-checkpoint.md") -Force -ErrorAction SilentlyContinue
-    Write-Result "COMPLETED"
+    $adminRelayScript = Join-Path $PSScriptRoot "reciprocal-relay.ps1"
+    Write-Result "COMPLETED" ([pscustomobject]@{
+        passiveTestCommand = "powershell -NoProfile -ExecutionPolicy Bypass -File `"$adminRelayScript`" -Action PassiveTest -Role A"
+    })
 } finally {
     $mutex.ReleaseMutex()
     $mutex.Dispose()

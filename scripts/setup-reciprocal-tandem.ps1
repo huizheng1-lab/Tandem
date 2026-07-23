@@ -75,7 +75,8 @@ function Initialize-ExecutorState([string]$Role, [string]$TargetWorktree) {
 }
 
 function Initialize-Schedule([string]$TargetWorktree, [string]$Role, [string]$Cron) {
-    $prompt = "Follow the injected TANDEM.md and execute one reciprocal improvement invocation as Executor A. Begin with the Claim command. If the relay reports PASSIVE_TEST, run the passive test command instead of starting new work. If it reports A_UPGRADE_PENDING, stop for the human gate."
+    $adminRelayScript = Join-Path $SourceRepo "scripts\reciprocal-relay.ps1"
+    $prompt = "Follow the injected TANDEM.md and execute one reciprocal improvement invocation as Executor A. Begin with the admin relay Claim command: powershell -NoProfile -ExecutionPolicy Bypass -File `"$adminRelayScript`" -Action Claim -Role A. If the relay reports PASSIVE_TEST, run the returned admin-script passive test command instead of starting new work. If Complete returns passiveTestCommand, use that returned admin-script command for immediate passive testing. If it reports A_UPGRADE_PENDING, stop for the human gate."
     $schedule = @([ordered]@{
         id = "relay-$($Role.ToLowerInvariant())"
         cron = $Cron

@@ -128,7 +128,7 @@ try {
     if (-not $failureName) { $failureName = "candidate validation failure" }
 
     $compactState = [ordered]@{
-        schemaVersion = 2
+        schemaVersion = 3
         turn = 1
         nextRole = "A"
         activeRole = $null
