@@ -49,6 +49,38 @@ function Assert-UnderRoot([string]$Path, [string]$Root) {
     return $fullPath
 }
 
+function Get-FileSha256([string]$Path) {
+    return (Get-FileHash -Algorithm SHA256 -LiteralPath $Path).Hash
+}
+
+function Get-RuntimePackageManifest([string]$Root) {
+    $rootFull = [IO.Path]::GetFullPath($Root).TrimEnd('\')
+    @(Get-ChildItem -LiteralPath $Root -Recurse -File -Force | Where-Object {
+        $_.Name -ne "BUILD_INFO.json"
+    } | Sort-Object FullName | ForEach-Object {
+        $relative = $_.FullName.Substring($rootFull.Length).TrimStart('\') -replace '\\','/'
+        [ordered]@{
+            path = $relative
+            sha256 = Get-FileSha256 $_.FullName
+            bytes = [int64]$_.Length
+        }
+    })
+}
+
+function Get-PackageIdentity([string]$SourceSha, [object[]]$Manifest, [object]$Capabilities) {
+    $payload = [ordered]@{
+        sourceSha = $SourceSha
+        manifest = $Manifest
+        reciprocalCapabilities = $Capabilities
+    } | ConvertTo-Json -Depth 12 -Compress
+    $sha = [Security.Cryptography.SHA256]::Create()
+    try {
+        return ([BitConverter]::ToString($sha.ComputeHash([Text.Encoding]::UTF8.GetBytes($payload)))).Replace("-", "")
+    } finally {
+        $sha.Dispose()
+    }
+}
+
 $Workspace = (Resolve-Path -LiteralPath $Workspace).Path
 if (-not $AdminRepo.Trim()) {
     $commonRaw = (& git -C $Workspace rev-parse --git-common-dir).Trim()
@@ -101,17 +133,22 @@ Invoke-WithRetry "remove stale runtime backup directory" { Remove-Item -LiteralP
 New-Item -ItemType Directory -Path $stagingDir -Force | Out-Null
 Get-ChildItem -LiteralPath $freshWinUnpacked -Force | Copy-Item -Destination $stagingDir -Recurse -Force
 
+$capabilities = [ordered]@{
+    candidatePreviewArtifactLifecycle = 1
+}
+$packageManifest = Get-RuntimePackageManifest $stagingDir
+$packageIdentity = Get-PackageIdentity $SourceSha $packageManifest $capabilities
 $buildInfo = [ordered]@{
     sourceSha = $SourceSha
     sourceShortSha = $shortSha
     sourceBranch = $sourceBranch
     builtAt = (Get-Date).ToUniversalTime().ToString("o")
     artifact = "release/win-unpacked"
+    packageIdentity = $packageIdentity
+    packageManifest = $packageManifest
     packagedBy = "scripts/package-passive-runtime.ps1"
     passiveWorkspace = $Workspace
-    reciprocalCapabilities = [ordered]@{
-        candidatePreviewArtifactLifecycle = 1
-    }
+    reciprocalCapabilities = $capabilities
 }
 $buildInfoJson = $buildInfo | ConvertTo-Json -Depth 5
 [IO.File]::WriteAllText((Join-Path $stagingDir "BUILD_INFO.json"), $buildInfoJson + [Environment]::NewLine, [Text.UTF8Encoding]::new($false))
@@ -155,6 +192,9 @@ $writtenInfo = Get-Content -LiteralPath (Join-Path $targetDir "BUILD_INFO.json")
 if ([string]$writtenInfo.sourceSha -ne $SourceSha) {
     throw "Canonical passive runtime BUILD_INFO sourceSha mismatch: $($writtenInfo.sourceSha) != $SourceSha"
 }
+if ([string]$writtenInfo.packageIdentity -ne $packageIdentity) {
+    throw "Canonical passive runtime package identity mismatch: $($writtenInfo.packageIdentity) != $packageIdentity"
+}
 
 [pscustomobject]@{
     sourceSha = $SourceSha
@@ -163,5 +203,7 @@ if ([string]$writtenInfo.sourceSha -ne $SourceSha) {
     targetDir = $targetDir
     exe = (Join-Path $targetDir "Tandem.exe")
     buildInfoPath = (Join-Path $targetDir "BUILD_INFO.json")
+    packageIdentity = $packageIdentity
+    packageManifest = $packageManifest
     preparedInput = if ($usedPrepared) { $freshWinUnpacked } else { $null }
 } | ConvertTo-Json -Depth 5

@@ -153,7 +153,7 @@ $commonDir = if ([IO.Path]::IsPathRooted($commonRaw)) { $commonRaw } else { [IO.
     $relayDir = Join-Path $commonDir "tandem-relay"
     $statePath = Join-Path $relayDir "state.json"
     $adminRepo = Split-Path $commonDir -Parent
-    $defaultRelayRoot = Join-Path (Split-Path $adminRepo -Parent) "Tandem Reciprocal"
+    $defaultRelayRoot = if ($env:TANDEM_RECIPROCAL_ROOT) { $env:TANDEM_RECIPROCAL_ROOT } else { Join-Path (Split-Path $adminRepo -Parent) "Tandem Reciprocal" }
 New-Item -ItemType Directory -Path $relayDir -Force | Out-Null
 
 $sha = [Security.Cryptography.SHA256]::Create()
@@ -208,6 +208,101 @@ try {
     }
     if (-not $state.PSObject.Properties["runtimeRecoveryStage"]) {
         $state | Add-Member -NotePropertyName runtimeRecoveryStage -NotePropertyValue $null
+    }
+
+    $runtimeRecoveryJournalPath = Join-Path $defaultRelayRoot "state\runtime-recovery-flow.json"
+    $durableRecoveryStages = @(
+        "package-ready",
+        "b-promote-started",
+        "b-promoted",
+        "b-start-started",
+        "b-started",
+        "b-verified",
+        "approval-recorded",
+        "a-stop-started",
+        "a-stopped",
+        "a-promote-started",
+        "a-promoted",
+        "a-start-started",
+        "a-started",
+        "a-verified",
+        "relay-completed",
+        "b-stop-started",
+        "b-stopped"
+    )
+
+    function Save-RuntimeRecoveryJournal {
+        param(
+            [string]$Stage,
+            [string]$SourceSha,
+            [string]$PackageIdentity,
+            [object]$Proof = $null,
+            [string]$Status = "running"
+        )
+        if (-not $SourceSha) { throw "Runtime recovery journal requires source SHA." }
+        if (-not $PackageIdentity) { throw "Runtime recovery journal requires package identity." }
+        $stageIndex = [Array]::IndexOf($durableRecoveryStages, $Stage)
+        if ($stageIndex -lt 0) { throw "Unknown runtime recovery stage: $Stage" }
+        $existing = $null
+        if (Test-Path -LiteralPath $runtimeRecoveryJournalPath) {
+            try {
+                $existing = Get-Content -LiteralPath $runtimeRecoveryJournalPath -Raw | ConvertFrom-Json
+            } catch {
+                throw "Runtime recovery journal is unreadable: $($_.Exception.Message)"
+            }
+            if ([string]$existing.sourceSha -ne $SourceSha) { throw "Runtime recovery journal source mismatch: $($existing.sourceSha) != $SourceSha" }
+            if ([string]$existing.packageIdentity -ne $PackageIdentity) { throw "Runtime recovery journal package mismatch: $($existing.packageIdentity) != $PackageIdentity" }
+            $existingIndex = [Array]::IndexOf($durableRecoveryStages, [string]$existing.stage)
+            if ($existingIndex -gt $stageIndex) { throw "Runtime recovery journal refuses stage regression: $($existing.stage) -> $Stage" }
+        }
+        $existingProof = if ($existing -and $existing.proof) { $existing.proof } else { [pscustomobject]@{} }
+        $proofObject = [ordered]@{}
+        foreach ($property in @($existingProof.PSObject.Properties)) { $proofObject[$property.Name] = $property.Value }
+        if ($Proof) {
+            foreach ($property in @($Proof.PSObject.Properties)) { $proofObject[$property.Name] = $property.Value }
+        }
+        $journal = [ordered]@{
+            schemaVersion = 1
+            id = if ($existing -and $existing.id) { [string]$existing.id } else { "relay-recovery-$((Get-Date).ToUniversalTime().ToString('yyyyMMddHHmmss'))-$PID" }
+            status = $Status
+            stage = $Stage
+            durableStages = $durableRecoveryStages
+            sourceSha = $SourceSha
+            candidateShortSha = if ($SourceSha.Length -ge 7) { $SourceSha.Substring(0, 7) } else { $SourceSha }
+            packageIdentity = $PackageIdentity
+            approvalReviewKey = $SourceSha
+            expected = [ordered]@{
+                worktrees = [ordered]@{
+                    A = (Join-Path $defaultRelayRoot "worktrees\copy-b")
+                    B = (Join-Path $defaultRelayRoot "worktrees\copy-a")
+                }
+                endpoints = [ordered]@{
+                    A = (Join-Path $defaultRelayRoot "state\executor-a\automation.json")
+                    B = (Join-Path $defaultRelayRoot "state\executor-b\automation.json")
+                }
+            }
+            previousStableA = if ($existing -and $existing.previousStableA) { $existing.previousStableA } else { $state.stableCommit }
+            interruptedPhase = if ($existing -and $existing.interruptedPhase) { $existing.interruptedPhase } else { "a-upgrade-pending" }
+            interruptedRole = if ($existing) { $existing.interruptedRole } else { $null }
+            flags = [ordered]@{
+                pausedByFlow = $false
+                relayResumed = $false
+                recoveryAuthorityReady = $stageIndex -ge ([Array]::IndexOf($durableRecoveryStages, "b-verified"))
+                executorsStopped = $stageIndex -ge ([Array]::IndexOf($durableRecoveryStages, "a-stopped"))
+                promoted = $stageIndex -ge ([Array]::IndexOf($durableRecoveryStages, "a-promoted"))
+                executorsRestarted = $stageIndex -ge ([Array]::IndexOf($durableRecoveryStages, "a-started"))
+            }
+            steps = if ($existing -and $existing.steps) { $existing.steps } else { @() }
+            proof = $proofObject
+            updatedAt = (Get-Date).ToUniversalTime().ToString("o")
+            completedAt = if ($Status -eq "completed") { (Get-Date).ToUniversalTime().ToString("o") } else { $null }
+            error = $null
+        }
+        $json = $journal | ConvertTo-Json -Depth 20
+        New-Item -ItemType Directory -Force -Path (Split-Path $runtimeRecoveryJournalPath -Parent) | Out-Null
+        $temp = "$runtimeRecoveryJournalPath.$PID.tmp"
+        [IO.File]::WriteAllText($temp, $json + [Environment]::NewLine, [Text.UTF8Encoding]::new($false))
+        Move-Item -LiteralPath $temp -Destination $runtimeRecoveryJournalPath -Force
     }
 
     function Update-RelayRefs {
@@ -344,6 +439,63 @@ try {
             exitCode = $exitCode
             passed = ($exitCode -eq 0)
             output = $text
+        }
+    }
+
+    function Invoke-PowerShellFileCommand([string[]]$Arguments, [string]$DisplayCommand) {
+        function Join-WindowsCommandLine([string[]]$Parts) {
+            ($Parts | ForEach-Object {
+                if ($_ -notmatch '[\s"]') {
+                    $_
+                } else {
+                    '"' + ($_.Replace('"', '\"')) + '"'
+                }
+            }) -join " "
+        }
+
+        $stdoutPath = Join-Path ([IO.Path]::GetTempPath()) ("tandem-relay-command-" + [guid]::NewGuid().ToString("N") + ".out")
+        $stderrPath = Join-Path ([IO.Path]::GetTempPath()) ("tandem-relay-command-" + [guid]::NewGuid().ToString("N") + ".err")
+        Push-Location -LiteralPath $Workspace
+        try {
+            $process = Start-Process -FilePath "powershell" -ArgumentList (Join-WindowsCommandLine $Arguments) -Wait -PassThru -WindowStyle Hidden -RedirectStandardOutput $stdoutPath -RedirectStandardError $stderrPath
+            $outputParts = @()
+            if (Test-Path -LiteralPath $stdoutPath) { $outputParts += (Get-Content -LiteralPath $stdoutPath -Raw) }
+            if (Test-Path -LiteralPath $stderrPath) { $outputParts += (Get-Content -LiteralPath $stderrPath -Raw) }
+            $text = ($outputParts | Where-Object { $_ }) -join [Environment]::NewLine
+            return [pscustomobject]@{
+                command = $DisplayCommand
+                exitCode = [int]$process.ExitCode
+                passed = ($process.ExitCode -eq 0)
+                output = $text
+            }
+        } finally {
+            Remove-Item -LiteralPath $stdoutPath, $stderrPath -Force -ErrorAction SilentlyContinue
+            Pop-Location
+        }
+    }
+
+    function Start-PowerShellFileCommand([string[]]$Arguments, [string]$DisplayCommand) {
+        function Join-WindowsCommandLine([string[]]$Parts) {
+            ($Parts | ForEach-Object {
+                if ($_ -notmatch '[\s"]') {
+                    $_
+                } else {
+                    '"' + ($_.Replace('"', '\"')) + '"'
+                }
+            }) -join " "
+        }
+
+        Push-Location -LiteralPath $Workspace
+        try {
+            $process = Start-Process -FilePath "powershell" -ArgumentList (Join-WindowsCommandLine $Arguments) -PassThru -WindowStyle Hidden
+            return [pscustomobject]@{
+                command = $DisplayCommand
+                exitCode = 0
+                passed = $true
+                output = "Started helper PID $($process.Id); readiness is verified by the executor automation token and /status attestation."
+            }
+        } finally {
+            Pop-Location
         }
     }
 
@@ -552,12 +704,12 @@ try {
     }
 
     function Get-SharedDirectionPath {
-        if ($env:TANDEM_RECIPROCAL_ROOT) {
-            return (Join-Path $env:TANDEM_RECIPROCAL_ROOT "control\WISHLIST.md")
-        }
         $localPath = Join-Path $Workspace ".tandem\shared-control\WISHLIST.md"
         if (Test-Path -LiteralPath (Split-Path $localPath -Parent)) {
             return $localPath
+        }
+        if ($env:TANDEM_RECIPROCAL_ROOT) {
+            return (Join-Path $env:TANDEM_RECIPROCAL_ROOT "control\WISHLIST.md")
         }
         $commonRaw = (@(Invoke-Git rev-parse --git-common-dir))[0].Trim()
         $commonDir = if ([IO.Path]::IsPathRooted($commonRaw)) { $commonRaw } else { [IO.Path]::GetFullPath((Join-Path $Workspace $commonRaw)) }
@@ -1569,6 +1721,15 @@ try {
         }
         $state.runtimeRecoveryStage = "passive-package-ready"
         Save-State
+        $packageIdentity = if ($runtimePackage -and $runtimePackage.packageIdentity) { [string]$runtimePackage.packageIdentity } else { $null }
+        if (-not $packageIdentity) {
+            $packageBuildInfoPath = if ($runtimePackage -and $runtimePackage.buildInfoPath) { [string]$runtimePackage.buildInfoPath } else { Join-Path $adminRepo "release\win-unpacked\BUILD_INFO.json" }
+            if (-not (Test-Path -LiteralPath $packageBuildInfoPath)) { throw "Passive package BUILD_INFO is missing package identity: $packageBuildInfoPath" }
+            $packageBuildInfo = Get-Content -LiteralPath $packageBuildInfoPath -Raw | ConvertFrom-Json
+            $packageIdentity = [string]$packageBuildInfo.packageIdentity
+        }
+        if (-not $packageIdentity) { throw "Passive package did not produce a cryptographic package identity." }
+        Save-RuntimeRecoveryJournal -Stage "package-ready" -SourceSha $head -PackageIdentity $packageIdentity -Proof ([pscustomobject]@{ package = $runtimePackage })
 
         $promotionScript = Join-Path $Workspace "scripts\promote-reciprocal-runtime.ps1"
         if (-not (Test-Path -LiteralPath $promotionScript)) {
@@ -1577,8 +1738,9 @@ try {
         if (-not (Test-Path -LiteralPath $promotionScript)) { throw "Passive recovery promotion helper is missing: $promotionScript" }
         $state.runtimeRecoveryStage = "b-runtime-promote-started"
         Save-State
+        Save-RuntimeRecoveryJournal -Stage "b-promote-started" -SourceSha $head -PackageIdentity $packageIdentity
         $bSourceDir = if ($runtimePackage -and $runtimePackage.targetDir) { [string]$runtimePackage.targetDir } else { Join-Path $adminRepo "release\win-unpacked" }
-        $promoteBCommand = "powershell -NoProfile -ExecutionPolicy Bypass -File `"$promotionScript`" -RelayRoot `"$defaultRelayRoot`" -Source `"$bSourceDir`" -SourceSha $head -TargetRole B -BuildRound D181 -PromotedRound D181"
+        $promoteBCommand = "powershell -NoProfile -ExecutionPolicy Bypass -File `"$promotionScript`" -RelayRoot `"$defaultRelayRoot`" -Source `"$bSourceDir`" -SourceSha $head -TargetRole B -BuildRound D183 -PromotedRound D183"
         $promoteBCheck = Invoke-ValidationCommand $promoteBCommand
         $mechanical += $promoteBCheck
         $failed = @($mechanical | Where-Object { -not $_.passed })
@@ -1605,11 +1767,13 @@ try {
         if (-not (Test-Path -LiteralPath $bBuildInfoPath)) { throw "Executor B recovery runtime BUILD_INFO is missing: $bBuildInfoPath" }
         $bBuildInfo = Get-Content -LiteralPath $bBuildInfoPath -Raw | ConvertFrom-Json
         if ([string]$bBuildInfo.sourceSha -ne $head) { throw "Executor B recovery runtime BUILD_INFO sourceSha mismatch: $($bBuildInfo.sourceSha) != $head" }
+        if ([string]$bBuildInfo.packageIdentity -ne $packageIdentity) { throw "Executor B recovery runtime package identity mismatch: $($bBuildInfo.packageIdentity) != $packageIdentity" }
         if (-not $bBuildInfo.reciprocalCapabilities -or [int]$bBuildInfo.reciprocalCapabilities.candidatePreviewArtifactLifecycle -lt 1) {
             throw "Executor B recovery runtime does not advertise candidatePreviewArtifactLifecycle v1."
         }
         $state.runtimeRecoveryStage = "b-runtime-promoted"
         Save-State
+        Save-RuntimeRecoveryJournal -Stage "b-promoted" -SourceSha $head -PackageIdentity $packageIdentity -Proof ([pscustomobject]@{ bBuildInfo = $bBuildInfo })
 
         $startScript = Join-Path $Workspace "scripts\start-reciprocal-tandem.ps1"
         if (-not (Test-Path -LiteralPath $startScript)) {
@@ -1618,21 +1782,9 @@ try {
         if (-not (Test-Path -LiteralPath $startScript)) { throw "Passive recovery start helper is missing: $startScript" }
         $state.runtimeRecoveryStage = "b-runtime-start-started"
         Save-State
-        $testHarnessBReady = [Environment]::GetEnvironmentVariable("TANDEM_RECIPROCAL_TEST_B_READY") -eq "1"
-        if ($testHarnessBReady) {
-            $bStateDir = Join-Path $defaultRelayRoot "state\executor-b"
-            New-Item -ItemType Directory -Force -Path $bStateDir | Out-Null
-            Set-Content -LiteralPath (Join-Path $bStateDir "automation.json") -Value (@{ port = 1; token = "test-token-b" } | ConvertTo-Json -Depth 4) -Encoding UTF8
-            $startBCheck = [pscustomobject]@{
-                command = "TANDEM_RECIPROCAL_TEST_B_READY=1 start Executor B"
-                exitCode = 0
-                passed = $true
-                output = "Test harness marked Executor B recovery endpoint ready."
-            }
-        } else {
-            $startBCommand = "powershell -NoProfile -ExecutionPolicy Bypass -File `"$startScript`" -Role B -RelayRoot `"$defaultRelayRoot`""
-            $startBCheck = Invoke-ValidationCommand $startBCommand
-        }
+        Save-RuntimeRecoveryJournal -Stage "b-start-started" -SourceSha $head -PackageIdentity $packageIdentity
+        $startBCommand = "powershell -NoProfile -ExecutionPolicy Bypass -File `"$startScript`" -Role B -RelayRoot `"$defaultRelayRoot`""
+        $startBCheck = Start-PowerShellFileCommand @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", $startScript, "-Role", "B", "-RelayRoot", $defaultRelayRoot) $startBCommand
         $mechanical += $startBCheck
         $failed = @($mechanical | Where-Object { -not $_.passed })
         $checkSummary = @($mechanical | ForEach-Object {
@@ -1656,32 +1808,51 @@ try {
         }
         $state.runtimeRecoveryStage = "b-runtime-started"
         Save-State
+        Save-RuntimeRecoveryJournal -Stage "b-started" -SourceSha $head -PackageIdentity $packageIdentity -Proof ([pscustomobject]@{ startBOutput = $startBCheck.output })
 
-        if (-not $testHarnessBReady) {
-            $bAutomationPath = Join-Path $defaultRelayRoot "state\executor-b\automation.json"
-            if (-not (Test-Path -LiteralPath $bAutomationPath)) { throw "Executor B automation token is missing after recovery start: $bAutomationPath" }
-            $bAutomation = Get-Content -LiteralPath $bAutomationPath -Raw | ConvertFrom-Json
-            if (-not $bAutomation.port -or -not $bAutomation.token) { throw "Executor B automation token is incomplete after recovery start." }
-            $bStatus = $null
-            $deadline = (Get-Date).AddSeconds(30)
-            do {
-                try {
-                    $headers = @{ Authorization = "Bearer $($bAutomation.token)" }
-                    $bStatus = Invoke-RestMethod -Method Get -Uri "http://127.0.0.1:$($bAutomation.port)/status" -Headers $headers -TimeoutSec 3
-                    break
-                } catch {
-                    Start-Sleep -Milliseconds 300
-                }
-            } while ((Get-Date) -lt $deadline)
-            if (-not $bStatus) { throw "Executor B recovery endpoint did not become ready before approval gate." }
-            $expectedBTarget = (Join-Path $defaultRelayRoot "worktrees\copy-a")
-            $actualBTarget = if ($bStatus.allowedProjectDir) { [string]$bStatus.allowedProjectDir } else { [string]$bStatus.projectDir }
-            if (([IO.Path]::GetFullPath($actualBTarget)).TrimEnd('\') -ine ([IO.Path]::GetFullPath($expectedBTarget)).TrimEnd('\')) {
-                throw "Executor B recovery endpoint target mismatch: $actualBTarget != $expectedBTarget"
+        $bAutomationPath = Join-Path $defaultRelayRoot "state\executor-b\automation.json"
+        $tokenDeadline = (Get-Date).AddSeconds(15)
+        while (-not (Test-Path -LiteralPath $bAutomationPath) -and (Get-Date) -lt $tokenDeadline) {
+            Start-Sleep -Milliseconds 200
+        }
+        if (-not (Test-Path -LiteralPath $bAutomationPath)) { throw "Executor B automation token is missing after recovery start: $bAutomationPath" }
+        $bAutomation = Get-Content -LiteralPath $bAutomationPath -Raw | ConvertFrom-Json
+        if (-not $bAutomation.port -or -not $bAutomation.token -or -not $bAutomation.pid) { throw "Executor B automation token is incomplete after recovery start." }
+        $bStatus = $null
+        $deadline = (Get-Date).AddSeconds(30)
+        do {
+            try {
+                $headers = @{ Authorization = "Bearer $($bAutomation.token)" }
+                $bStatus = Invoke-RestMethod -Method Get -Uri "http://127.0.0.1:$($bAutomation.port)/status" -Headers $headers -TimeoutSec 3
+                break
+            } catch {
+                Start-Sleep -Milliseconds 300
             }
+        } while ((Get-Date) -lt $deadline)
+        if (-not $bStatus) { throw "Executor B recovery endpoint did not become ready before approval gate." }
+        $expectedBTarget = (Join-Path $defaultRelayRoot "worktrees\copy-a")
+        $actualBTarget = if ($bStatus.allowedProjectDir) { [string]$bStatus.allowedProjectDir } else { [string]$bStatus.projectDir }
+        if (([IO.Path]::GetFullPath($actualBTarget)).TrimEnd('\') -ine ([IO.Path]::GetFullPath($expectedBTarget)).TrimEnd('\')) {
+            throw "Executor B recovery endpoint target mismatch: $actualBTarget != $expectedBTarget"
+        }
+        if ([string]$bStatus.sourceSha -ne $head) { throw "Executor B recovery endpoint source mismatch: $($bStatus.sourceSha) != $head" }
+        if ([string]$bStatus.packageIdentity -ne $packageIdentity) { throw "Executor B recovery endpoint package mismatch: $($bStatus.packageIdentity) != $packageIdentity" }
+        if (-not $bStatus.capabilities -or [int]$bStatus.capabilities.candidatePreviewArtifactLifecycle -lt 1) {
+            throw "Executor B recovery endpoint does not advertise candidatePreviewArtifactLifecycle v1."
+        }
+        $bRuntimeExe = Join-Path $defaultRelayRoot "runtimes\executor-b\Tandem.exe"
+        $bProcess = Get-Process -Id ([int]$bAutomation.pid) -ErrorAction SilentlyContinue
+        if (-not $bProcess) { throw "Executor B recovery PID $($bAutomation.pid) is not running." }
+        if (-not $bProcess.Path -or ([IO.Path]::GetFullPath($bProcess.Path) -ine [IO.Path]::GetFullPath($bRuntimeExe))) {
+            throw "Executor B recovery PID path mismatch: $($bProcess.Path) != $bRuntimeExe"
         }
         $state.runtimeRecoveryStage = "b-runtime-verified"
         Save-State
+        Save-RuntimeRecoveryJournal -Stage "b-verified" -SourceSha $head -PackageIdentity $packageIdentity -Proof ([pscustomobject]@{
+            bEndpoint = $bStatus
+            bAutomation = $bAutomation
+            bProcess = [ordered]@{ pid = [int]$bAutomation.pid; path = $bProcess.Path }
+        })
 
         $acceptedKind = $state.candidateKind
         $previousStableCommit = $state.stableCommit
@@ -1694,6 +1865,14 @@ try {
             $state.stableCommit = $previousStableCommit
             Update-RelayRefs
             throw
+        }
+        if ($continuation) {
+            Save-RuntimeRecoveryJournal -Stage "b-stop-started" -SourceSha $head -PackageIdentity $packageIdentity
+            Stop-Process -Id ([int]$bAutomation.pid) -Force -ErrorAction SilentlyContinue
+            Save-RuntimeRecoveryJournal -Stage "b-stopped" -SourceSha $head -PackageIdentity $packageIdentity -Proof ([pscustomobject]@{
+                bStoppedAfterAutonomousContinuation = $true
+                bPid = [int]$bAutomation.pid
+            })
         }
         $state.stableCommit = $head
         $state.candidateCommit = $null

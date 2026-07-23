@@ -105,6 +105,8 @@ foreach ($role in $roles) {
         buildRound = $BuildRound
         promotedRound = $PromotedRound
         builtAt = if ($sourceBuildInfo -and $sourceBuildInfo.builtAt) { [string]$sourceBuildInfo.builtAt } else { $null }
+        packageIdentity = if ($sourceBuildInfo -and $sourceBuildInfo.packageIdentity) { [string]$sourceBuildInfo.packageIdentity } else { $null }
+        packageManifest = if ($sourceBuildInfo -and $sourceBuildInfo.packageManifest) { $sourceBuildInfo.packageManifest } else { $null }
         sourceBuildInfo = if ($sourceBuildInfo) { $sourceBuildInfo } else { $null }
         reciprocalCapabilities = if ($sourceBuildInfo -and $sourceBuildInfo.reciprocalCapabilities) { $sourceBuildInfo.reciprocalCapabilities } else { $null }
         promotedAt = (Get-Date).ToString("o")

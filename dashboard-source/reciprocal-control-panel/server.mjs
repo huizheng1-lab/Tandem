@@ -162,6 +162,12 @@ function runResult(command, args, cwd = repoRoot, env = process.env) {
 
 const git = (cwd, ...args) => run("git", args, cwd);
 
+async function runtimePackageIdentity(runtimeDir) {
+  const build = await jsonFile(path.join(runtimeDir, "BUILD_INFO.json"), {});
+  if (build.packageIdentity) return build.packageIdentity;
+  return null;
+}
+
 async function recordHarnessCommand(args, cwd = repoRoot) {
   if (!testCommandLogPath) return;
   await appendFile(testCommandLogPath, `${JSON.stringify({ at: new Date().toISOString(), cwd, args })}\n`, "utf8");
@@ -276,7 +282,14 @@ async function writeJsonAtomic(file, value) {
 
 async function loadRuntimeRecoveryJournal() {
   const journal = await jsonFile(runtimeRecoveryJournalPath, null);
-  if (!journal || typeof journal !== "object" || journal._readError) return null;
+  if (!journal) return null;
+  if (typeof journal !== "object" || journal._readError) {
+    throw new Error(`Runtime recovery journal is unreadable or corrupt: ${journal?._readError?.message || "invalid JSON"}.`);
+  }
+  if (journal.schemaVersion !== 1) throw new Error(`Runtime recovery journal schema ${journal.schemaVersion || "unknown"} is not supported.`);
+  if (!durableRecoveryStages.includes(journal.stage)) throw new Error(`Runtime recovery journal has unknown stage ${journal.stage || "missing"}.`);
+  if (!/^[0-9a-f]{40}$/i.test(String(journal.sourceSha || ""))) throw new Error("Runtime recovery journal is missing an exact source SHA.");
+  if (!journal.packageIdentity) throw new Error("Runtime recovery journal is missing package identity.");
   return journal;
 }
 
@@ -284,6 +297,14 @@ async function saveRuntimeRecoveryJournal(flow, durableStage = null, proof = {})
   if (!flow?.sourceSha) return null;
   const existing = await loadRuntimeRecoveryJournal();
   const stage = durableStage || flow.durableStage || existing?.stage || "package-ready";
+  if (!durableRecoveryStages.includes(stage)) throw new Error(`Refusing to persist unknown runtime recovery stage ${stage}.`);
+  if (existing) {
+    if (existing.sourceSha !== flow.sourceSha) throw new Error(`Runtime recovery journal source mismatch: ${shortSha(existing.sourceSha)} != ${shortSha(flow.sourceSha)}.`);
+    const nextIndex = durableRecoveryStages.indexOf(stage);
+    const existingIndex = durableRecoveryStages.indexOf(existing.stage);
+    if (nextIndex < existingIndex) throw new Error(`Runtime recovery journal refuses stage regression: ${existing.stage} -> ${stage}.`);
+    if (flow.packageIdentity && existing.packageIdentity !== flow.packageIdentity) throw new Error("Runtime recovery journal package identity mismatch.");
+  }
   const journal = {
     schemaVersion: 1,
     id: flow.id,
@@ -315,6 +336,7 @@ async function saveRuntimeRecoveryJournal(flow, durableStage = null, proof = {})
     completedAt: flow.completedAt || existing?.completedAt || null,
     error: flow.error || existing?.error || null,
   };
+  if (!journal.packageIdentity) throw new Error("Runtime recovery journal cannot be saved without package identity.");
   flow.durableStage = stage;
   await writeJsonAtomic(runtimeRecoveryJournalPath, journal);
   return journal;
@@ -356,16 +378,31 @@ const delay = (milliseconds) => new Promise((resolve) => setTimeout(resolve, mil
 async function automationRequest(role, pathname, method = "GET", payload) {
   const config = automation[role];
   if (testHarness) await recordHarnessCommand(["AUTOMATION", role, method, pathname]);
+  const testStatus = async () => {
+    const build = await jsonFile(path.join(relayRoot, "runtimes", `executor-${role.toLowerCase()}`, "BUILD_INFO.json"), {});
+    return {
+      ok: true,
+      running: false,
+      pid: role === "A" ? 4101 : 4102,
+      instanceId: role,
+      projectDir: config.projectDir,
+      allowedProjectDir: config.projectDir,
+      tokenFile: config.tokenFile,
+      sourceSha: build.sourceSha,
+      packageIdentity: build.packageIdentity,
+      capabilities: build.reciprocalCapabilities || build.sourceBuildInfo?.reciprocalCapabilities || { candidatePreviewArtifactLifecycle: 1 },
+    };
+  };
   if (testHarness && testHarnessStartedRoles.has(role) && pathname === "/status") {
-    return { ok: true, running: false, pid: role === "A" ? 4101 : 4102, projectDir: config.projectDir, allowedProjectDir: config.projectDir };
+    return testStatus();
   }
   if (testHarness && pathname === "/status" && existsSync(config.tokenFile)) {
-    return { ok: true, running: false, pid: role === "A" ? 4101 : 4102, projectDir: config.projectDir, allowedProjectDir: config.projectDir };
+    return testStatus();
   }
   if (testHarness && process.env.TANDEM_DASHBOARD_TEST_REQUIRE_STARTED_AUTOMATION === "1") {
     if (!testHarnessStartedRoles.has(role)) throw new Error(`TEST executor ${role} automation is not started.`);
     if (pathname === "/status") {
-      return { ok: true, running: false, pid: role === "A" ? 4101 : 4102, projectDir: config.projectDir, allowedProjectDir: config.projectDir };
+      return testStatus();
     }
     if (pathname === "/prompt" && method === "POST") {
       if (role === "A") {
@@ -1406,7 +1443,7 @@ async function runApprovalFlow(comment, candidate) {
   try {
     if (!durableStageReached(flow, "package-ready")) {
       const candidateBuild = await jsonFile(path.join(candidateSource, "BUILD_INFO.json"), {});
-      flow.packageIdentity = `${candidate.sourceSha}:${candidateBuild.builtAt || "unknown"}:${candidateBuild.packageId || "release-win-unpacked"}`;
+      flow.packageIdentity = candidateBuild.packageIdentity || await runtimePackageIdentity(candidateSource);
       flow.previousStableA = (await jsonFile(path.join(relayRoot, "runtimes", "executor-a", "BUILD_INFO.json"), {}))?.sourceSha || null;
       await saveRuntimeRecoveryJournal(flow, "package-ready", { candidateBuild });
     }
@@ -1456,16 +1493,18 @@ async function runApprovalFlow(comment, candidate) {
       await approvalStep(flow, "runtime-a-promoted", `${promoteOutput} BUILD_INFO A=${shortSha(buildA.sourceSha)}; verified B source remains ${shortSha(buildB.sourceSha)}. ${listing}`);
     }
 
-    if (!durableStageReached(flow, "a-verified")) {
+    if (!durableStageReached(flow, "a-started")) {
       await saveRuntimeRecoveryJournal(flow, "a-start-started");
       const startOutput = await powershell("-File", path.join(repoRoot, "scripts", "start-reciprocal-tandem.ps1"), "-Role", "A", "-RelayRoot", relayRoot);
       flow.durableStage = "a-started";
       await saveRuntimeRecoveryJournal(flow, "a-started", { startAOutput: startOutput });
+    }
+    if (!durableStageReached(flow, "a-verified")) {
       const statusA = await waitForAutomation("A");
       await verifyRuntimeEndpoint("A", candidate);
       flow.executorsRestarted = true;
       flow.durableStage = "a-verified";
-      await approvalStep(flow, "executor-a-restarted", `${startOutput} Hidden endpoint ready: A PID ${statusA.pid}.`);
+      await approvalStep(flow, "executor-a-restarted", `Hidden endpoint ready: A PID ${statusA.pid}.`);
     }
 
     if (flow.forcedBoundary && flow.interruptedRole) {
@@ -1513,6 +1552,7 @@ async function prepareRecoveryAuthority(flow, candidate) {
     const promoteBOutput = await powershell("-File", path.join(repoRoot, "scripts", "promote-reciprocal-runtime.ps1"), "-RelayRoot", relayRoot, "-Source", candidateSource, "-SourceSha", candidate.sourceSha, "-TargetRole", "B", "-BuildRound", "D182", "-PromotedRound", "D182");
     const buildB = await jsonFile(path.join(relayRoot, "runtimes", "executor-b", "BUILD_INFO.json"), {});
     if (buildB.sourceSha !== candidate.sourceSha) throw new Error(`Executor B recovery runtime BUILD_INFO mismatch: B=${shortSha(buildB.sourceSha)}, candidate=${candidate.shortSha}.`);
+    if (buildB.packageIdentity !== flow.packageIdentity) throw new Error("Executor B recovery runtime package identity mismatch.");
     if (capabilityVersion(buildB, "candidatePreviewArtifactLifecycle") < requiredReciprocalCapabilities.candidatePreviewArtifactLifecycle) {
       throw new Error("Executor B recovery runtime lacks candidatePreviewArtifactLifecycle capability.");
     }
@@ -1538,15 +1578,26 @@ async function prepareRecoveryAuthority(flow, candidate) {
 async function verifyRuntimeEndpoint(role, candidate) {
   const build = await jsonFile(path.join(relayRoot, "runtimes", `executor-${role.toLowerCase()}`, "BUILD_INFO.json"), {});
   if (build.sourceSha !== candidate.sourceSha) throw new Error(`Executor ${role} runtime BUILD_INFO mismatch: ${shortSha(build.sourceSha)} != ${candidate.shortSha}.`);
+  const expectedPackage = approvalFlow?.packageIdentity || (await loadRuntimeRecoveryJournal())?.packageIdentity || build.packageIdentity;
+  if (!expectedPackage) throw new Error(`Executor ${role} package identity is missing.`);
+  if (build.packageIdentity !== expectedPackage) throw new Error(`Executor ${role} runtime package identity mismatch.`);
   if (capabilityVersion(build, "candidatePreviewArtifactLifecycle") < requiredReciprocalCapabilities.candidatePreviewArtifactLifecycle) {
     throw new Error(`Executor ${role} runtime lacks candidatePreviewArtifactLifecycle capability.`);
   }
   const status = await waitForAutomation(role);
   const endpoint = await automationRequest(role, "/status");
+  const credentials = await jsonFile(automation[role].tokenFile, {});
+  const runtimeExe = path.join(relayRoot, "runtimes", `executor-${role.toLowerCase()}`, "Tandem.exe");
+  if (Number(credentials.pid || endpoint.pid) !== Number(endpoint.pid || credentials.pid)) throw new Error(`Executor ${role} token PID and endpoint PID disagree.`);
+  if (endpoint.sourceSha !== candidate.sourceSha) throw new Error(`Executor ${role} endpoint source mismatch: ${shortSha(endpoint.sourceSha)} != ${candidate.shortSha}.`);
+  if (endpoint.packageIdentity !== expectedPackage) throw new Error(`Executor ${role} endpoint package identity mismatch.`);
+  if (endpoint.tokenFile && path.resolve(endpoint.tokenFile).toLowerCase() !== path.resolve(automation[role].tokenFile).toLowerCase()) throw new Error(`Executor ${role} endpoint token file mismatch.`);
+  const processInfo = testHarness ? { Id: endpoint.pid || credentials.pid, Path: runtimeExe } : await getProcessByPath(runtimeExe);
+  if (!processInfo || Number(processInfo.Id) !== Number(endpoint.pid || credentials.pid)) throw new Error(`Executor ${role} process identity mismatch for ${runtimeExe}.`);
   const target = path.resolve(endpoint.allowedProjectDir || endpoint.projectDir || status.allowedProjectDir || "");
   const expectedTarget = path.resolve(automation[role].projectDir);
   if (target !== expectedTarget) throw new Error(`Executor ${role} endpoint target mismatch: ${target} != ${expectedTarget}.`);
-  return { build, status, endpoint, target };
+  return { build, status, endpoint, target, process: processInfo, packageIdentity: expectedPackage };
 }
 
 async function verifyRecoveryAuthority(candidate) {
@@ -1605,6 +1656,9 @@ async function recoverAlreadyPromotedAUpgrade(comment, sourceSha) {
       executorsRestarted: true,
       interruptedPhase: state.pausedFromPhase,
       interruptedRole: null,
+      packageIdentity: runtimeA.buildInfo?.packageIdentity || runtimeB.buildInfo?.packageIdentity || null,
+      previousStableA: runtimeA.buildInfo?.sourceSha || null,
+      durableStage: "a-verified",
       cancelRequested: false,
       forceRequested: false,
       recoveryOnly: true,

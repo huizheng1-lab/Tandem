@@ -1,7 +1,9 @@
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { copyFile, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { createHmac } from "node:crypto";
+import net from "node:net";
 import { execa } from "execa";
 import { describe, expect, it } from "vitest";
 
@@ -60,6 +62,32 @@ describe("reciprocal relay script", () => {
     return JSON.parse(result.stdout);
   }
 
+  function relayRoot(repo: string) {
+    return path.join(repo, ".tandem", "relay-root");
+  }
+
+  function relayEnv(repo: string) {
+    return { ...process.env, TANDEM_RECIPROCAL_ROOT: relayRoot(repo) };
+  }
+
+  async function freePort() {
+    return await new Promise<number>((resolve, reject) => {
+      const server = net.createServer();
+      server.once("error", reject);
+      server.listen(0, "127.0.0.1", () => {
+        const address = server.address();
+        const port = typeof address === "object" && address ? address.port : 0;
+        server.close(() => resolve(port));
+      });
+    });
+  }
+
+  async function stopProcess(pid: number | undefined) {
+    if (!pid) return;
+    spawnSync("taskkill.exe", ["/PID", String(pid), "/T", "/F"], { windowsHide: true });
+    await new Promise((resolve) => setTimeout(resolve, 250));
+  }
+
   function signedAuthorityEnv(request: Record<string, string>, decision: "approve" | "deny", secret = "dashboard-secret") {
     const expiresAtUtc = new Date(Date.now() + 120_000).toISOString();
     const binding = [
@@ -116,11 +144,56 @@ describe("reciprocal relay script", () => {
   async function withPreparedRuntime<T>(repo: string, run: () => Promise<T>) {
     const preparedRuntime = path.join(repo, ".tandem", "prepared-runtime", "win-unpacked");
     await mkdir(preparedRuntime, { recursive: true });
-    await writeFile(path.join(preparedRuntime, "Tandem.exe"), "fake exe\n", "utf8");
+    await copyFile(process.execPath, path.join(preparedRuntime, "Tandem.exe"));
+    const fakeRuntime = path.join(repo, ".tandem", "fake-runtime.mjs");
+    await writeFile(fakeRuntime, `
+import { createServer } from "node:http";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
+import path from "node:path";
+const value = (name) => process.argv.find((arg) => arg.startsWith(\`--\${name}=\`))?.slice(name.length + 3) || "";
+const port = Number(value("automation-port"));
+const tokenFile = value("automation-token-file");
+const projectDir = path.resolve(value("automation-project-dir"));
+const token = "fixture-token-" + process.pid;
+const buildInfoPath = process.env.TANDEM_RUNTIME_BUILD_INFO;
+const buildInfo = buildInfoPath ? JSON.parse(await readFile(buildInfoPath, "utf8")) : {};
+await mkdir(path.dirname(tokenFile), { recursive: true });
+await writeFile(tokenFile, JSON.stringify({ port, token, pid: process.pid, instanceId: process.env.TANDEM_INSTANCE_ID || null, projectDir, createdAt: new Date().toISOString() }, null, 2) + "\\n", "utf8");
+const server = createServer((request, response) => {
+  if (request.headers.authorization !== \`Bearer \${token}\`) {
+    response.writeHead(401, { "Content-Type": "application/json" });
+    response.end(JSON.stringify({ error: "Invalid automation token." }));
+    return;
+  }
+  if (request.method === "GET" && request.url === "/status") {
+    response.writeHead(200, { "Content-Type": "application/json" });
+    response.end(JSON.stringify({
+      ok: true,
+      pid: process.pid,
+      instanceId: process.env.TANDEM_INSTANCE_ID || null,
+      allowedProjectDir: projectDir,
+      projectDir,
+      tokenFile,
+      sourceSha: buildInfo.sourceSha,
+      packageIdentity: buildInfo.packageIdentity,
+      capabilities: buildInfo.reciprocalCapabilities || { candidatePreviewArtifactLifecycle: 1 },
+      running: false
+    }));
+    return;
+  }
+  response.writeHead(404, { "Content-Type": "application/json" });
+  response.end(JSON.stringify({ error: "Not found" }));
+});
+server.listen(port, "127.0.0.1");
+`, "utf8");
     const previousPrepared = process.env.TANDEM_PASSIVE_PACKAGE_PREPARED_WIN_UNPACKED;
-    const previousBReady = process.env.TANDEM_RECIPROCAL_TEST_B_READY;
+    const previousBEntry = process.env.TANDEM_EXECUTOR_B_NODE_ENTRY;
+    const previousRelayRoot = process.env.TANDEM_RECIPROCAL_ROOT;
+    const previousPortB = process.env.TANDEM_AUTOMATION_PORT_B;
     process.env.TANDEM_PASSIVE_PACKAGE_PREPARED_WIN_UNPACKED = preparedRuntime;
-    process.env.TANDEM_RECIPROCAL_TEST_B_READY = "1";
+    process.env.TANDEM_EXECUTOR_B_NODE_ENTRY = fakeRuntime;
+    process.env.TANDEM_RECIPROCAL_ROOT = relayRoot(repo);
+    process.env.TANDEM_AUTOMATION_PORT_B = String(await freePort());
     try {
       return await run();
     } finally {
@@ -129,11 +202,40 @@ describe("reciprocal relay script", () => {
       } else {
         process.env.TANDEM_PASSIVE_PACKAGE_PREPARED_WIN_UNPACKED = previousPrepared;
       }
-      if (previousBReady === undefined) {
-        delete process.env.TANDEM_RECIPROCAL_TEST_B_READY;
+      if (previousBEntry === undefined) {
+        delete process.env.TANDEM_EXECUTOR_B_NODE_ENTRY;
       } else {
-        process.env.TANDEM_RECIPROCAL_TEST_B_READY = previousBReady;
+        process.env.TANDEM_EXECUTOR_B_NODE_ENTRY = previousBEntry;
       }
+      if (previousRelayRoot === undefined) {
+        delete process.env.TANDEM_RECIPROCAL_ROOT;
+      } else {
+        process.env.TANDEM_RECIPROCAL_ROOT = previousRelayRoot;
+      }
+      if (previousPortB === undefined) {
+        delete process.env.TANDEM_AUTOMATION_PORT_B;
+      } else {
+        process.env.TANDEM_AUTOMATION_PORT_B = previousPortB;
+      }
+    }
+  }
+
+  async function stopRelayProcess(relayRoot: string, role = "b") {
+    try {
+      const token = JSON.parse(await readFile(path.join(relayRoot, "state", `executor-${role}`, "automation.json"), "utf8"));
+      await stopProcess(Number(token.pid));
+    } catch {
+      // Best-effort cleanup for isolated fixture processes.
+    }
+    try {
+      const psRelayRoot = relayRoot.replaceAll("'", "''");
+      spawnSync("powershell", [
+        "-NoProfile",
+        "-Command",
+        `$root='${psRelayRoot}'; $deadline=(Get-Date).AddSeconds(5); do { $procs=@(Get-Process -Name Tandem -ErrorAction SilentlyContinue | Where-Object { try { $_.Path -and $_.Path.StartsWith($root, [StringComparison]::OrdinalIgnoreCase) } catch { $false } }); if($procs.Count -gt 0){ $procs | Stop-Process -Force; Start-Sleep -Milliseconds 250 } } while($procs.Count -gt 0 -and (Get-Date) -lt $deadline)`,
+      ], { windowsHide: true });
+    } catch {
+      // Best-effort cleanup for isolated fixture processes.
     }
   }
 
@@ -385,6 +487,7 @@ describe("reciprocal relay script", () => {
         pauseReasonCode: "repeated-genuine-blocker"
       });
     } finally {
+      await stopRelayProcess(relayRoot(repo));
       await rm(repo, { recursive: true, force: true });
     }
   }, 30_000);
@@ -692,7 +795,7 @@ describe("reciprocal relay script", () => {
 
   windowsIt("D151: passive test accepts a candidate and stops at the A-upgrade human gate", async () => {
     const repo = await mkdtemp(path.join(tmpdir(), "tandem-relay-d151-passive-"));
-    const relayRoot = path.join(path.dirname(repo), "Tandem Reciprocal");
+    const root = relayRoot(repo);
     try {
       await initRepo(repo);
       const candidateCommit = await createCandidate(repo);
@@ -702,7 +805,7 @@ describe("reciprocal relay script", () => {
         `- [ ] W0001 | P3 | passive candidate | CANDIDATE commit=${candidateCommit} updated=2026-07-18T00:00:00Z`,
       );
       const accepted = await passiveAccept(repo);
-      expect(accepted).toMatchObject({
+      expect(accepted, JSON.stringify(accepted.passiveChecks || accepted, null, 2)).toMatchObject({
         outcome: "PASSIVE_ACCEPTED",
         phase: "a-upgrade-pending",
         stableCommit: candidateCommit,
@@ -715,11 +818,15 @@ describe("reciprocal relay script", () => {
       expect(board).toContain(`- [x] W0001 | P3 | passive candidate | DONE stable=${candidateCommit}`);
       const buildInfo = JSON.parse(await readFile(path.join(repo, "release", "win-unpacked", "BUILD_INFO.json"), "utf8"));
       expect(buildInfo.sourceSha).toBe(candidateCommit);
-      expect(await readFile(path.join(repo, "release", "win-unpacked", "Tandem.exe"), "utf8")).toContain("fake exe");
+      expect(buildInfo.packageIdentity).toMatch(/^[0-9A-F]{64}$/);
       expect(accepted.recoveryRuntime).toMatchObject({ role: "B", sourceSha: candidateCommit, stage: "b-runtime-verified" });
-      const recoveryBuildInfo = JSON.parse(await readFile(path.join(relayRoot, "runtimes", "executor-b", "BUILD_INFO.json"), "utf8"));
+      const recoveryBuildInfo = JSON.parse(await readFile(path.join(root, "runtimes", "executor-b", "BUILD_INFO.json"), "utf8"));
       expect(recoveryBuildInfo.sourceSha).toBe(candidateCommit);
+      expect(recoveryBuildInfo.packageIdentity).toBe(buildInfo.packageIdentity);
       expect(recoveryBuildInfo.reciprocalCapabilities.candidatePreviewArtifactLifecycle).toBe(1);
+      const journal = JSON.parse(await readFile(path.join(root, "state", "runtime-recovery-flow.json"), "utf8"));
+      expect(journal).toMatchObject({ sourceSha: candidateCommit, packageIdentity: buildInfo.packageIdentity, stage: "b-verified" });
+      expect(journal.proof.bEndpoint).toMatchObject({ sourceSha: candidateCommit, packageIdentity: buildInfo.packageIdentity });
 
       const waitingClaim = await relay(repo, "-Action", "Claim", "-Role", "A");
       expect(waitingClaim).toMatchObject({ outcome: "A_UPGRADE_PENDING" });
@@ -731,10 +838,10 @@ describe("reciprocal relay script", () => {
       const completed = await relay(repo, "-Action", "CompleteAUpgrade", "-Role", "A", "-Force", "-Summary", "human confirmed A rebuild");
       expect(completed).toMatchObject({ outcome: "A_UPGRADE_COMPLETED", phase: "idle", nextRole: "A" });
     } finally {
-      await rm(relayRoot, { recursive: true, force: true });
+      await stopRelayProcess(root);
       await rm(repo, { recursive: true, force: true });
     }
-  }, 30_000);
+  }, 90_000);
 
   windowsIt("uses the relay's paired direction controller when accepting an external worktree candidate", async () => {
     const repo = await mkdtemp(path.join(tmpdir(), "tandem-relay-paired-control-"));
@@ -765,7 +872,7 @@ describe("reciprocal relay script", () => {
     } finally {
       await rm(repo, { recursive: true, force: true });
     }
-  }, 30_000);
+  }, 90_000);
 
   windowsIt("D155: intermediate autonomous epic steps return to idle while final steps keep the A-upgrade gate", async () => {
     const intermediateRepo = await mkdtemp(path.join(tmpdir(), "tandem-relay-d155-intermediate-"));
@@ -804,6 +911,7 @@ describe("reciprocal relay script", () => {
       const nextClaim = await relay(intermediateRepo, "-Action", "Claim", "-Role", "A");
       expect(nextClaim).toMatchObject({ outcome: "CLAIMED", phase: "working", activeRole: "A" });
     } finally {
+      await stopRelayProcess(relayRoot(intermediateRepo));
       await rm(intermediateRepo, { recursive: true, force: true });
     }
 
@@ -832,9 +940,10 @@ describe("reciprocal relay script", () => {
       const waitingClaim = await relay(finalRepo, "-Action", "Claim", "-Role", "A");
       expect(waitingClaim).toMatchObject({ outcome: "A_UPGRADE_PENDING" });
     } finally {
+      await stopRelayProcess(relayRoot(finalRepo));
       await rm(finalRepo, { recursive: true, force: true });
     }
-  }, 30_000);
+  }, 90_000);
 
   windowsIt("D151: passive check failure pauses without handing work to B", async () => {
     const repo = await mkdtemp(path.join(tmpdir(), "tandem-relay-d151-fail-"));

@@ -1,6 +1,6 @@
 import { randomBytes } from "node:crypto";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
-import { mkdir, rm, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { SessionResumeResponse, SessionStartResponse } from "../shared/ipc.js";
 
@@ -61,6 +61,29 @@ export async function startAutomationServer(options: AutomationServerOptions): P
   let activeRun: Promise<void> | undefined;
   let completedRun: { projectDir: string; sessionId?: string } | undefined;
 
+  const runtimeBuildInfo = async () => {
+    const buildInfoPath = process.env.TANDEM_RUNTIME_BUILD_INFO;
+    if (!buildInfoPath) return {};
+    try {
+      const parsed = JSON.parse(await readFile(buildInfoPath, "utf8")) as Record<string, unknown>;
+      return {
+        runtimeBuildInfoPath: buildInfoPath,
+        sourceSha: typeof parsed.sourceSha === "string" ? parsed.sourceSha : undefined,
+        packageIdentity: typeof parsed.packageIdentity === "string" ? parsed.packageIdentity : process.env.TANDEM_RUNTIME_PACKAGE_ID,
+        capabilities: parsed.reciprocalCapabilities && typeof parsed.reciprocalCapabilities === "object"
+          ? parsed.reciprocalCapabilities
+          : { candidatePreviewArtifactLifecycle: 1 }
+      };
+    } catch (error) {
+      return {
+        runtimeBuildInfoPath: buildInfoPath,
+        packageIdentity: process.env.TANDEM_RUNTIME_PACKAGE_ID,
+        runtimeBuildInfoError: error instanceof Error ? error.message : String(error),
+        capabilities: { candidatePreviewArtifactLifecycle: 1 }
+      };
+    }
+  };
+
   const currentState = () => {
     const serviceState = options.service.getAutomationState();
     if (!serviceState.running) completedRun = undefined;
@@ -84,13 +107,16 @@ export async function startAutomationServer(options: AutomationServerOptions): P
       const url = new URL(request.url || "/", "http://127.0.0.1");
       if (request.method === "GET" && url.pathname === "/status") {
         const state = currentState();
+        const runtime = await runtimeBuildInfo();
         return send(response, 200, {
           ok: true,
           pid: process.pid,
           instanceId: options.instanceId || null,
           allowedProjectDir,
+          tokenFile: options.tokenFile,
           ...state.serviceState,
-          capabilities: { candidatePreviewArtifactLifecycle: 1 },
+          ...runtime,
+          capabilities: runtime.capabilities || { candidatePreviewArtifactLifecycle: 1 },
           running: state.running,
           acceptedAt,
           completedAt,

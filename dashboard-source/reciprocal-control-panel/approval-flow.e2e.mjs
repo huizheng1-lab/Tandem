@@ -119,6 +119,7 @@ async function makeFixture(t) {
   await git(repoRoot, "worktree", "add", copyA, "codex/reciprocal-a");
   await git(repoRoot, "worktree", "add", copyB, "codex/reciprocal-b");
   const fixtureSha = await git(repoRoot, "rev-parse", "HEAD");
+  const fixturePackage = `pkg-${fixtureSha.slice(0, 12)}`;
   const oldSha = "0000000000000000000000000000000000000000";
   const statePath = path.join(repoRoot, ".git", "tandem-relay", "state.json");
   const reviewIndexPath = path.join(relayRoot, "control", "UPDATE_REVIEW_INDEX.json");
@@ -129,13 +130,14 @@ async function makeFixture(t) {
     sourceSha: fixtureSha,
     sourceShortSha: fixtureSha.slice(0, 7),
     builtAt: "2026-07-22T00:00:00.000Z",
+    packageIdentity: fixturePackage,
     reciprocalCapabilities: { candidatePreviewArtifactLifecycle: 1 },
   });
   await writeFile(path.join(repoRoot, "release", "win-unpacked", "Tandem.exe"), "fixture candidate\n", "utf8");
   for (const role of ["a", "b"]) {
     const runtimeDir = path.join(relayRoot, "runtimes", `executor-${role}`);
     await mkdir(runtimeDir, { recursive: true });
-    await writeJson(path.join(runtimeDir, "BUILD_INFO.json"), { sourceSha: oldSha, sourceShortSha: "0000000" });
+    await writeJson(path.join(runtimeDir, "BUILD_INFO.json"), { sourceSha: oldSha, sourceShortSha: "0000000", packageIdentity: `old-${role}` });
     await writeFile(path.join(runtimeDir, "Tandem.exe"), "fixture runtime\n", "utf8");
   }
   await writeJson(reviewIndexPath, {});
@@ -170,11 +172,13 @@ async function makeFixture(t) {
       await writeJson(path.join(relayRoot, "runtimes", `executor-${role}`, "BUILD_INFO.json"), {
         sourceSha,
         sourceShortSha: sourceSha.slice(0, 7),
+        packageIdentity: fixturePackage,
+        reciprocalCapabilities: { candidatePreviewArtifactLifecycle: 1 },
       });
     }
   }
 
-  return { root, relayRoot, repoRoot, copyA, copyB, fixtureSha, oldSha, statePath, reviewIndexPath, auditPath, commandLog, wishlistPath: path.join(relayRoot, "control", "WISHLIST.md"), setState, setRuntimeShas };
+  return { root, relayRoot, repoRoot, copyA, copyB, fixtureSha, fixturePackage, oldSha, statePath, reviewIndexPath, auditPath, commandLog, wishlistPath: path.join(relayRoot, "control", "WISHLIST.md"), setState, setRuntimeShas };
 }
 
 async function withServer(t, fixture, runTest) {
@@ -337,6 +341,78 @@ test("approval flow uses the real relay to complete an inactive A-upgrade bounda
     "b-stopped",
   ]);
   await writeEvidence("approval-flow", { commands, actions, state, journal, auditSteps: audit.filter((entry) => entry.action === "update.approvalStep").map((entry) => ({ step: entry.step, detail: entry.detail })) });
+});
+
+test("D183 approval adopts relay-verified B without re-promoting or restarting it", async (t) => {
+  const fixture = await makeFixture(t);
+  await fixture.setState({ runtimeRecoveryStage: "b-runtime-verified" });
+  await writeJson(path.join(fixture.relayRoot, "runtimes", "executor-a", "BUILD_INFO.json"), {
+    sourceSha: fixture.oldSha,
+    sourceShortSha: "0000000",
+    packageIdentity: "old-a",
+  });
+  await writeJson(path.join(fixture.relayRoot, "runtimes", "executor-b", "BUILD_INFO.json"), {
+    sourceSha: fixture.fixtureSha,
+    sourceShortSha: fixture.fixtureSha.slice(0, 7),
+    packageIdentity: fixture.fixturePackage,
+    reciprocalCapabilities: { candidatePreviewArtifactLifecycle: 1 },
+  });
+  await writeJson(path.join(fixture.relayRoot, "state", "executor-b", "automation.json"), {
+    port: 4102,
+    token: "test-token-B",
+    pid: 4102,
+    projectDir: fixture.copyA,
+    createdAt: "2026-07-22T00:00:00.000Z",
+  });
+  await writeJson(path.join(fixture.relayRoot, "state", "runtime-recovery-flow.json"), {
+    schemaVersion: 1,
+    id: "relay-recovery-fixture",
+    status: "running",
+    stage: "b-verified",
+    durableStages: [
+      "package-ready",
+      "b-promote-started",
+      "b-promoted",
+      "b-start-started",
+      "b-started",
+      "b-verified",
+      "approval-recorded",
+      "a-stop-started",
+      "a-stopped",
+      "a-promote-started",
+      "a-promoted",
+      "a-start-started",
+      "a-started",
+      "a-verified",
+      "relay-completed",
+      "b-stop-started",
+      "b-stopped",
+    ],
+    sourceSha: fixture.fixtureSha,
+    packageIdentity: fixture.fixturePackage,
+    proof: { bEndpoint: { sourceSha: fixture.fixtureSha, packageIdentity: fixture.fixturePackage, allowedProjectDir: fixture.copyA } },
+    flags: { recoveryAuthorityReady: true },
+    steps: [{ step: "recovery-authority-ready", ok: true, detail: "relay verified B", at: "2026-07-22T00:00:00.000Z" }],
+    updatedAt: "2026-07-22T00:00:00.000Z",
+  });
+
+  await withServer(t, fixture, async ({ post }) => {
+    const { response, result } = await post("/api/update/approve", { comment: "adopt relay B" });
+    assert.equal(response.status, 200, JSON.stringify(result));
+    assert.equal(result.ok, true);
+    assert.equal(result.result.current, "complete");
+  });
+
+  const commands = await readJsonl(fixture.commandLog);
+  const promoteCommands = commands.filter((entry) => String(entry.args[1]).endsWith("promote-reciprocal-runtime.ps1"));
+  assert.deepEqual(promoteCommands.map((entry) => entry.args[entry.args.indexOf("-TargetRole") + 1]), ["A"]);
+  const startCommands = commands.filter((entry) => String(entry.args[1]).endsWith("start-reciprocal-tandem.ps1"));
+  assert.deepEqual(startCommands.map((entry) => entry.args[entry.args.indexOf("-Role") + 1]), ["A"]);
+  const automationCalls = commands.filter((entry) => entry.args[0] === "AUTOMATION");
+  assert.equal(automationCalls.some((entry) => entry.args[1] === "B" && entry.args[3] === "/prompt"), false);
+  const finalJournal = await readJson(path.join(fixture.relayRoot, "state", "runtime-recovery-flow.json"));
+  assert.equal(finalJournal.stage, "b-stopped");
+  assert.equal(finalJournal.packageIdentity, fixture.fixturePackage);
 });
 
 test("D181 failed A restart leaves B online as recovery authority", async (t) => {
