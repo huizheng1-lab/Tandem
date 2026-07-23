@@ -1,0 +1,44 @@
+Round: D193
+
+Commits:
+- 3cc41ec D193-1: budget process-spawning integration tests
+- ae7ca15 D193-2: retire completed promotion operations
+
+Scope completed:
+- Added a 30s file-level Vitest timeout budget to the process-spawning integration suites named by the handoff:
+  - tests/reciprocal-direction.test.ts
+  - tests/reciprocal-relay.test.ts
+  - tests/reciprocal-supervisor.test.ts
+  - tests/reciprocal-main-update.test.ts
+- The timeout change is a timing budget only. No assertions, skips, or coverage expectations were weakened.
+- Added completed promotion-operation retirement in scripts/promote-reciprocal-runtime.ps1. A different package can proceed only when the existing operation is already target-verified and the current target verifies against that completed operation; otherwise the script still fails closed.
+- Added regression coverage in tests/runtime-package-integrity.test.ts for promoting a different package after an already-verified executor promotion operation.
+
+Live acceptance:
+- Cleared the current efb3b06 pause with an admin Resume referencing D193, preserving candidate efb3b06a37390fcf191eb9f07f4fa479d49faee7.
+- First fair admin PassiveTest from copy-a proved the D193 timing issue was fixed: candidate typecheck, full npm test, build, and candidate diff-check all passed.
+- That run then exposed a separate lifecycle environment failure: executor-B had a completed target-verified promotion operation for stable 83421bb, which blocked promotion of the efb3b06 package. D193-2 fixed this durably instead of manually deleting live state.
+- Final fair admin PassiveTest from copy-a returned PASSIVE_ACCEPTED.
+- Relay stopped at the human gate:
+  - phase: a-upgrade-pending
+  - stableCommit: efb3b06a37390fcf191eb9f07f4fa479d49faee7
+  - candidateCommit: null
+  - passiveFailure: null
+- The final gate did not cross the A runtime promotion gate.
+- The final gate promoted and started recovery executor B from the verified efb3b06 package:
+  - packageIdentity: C5D4CB4625BAA9BBF87A66568756A531C9766EF6914154A6B23BEA06BB30A57B
+  - B start output: Started helper PID 52856; readiness is verified by the executor automation token and /status attestation.
+
+Verification:
+- npm test -- tests/reciprocal-direction.test.ts -- --reporter=dot: passed, 24 tests
+- npm test -- tests/reciprocal-supervisor.test.ts -- --reporter=dot: passed, 12 tests
+- npm test -- tests/reciprocal-main-update.test.ts: passed, 8 tests after an initial contention failure when run concurrently with the long relay suite
+- npm test -- tests/reciprocal-relay.test.ts -- --reporter=dot: passed, 40 tests
+- npm test -- tests/runtime-package-integrity.test.ts -- --reporter=dot: passed, 4 tests
+- npm run typecheck: passed
+- npm test: passed on rerun, 53 files passed and 1 skipped; 575 tests passed and 1 skipped
+- git diff --check: passed
+
+Notes:
+- An earlier full npm test attempt failed two reciprocal-relay tests due an environment/temp-worktree setup failure under heavy process contention; the reciprocal-relay file passed in isolation immediately afterward, and the full npm test command passed on a clean rerun.
+- Unrelated untracked handoff docs and the pre-existing unstaged scheduler cadence hunk in scripts/setup-reciprocal-tandem.ps1 were left untouched.
