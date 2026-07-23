@@ -313,6 +313,96 @@ throw "unexpected action $Action"
     expect(hard.actions[0]).toMatchObject({ kind: "retry-backoff", code: "environment-failure", retryable: false });
   }, 30_000);
 
+  it("D189 escalates repeated environment failures through production retry state", async () => {
+    const { repo, relay, state } = await fixture();
+    const statePath = path.join(repo, ".git", "tandem-relay", "state.json");
+    await writeFile(statePath, JSON.stringify({
+      schemaVersion: 2,
+      phase: "paused",
+      pausedFromPhase: "passive-testing",
+      pauseOrigin: "machine",
+      pauseReasonCode: "environment-failure",
+      pauseAfterTurn: false,
+      activeRole: null,
+      nextRole: "A",
+      stableCommit: "0123456789012345678901234567890123456789",
+      candidateCommit: "abcdefabcdefabcdefabcdefabcdefabcdefabcd",
+    }), "utf8");
+    const fakeRelay = path.join(relay, "control", "fake-relay-d189.ps1");
+    const callsPath = path.join(relay, "control", "retry-calls-d189.log");
+    await writeFile(fakeRelay, `
+param([string]$Action,[string]$Workspace,[string]$Role,[string]$Summary)
+Add-Content -LiteralPath '${callsPath.replaceAll("'", "''")}' -Value $Action
+$statePath='${statePath.replaceAll("'", "''")}'
+$utf8=[Text.UTF8Encoding]::new($false)
+if($Action -eq 'Resume'){
+  $state=Get-Content -LiteralPath $statePath -Raw | ConvertFrom-Json
+  $state.phase='passive-testing'; $state.pauseOrigin=$null; $state.pauseReasonCode=$null
+  [IO.File]::WriteAllBytes($statePath, $utf8.GetBytes(($state | ConvertTo-Json -Depth 8) + [Environment]::NewLine))
+  @{ outcome='RESUMED'; phase='passive-testing' } | ConvertTo-Json
+  exit 0
+}
+if($Action -eq 'PassiveTest'){
+  $state=Get-Content -LiteralPath $statePath -Raw | ConvertFrom-Json
+  $state.phase='paused'; $state.pausedFromPhase='passive-testing'; $state.pauseOrigin='machine'; $state.pauseReasonCode='environment-failure'
+  [IO.File]::WriteAllBytes($statePath, $utf8.GetBytes(($state | ConvertTo-Json -Depth 8) + [Environment]::NewLine))
+  @{ outcome='PASSIVE_FAILED'; phase='paused'; pauseReasonCode='environment-failure' } | ConvertTo-Json
+  exit 0
+}
+throw "unexpected action $Action"
+`, "utf8");
+    const env = {
+      ...process.env,
+      TANDEM_SUPERVISOR_TEST_RELAY_SCRIPT: fakeRelay,
+      TANDEM_SUPERVISOR_TEST_COPY_A: repo,
+    };
+    const calls = async () => (await readFile(callsPath, "utf8")).trim().split(/\r?\n/).filter(Boolean);
+    const expireBackoff = async () => {
+      const saved = await readJson(state);
+      saved.blocker.nextAttemptAt = new Date(Date.now() - 1000).toISOString();
+      await writeFile(state, JSON.stringify(saved), "utf8");
+    };
+
+    const first = await supervisor(repo, relay, env);
+    expect(first.transitionsUsed).toBe(1);
+    expect(first.actions[0]).toMatchObject({ kind: "environment-failure-retry", resumeOutcome: "RESUMED", passiveOutcome: "PASSIVE_FAILED" });
+    expect(await calls()).toEqual(["Resume", "PassiveTest"]);
+    let saved = await readJson(state);
+    expect(saved.blocker).toMatchObject({
+      category: "auto-recoverable-prerequisite",
+      code: "environment-failure",
+      attemptCount: 1,
+      message: "environment failure reproduced during bounded passive retry",
+    });
+
+    const backoff = await supervisor(repo, relay, env);
+    expect(backoff.transitionsUsed).toBe(0);
+    expect(backoff.actions[0]).toMatchObject({ kind: "retry-backoff", code: "environment-failure", retryable: true });
+    expect(await calls()).toEqual(["Resume", "PassiveTest"]);
+
+    await expireBackoff();
+    const second = await supervisor(repo, relay, env);
+    expect(second.transitionsUsed).toBe(1);
+    expect(second.actions[0]).toMatchObject({ kind: "environment-failure-retry" });
+    expect(await calls()).toEqual(["Resume", "PassiveTest", "Resume", "PassiveTest"]);
+    saved = await readJson(state);
+    expect(saved.blocker).toMatchObject({ category: "auto-recoverable-prerequisite", code: "environment-failure", attemptCount: 2 });
+
+    await expireBackoff();
+    const third = await supervisor(repo, relay, env);
+    expect(third.transitionsUsed).toBe(1);
+    expect(third.actions[0]).toMatchObject({ kind: "environment-failure-retry" });
+    expect(await calls()).toEqual(["Resume", "PassiveTest", "Resume", "PassiveTest", "Resume", "PassiveTest"]);
+    saved = await readJson(state);
+    expect(saved.displayState).toBe("hard blocked");
+    expect(saved.blocker).toMatchObject({ category: "hard-blocked", code: "environment-failure", attemptCount: 3, nextAction: "surface-actionable-blocker" });
+
+    const hard = await supervisor(repo, relay, env);
+    expect(hard.transitionsUsed).toBe(0);
+    expect(hard.actions[0]).toMatchObject({ kind: "retry-backoff", code: "environment-failure", retryable: false });
+    expect(await calls()).toEqual(["Resume", "PassiveTest", "Resume", "PassiveTest", "Resume", "PassiveTest"]);
+  }, 45_000);
+
   it("D188 canonical relay-state writes are atomic and size capped", async () => {
     const { repo, relay } = await fixture();
     const statePath = path.join(repo, ".git", "tandem-relay", "state.json");

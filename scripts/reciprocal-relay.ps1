@@ -493,16 +493,22 @@ try {
 
     function Invoke-ValidationCommandInWorkspace([string]$Command, [string]$CommandWorkspace) {
         $oldErrorAction = $ErrorActionPreference
+        $stdoutPath = Join-Path ([IO.Path]::GetTempPath()) ("tandem-validation-command-" + [guid]::NewGuid().ToString("N") + ".out")
+        $stderrPath = Join-Path ([IO.Path]::GetTempPath()) ("tandem-validation-command-" + [guid]::NewGuid().ToString("N") + ".err")
         Push-Location -LiteralPath $CommandWorkspace
         try {
             $ErrorActionPreference = "Continue"
-            $output = @(& cmd.exe /d /s /c $Command 2>&1)
-            $exitCode = $LASTEXITCODE
+            $process = Start-Process -FilePath "cmd.exe" -ArgumentList @("/d", "/s", "/c", $Command) -Wait -PassThru -WindowStyle Hidden -RedirectStandardOutput $stdoutPath -RedirectStandardError $stderrPath
+            $exitCode = [int]$process.ExitCode
         } finally {
             $ErrorActionPreference = $oldErrorAction
             Pop-Location
         }
-        $text = ($output | ForEach-Object { $_.ToString() }) -join [Environment]::NewLine
+        $outputParts = @()
+        if (Test-Path -LiteralPath $stdoutPath) { $outputParts += [IO.File]::ReadAllText($stdoutPath, [Text.UTF8Encoding]::new($false)) }
+        if (Test-Path -LiteralPath $stderrPath) { $outputParts += [IO.File]::ReadAllText($stderrPath, [Text.UTF8Encoding]::new($false)) }
+        Remove-Item -LiteralPath $stdoutPath, $stderrPath -Force -ErrorAction SilentlyContinue
+        $text = ($outputParts | Where-Object { $_ }) -join [Environment]::NewLine
         return [pscustomobject]@{
             command = $Command
             exitCode = $exitCode
@@ -638,12 +644,25 @@ try {
             if ($_.Groups[1].Success) { $_.Groups[1].Value -replace '\\"','"' } else { $_.Groups[2].Value }
         })
         if ($tokens.Count -eq 0) { return $false }
-        $pathPattern = '^tests[\\/](?!.*(?:^|[\\/])\.\.(?:[\\/]|$))[A-Za-z0-9_.\\/ -]+\.(?:test|spec)\.[cm]?[tj]sx?$'
+        function Test-TrustedTestPathToken([string]$Value) {
+            if ([string]::IsNullOrWhiteSpace($Value)) { return $false }
+            if ($Value.StartsWith("-")) { return $false }
+            if ([IO.Path]::IsPathRooted($Value)) { return $false }
+            if ($Value -match '^[A-Za-z]:[\\/]') { return $false }
+            if ($Value -notmatch '^tests[\\/].+\.(?:test|spec)\.[cm]?[tj]sx?$') { return $false }
+            $segments = @($Value.Replace('\','/') -split '/')
+            if ($segments.Count -lt 2 -or $segments[0] -ne "tests") { return $false }
+            foreach ($segment in $segments) {
+                if ([string]::IsNullOrEmpty($segment)) { return $false }
+                if ($segment -eq "." -or $segment -eq "..") { return $false }
+                if ($segment -notmatch '^[A-Za-z0-9_. -]+$') { return $false }
+            }
+            return $true
+        }
         function Test-TrustedTestPathTokens([string[]]$Values) {
             if ($Values.Count -eq 0) { return $true }
             foreach ($value in $Values) {
-                if ($value.StartsWith("-")) { return $false }
-                if ($value -notmatch $pathPattern) { return $false }
+                if (-not (Test-TrustedTestPathToken $value)) { return $false }
             }
             return $true
         }

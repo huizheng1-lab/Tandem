@@ -80,9 +80,34 @@ describe("reciprocal relay script", () => {
     return { ...process.env, TANDEM_RECIPROCAL_ROOT: relayRoot(repo) };
   }
 
+  function vitestBinEnv(repo: string) {
+    return { ...relayEnv(repo), PATH: `${path.join(repo, "node_modules", ".bin")}${path.delimiter}${process.env.PATH ?? ""}` };
+  }
+
+  function normalizePassiveFailureEvidence(value: unknown): unknown {
+    if (typeof value === "string") {
+      return value
+        .replace(/tandem-stable-baseline-[a-f0-9]+/gi, "tandem-stable-baseline-<id>")
+        .replace(/Start at\s+\d{2}:\d{2}:\d{2}/g, "Start at <time>")
+        .replace(/Duration\s+[^\r\n]+/g, "Duration <duration>")
+        .replace(/\s+\d+(?:\.\d+)?ms/g, " <ms>");
+    }
+    if (Array.isArray(value)) return value.map((entry) => normalizePassiveFailureEvidence(entry));
+    if (value && typeof value === "object") {
+      return Object.fromEntries(Object.entries(value).map(([key, entry]) => [key, normalizePassiveFailureEvidence(entry)]));
+    }
+    return value;
+  }
+
   async function enableVitestFixture(repo: string, source: string) {
     await mkdir(path.join(repo, "tests"), { recursive: true });
+    await mkdir(path.join(repo, "node_modules", ".bin"), { recursive: true });
     const vitestEntry = path.resolve("node_modules", "vitest", "vitest.mjs").replaceAll("\\", "/");
+    await writeFile(
+      path.join(repo, "node_modules", ".bin", "vitest.cmd"),
+      `@echo off\r\nnode "${vitestEntry}" %*\r\n`,
+      "utf8",
+    );
     await writeFile(
       path.join(repo, "package.json"),
       JSON.stringify({ type: "module", scripts: { test: `node "${vitestEntry}" run --configLoader runner` } }, null, 2),
@@ -1290,6 +1315,10 @@ it("suite > grammar failure", () => expect(1).toBe(2));
         "npm test -- tests/example.test.ts --config tests/side-effect.ts",
         "npx vitest run tests/example.test.ts --setupFiles tests/side-effect.ts",
         "vitest run tests/example.test.ts ../outside.test.ts",
+        "npm test -- tests/../outside.test.ts",
+        "npm test -- \"tests/../outside.test.ts\"",
+        "npx vitest run tests\\..\\outside.test.ts",
+        "vitest run \"tests\\..\\outside.test.ts\"",
         "npm test -- tests/example.test.ts README.md",
       ]) {
         const result = await relay(repo, "-Action", "PassiveTest", "-Role", "A", "-ValidationChecks", command);
@@ -1302,6 +1331,33 @@ it("suite > grammar failure", () => expect(1).toBe(2));
       await rm(repo, { recursive: true, force: true });
     }
   }, 90_000);
+
+  windowsIt("D189: stable baseline command grammar accepts only supported test command families", async () => {
+    const repo = await mkdtemp(path.join(tmpdir(), "tandem-relay-d189-grammar-positive-"));
+    try {
+      await initRepo(repo);
+      await enableVitestFixture(repo, `
+import { expect, it } from "vitest";
+it("suite > grammar positive", () => expect(1).toBe(2));
+`);
+      const candidateCommit = await createCandidate(repo);
+      await execa("git", ["switch", "codex/reciprocal-a"], { cwd: repo });
+      for (const command of [
+        "npm test -- tests/example.test.ts",
+        "npx vitest run tests/example.test.ts",
+        "vitest run tests/example.test.ts",
+      ]) {
+        const result = await relayWithEnv(repo, vitestBinEnv(repo), "-Action", "PassiveTest", "-Role", "A", "-ValidationChecks", command);
+        expect(result).toMatchObject({ outcome: "PASSIVE_FAILED", phase: "paused", candidateCommit });
+        expect(result.stableBaseline).toMatchObject({ classification: "environment-failure", reproducedOnStable: true });
+        expect(result.stableBaseline.baselineChecks).toHaveLength(1);
+        expect(result.stableBaseline.skippedControls).toHaveLength(0);
+        await relay(repo, "-Action", "Resume", "-Summary", "continue command grammar positive checks");
+      }
+    } finally {
+      await rm(repo, { recursive: true, force: true });
+    }
+  }, 120_000);
 
   windowsIt("D188: persisted diagnostics are limited by UTF-8 bytes", async () => {
     const repo = await mkdtemp(path.join(tmpdir(), "tandem-relay-d188-byte-limit-"));
@@ -1355,6 +1411,44 @@ it("suite > same failure", () => expect("❯ × 智能路径").toBe("stable"));
       }
       expect(snapshots[1]).toEqual(snapshots[0]);
       expect(snapshots[2]).toEqual(snapshots[0]);
+    } finally {
+      await rm(repo, { recursive: true, force: true });
+    }
+  }, 120_000);
+
+  windowsIt("D189: repeated mutating failure saves preserve complete passiveFailure evidence bytes", async () => {
+    const repo = await mkdtemp(path.join(tmpdir(), "tandem-relay-d189-save-stability-"));
+    try {
+      await initRepo(repo);
+      await enableVitestFixture(repo, `
+import { expect, it } from "vitest";
+it("suite > \\u276f \\u00d7 \\u667a\\u80fd\\u8def\\u5f84", () => expect("\\u276f \\u00d7 \\u667a\\u80fd\\u8def\\u5f84").toBe("stable"));
+`);
+      await createCandidate(repo);
+      await execa("git", ["switch", "codex/reciprocal-a"], { cwd: repo });
+      const exactUnicode = "\u276f \u00d7 \u667a\u80fd\u8def\u5f84";
+      const snapshots: Array<{ evidenceText: string; evidenceBytes: number; stateBytes: number }> = [];
+      for (let index = 0; index < 3; index += 1) {
+        const result = await relay(repo, "-Action", "PassiveTest", "-Role", "A", "-ValidationChecks", "npm test -- tests/example.test.ts");
+        expect(result.stableBaseline).toMatchObject({ classification: "environment-failure", reproducedOnStable: true });
+        const statePath = path.join(repo, ".git", "tandem-relay", "state.json");
+        const persisted = JSON.parse(await readFile(statePath, "utf8"));
+        expect(persisted.passiveFailure.baselineChecks).toHaveLength(1);
+        expect(persisted.passiveFailure.skippedControls).toHaveLength(0);
+        expect(Buffer.byteLength(persisted.passiveFailure.failedCandidateCommands[0].output, "utf8")).toBeLessThanOrEqual(3000);
+        expect(Buffer.byteLength(persisted.passiveFailure.baselineChecks[0].output, "utf8")).toBeLessThanOrEqual(3000);
+        const evidenceText = JSON.stringify(normalizePassiveFailureEvidence(persisted.passiveFailure));
+        const stateBytes = Buffer.byteLength(JSON.stringify(normalizePassiveFailureEvidence(persisted)), "utf8");
+        expect(evidenceText).toContain(exactUnicode);
+        snapshots.push({ evidenceText, evidenceBytes: Buffer.byteLength(evidenceText, "utf8"), stateBytes });
+        await relay(repo, "-Action", "Resume", "-Summary", "repeat complete evidence save stability check");
+      }
+      expect(snapshots[1].evidenceText).toBe(snapshots[0].evidenceText);
+      expect(snapshots[2].evidenceText).toBe(snapshots[0].evidenceText);
+      expect(snapshots[1].evidenceBytes).toBe(snapshots[0].evidenceBytes);
+      expect(snapshots[2].evidenceBytes).toBe(snapshots[0].evidenceBytes);
+      expect(snapshots[1].stateBytes).toBeLessThanOrEqual(snapshots[0].stateBytes);
+      expect(snapshots[2].stateBytes).toBeLessThanOrEqual(snapshots[1].stateBytes);
     } finally {
       await rm(repo, { recursive: true, force: true });
     }

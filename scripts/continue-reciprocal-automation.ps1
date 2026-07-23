@@ -535,12 +535,12 @@ function Exit-Lease([string]$Path) {
 }
 
 function Set-DisplayState([object]$RelayState, [object]$SupervisorState) {
+    if ($SupervisorState.blocker -and $SupervisorState.blocker.category -eq [string]$taxonomy.categories.hardBlocked) { return [string]$taxonomy.displayStates.hardBlocked }
     if ($RelayState.phase -eq "working" -and $RelayState.activeRole) { return [string]$taxonomy.displayStates.working }
     if ($RelayState.phase -eq "validating" -or $RelayState.phase -eq "passive-testing") { return [string]$taxonomy.displayStates.testing }
     if ($RelayState.phase -eq "a-upgrade-pending") { return [string]$taxonomy.displayStates.waitingForReview }
     if ($RelayState.phase -eq "paused" -and $RelayState.pauseOrigin -eq [string]$taxonomy.pauseOrigins.human) { return [string]$taxonomy.displayStates.humanPaused }
     if ($RelayState.phase -eq "paused" -and $RelayState.pauseOrigin -eq [string]$taxonomy.pauseOrigins.machine) { return [string]$taxonomy.displayStates.machineBlocked }
-    if ($SupervisorState.blocker -and $SupervisorState.blocker.category -eq [string]$taxonomy.categories.hardBlocked) { return [string]$taxonomy.displayStates.hardBlocked }
     if ($SupervisorState.blocker) { return [string]$taxonomy.displayStates.retryingPrerequisite }
     if ($SupervisorState.waiting) { return [string]$taxonomy.displayStates.waitingNotBlocked }
     $board = Get-HighestPriorityQueuedItem (Get-SharedDirectionPath $relayRootFull)
