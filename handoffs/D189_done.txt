@@ -1,0 +1,27 @@
+Round: D189
+
+Commits:
+- 7032a8c D189-1: close relay safety proof gaps
+
+Implementation summary:
+- Replaced the stable-baseline control path regex with per-token path validation that rejects options, rooted paths, drive paths, empty segments, "."/".." segments, non-test tokens, and test paths outside the tests tree.
+- Added direct allowlist negatives for slash and backslash immediate traversal, quoted and unquoted forms, plus the existing hidden option/non-test token cases.
+- Added positive baseline replay coverage for all supported read-only test command families: "npm test -- ...", "npx vitest run ...", and "vitest run ...".
+- Changed validation command output capture to UTF-8 redirected process output so exact Unicode failure text persists instead of being re-decoded through the PowerShell native pipeline.
+- Added D189 retry escalation coverage that drives production state through attempt 1, no-call backoff, elapsed attempt 2, elapsed attempt 3 hard-block, and a subsequent no-call hard-block poll. Assertions cover cumulative Resume/PassiveTest calls, attempt counts, category, nextAction, and retryability.
+- Made hard-blocked supervisor state take precedence over machine-paused relay state for truthful dashboard display state.
+- Added D189 complete passiveFailure persistence coverage comparing normalized passiveFailure byte-for-byte across repeated genuine state mutations, including command outputs, baseline checks, skipped controls, exact Unicode text, and non-growing normalized state/evidence byte sizes.
+
+Verification:
+- PASS: npm test -- tests/reciprocal-relay.test.ts -t "D189|D188: stable baseline command grammar|D188: repeated mutating failure" -- --reporter=dot
+- PASS: npm test -- tests/reciprocal-supervisor.test.ts -t "D189|D188 retries|D188 backs off" -- --reporter=dot
+- PASS: npm test -- tests/reciprocal-supervisor.test.ts -- --reporter=dot
+- PASS: npm test -- tests/reciprocal-relay.test.ts -t "D151: passive test accepts" -- --reporter=verbose
+- PASS: npm test -- tests/reciprocal-relay.test.ts -- --reporter=dot
+- PASS: npm run typecheck
+- PASS: npm test
+- PASS: git diff --check
+
+Notes:
+- A first full relay-file run timed out once at the original 4-minute command timeout, then one longer full relay-file run had a transient D151 Claim failure. The isolated D151 rerun passed, and the subsequent complete relay-file rerun passed 37/37.
+- Dashboard deployment, live relay state, W0027, reciprocal worktrees/runtimes, and the quarantined oversized state were not touched.
