@@ -2,10 +2,13 @@ import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { execa } from "execa";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 const describeWindows = process.platform === "win32" ? describe : describe.skip;
 const scriptPath = path.resolve("scripts", "reciprocal-direction.ps1");
+const PROCESS_SPAWNING_TEST_TIMEOUT_MS = 30_000;
+
+vi.setConfig({ testTimeout: PROCESS_SPAWNING_TEST_TIMEOUT_MS });
 
 async function boardFile(): Promise<string> {
   const dir = path.join(tmpdir(), `tandem-direction-${Date.now()}-${Math.random().toString(16).slice(2)}`);

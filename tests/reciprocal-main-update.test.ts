@@ -2,10 +2,13 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { execa } from "execa";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 const script = path.resolve("scripts/reciprocal-main-update.mjs");
 const windowsIt = process.platform === "win32" ? it : it.skip;
+const PROCESS_SPAWNING_TEST_TIMEOUT_MS = 30_000;
+
+vi.setConfig({ testTimeout: PROCESS_SPAWNING_TEST_TIMEOUT_MS });
 
 async function git(cwd: string, ...args: string[]) {
   return execa("git", args, { cwd });

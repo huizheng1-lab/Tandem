@@ -5,9 +5,12 @@ import path from "node:path";
 import { createHmac } from "node:crypto";
 import net from "node:net";
 import { execa } from "execa";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 const windowsIt = process.platform === "win32" ? it : it.skip;
+const PROCESS_SPAWNING_TEST_TIMEOUT_MS = 30_000;
+
+vi.setConfig({ testTimeout: PROCESS_SPAWNING_TEST_TIMEOUT_MS });
 
 describe("reciprocal relay script", () => {
   async function initRepo(repo: string) {
