@@ -1,0 +1,46 @@
+Round: D192
+
+Commits:
+- 8c6c2e7 D192-1: add relay schema boundary
+- b34385e D192-2: reset recovery journal per candidate
+
+Scope completed:
+- Added relay state schemaVersion 3 as a hard gate-version boundary. Admin relay migrates schema 2 state to schema 3 once with D192 audit fields; stale checkout relay scripts fail closed on active schema 3 state instead of running a passive gate or mutating pause state.
+- Added an admin-absolute passiveTestCommand to Complete output and documented it as the only valid immediate passive-test chain command after Complete.
+- Updated A protocol/setup prompt guidance so claims and passive gates use the admin relay path rather than checkout-relative relay scripts.
+- Reset runtime recovery journals at package-ready when a new candidate source/package is being processed, while keeping mismatch failures for later stages.
+- Added focused D192 regression coverage for schema migration, stale script failure, passiveFailure preservation, and admin passiveTestCommand emission.
+
+Live D192 acceptance:
+- Starting condition was stale checkout relay code after Complete had produced an evidence-free passive pause for candidate efb3b06a37390fcf191eb9f07f4fa479d49faee7 with passiveFailure: null.
+- A stale checkout Status attempt from copy-a failed loudly on active schema 3 state and did not run the passive gate or mutate to another blind pause.
+- Admin relay migrated the live state to schemaVersion 3 with schemaMigratedFrom 2 and reason "D192 stale-relay hard boundary".
+- Cleared the evidence-free pause with admin Resume while preserving the candidate.
+- Re-ran the passive gate with the admin relay. The final fair retest ended:
+  - phase: paused
+  - pausedFromPhase: passive-testing
+  - pauseOrigin: machine
+  - pauseReasonCode: candidate-failure
+  - stableCommit: 83421bbc0cd5a8dd2832f194b66e8bf8e9d72eb1
+  - candidateCommit: efb3b06a37390fcf191eb9f07f4fa479d49faee7
+  - passiveFailure.classifier: stable-baseline-control
+  - passiveFailure.classification: candidate-failure
+  - passiveFailure.reproducedOnStable: false
+  - failing test file: tests\reciprocal-direction.test.ts
+  - candidate identity: tests\reciprocal-direction.test.ts::reciprocal direction wishlist removal > removes a queued item while preserving its original line and reason
+  - stable baseline targeted check: npm test -- "tests\reciprocal-direction.test.ts" passed, 24 tests
+- No promotion occurred and the stable runtime remained on 83421bbc0cd5a8dd2832f194b66e8bf8e9d72eb1.
+
+Verification:
+- npm test -- tests/reciprocal-relay.test.ts -t "D192|D190" -- --reporter=dot
+- npm test -- tests/reciprocal-relay.test.ts -t "D192|D187" -- --reporter=dot
+- npm test -- tests/reciprocal-relay.test.ts -t "D192|D190|D151: passive test accepts" -- --reporter=dot
+- npm run typecheck
+- npm test -- tests/reciprocal-relay.test.ts -- --reporter=dot
+- npm test
+- git diff --check
+
+Notes:
+- The first admin retest produced an evidenced environment-failure timeout classification, so D192 retried once.
+- The retry exposed a stale runtime recovery journal source mismatch from the prior D190 stable candidate; D192-2 fixes this by starting a fresh journal when a new candidate reaches package-ready.
+- Unrelated untracked handoff docs and the pre-existing unstaged scheduler cadence hunk in scripts/setup-reciprocal-tandem.ps1 were left untouched.
