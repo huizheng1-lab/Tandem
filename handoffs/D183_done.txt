@@ -1,0 +1,43 @@
+Round: D183
+
+Commits:
+- 4357b44 D183-1: unify recovery journal authority
+
+Summary:
+- Unified relay and dashboard recovery on state/runtime-recovery-flow.json with one durable stage vocabulary:
+  package-ready -> b-promote-started -> b-promoted -> b-start-started -> b-started -> b-verified -> approval-recorded -> a-stop-started -> a-stopped -> a-promote-started -> a-promoted -> a-start-started -> a-started -> a-verified -> relay-completed -> b-stop-started -> b-stopped.
+- Relay now writes the shared journal from package-ready through verified B, and dashboard approval adopts relay-verified B without re-promoting or restarting it.
+- Role=Both startup preserves A+B when relay state is a-upgrade-pending with b-runtime-verified and no dashboard journal exists.
+- Removed the B readiness bypass from production/test source; no TANDEM_RECIPROCAL_TEST_B_READY path remains outside the D183 handoff text.
+- Added cryptographic package identity: SHA-256 over source SHA, managed runtime file manifest, and required reciprocal capabilities. BUILD_INFO now carries packageIdentity and packageManifest through packaging and promotion.
+- Bound running endpoint proof to PID, executable path, token file, target worktree, source SHA, package identity, and reciprocal capability.
+- Dashboard journal loading/writing fails closed on corrupt JSON, unsupported schema, unknown stage, missing source/package identity, stage regression, source mismatch, and package mismatch.
+- For autonomous continuations that return to idle, relay stops the temporary verified B after candidate proof; human-gated A upgrades preserve B online until A is verified and relay completion is durable.
+
+Isolated process topology:
+- tests/reciprocal-relay.test.ts copies process.execPath to isolated runtime Tandem.exe, injects a fake runtime entrypoint through TANDEM_EXECUTOR_B_NODE_ENTRY, launches a real child process, writes a real token file, and serves authenticated loopback /status.
+- tests/reciprocal-setup-script.test.ts launches an isolated A process with a real authenticated /status endpoint and proves stale B exits while A reaches the expected target/source/package endpoint.
+- Dashboard E2E uses isolated relay roots, runtime dirs, tokens, and command logs; the D183 path proves approval continues from a prewritten relay b-verified journal with no second B promote/start and no B /prompt.
+
+Failure/crash matrix covered:
+- B package/promote/start/verify failures fail before A stop and keep A known-good.
+- Journal corruption, unknown schema/stage, source mismatch, package mismatch, and regression fail closed.
+- A restart failure preserves B as recovery authority and retry resumes without duplicate approval.
+- Crash after durable A stop resumes from journal and completes.
+- Recovery-only already-promoted A gate derives package identity before journal writes and closes without promotion/start/stop.
+- B is stopped only after A verification and relay completion for human-gated upgrades; non-gated continuations stop B before returning idle.
+
+Verification:
+- node --check dashboard-source/reciprocal-control-panel/server.mjs: PASS
+- node --test dashboard-source/reciprocal-control-panel/lib.nodecheck.mjs: PASS
+- node --test dashboard-source/reciprocal-control-panel/approval-flow.e2e.mjs: PASS
+- npx vitest run --configLoader runner tests/reciprocal-relay.test.ts tests/reciprocal-setup-script.test.ts tests/automation-server.test.ts --reporter verbose: PASS (27 tests)
+- npm run typecheck: PASS
+- npm test: PASS (52 files passed, 1 skipped; 542 tests passed, 1 skipped)
+- git diff --check: PASS
+- scripts/deploy-reciprocal-dashboard.ps1 to isolated temp target plus -VerifyOnly: PASS, verification.ok=true. The temp deployment emitted the known nonfatal start-dashboard Resolve-Path warning for AppData\Local\HZ code.
+
+Safety:
+- No live W0027 runtime, relay state, dashboard, control board, or reciprocal worktree was intentionally modified.
+- Untracked handoff documents and unrelated moved/done files were left untouched.
+- Existing unrelated modification scripts/setup-reciprocal-tandem.ps1 was left unstaged.
