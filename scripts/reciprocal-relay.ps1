@@ -512,6 +512,21 @@ try {
         return $command
     }
 
+    function ConvertTo-StableBaselineCommand([string]$Command, [string]$BaselineRoot) {
+        $baselineCommand = $Command
+        if ($state.candidateCommit -and $state.stableCommit) {
+            $baselineCommand = $baselineCommand.Replace([string]$state.candidateCommit, [string]$state.stableCommit)
+        }
+        $workspaceFull = [IO.Path]::GetFullPath($Workspace).TrimEnd('\')
+        $baselineFull = [IO.Path]::GetFullPath($BaselineRoot).TrimEnd('\')
+        foreach ($workspaceText in @($workspaceFull, ($workspaceFull -replace '\\','/'))) {
+            if ($workspaceText) {
+                $baselineCommand = $baselineCommand.Replace($workspaceText, $baselineFull)
+            }
+        }
+        return $baselineCommand
+    }
+
     function Invoke-StableBaselineControl([object[]]$FailedChecks) {
         $baselineRoot = Join-Path ([IO.Path]::GetTempPath()) ("tandem-stable-baseline-" + [guid]::NewGuid().ToString("N"))
         $failingFiles = @()
@@ -529,7 +544,7 @@ try {
                 foreach ($file in $files) {
                     if ($failingFiles -notcontains $file) { $failingFiles += $file }
                 }
-                $baselineCommand = Get-StableBaselineCommand $failed $files
+                $baselineCommand = ConvertTo-StableBaselineCommand (Get-StableBaselineCommand $failed $files) $baselineRoot
                 $baselineChecks += Invoke-ValidationCommandInWorkspace $baselineCommand $baselineRoot
             }
             $reproduced = @($baselineChecks | Where-Object { -not $_.passed }).Count -gt 0
