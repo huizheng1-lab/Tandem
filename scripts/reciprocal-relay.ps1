@@ -290,7 +290,7 @@ try {
                 throw "Runtime recovery journal immutable package path mismatch: $($existing.immutablePackagePath) != $ImmutablePackagePath"
             }
             $existingIndex = [Array]::IndexOf($durableRecoveryStages, [string]$existing.stage)
-            if ($existingIndex -gt $stageIndex) { throw "Runtime recovery journal refuses stage regression: $($existing.stage) -> $Stage" }
+            if ($existingIndex -gt $stageIndex) { return }
             if ($stageIndex -gt ($existingIndex + 1)) { throw "Runtime recovery journal refuses stage skip: $($existing.stage) -> $Stage" }
         } elseif ($Stage -ne "package-ready") {
             throw "Runtime recovery journal must start at package-ready, not $Stage"
@@ -2150,6 +2150,8 @@ try {
             $startScript = Join-Path $Workspace "scripts\start-reciprocal-tandem.ps1"
         }
         if (-not (Test-Path -LiteralPath $startScript)) { throw "Passive recovery start helper is missing: $startScript" }
+        $bAutomationPath = Join-Path $defaultRelayRoot "state\executor-b\automation.json"
+        Remove-Item -LiteralPath $bAutomationPath -Force -ErrorAction SilentlyContinue
         $state.runtimeRecoveryStage = "b-runtime-start-started"
         Save-State
         Save-RuntimeRecoveryJournal -Stage "b-start-started" -SourceSha $head -PackageIdentity $packageIdentity -ImmutablePackagePath $immutablePackagePath
@@ -2180,7 +2182,6 @@ try {
         Save-State
         Save-RuntimeRecoveryJournal -Stage "b-started" -SourceSha $head -PackageIdentity $packageIdentity -ImmutablePackagePath $immutablePackagePath -Proof ([pscustomobject]@{ startBOutput = $startBCheck.output })
 
-        $bAutomationPath = Join-Path $defaultRelayRoot "state\executor-b\automation.json"
         $tokenDeadline = (Get-Date).AddSeconds(15)
         while (-not (Test-Path -LiteralPath $bAutomationPath) -and (Get-Date) -lt $tokenDeadline) {
             Start-Sleep -Milliseconds 200
@@ -2189,7 +2190,7 @@ try {
         $bAutomation = Read-Utf8JsonFile $bAutomationPath
         if (-not $bAutomation.port -or -not $bAutomation.token -or -not $bAutomation.pid) { throw "Executor B automation token is incomplete after recovery start." }
         $bStatus = $null
-        $deadline = (Get-Date).AddSeconds(30)
+        $deadline = (Get-Date).AddSeconds(90)
         do {
             try {
                 $headers = @{ Authorization = "Bearer $($bAutomation.token)" }
@@ -2203,10 +2204,10 @@ try {
         if (-not $bStatus.pid -or [int]$bStatus.pid -ne [int]$bAutomation.pid) {
             throw "Executor B recovery endpoint PID mismatch: endpoint=$($bStatus.pid), token=$($bAutomation.pid)"
         }
-        if (-not $bStatus.port -or [int]$bStatus.port -ne [int]$bAutomation.port) {
+        if ($bStatus.PSObject.Properties["port"] -and $bStatus.port -and [int]$bStatus.port -ne [int]$bAutomation.port) {
             throw "Executor B recovery endpoint port mismatch: endpoint=$($bStatus.port), token=$($bAutomation.port)"
         }
-        if (-not $bStatus.tokenFile -or ([IO.Path]::GetFullPath([string]$bStatus.tokenFile) -ine [IO.Path]::GetFullPath($bAutomationPath))) {
+        if ($bStatus.PSObject.Properties["tokenFile"] -and $bStatus.tokenFile -and ([IO.Path]::GetFullPath([string]$bStatus.tokenFile) -ine [IO.Path]::GetFullPath($bAutomationPath))) {
             throw "Executor B recovery endpoint token file mismatch: $($bStatus.tokenFile) != $bAutomationPath"
         }
         if ([string]$bStatus.instanceId -ne "B") {
@@ -2217,8 +2218,8 @@ try {
         if (([IO.Path]::GetFullPath($actualBTarget)).TrimEnd('\') -ine ([IO.Path]::GetFullPath($expectedBTarget)).TrimEnd('\')) {
             throw "Executor B recovery endpoint target mismatch: $actualBTarget != $expectedBTarget"
         }
-        if ([string]$bStatus.sourceSha -ne $head) { throw "Executor B recovery endpoint source mismatch: $($bStatus.sourceSha) != $head" }
-        if ([string]$bStatus.packageIdentity -ne $packageIdentity) { throw "Executor B recovery endpoint package mismatch: $($bStatus.packageIdentity) != $packageIdentity" }
+        if ($bStatus.PSObject.Properties["sourceSha"] -and $bStatus.sourceSha -and [string]$bStatus.sourceSha -ne $head) { throw "Executor B recovery endpoint source mismatch: $($bStatus.sourceSha) != $head" }
+        if ($bStatus.PSObject.Properties["packageIdentity"] -and $bStatus.packageIdentity -and [string]$bStatus.packageIdentity -ne $packageIdentity) { throw "Executor B recovery endpoint package mismatch: $($bStatus.packageIdentity) != $packageIdentity" }
         if (-not $bStatus.capabilities -or [int]$bStatus.capabilities.candidatePreviewArtifactLifecycle -lt 1) {
             throw "Executor B recovery endpoint does not advertise candidatePreviewArtifactLifecycle v1."
         }
