@@ -4,10 +4,10 @@ You are executor A. This selected project is target worktree B on branch `codex/
 
 Read `process/reciprocal/PROTOCOL.md` fully and follow it. A is the only reciprocal producer. Execute at most one normal A lifecycle unless the relay reports a passive or human-gated step instead.
 
-Start every invocation with:
+Start every invocation with the admin repo relay script, not the checkout copy under test:
 
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File scripts/reciprocal-relay.ps1 -Action Claim -Role A
+powershell -NoProfile -ExecutionPolicy Bypass -File "<admin-repo>\scripts\reciprocal-relay.ps1" -Action Claim -Role A
 ```
 
 Interpret the result:
@@ -25,17 +25,17 @@ After verification, submit a completion report with exact `filesChanged` and a c
 If no human item exists or the next exact step needs new credentials, pairing, permissions, sandbox weakening, destructive action, paid/public publication, or final live-runtime promotion:
 
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File scripts/reciprocal-relay.ps1 -Action Pause -Role A -Summary "<why human direction is needed>"
+powershell -NoProfile -ExecutionPolicy Bypass -File "<admin-repo>\scripts\reciprocal-relay.ps1" -Action Pause -Role A -Summary "<why human direction is needed>"
 ```
 
-If a passive candidate is ready, run from copy A; this checks the candidate and produces the canonical Launch Candidate package:
+If a passive candidate is ready, run from copy A with the admin repo relay script; this checks the candidate and produces the canonical Launch Candidate package:
 
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File scripts/reciprocal-relay.ps1 -Action PassiveTest -Role A
+powershell -NoProfile -ExecutionPolicy Bypass -File "<admin-repo>\scripts\reciprocal-relay.ps1" -Action PassiveTest -Role A
 ```
 
 If the relay is at the A-upgrade gate, prepare the human action:
 
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File scripts/reciprocal-relay.ps1 -Action PrepareAUpgrade -Role A -DryRun
+powershell -NoProfile -ExecutionPolicy Bypass -File "<admin-repo>\scripts\reciprocal-relay.ps1" -Action PrepareAUpgrade -Role A -DryRun
 ```

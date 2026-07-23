@@ -316,6 +316,30 @@ server.listen(port, "127.0.0.1");
     return completed.candidateCommit as string;
   }
 
+  async function createCandidateWithTestSource(repo: string, testSource: string) {
+    await relay(repo, "-Action", "Reset", "-Force");
+    const claimed = await relay(repo, "-Action", "Claim", "-Role", "A");
+    expect(claimed).toMatchObject({ outcome: "CLAIMED", phase: "working", activeRole: "A" });
+    await writeFile(path.join(repo, "README.md"), "initial\ncandidate\n", "utf8");
+    await writeFile(path.join(repo, "tests", "example.test.ts"), testSource, "utf8");
+    await execa("git", ["add", "README.md", "tests/example.test.ts"], { cwd: repo });
+    await execa("git", ["commit", "-m", "candidate"], { cwd: repo });
+    const completed = await relay(repo, "-Action", "Complete", "-Role", "A", "-Summary", "candidate ready");
+    expect(completed).toMatchObject({ outcome: "COMPLETED", phase: "passive-testing", nextRole: "A", activeRole: null });
+    return completed.candidateCommit as string;
+  }
+
+  async function writeNodeModulesSentinel(repo: string) {
+    const sentinel = path.join(repo, "node_modules", "d190-sentinel.txt");
+    await writeFile(sentinel, "workspace dependencies stay intact\n", "utf8");
+    return sentinel;
+  }
+
+  async function expectNodeModulesIntact(repo: string, sentinel: string) {
+    expect(await readFile(sentinel, "utf8")).toBe("workspace dependencies stay intact\n");
+    expect(await readFile(path.join(repo, "node_modules", ".bin", "vitest.cmd"), "utf8")).toContain("vitest.mjs");
+  }
+
   windowsIt("D129: status does not lock packed refs when relay refs are unchanged", async () => {
     const repo = await mkdtemp(path.join(tmpdir(), "tandem-relay-d129-"));
     const script = path.resolve("scripts/reciprocal-relay.ps1");
@@ -1453,6 +1477,105 @@ it("suite > \\u276f \\u00d7 \\u667a\\u80fd\\u8def\\u5f84", () => expect("\\u276f
       await rm(repo, { recursive: true, force: true });
     }
   }, 120_000);
+
+  windowsIt("D190: stable baseline cleanup preserves workspace node_modules junction target", async () => {
+    const cases: Array<{
+      name: string;
+      stableSource: string;
+      createCandidate: (repo: string) => Promise<string>;
+      env?: NodeJS.ProcessEnv;
+      expectedClassification: string;
+    }> = [
+      {
+        name: "stable-pass",
+        stableSource: `
+import { expect, it } from "vitest";
+it("suite > candidate only", () => expect(1).toBe(1));
+`,
+        createCandidate: (repo) =>
+          createCandidateWithTestSource(
+            repo,
+            `
+import { expect, it } from "vitest";
+it("suite > candidate only", () => expect(1).toBe(2));
+`,
+          ),
+        expectedClassification: "candidate-failure",
+      },
+      {
+        name: "stable-fail",
+        stableSource: `
+import { expect, it } from "vitest";
+it("suite > stable reproduced", () => expect(1).toBe(2));
+`,
+        createCandidate: (repo) => createCandidate(repo),
+        expectedClassification: "environment-failure",
+      },
+      {
+        name: "worktree-remove-fallback",
+        stableSource: `
+import { expect, it } from "vitest";
+it("suite > fallback reproduced", () => expect(1).toBe(2));
+`,
+        createCandidate: (repo) => createCandidate(repo),
+        env: { TANDEM_TEST_FAIL_STABLE_WORKTREE_REMOVE: "1" },
+        expectedClassification: "environment-failure",
+      },
+    ];
+
+    for (const item of cases) {
+      const repo = await mkdtemp(path.join(tmpdir(), `tandem-relay-d190-junction-${item.name}-`));
+      try {
+        await initRepo(repo);
+        await enableVitestFixture(repo, item.stableSource);
+        const sentinel = await writeNodeModulesSentinel(repo);
+        const candidateCommit = await item.createCandidate(repo);
+        await execa("git", ["switch", "codex/reciprocal-a"], { cwd: repo });
+        const env = { ...relayEnv(repo), ...item.env };
+        const result = await relayWithEnv(repo, env, "-Action", "PassiveTest", "-Role", "A", "-ValidationChecks", "npm test -- tests/example.test.ts");
+        expect(result).toMatchObject({ outcome: "PASSIVE_FAILED", phase: "paused", candidateCommit });
+        expect(result.stableBaseline).toMatchObject({ classification: item.expectedClassification });
+        expect(result.stableBaseline.baselineChecks).toHaveLength(1);
+        await expectNodeModulesIntact(repo, sentinel);
+      } finally {
+        await rm(repo, { recursive: true, force: true });
+      }
+    }
+  }, 180_000);
+
+  windowsIt("D190: copy-a passive gate uses admin relay script instead of checkout script", async () => {
+    const repo = await mkdtemp(path.join(tmpdir(), "tandem-relay-d190-admin-gate-"));
+    try {
+      await initRepo(repo);
+      await enableVitestFixture(repo, `
+import { expect, it } from "vitest";
+it("suite > admin gate evidence", () => expect(1).toBe(2));
+`);
+      await writeFile(
+        path.join(repo, "scripts", "reciprocal-relay.ps1"),
+        "throw 'stale checkout relay script executed'\n",
+        "utf8",
+      );
+      await execa("git", ["add", "scripts/reciprocal-relay.ps1"], { cwd: repo });
+      await execa("git", ["commit", "-m", "stale checkout relay script"], { cwd: repo });
+      const candidateCommit = await createCandidate(repo);
+
+      const claim = await relay(repo, "-Action", "Claim", "-Role", "A");
+      expect(claim).toMatchObject({ outcome: "PASSIVE_TEST" });
+      expect(claim.passiveTestCommand).toContain(path.resolve("scripts", "reciprocal-relay.ps1"));
+      expect(claim.passiveTestCommand).not.toContain("-File scripts/reciprocal-relay.ps1");
+
+      await execa("git", ["switch", "codex/reciprocal-a"], { cwd: repo });
+      const result = await relay(repo, "-Action", "PassiveTest", "-Role", "A", "-ValidationChecks", "npm test -- tests/example.test.ts");
+      expect(result).toMatchObject({ outcome: "PASSIVE_FAILED", phase: "paused", candidateCommit });
+      expect(result.stableBaseline).toMatchObject({ classification: "environment-failure", reproducedOnStable: true });
+      const persisted = JSON.parse(await readFile(path.join(repo, ".git", "tandem-relay", "state.json"), "utf8"));
+      expect(persisted.passiveFailure).toMatchObject({ classifier: "stable-baseline-control", classification: "environment-failure" });
+      expect(persisted.passiveFailure.baselineChecks).toHaveLength(1);
+    } finally {
+      await rm(repo, { recursive: true, force: true });
+    }
+  }, 90_000);
 
   windowsIt("D187: oversized relay state fails closed before whole-file parsing", async () => {
     const repo = await mkdtemp(path.join(tmpdir(), "tandem-relay-d187-oversized-"));

@@ -36,7 +36,7 @@ A broad human-queued item is authorization to plan. It is not a reason to pause.
 Start each invocation with:
 
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File scripts/reciprocal-relay.ps1 -Action Claim -Role A
+powershell -NoProfile -ExecutionPolicy Bypass -File "<admin-repo>\scripts\reciprocal-relay.ps1" -Action Claim -Role A
 ```
 
 Interpret the result:
@@ -64,7 +64,7 @@ Never run `git add`, `git commit`, wishlist `Candidate`, or relay `Complete` ins
 
 B has no schedule and no wishlist prompt loop. It may be launched so copy A can run as a separate runtime/process, but it must not claim, plan, implement, review, validate, or autonomously continue wishlist items. Under D151, B's `Claim` always returns passive `WAIT`.
 
-`PassiveTest -Role A` is the normal acceptance gate. It must run from copy A on `codex/reciprocal-a`; it fast-forwards to the candidate and runs:
+`PassiveTest -Role A` is the normal acceptance gate. It must run from copy A on `codex/reciprocal-a`, but the `-File` path must be the current admin repo relay script, not `scripts/reciprocal-relay.ps1` from the candidate checkout. The same admin-script invariant applies to mechanical gate commands returned by `Claim`, including `PassiveTest`, `PrepareAUpgrade`, and `CompleteAUpgrade`; the checkout under test supplies only the working directory and source tree. The gate then fast-forwards to the candidate and runs:
 
 - `npm run typecheck`
 - `npm test`

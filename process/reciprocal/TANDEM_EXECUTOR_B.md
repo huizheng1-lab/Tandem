@@ -7,7 +7,7 @@ B must not claim wishlist items, plan, implement, run leader/worker review, vali
 If invoked accidentally, run only:
 
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File scripts/reciprocal-relay.ps1 -Action Claim -Role B
+powershell -NoProfile -ExecutionPolicy Bypass -File "<admin-repo>\scripts\reciprocal-relay.ps1" -Action Claim -Role B
 ```
 
 The expected result is passive `WAIT` with `passiveOnly=true`. Report that status and stop. Do not edit files.
@@ -15,7 +15,7 @@ The expected result is passive `WAIT` with `passiveOnly=true`. Report that statu
 Passive testing is driven by A or a human from copy A with:
 
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File scripts/reciprocal-relay.ps1 -Action PassiveTest -Role A
+powershell -NoProfile -ExecutionPolicy Bypass -File "<admin-repo>\scripts\reciprocal-relay.ps1" -Action PassiveTest -Role A
 ```
 
 That command performs the mechanical build/test gate. It is not an invitation for B to reason about or change the code.

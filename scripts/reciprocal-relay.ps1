@@ -682,6 +682,20 @@ try {
         return $false
     }
 
+    function Remove-StableBaselineWorktree([string]$BaselineRoot) {
+        $baselineNodeModules = Join-Path $BaselineRoot "node_modules"
+        if (Test-Path -LiteralPath $baselineNodeModules) {
+            $item = Get-Item -LiteralPath $baselineNodeModules -Force
+            if (($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
+                [IO.Directory]::Delete($baselineNodeModules, $false)
+            }
+        }
+        if ($env:TANDEM_TEST_FAIL_STABLE_WORKTREE_REMOVE -eq "1") {
+            throw "test forced stable baseline worktree remove failure"
+        }
+        Invoke-Git worktree remove --force $BaselineRoot | Out-Null
+    }
+
     function Invoke-StableBaselineControl([object[]]$FailedChecks) {
         $baselineRoot = Join-Path ([IO.Path]::GetTempPath()) ("tandem-stable-baseline-" + [guid]::NewGuid().ToString("N"))
         $failingFiles = @()
@@ -749,7 +763,7 @@ try {
         } finally {
             if (Test-Path -LiteralPath $baselineRoot) {
                 try {
-                    Invoke-Git worktree remove --force $baselineRoot | Out-Null
+                    Remove-StableBaselineWorktree $baselineRoot
                 } catch {
                     Remove-Item -LiteralPath $baselineRoot -Recurse -Force -ErrorAction SilentlyContinue
                 }
@@ -1232,12 +1246,13 @@ try {
     function New-AutonomousContinuation([string]$Id, [string]$NextStep) {
         $nextStep = $NextStep.Trim()
         if ($nextStep -notmatch "^\d+/\d+$") { return $null }
+        $adminRelayScript = Join-Path $PSScriptRoot "reciprocal-relay.ps1"
         return [pscustomobject]@{
             available = $true
             reason = "autonomous-epic-next-step"
             wishlistId = $Id
             nextStep = $nextStep
-            claimCommand = "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/reciprocal-relay.ps1 -Action Claim -Role $Role"
+            claimCommand = "powershell -NoProfile -ExecutionPolicy Bypass -File `"$adminRelayScript`" -Action Claim -Role $Role"
             startCommand = "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/reciprocal-direction.ps1 -Action Start -Id $Id -Role $Role"
         }
     }
@@ -1830,16 +1845,17 @@ try {
             Write-Result "WAIT" ([pscustomobject]@{ passiveOnly = $true; reason = "executor-b-no-agentic-turns" })
             exit 0
         }
+        $adminRelayScript = Join-Path $PSScriptRoot "reciprocal-relay.ps1"
         if ($state.phase -eq "passive-testing" -or $state.candidateCommit) {
             Write-Result "PASSIVE_TEST" ([pscustomobject]@{
-                passiveTestCommand = "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/reciprocal-relay.ps1 -Action PassiveTest -Role A"
+                passiveTestCommand = "powershell -NoProfile -ExecutionPolicy Bypass -File `"$adminRelayScript`" -Action PassiveTest -Role A"
             })
             exit 0
         }
         if ($state.phase -eq "a-upgrade-pending") {
             Write-Result "A_UPGRADE_PENDING" ([pscustomobject]@{
-                prepareCommand = "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/reciprocal-relay.ps1 -Action PrepareAUpgrade -Role A -DryRun"
-                completeCommand = "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/reciprocal-relay.ps1 -Action CompleteAUpgrade -Role A -Force -Summary '<human confirmed A rebuild>'"
+                prepareCommand = "powershell -NoProfile -ExecutionPolicy Bypass -File `"$adminRelayScript`" -Action PrepareAUpgrade -Role A -DryRun"
+                completeCommand = "powershell -NoProfile -ExecutionPolicy Bypass -File `"$adminRelayScript`" -Action CompleteAUpgrade -Role A -Force -Summary '<human confirmed A rebuild>'"
             })
             exit 0
         }
