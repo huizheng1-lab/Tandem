@@ -1042,6 +1042,14 @@ server.listen(port, "127.0.0.1");
         classification: "environment-failure",
         reproducedOnStable: true,
       });
+
+      await relay(repo, "-Action", "Resume", "-Summary", "retry after restoring the environment");
+      const resumed = await relay(repo, "-Action", "Status");
+      expect(resumed).toMatchObject({
+        phase: "passive-testing",
+        pauseReasonCode: null,
+        passiveFailure: null,
+      });
     } finally {
       await rm(repo, { recursive: true, force: true });
     }

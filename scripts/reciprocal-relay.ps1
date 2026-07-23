@@ -1582,6 +1582,7 @@ try {
         $state.pausedFromPhase = $null
         $state.pauseOrigin = $null
         $state.pauseReasonCode = $null
+        $state.passiveFailure = $null
         Reset-ResumeCounter
         $state.lastSummary = $Summary.Trim()
         Save-State
@@ -1802,6 +1803,8 @@ try {
         Invoke-Git merge --ff-only $state.candidateCommit | Out-Null
         $head = (@(Invoke-Git rev-parse HEAD))[0].Trim()
         if ($head -ne $state.candidateCommit) { throw "PassiveTest did not land candidate commit $($state.candidateCommit)." }
+        $state.passiveFailure = $null
+        Save-State
 
         $checks = if ($ValidationChecks -and $ValidationChecks.Count -gt 0) {
             $ValidationChecks
@@ -2028,6 +2031,7 @@ try {
         $state.candidateCommit = $null
         $state.candidateKind = $null
         $state.rollbackCommit = $null
+        $state.passiveFailure = $null
         $state.activeRole = $null
         $state.nextRole = "A"
         $state.phase = if ($continuation) { "idle" } else { "a-upgrade-pending" }
