@@ -410,13 +410,34 @@ function durableStageReached(flow, stage) {
 }
 
 const delay = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds));
+const hasEndpointEcho = (value) => value !== undefined && value !== null && String(value).trim() !== "";
+
+function applyTestStatusSchema(role, status) {
+  if (!testHarness) return status;
+  const schema = process.env.TANDEM_DASHBOARD_TEST_STATUS_SCHEMA || "";
+  const result = { ...status };
+  if (schema === "old-no-echoes") {
+    delete result.port;
+    delete result.tokenFile;
+    delete result.sourceSha;
+    delete result.packageIdentity;
+  }
+  const overridePrefix = `TANDEM_DASHBOARD_TEST_STATUS_${role}_`;
+  for (const [key, value] of Object.entries(process.env)) {
+    if (!key.startsWith(overridePrefix)) continue;
+    const field = key.slice(overridePrefix.length);
+    if (!field) continue;
+    result[field[0].toLowerCase() + field.slice(1)] = value;
+  }
+  return result;
+}
 
 async function automationRequest(role, pathname, method = "GET", payload) {
   const config = automation[role];
   if (testHarness) await recordHarnessCommand(["AUTOMATION", role, method, pathname]);
   const testStatus = async () => {
     const build = await jsonFile(path.join(relayRoot, "runtimes", `executor-${role.toLowerCase()}`, "BUILD_INFO.json"), {});
-    return {
+    const status = {
       ok: true,
       running: false,
       pid: role === "A" ? 4101 : 4102,
@@ -428,6 +449,7 @@ async function automationRequest(role, pathname, method = "GET", payload) {
       packageIdentity: build.packageIdentity,
       capabilities: build.reciprocalCapabilities || build.sourceBuildInfo?.reciprocalCapabilities || { candidatePreviewArtifactLifecycle: 1 },
     };
+    return applyTestStatusSchema(role, status);
   };
   if (testHarness && testHarnessStartedRoles.has(role) && pathname === "/status") {
     return testStatus();
@@ -1635,11 +1657,11 @@ async function verifyRuntimeEndpoint(role, candidate) {
   const credentials = await jsonFile(automation[role].tokenFile, {});
   const runtimeExe = path.join(runtimeDir, "Tandem.exe");
   if (!credentials.pid || !endpoint.pid || Number(credentials.pid) !== Number(endpoint.pid)) throw new Error(`Executor ${role} token PID and endpoint PID disagree.`);
-  if (!endpoint.tokenFile || path.resolve(endpoint.tokenFile).toLowerCase() !== path.resolve(automation[role].tokenFile).toLowerCase()) throw new Error(`Executor ${role} endpoint token file mismatch.`);
-  if (endpoint.port && Number(endpoint.port) !== Number(credentials.port)) throw new Error(`Executor ${role} endpoint port mismatch.`);
+  if (hasEndpointEcho(endpoint.tokenFile) && path.resolve(endpoint.tokenFile).toLowerCase() !== path.resolve(automation[role].tokenFile).toLowerCase()) throw new Error(`Executor ${role} endpoint token file mismatch.`);
+  if (hasEndpointEcho(endpoint.port) && Number(endpoint.port) !== Number(credentials.port)) throw new Error(`Executor ${role} endpoint port mismatch.`);
   if (endpoint.instanceId !== role) throw new Error(`Executor ${role} endpoint instance mismatch: ${endpoint.instanceId || "missing"}.`);
-  if (endpoint.sourceSha !== candidate.sourceSha) throw new Error(`Executor ${role} endpoint source mismatch: ${shortSha(endpoint.sourceSha)} != ${candidate.shortSha}.`);
-  if (endpoint.packageIdentity !== expectedPackage) throw new Error(`Executor ${role} endpoint package identity mismatch.`);
+  if (hasEndpointEcho(endpoint.sourceSha) && endpoint.sourceSha !== candidate.sourceSha) throw new Error(`Executor ${role} endpoint source mismatch: ${shortSha(endpoint.sourceSha)} != ${candidate.shortSha}.`);
+  if (hasEndpointEcho(endpoint.packageIdentity) && endpoint.packageIdentity !== expectedPackage) throw new Error(`Executor ${role} endpoint package identity mismatch.`);
   if (capabilityVersion({ reciprocalCapabilities: endpoint.capabilities }, "candidatePreviewArtifactLifecycle") < requiredReciprocalCapabilities.candidatePreviewArtifactLifecycle) {
     throw new Error(`Executor ${role} endpoint capability mismatch.`);
   }

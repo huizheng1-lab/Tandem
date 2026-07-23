@@ -448,6 +448,43 @@ test("D183 approval adopts relay-verified B without re-promoting or restarting i
   assert.equal(finalJournal.packageIdentity, fixture.fixturePackage);
 });
 
+test("D195 approval accepts older endpoint status without optional echo fields", async (t) => {
+  const fixture = await makeFixture(t);
+  await fixture.setState();
+
+  await withServer(t, fixture, async ({ post }) => {
+    const { response, result } = await post("/api/update/approve", { comment: "old endpoint schema approval" });
+    assert.equal(response.status, 200, JSON.stringify(result));
+    assert.equal(result.ok, true);
+    assert.equal(result.result.current, "complete");
+  }, { env: { TANDEM_DASHBOARD_TEST_STATUS_SCHEMA: "old-no-echoes" } });
+
+  const commands = await readJsonl(fixture.commandLog);
+  const automationCalls = commands.filter((entry) => entry.args[0] === "AUTOMATION");
+  assert.equal(automationCalls.some((entry) => entry.args[1] === "B" && entry.args[3] === "/status"), true);
+  assert.equal(automationCalls.some((entry) => entry.args[1] === "B" && entry.args[3] === "/prompt"), false);
+  const state = await readJson(fixture.statePath);
+  assert.equal(state.phase, "idle");
+  assert.equal(state.nextRole, "A");
+});
+
+test("D195 approval still rejects hard endpoint identity mismatches", async (t) => {
+  const fixture = await makeFixture(t);
+  await fixture.setState();
+
+  await withServer(t, fixture, async ({ post }) => {
+    const { response, result } = await post("/api/update/approve", { comment: "bad endpoint identity" });
+    assert.equal(response.status, 400, JSON.stringify(result));
+    assert.match(result.error, /endpoint instance mismatch/i);
+  }, { env: { TANDEM_DASHBOARD_TEST_STATUS_B_InstanceId: "wrong-B" } });
+
+  const commands = await readJsonl(fixture.commandLog);
+  assert.equal(commandActions(commands).some((entry) => entry.action === "CompleteAUpgrade"), false);
+  const state = await readJson(fixture.statePath);
+  assert.equal(state.phase, "a-upgrade-pending");
+  assert.equal(state.activeRole, null);
+});
+
 test("D181 failed A restart leaves B online as recovery authority", async (t) => {
   const fixture = await makeFixture(t);
   await fixture.setState();
