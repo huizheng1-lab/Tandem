@@ -236,11 +236,13 @@ try {
             [string]$Stage,
             [string]$SourceSha,
             [string]$PackageIdentity,
+            [string]$ImmutablePackagePath = "",
             [object]$Proof = $null,
             [string]$Status = "running"
         )
         if (-not $SourceSha) { throw "Runtime recovery journal requires source SHA." }
         if (-not $PackageIdentity) { throw "Runtime recovery journal requires package identity." }
+        if (-not $ImmutablePackagePath) { throw "Runtime recovery journal requires immutable package path." }
         $stageIndex = [Array]::IndexOf($durableRecoveryStages, $Stage)
         if ($stageIndex -lt 0) { throw "Unknown runtime recovery stage: $Stage" }
         $existing = $null
@@ -252,8 +254,14 @@ try {
             }
             if ([string]$existing.sourceSha -ne $SourceSha) { throw "Runtime recovery journal source mismatch: $($existing.sourceSha) != $SourceSha" }
             if ([string]$existing.packageIdentity -ne $PackageIdentity) { throw "Runtime recovery journal package mismatch: $($existing.packageIdentity) != $PackageIdentity" }
+            if ($existing.immutablePackagePath -and ([IO.Path]::GetFullPath([string]$existing.immutablePackagePath) -ine [IO.Path]::GetFullPath($ImmutablePackagePath))) {
+                throw "Runtime recovery journal immutable package path mismatch: $($existing.immutablePackagePath) != $ImmutablePackagePath"
+            }
             $existingIndex = [Array]::IndexOf($durableRecoveryStages, [string]$existing.stage)
             if ($existingIndex -gt $stageIndex) { throw "Runtime recovery journal refuses stage regression: $($existing.stage) -> $Stage" }
+            if ($stageIndex -gt ($existingIndex + 1)) { throw "Runtime recovery journal refuses stage skip: $($existing.stage) -> $Stage" }
+        } elseif ($Stage -ne "package-ready") {
+            throw "Runtime recovery journal must start at package-ready, not $Stage"
         }
         $existingProof = if ($existing -and $existing.proof) { $existing.proof } else { [pscustomobject]@{} }
         $proofObject = [ordered]@{}
@@ -270,6 +278,7 @@ try {
             sourceSha = $SourceSha
             candidateShortSha = if ($SourceSha.Length -ge 7) { $SourceSha.Substring(0, 7) } else { $SourceSha }
             packageIdentity = $PackageIdentity
+            immutablePackagePath = $ImmutablePackagePath
             approvalReviewKey = $SourceSha
             expected = [ordered]@{
                 worktrees = [ordered]@{
@@ -1729,7 +1738,9 @@ try {
             $packageIdentity = [string]$packageBuildInfo.packageIdentity
         }
         if (-not $packageIdentity) { throw "Passive package did not produce a cryptographic package identity." }
-        Save-RuntimeRecoveryJournal -Stage "package-ready" -SourceSha $head -PackageIdentity $packageIdentity -Proof ([pscustomobject]@{ package = $runtimePackage })
+        $immutablePackagePath = if ($runtimePackage -and $runtimePackage.immutablePackagePath) { [string]$runtimePackage.immutablePackagePath } else { Join-Path $adminRepo "release\runtime-packages\$packageIdentity\win-unpacked" }
+        if (-not (Test-Path -LiteralPath $immutablePackagePath)) { throw "Immutable passive runtime package is missing: $immutablePackagePath" }
+        Save-RuntimeRecoveryJournal -Stage "package-ready" -SourceSha $head -PackageIdentity $packageIdentity -ImmutablePackagePath $immutablePackagePath -Proof ([pscustomobject]@{ package = $runtimePackage })
 
         $promotionScript = Join-Path $Workspace "scripts\promote-reciprocal-runtime.ps1"
         if (-not (Test-Path -LiteralPath $promotionScript)) {
@@ -1738,9 +1749,9 @@ try {
         if (-not (Test-Path -LiteralPath $promotionScript)) { throw "Passive recovery promotion helper is missing: $promotionScript" }
         $state.runtimeRecoveryStage = "b-runtime-promote-started"
         Save-State
-        Save-RuntimeRecoveryJournal -Stage "b-promote-started" -SourceSha $head -PackageIdentity $packageIdentity
-        $bSourceDir = if ($runtimePackage -and $runtimePackage.targetDir) { [string]$runtimePackage.targetDir } else { Join-Path $adminRepo "release\win-unpacked" }
-        $promoteBCommand = "powershell -NoProfile -ExecutionPolicy Bypass -File `"$promotionScript`" -RelayRoot `"$defaultRelayRoot`" -Source `"$bSourceDir`" -SourceSha $head -TargetRole B -BuildRound D183 -PromotedRound D183"
+        Save-RuntimeRecoveryJournal -Stage "b-promote-started" -SourceSha $head -PackageIdentity $packageIdentity -ImmutablePackagePath $immutablePackagePath
+        $bSourceDir = $immutablePackagePath
+        $promoteBCommand = "powershell -NoProfile -ExecutionPolicy Bypass -File `"$promotionScript`" -RelayRoot `"$defaultRelayRoot`" -Source `"$bSourceDir`" -SourceSha $head -TargetRole B -BuildRound D184 -PromotedRound D184"
         $promoteBCheck = Invoke-ValidationCommand $promoteBCommand
         $mechanical += $promoteBCheck
         $failed = @($mechanical | Where-Object { -not $_.passed })
@@ -1773,7 +1784,7 @@ try {
         }
         $state.runtimeRecoveryStage = "b-runtime-promoted"
         Save-State
-        Save-RuntimeRecoveryJournal -Stage "b-promoted" -SourceSha $head -PackageIdentity $packageIdentity -Proof ([pscustomobject]@{ bBuildInfo = $bBuildInfo })
+        Save-RuntimeRecoveryJournal -Stage "b-promoted" -SourceSha $head -PackageIdentity $packageIdentity -ImmutablePackagePath $immutablePackagePath -Proof ([pscustomobject]@{ bBuildInfo = $bBuildInfo })
 
         $startScript = Join-Path $Workspace "scripts\start-reciprocal-tandem.ps1"
         if (-not (Test-Path -LiteralPath $startScript)) {
@@ -1782,7 +1793,7 @@ try {
         if (-not (Test-Path -LiteralPath $startScript)) { throw "Passive recovery start helper is missing: $startScript" }
         $state.runtimeRecoveryStage = "b-runtime-start-started"
         Save-State
-        Save-RuntimeRecoveryJournal -Stage "b-start-started" -SourceSha $head -PackageIdentity $packageIdentity
+        Save-RuntimeRecoveryJournal -Stage "b-start-started" -SourceSha $head -PackageIdentity $packageIdentity -ImmutablePackagePath $immutablePackagePath
         $startBCommand = "powershell -NoProfile -ExecutionPolicy Bypass -File `"$startScript`" -Role B -RelayRoot `"$defaultRelayRoot`""
         $startBCheck = Start-PowerShellFileCommand @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", $startScript, "-Role", "B", "-RelayRoot", $defaultRelayRoot) $startBCommand
         $mechanical += $startBCheck
@@ -1808,7 +1819,7 @@ try {
         }
         $state.runtimeRecoveryStage = "b-runtime-started"
         Save-State
-        Save-RuntimeRecoveryJournal -Stage "b-started" -SourceSha $head -PackageIdentity $packageIdentity -Proof ([pscustomobject]@{ startBOutput = $startBCheck.output })
+        Save-RuntimeRecoveryJournal -Stage "b-started" -SourceSha $head -PackageIdentity $packageIdentity -ImmutablePackagePath $immutablePackagePath -Proof ([pscustomobject]@{ startBOutput = $startBCheck.output })
 
         $bAutomationPath = Join-Path $defaultRelayRoot "state\executor-b\automation.json"
         $tokenDeadline = (Get-Date).AddSeconds(15)
@@ -1848,7 +1859,7 @@ try {
         }
         $state.runtimeRecoveryStage = "b-runtime-verified"
         Save-State
-        Save-RuntimeRecoveryJournal -Stage "b-verified" -SourceSha $head -PackageIdentity $packageIdentity -Proof ([pscustomobject]@{
+        Save-RuntimeRecoveryJournal -Stage "b-verified" -SourceSha $head -PackageIdentity $packageIdentity -ImmutablePackagePath $immutablePackagePath -Proof ([pscustomobject]@{
             bEndpoint = $bStatus
             bAutomation = $bAutomation
             bProcess = [ordered]@{ pid = [int]$bAutomation.pid; path = $bProcess.Path }
@@ -1867,9 +1878,12 @@ try {
             throw
         }
         if ($continuation) {
-            Save-RuntimeRecoveryJournal -Stage "b-stop-started" -SourceSha $head -PackageIdentity $packageIdentity
+            Save-RuntimeRecoveryJournal -Stage "b-verified" -SourceSha $head -PackageIdentity $packageIdentity -ImmutablePackagePath $immutablePackagePath -Proof ([pscustomobject]@{
+                bStopStartedAfterAutonomousContinuation = $true
+                bPid = [int]$bAutomation.pid
+            })
             Stop-Process -Id ([int]$bAutomation.pid) -Force -ErrorAction SilentlyContinue
-            Save-RuntimeRecoveryJournal -Stage "b-stopped" -SourceSha $head -PackageIdentity $packageIdentity -Proof ([pscustomobject]@{
+            Save-RuntimeRecoveryJournal -Stage "b-verified" -SourceSha $head -PackageIdentity $packageIdentity -ImmutablePackagePath $immutablePackagePath -Proof ([pscustomobject]@{
                 bStoppedAfterAutonomousContinuation = $true
                 bPid = [int]$bAutomation.pid
             })

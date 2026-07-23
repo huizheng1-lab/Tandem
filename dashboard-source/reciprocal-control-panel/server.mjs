@@ -1,7 +1,7 @@
 import { createServer } from "node:http";
 import { spawn } from "node:child_process";
 import { createHash, createHmac, randomBytes } from "node:crypto";
-import { appendFile, mkdir, readFile, stat, writeFile } from "node:fs/promises";
+import { appendFile, cp, mkdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { appendFileSync, existsSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -70,6 +70,7 @@ const approvalWaitTimeoutMs = Number(process.env.TANDEM_APPROVAL_WAIT_TIMEOUT_MS
 const testHarness = process.env.TANDEM_DASHBOARD_TEST_HARNESS === "1";
 const testCommandLogPath = process.env.TANDEM_DASHBOARD_COMMAND_LOG || "";
 const testHarnessStartedRoles = new Set();
+const packageIntegrityPromise = import(pathToFileURL(path.join(repoRoot, "scripts", "runtime-package-integrity.mjs")).href);
 let approvalFlow = null;
 let supervisorTickRunning = false;
 
@@ -163,9 +164,27 @@ function runResult(command, args, cwd = repoRoot, env = process.env) {
 const git = (cwd, ...args) => run("git", args, cwd);
 
 async function runtimePackageIdentity(runtimeDir) {
-  const build = await jsonFile(path.join(runtimeDir, "BUILD_INFO.json"), {});
-  if (build.packageIdentity) return build.packageIdentity;
-  return null;
+  const integrity = await packageIntegrityPromise;
+  return (await integrity.verifyPackage(runtimeDir)).packageIdentity;
+}
+
+async function verifyCandidatePackage(candidate) {
+  const integrity = await packageIntegrityPromise;
+  const proof = await integrity.verifyPackage(candidateSource, { sourceSha: candidate.sourceSha });
+  const build = proof.buildInfo;
+  const immutablePackagePath = build.immutablePackagePath ? path.resolve(build.immutablePackagePath) : path.resolve(candidateSource);
+  if (immutablePackagePath !== path.resolve(candidateSource)) {
+    const immutableProof = await integrity.verifyPackage(immutablePackagePath, {
+      sourceSha: candidate.sourceSha,
+      packageIdentity: proof.packageIdentity,
+    });
+    return { ...immutableProof, mutableAliasProof: proof, immutablePackagePath };
+  }
+  return { ...proof, immutablePackagePath };
+}
+
+function packageSourceForFlow(flow) {
+  return flow?.immutablePackagePath || candidateSource;
 }
 
 async function recordHarnessCommand(args, cwd = repoRoot) {
@@ -196,7 +215,14 @@ async function powershell(...args) {
       for (const item of roles) {
         if (!["A", "B"].includes(item)) continue;
         await mkdir(path.dirname(automation[item].tokenFile), { recursive: true });
-        await writeFile(automation[item].tokenFile, `${JSON.stringify({ port: item === "A" ? 4101 : 4102, token: `test-token-${item}` }, null, 2)}\n`, "utf8");
+        await writeFile(automation[item].tokenFile, `${JSON.stringify({
+          port: item === "A" ? 4101 : 4102,
+          token: `test-token-${item}`,
+          pid: item === "A" ? 4101 : 4102,
+          instanceId: item,
+          projectDir: automation[item].projectDir,
+          tokenFile: automation[item].tokenFile,
+        }, null, 2)}\n`, "utf8");
       }
       if (role === "Both") testHarnessStartedRoles.add("A");
       else {
@@ -213,9 +239,10 @@ async function powershell(...args) {
       const buildInfo = await jsonFile(path.join(source, "BUILD_INFO.json"), {});
       for (const role of roles) {
         const runtimeDir = path.join(relayRoot, "runtimes", `executor-${role}`);
+        await rm(runtimeDir, { recursive: true, force: true });
         await mkdir(runtimeDir, { recursive: true });
+        await cp(source, runtimeDir, { recursive: true });
         await writeFile(path.join(runtimeDir, "BUILD_INFO.json"), `${JSON.stringify({ ...buildInfo, promotedBy: "dashboard-test-harness" }, null, 2)}\n`, "utf8");
-        await writeFile(path.join(runtimeDir, "Tandem.exe"), "test runtime\n", "utf8");
       }
       return `TEST promoted executor ${targetRole} runtime to ${shortSha(buildInfo.sourceSha)}.`;
     }
@@ -298,12 +325,18 @@ async function saveRuntimeRecoveryJournal(flow, durableStage = null, proof = {})
   const existing = await loadRuntimeRecoveryJournal();
   const stage = durableStage || flow.durableStage || existing?.stage || "package-ready";
   if (!durableRecoveryStages.includes(stage)) throw new Error(`Refusing to persist unknown runtime recovery stage ${stage}.`);
+  const stageIndex = durableRecoveryStages.indexOf(stage);
   if (existing) {
     if (existing.sourceSha !== flow.sourceSha) throw new Error(`Runtime recovery journal source mismatch: ${shortSha(existing.sourceSha)} != ${shortSha(flow.sourceSha)}.`);
-    const nextIndex = durableRecoveryStages.indexOf(stage);
     const existingIndex = durableRecoveryStages.indexOf(existing.stage);
-    if (nextIndex < existingIndex) throw new Error(`Runtime recovery journal refuses stage regression: ${existing.stage} -> ${stage}.`);
+    if (stageIndex < existingIndex) throw new Error(`Runtime recovery journal refuses stage regression: ${existing.stage} -> ${stage}.`);
+    if (stageIndex > existingIndex + 1) throw new Error(`Runtime recovery journal refuses stage skip: ${existing.stage} -> ${stage}.`);
     if (flow.packageIdentity && existing.packageIdentity !== flow.packageIdentity) throw new Error("Runtime recovery journal package identity mismatch.");
+    if (flow.immutablePackagePath && existing.immutablePackagePath && path.resolve(existing.immutablePackagePath) !== path.resolve(flow.immutablePackagePath)) {
+      throw new Error("Runtime recovery journal immutable package path mismatch.");
+    }
+  } else if (stage !== "package-ready" && !flow.recoveryOnly) {
+    throw new Error(`Runtime recovery journal must start at package-ready, not ${stage}.`);
   }
   const journal = {
     schemaVersion: 1,
@@ -314,6 +347,7 @@ async function saveRuntimeRecoveryJournal(flow, durableStage = null, proof = {})
     sourceSha: flow.sourceSha,
     candidateShortSha: shortSha(flow.sourceSha),
     packageIdentity: flow.packageIdentity || existing?.packageIdentity || null,
+    immutablePackagePath: flow.immutablePackagePath || existing?.immutablePackagePath || null,
     approvalReviewKey: flow.sourceSha,
     expected: {
       worktrees: { A: automation.A.projectDir, B: automation.B.projectDir },
@@ -337,6 +371,7 @@ async function saveRuntimeRecoveryJournal(flow, durableStage = null, proof = {})
     error: flow.error || existing?.error || null,
   };
   if (!journal.packageIdentity) throw new Error("Runtime recovery journal cannot be saved without package identity.");
+  if (!journal.immutablePackagePath) throw new Error("Runtime recovery journal cannot be saved without immutable package path.");
   flow.durableStage = stage;
   await writeJsonAtomic(runtimeRecoveryJournalPath, journal);
   return journal;
@@ -360,6 +395,7 @@ function flowFromRuntimeRecoveryJournal(journal, candidate) {
     interruptedPhase: journal.interruptedPhase || "a-upgrade-pending",
     interruptedRole: journal.interruptedRole || null,
     packageIdentity: journal.packageIdentity || null,
+    immutablePackagePath: journal.immutablePackagePath || journal.proof?.package?.immutablePackagePath || null,
     previousStableA: journal.previousStableA || null,
     durableStage: journal.stage || "package-ready",
     cancelRequested: false,
@@ -747,6 +783,7 @@ async function getCandidateUpdate(runtimeA, runtimeB, relayState = {}, reviewInd
     exists: exeExists,
     buildInfoPath,
     buildInfo,
+    immutablePackagePath: buildInfo?.immutablePackagePath || null,
     sourceSha: candidateSha,
     shortSha: candidateShortSha,
     expectedSha: relayExpectedSha,
@@ -914,13 +951,17 @@ function claudeCliModelOptionsFromSource(source) {
 let locatorPromise;
 async function cliLocators() {
   locatorPromise ||= (async () => {
-    const tsxApi = path.join(repoRoot, "node_modules", "tsx", "dist", "esm", "api", "index.mjs");
+    const repoTsxApi = path.join(repoRoot, "node_modules", "tsx", "dist", "esm", "api", "index.mjs");
+    const sourceRoot = path.resolve(here, "..", "..");
+    const sourceTsxApi = path.join(sourceRoot, "node_modules", "tsx", "dist", "esm", "api", "index.mjs");
+    const tsxApi = existsSync(repoTsxApi) ? repoTsxApi : sourceTsxApi;
     const { tsImport } = await import(pathToFileURL(tsxApi).href);
-    const parentURL = pathToFileURL(path.join(repoRoot, "dashboard-model-resolution.mjs")).href;
-    const tsconfig = path.join(repoRoot, "tsconfig.json");
+    const locatorRoot = existsSync(path.join(repoRoot, "src", "agents")) ? repoRoot : sourceRoot;
+    const parentURL = pathToFileURL(path.join(locatorRoot, "dashboard-model-resolution.mjs")).href;
+    const tsconfig = path.join(locatorRoot, "tsconfig.json");
     const [codex, claude] = await Promise.all([
-      tsImport(pathToFileURL(path.join(repoRoot, "src", "agents", "codex-cli", "locate.ts")).href, { parentURL, tsconfig }),
-      tsImport(pathToFileURL(path.join(repoRoot, "src", "agents", "claude-code-cli", "locate.ts")).href, { parentURL, tsconfig }),
+      tsImport(pathToFileURL(path.join(locatorRoot, "src", "agents", "codex-cli", "locate.ts")).href, { parentURL, tsconfig }),
+      tsImport(pathToFileURL(path.join(locatorRoot, "src", "agents", "claude-code-cli", "locate.ts")).href, { parentURL, tsconfig }),
     ]);
     return { locateCodexCli: codex.locateCodexCli, locateClaudeCli: claude.locateClaudeCli };
   })();
@@ -1442,10 +1483,12 @@ async function runApprovalFlow(comment, candidate) {
   const flow = approvalFlow;
   try {
     if (!durableStageReached(flow, "package-ready")) {
-      const candidateBuild = await jsonFile(path.join(candidateSource, "BUILD_INFO.json"), {});
-      flow.packageIdentity = candidateBuild.packageIdentity || await runtimePackageIdentity(candidateSource);
+      const candidateProof = await verifyCandidatePackage(candidate);
+      const candidateBuild = candidateProof.buildInfo;
+      flow.packageIdentity = candidateProof.packageIdentity;
+      flow.immutablePackagePath = candidateProof.immutablePackagePath;
       flow.previousStableA = (await jsonFile(path.join(relayRoot, "runtimes", "executor-a", "BUILD_INFO.json"), {}))?.sourceSha || null;
-      await saveRuntimeRecoveryJournal(flow, "package-ready", { candidateBuild });
+      await saveRuntimeRecoveryJournal(flow, "package-ready", { package: candidateProof, candidateBuild });
     }
 
     if (!durableStageReached(flow, "b-verified")) {
@@ -1480,7 +1523,7 @@ async function runApprovalFlow(comment, candidate) {
     if (!durableStageReached(flow, "a-promoted")) {
       await verifyRecoveryAuthority(candidate);
       await saveRuntimeRecoveryJournal(flow, "a-promote-started");
-      const promoteOutput = await powershell("-File", path.join(repoRoot, "scripts", "promote-reciprocal-runtime.ps1"), "-RelayRoot", relayRoot, "-Source", candidateSource, "-SourceSha", candidate.sourceSha, "-TargetRole", "A", "-BuildRound", "D182", "-PromotedRound", "D182");
+      const promoteOutput = await powershell("-File", path.join(repoRoot, "scripts", "promote-reciprocal-runtime.ps1"), "-RelayRoot", relayRoot, "-Source", packageSourceForFlow(flow), "-SourceSha", candidate.sourceSha, "-TargetRole", "A", "-BuildRound", "D184", "-PromotedRound", "D184");
       flow.promoted = true;
       const [buildA, buildB, listing] = await Promise.all([
         jsonFile(path.join(relayRoot, "runtimes", "executor-a", "BUILD_INFO.json"), {}),
@@ -1549,7 +1592,7 @@ async function prepareRecoveryAuthority(flow, candidate) {
   if (!durableStageReached(flow, "b-promoted")) {
     flow.recoveryStage = "b-runtime-promote";
     await saveRuntimeRecoveryJournal(flow, "b-promote-started");
-    const promoteBOutput = await powershell("-File", path.join(repoRoot, "scripts", "promote-reciprocal-runtime.ps1"), "-RelayRoot", relayRoot, "-Source", candidateSource, "-SourceSha", candidate.sourceSha, "-TargetRole", "B", "-BuildRound", "D182", "-PromotedRound", "D182");
+    const promoteBOutput = await powershell("-File", path.join(repoRoot, "scripts", "promote-reciprocal-runtime.ps1"), "-RelayRoot", relayRoot, "-Source", packageSourceForFlow(flow), "-SourceSha", candidate.sourceSha, "-TargetRole", "B", "-BuildRound", "D184", "-PromotedRound", "D184");
     const buildB = await jsonFile(path.join(relayRoot, "runtimes", "executor-b", "BUILD_INFO.json"), {});
     if (buildB.sourceSha !== candidate.sourceSha) throw new Error(`Executor B recovery runtime BUILD_INFO mismatch: B=${shortSha(buildB.sourceSha)}, candidate=${candidate.shortSha}.`);
     if (buildB.packageIdentity !== flow.packageIdentity) throw new Error("Executor B recovery runtime package identity mismatch.");
@@ -1576,28 +1619,36 @@ async function prepareRecoveryAuthority(flow, candidate) {
 }
 
 async function verifyRuntimeEndpoint(role, candidate) {
-  const build = await jsonFile(path.join(relayRoot, "runtimes", `executor-${role.toLowerCase()}`, "BUILD_INFO.json"), {});
+  const runtimeDir = path.join(relayRoot, "runtimes", `executor-${role.toLowerCase()}`);
+  const integrity = await packageIntegrityPromise;
+  const proof = await integrity.verifyPackage(runtimeDir, { sourceSha: candidate.sourceSha });
+  const build = proof.buildInfo;
   if (build.sourceSha !== candidate.sourceSha) throw new Error(`Executor ${role} runtime BUILD_INFO mismatch: ${shortSha(build.sourceSha)} != ${candidate.shortSha}.`);
   const expectedPackage = approvalFlow?.packageIdentity || (await loadRuntimeRecoveryJournal())?.packageIdentity || build.packageIdentity;
   if (!expectedPackage) throw new Error(`Executor ${role} package identity is missing.`);
-  if (build.packageIdentity !== expectedPackage) throw new Error(`Executor ${role} runtime package identity mismatch.`);
+  if (proof.packageIdentity !== expectedPackage) throw new Error(`Executor ${role} runtime package identity mismatch.`);
   if (capabilityVersion(build, "candidatePreviewArtifactLifecycle") < requiredReciprocalCapabilities.candidatePreviewArtifactLifecycle) {
     throw new Error(`Executor ${role} runtime lacks candidatePreviewArtifactLifecycle capability.`);
   }
   const status = await waitForAutomation(role);
   const endpoint = await automationRequest(role, "/status");
   const credentials = await jsonFile(automation[role].tokenFile, {});
-  const runtimeExe = path.join(relayRoot, "runtimes", `executor-${role.toLowerCase()}`, "Tandem.exe");
-  if (Number(credentials.pid || endpoint.pid) !== Number(endpoint.pid || credentials.pid)) throw new Error(`Executor ${role} token PID and endpoint PID disagree.`);
+  const runtimeExe = path.join(runtimeDir, "Tandem.exe");
+  if (!credentials.pid || !endpoint.pid || Number(credentials.pid) !== Number(endpoint.pid)) throw new Error(`Executor ${role} token PID and endpoint PID disagree.`);
+  if (!endpoint.tokenFile || path.resolve(endpoint.tokenFile).toLowerCase() !== path.resolve(automation[role].tokenFile).toLowerCase()) throw new Error(`Executor ${role} endpoint token file mismatch.`);
+  if (endpoint.port && Number(endpoint.port) !== Number(credentials.port)) throw new Error(`Executor ${role} endpoint port mismatch.`);
+  if (endpoint.instanceId !== role) throw new Error(`Executor ${role} endpoint instance mismatch: ${endpoint.instanceId || "missing"}.`);
   if (endpoint.sourceSha !== candidate.sourceSha) throw new Error(`Executor ${role} endpoint source mismatch: ${shortSha(endpoint.sourceSha)} != ${candidate.shortSha}.`);
   if (endpoint.packageIdentity !== expectedPackage) throw new Error(`Executor ${role} endpoint package identity mismatch.`);
-  if (endpoint.tokenFile && path.resolve(endpoint.tokenFile).toLowerCase() !== path.resolve(automation[role].tokenFile).toLowerCase()) throw new Error(`Executor ${role} endpoint token file mismatch.`);
+  if (capabilityVersion({ reciprocalCapabilities: endpoint.capabilities }, "candidatePreviewArtifactLifecycle") < requiredReciprocalCapabilities.candidatePreviewArtifactLifecycle) {
+    throw new Error(`Executor ${role} endpoint capability mismatch.`);
+  }
   const processInfo = testHarness ? { Id: endpoint.pid || credentials.pid, Path: runtimeExe } : await getProcessByPath(runtimeExe);
   if (!processInfo || Number(processInfo.Id) !== Number(endpoint.pid || credentials.pid)) throw new Error(`Executor ${role} process identity mismatch for ${runtimeExe}.`);
   const target = path.resolve(endpoint.allowedProjectDir || endpoint.projectDir || status.allowedProjectDir || "");
   const expectedTarget = path.resolve(automation[role].projectDir);
   if (target !== expectedTarget) throw new Error(`Executor ${role} endpoint target mismatch: ${target} != ${expectedTarget}.`);
-  return { build, status, endpoint, target, process: processInfo, packageIdentity: expectedPackage };
+  return { build, status, endpoint, target, process: processInfo, packageIdentity: expectedPackage, manifest: proof.manifest };
 }
 
 async function verifyRecoveryAuthority(candidate) {
@@ -1657,6 +1708,7 @@ async function recoverAlreadyPromotedAUpgrade(comment, sourceSha) {
       interruptedPhase: state.pausedFromPhase,
       interruptedRole: null,
       packageIdentity: runtimeA.buildInfo?.packageIdentity || runtimeB.buildInfo?.packageIdentity || null,
+      immutablePackagePath: runtimeA.buildInfo?.immutablePackagePath || runtimeB.buildInfo?.immutablePackagePath || null,
       previousStableA: runtimeA.buildInfo?.sourceSha || null,
       durableStage: "a-verified",
       cancelRequested: false,

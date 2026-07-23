@@ -43,7 +43,12 @@ describe("reciprocal relay script", () => {
       await readFile(path.resolve("scripts/start-reciprocal-tandem.ps1"), "utf8"),
       "utf8",
     );
-    await execa("git", ["add", "README.md", ".gitignore", "process/reciprocal/gate-taxonomy.json", "scripts/reciprocal-direction.ps1", "scripts/promote-reciprocal-runtime.ps1", "scripts/package-passive-runtime.ps1", "scripts/start-reciprocal-tandem.ps1"], { cwd: repo });
+    await writeFile(
+      path.join(repo, "scripts", "runtime-package-integrity.mjs"),
+      await readFile(path.resolve("scripts/runtime-package-integrity.mjs"), "utf8"),
+      "utf8",
+    );
+    await execa("git", ["add", "README.md", ".gitignore", "process/reciprocal/gate-taxonomy.json", "scripts/reciprocal-direction.ps1", "scripts/promote-reciprocal-runtime.ps1", "scripts/package-passive-runtime.ps1", "scripts/start-reciprocal-tandem.ps1", "scripts/runtime-package-integrity.mjs"], { cwd: repo });
     await execa("git", ["commit", "-m", "initial"], { cwd: repo });
     await execa("git", ["branch", "codex/reciprocal-a"], { cwd: repo });
     await execa("git", ["branch", "codex/reciprocal-b"], { cwd: repo });
@@ -819,14 +824,19 @@ server.listen(port, "127.0.0.1");
       const buildInfo = JSON.parse(await readFile(path.join(repo, "release", "win-unpacked", "BUILD_INFO.json"), "utf8"));
       expect(buildInfo.sourceSha).toBe(candidateCommit);
       expect(buildInfo.packageIdentity).toMatch(/^[0-9A-F]{64}$/);
+      expect(buildInfo.immutablePackagePath).toContain(path.join("release", "runtime-packages", buildInfo.packageIdentity, "win-unpacked"));
+      await execa("node", [path.resolve("scripts/runtime-package-integrity.mjs"), "verify", buildInfo.immutablePackagePath, "--source-sha", candidateCommit, "--package-identity", buildInfo.packageIdentity], { cwd: repo });
       expect(accepted.recoveryRuntime).toMatchObject({ role: "B", sourceSha: candidateCommit, stage: "b-runtime-verified" });
       const recoveryBuildInfo = JSON.parse(await readFile(path.join(root, "runtimes", "executor-b", "BUILD_INFO.json"), "utf8"));
       expect(recoveryBuildInfo.sourceSha).toBe(candidateCommit);
       expect(recoveryBuildInfo.packageIdentity).toBe(buildInfo.packageIdentity);
+      expect(recoveryBuildInfo.immutablePackagePath).toBe(buildInfo.immutablePackagePath);
       expect(recoveryBuildInfo.reciprocalCapabilities.candidatePreviewArtifactLifecycle).toBe(1);
       const journal = JSON.parse(await readFile(path.join(root, "state", "runtime-recovery-flow.json"), "utf8"));
-      expect(journal).toMatchObject({ sourceSha: candidateCommit, packageIdentity: buildInfo.packageIdentity, stage: "b-verified" });
+      expect(journal).toMatchObject({ sourceSha: candidateCommit, packageIdentity: buildInfo.packageIdentity, immutablePackagePath: buildInfo.immutablePackagePath, stage: "b-verified" });
       expect(journal.proof.bEndpoint).toMatchObject({ sourceSha: candidateCommit, packageIdentity: buildInfo.packageIdentity });
+      await writeFile(path.join(buildInfo.immutablePackagePath, "D184_TAMPER.txt"), "tampered\n", "utf8");
+      await expect(execa("node", [path.resolve("scripts/runtime-package-integrity.mjs"), "verify", buildInfo.immutablePackagePath, "--source-sha", candidateCommit, "--package-identity", buildInfo.packageIdentity], { cwd: repo })).rejects.toThrow(/manifest mismatch/i);
 
       const waitingClaim = await relay(repo, "-Action", "Claim", "-Role", "A");
       expect(waitingClaim).toMatchObject({ outcome: "A_UPGRADE_PENDING" });
@@ -845,6 +855,7 @@ server.listen(port, "127.0.0.1");
 
   windowsIt("uses the relay's paired direction controller when accepting an external worktree candidate", async () => {
     const repo = await mkdtemp(path.join(tmpdir(), "tandem-relay-paired-control-"));
+    const root = relayRoot(repo);
     try {
       await initRepo(repo);
       await writeFile(
@@ -870,6 +881,7 @@ server.listen(port, "127.0.0.1");
       expect(accepted).toMatchObject({ outcome: "PASSIVE_ACCEPTED", phase: "idle", stableCommit: candidateCommit });
       expect(await readFile(boardPath, "utf8")).toContain(`PLAN_APPROVED epic=true autonomy=full revision=1 completed=0 steps=1 next=1/1 plan=process/reciprocal/epics/W0001-plan.md commit=${candidateCommit}`);
     } finally {
+      await stopRelayProcess(root);
       await rm(repo, { recursive: true, force: true });
     }
   }, 90_000);

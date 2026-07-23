@@ -4,8 +4,8 @@
     "files":  [
                   {
                       "path":  "approval-flow.e2e.mjs",
-                      "sha256":  "EC81A72DFC31EA1014478776D77925A052C1903A27088D11051C7529B7127DFF",
-                      "bytes":  30324
+                      "sha256":  "5BAB038CD25B4AAB6D400A10AA883B13EA76204E3759066E14E8FC0691DF42F3",
+                      "bytes":  32575
                   },
                   {
                       "path":  "dashboard-watchdog.ps1",
@@ -64,8 +64,8 @@
                   },
                   {
                       "path":  "server.mjs",
-                      "sha256":  "E4CDF3F029694AF757DFFC697D7A9821D3BCBEFF207DF25B2200DF6D58E80F2C",
-                      "bytes":  119234
+                      "sha256":  "66051D7D2F2E2452F299B5763258D76BCFE71BE57319F2D9C4C6FBB1AE154F35",
+                      "bytes":  122581
                   },
                   {
                       "path":  "start-dashboard.ps1",

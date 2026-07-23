@@ -81,6 +81,14 @@ function Get-PackageIdentity([string]$SourceSha, [object[]]$Manifest, [object]$C
     }
 }
 
+function Get-PackageIntegrity([string]$Command, [string]$RuntimeRoot, [string[]]$ExtraArgs = @()) {
+    $tool = Join-Path $PSScriptRoot "runtime-package-integrity.mjs"
+    if (-not (Test-Path -LiteralPath $tool)) { throw "Runtime package integrity helper is missing: $tool" }
+    $arguments = @($tool, $Command, $RuntimeRoot) + $ExtraArgs
+    $output = Invoke-Native "node.exe" $arguments $Workspace
+    return $output | ConvertFrom-Json
+}
+
 $Workspace = (Resolve-Path -LiteralPath $Workspace).Path
 if (-not $AdminRepo.Trim()) {
     $commonRaw = (& git -C $Workspace rev-parse --git-common-dir).Trim()
@@ -136,8 +144,11 @@ Get-ChildItem -LiteralPath $freshWinUnpacked -Force | Copy-Item -Destination $st
 $capabilities = [ordered]@{
     candidatePreviewArtifactLifecycle = 1
 }
-$packageManifest = Get-RuntimePackageManifest $stagingDir
-$packageIdentity = Get-PackageIdentity $SourceSha $packageManifest $capabilities
+$integrity = Get-PackageIntegrity "identity" $stagingDir @("--source-sha", $SourceSha)
+$packageManifest = $integrity.manifest
+$packageIdentity = [string]$integrity.packageIdentity
+$immutableRoot = Assert-UnderRoot (Join-Path $releaseRoot "runtime-packages") $releaseRoot
+$immutableDir = Assert-UnderRoot (Join-Path $immutableRoot "$packageIdentity\win-unpacked") $immutableRoot
 $buildInfo = [ordered]@{
     sourceSha = $SourceSha
     sourceShortSha = $shortSha
@@ -146,6 +157,7 @@ $buildInfo = [ordered]@{
     artifact = "release/win-unpacked"
     packageIdentity = $packageIdentity
     packageManifest = $packageManifest
+    immutablePackagePath = $immutableDir
     packagedBy = "scripts/package-passive-runtime.ps1"
     passiveWorkspace = $Workspace
     reciprocalCapabilities = $capabilities
@@ -155,6 +167,19 @@ $buildInfoJson = $buildInfo | ConvertTo-Json -Depth 5
 
 if (-not (Test-Path -LiteralPath (Join-Path $stagingDir "Tandem.exe"))) {
     throw "Staged passive runtime is missing Tandem.exe."
+}
+$null = Get-PackageIntegrity "verify" $stagingDir @("--source-sha", $SourceSha, "--package-identity", $packageIdentity)
+
+if (Test-Path -LiteralPath $immutableDir) {
+    $null = Get-PackageIntegrity "verify" $immutableDir @("--source-sha", $SourceSha, "--package-identity", $packageIdentity)
+} else {
+    New-Item -ItemType Directory -Path (Split-Path $immutableDir -Parent) -Force | Out-Null
+    $immutableStaging = Assert-UnderRoot (Join-Path $immutableRoot ".$packageIdentity-$PID-staging") $immutableRoot
+    Invoke-WithRetry "remove stale immutable package staging" { Remove-Item -LiteralPath $immutableStaging -Recurse -Force -ErrorAction SilentlyContinue }
+    New-Item -ItemType Directory -Path $immutableStaging -Force | Out-Null
+    Get-ChildItem -LiteralPath $stagingDir -Force | Copy-Item -Destination $immutableStaging -Recurse -Force
+    $null = Get-PackageIntegrity "verify" $immutableStaging @("--source-sha", $SourceSha, "--package-identity", $packageIdentity)
+    Move-Item -LiteralPath $immutableStaging -Destination $immutableDir -Force
 }
 
 $targetMoved = $false
@@ -195,6 +220,7 @@ if ([string]$writtenInfo.sourceSha -ne $SourceSha) {
 if ([string]$writtenInfo.packageIdentity -ne $packageIdentity) {
     throw "Canonical passive runtime package identity mismatch: $($writtenInfo.packageIdentity) != $packageIdentity"
 }
+$null = Get-PackageIntegrity "verify" $targetDir @("--source-sha", $SourceSha, "--package-identity", $packageIdentity)
 
 [pscustomobject]@{
     sourceSha = $SourceSha
@@ -205,5 +231,6 @@ if ([string]$writtenInfo.packageIdentity -ne $packageIdentity) {
     buildInfoPath = (Join-Path $targetDir "BUILD_INFO.json")
     packageIdentity = $packageIdentity
     packageManifest = $packageManifest
+    immutablePackagePath = $immutableDir
     preparedInput = if ($usedPrepared) { $freshWinUnpacked } else { $null }
 } | ConvertTo-Json -Depth 5

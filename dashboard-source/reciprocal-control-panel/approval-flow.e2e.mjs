@@ -2,11 +2,11 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { once } from "node:events";
-import { appendFile, mkdtemp, mkdir, readFile, writeFile, copyFile, rm } from "node:fs/promises";
+import { appendFile, cp, mkdtemp, mkdir, readFile, writeFile, copyFile, rm } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 function findAdminRepo(start) {
@@ -106,6 +106,7 @@ async function makeFixture(t) {
   await mkdir(path.join(repoRoot, "process", "reciprocal"), { recursive: true });
   await copyFile(relayScript, path.join(repoRoot, "scripts", "reciprocal-relay.ps1"));
   await copyFile(path.join(adminRepo, "scripts", "reciprocal-direction.ps1"), path.join(repoRoot, "scripts", "reciprocal-direction.ps1"));
+  await copyFile(path.join(adminRepo, "scripts", "runtime-package-integrity.mjs"), path.join(repoRoot, "scripts", "runtime-package-integrity.mjs"));
   await copyFile(path.join(adminRepo, "process", "reciprocal", "gate-taxonomy.json"), path.join(repoRoot, "process", "reciprocal", "gate-taxonomy.json"));
   await writeFile(path.join(repoRoot, "package.json"), "{\"name\":\"fixture\",\"version\":\"0.0.0\"}\n", "utf8");
   await git(repoRoot, "init", "-b", "master");
@@ -119,21 +120,29 @@ async function makeFixture(t) {
   await git(repoRoot, "worktree", "add", copyA, "codex/reciprocal-a");
   await git(repoRoot, "worktree", "add", copyB, "codex/reciprocal-b");
   const fixtureSha = await git(repoRoot, "rev-parse", "HEAD");
-  const fixturePackage = `pkg-${fixtureSha.slice(0, 12)}`;
+  const integrity = await import(pathToFileURL(path.join(adminRepo, "scripts", "runtime-package-integrity.mjs")).href);
   const oldSha = "0000000000000000000000000000000000000000";
   const statePath = path.join(repoRoot, ".git", "tandem-relay", "state.json");
   const reviewIndexPath = path.join(relayRoot, "control", "UPDATE_REVIEW_INDEX.json");
   const auditPath = path.join(relayRoot, "control", "CONTROL_PANEL_AUDIT.jsonl");
   const commandLog = path.join(relayRoot, "control", "COMMAND_LOG.jsonl");
-  await mkdir(path.join(repoRoot, "release", "win-unpacked"), { recursive: true });
-  await writeJson(path.join(repoRoot, "release", "win-unpacked", "BUILD_INFO.json"), {
+  const candidateRuntimeDir = path.join(repoRoot, "release", "win-unpacked");
+  await mkdir(candidateRuntimeDir, { recursive: true });
+  await writeFile(path.join(candidateRuntimeDir, "Tandem.exe"), "fixture candidate\n", "utf8");
+  const fixtureManifest = await integrity.packageManifest(candidateRuntimeDir);
+  const fixturePackage = integrity.packageIdentity(fixtureSha, fixtureManifest, { candidatePreviewArtifactLifecycle: 1 });
+  const immutablePackagePath = path.join(repoRoot, "release", "runtime-packages", fixturePackage, "win-unpacked");
+  await writeJson(path.join(candidateRuntimeDir, "BUILD_INFO.json"), {
     sourceSha: fixtureSha,
     sourceShortSha: fixtureSha.slice(0, 7),
     builtAt: "2026-07-22T00:00:00.000Z",
     packageIdentity: fixturePackage,
+    packageManifest: fixtureManifest,
+    immutablePackagePath,
     reciprocalCapabilities: { candidatePreviewArtifactLifecycle: 1 },
   });
-  await writeFile(path.join(repoRoot, "release", "win-unpacked", "Tandem.exe"), "fixture candidate\n", "utf8");
+  await mkdir(path.dirname(immutablePackagePath), { recursive: true });
+  await cp(candidateRuntimeDir, immutablePackagePath, { recursive: true });
   for (const role of ["a", "b"]) {
     const runtimeDir = path.join(relayRoot, "runtimes", `executor-${role}`);
     await mkdir(runtimeDir, { recursive: true });
@@ -168,33 +177,44 @@ async function makeFixture(t) {
   }
 
   async function setRuntimeShas(sourceSha) {
+    const candidateBuildInfo = await readJson(path.join(candidateRuntimeDir, "BUILD_INFO.json"));
     for (const role of ["a", "b"]) {
+      const runtimeDir = path.join(relayRoot, "runtimes", `executor-${role}`);
+      await rm(runtimeDir, { recursive: true, force: true });
+      await mkdir(runtimeDir, { recursive: true });
+      await cp(candidateRuntimeDir, runtimeDir, { recursive: true });
       await writeJson(path.join(relayRoot, "runtimes", `executor-${role}`, "BUILD_INFO.json"), {
+        ...candidateBuildInfo,
         sourceSha,
         sourceShortSha: sourceSha.slice(0, 7),
         packageIdentity: fixturePackage,
+        immutablePackagePath,
         reciprocalCapabilities: { candidatePreviewArtifactLifecycle: 1 },
       });
     }
   }
 
-  return { root, relayRoot, repoRoot, copyA, copyB, fixtureSha, fixturePackage, oldSha, statePath, reviewIndexPath, auditPath, commandLog, wishlistPath: path.join(relayRoot, "control", "WISHLIST.md"), setState, setRuntimeShas };
+  return { root, relayRoot, repoRoot, copyA, copyB, fixtureSha, fixturePackage, immutablePackagePath, candidateRuntimeDir, oldSha, statePath, reviewIndexPath, auditPath, commandLog, wishlistPath: path.join(relayRoot, "control", "WISHLIST.md"), setState, setRuntimeShas };
 }
 
-async function withServer(t, fixture, runTest) {
+async function withServer(t, fixture, runTest, options = {}) {
   const port = 18_000 + Math.floor(Math.random() * 20_000);
+  const env = {
+    ...process.env,
+    TANDEM_RECIPROCAL_ROOT: fixture.relayRoot,
+    TANDEM_SOURCE_REPO: fixture.repoRoot,
+    TANDEM_DASHBOARD_COMMAND_LOG: fixture.commandLog,
+    TANDEM_APPROVAL_WAIT_TIMEOUT_MS: "5000",
+    TANDEM_SUPERVISOR_TICK_MS: "600000",
+    TANDEM_DASHBOARD_TEST_REQUIRE_STARTED_AUTOMATION: process.env.TANDEM_DASHBOARD_TEST_REQUIRE_STARTED_AUTOMATION || "",
+    ...(options.env || {}),
+  };
+  if (options.harness !== false) env.TANDEM_DASHBOARD_TEST_HARNESS = "1";
+  else delete env.TANDEM_DASHBOARD_TEST_HARNESS;
   const server = spawn(process.execPath, [serverScript, `--port=${port}`], {
     cwd: here,
     windowsHide: true,
-    env: {
-      ...process.env,
-      TANDEM_RECIPROCAL_ROOT: fixture.relayRoot,
-      TANDEM_SOURCE_REPO: fixture.repoRoot,
-      TANDEM_DASHBOARD_TEST_HARNESS: "1",
-      TANDEM_DASHBOARD_COMMAND_LOG: fixture.commandLog,
-      TANDEM_APPROVAL_WAIT_TIMEOUT_MS: "5000",
-      TANDEM_DASHBOARD_TEST_REQUIRE_STARTED_AUTOMATION: process.env.TANDEM_DASHBOARD_TEST_REQUIRE_STARTED_AUTOMATION || "",
-    },
+    env,
   });
   let stderr = "";
   server.stderr.on("data", (chunk) => { stderr += chunk; });
@@ -237,6 +257,20 @@ async function withServer(t, fixture, runTest) {
 
   return runTest({ post, get, postWithoutToken });
 }
+
+test("D184 dashboard reports canonical package state without the test harness", async (t) => {
+  const fixture = await makeFixture(t);
+  await fixture.setState();
+  await withServer(t, fixture, async ({ get }) => {
+    const { response, result } = await get("/api/status");
+    assert.equal(response.status, 200, JSON.stringify(result));
+    assert.equal(result.candidateUpdate.sourceSha, fixture.fixtureSha);
+    assert.equal(result.candidateUpdate.buildInfo.packageIdentity, fixture.fixturePackage);
+    assert.equal(result.candidateUpdate.buildInfo.immutablePackagePath.endsWith(path.join("release", "runtime-packages", fixture.fixturePackage, "win-unpacked")), true);
+    assert.equal(result.candidateUpdate.pending, true);
+    assert.equal(result.runtimeTopology.key, "a-running-verifying-b");
+  }, { harness: false });
+});
 
 test("D181 Kickstart starts only Executor A and treats B dormant as healthy", async (t) => {
   const fixture = await makeFixture(t);
@@ -351,12 +385,10 @@ test("D183 approval adopts relay-verified B without re-promoting or restarting i
     sourceShortSha: "0000000",
     packageIdentity: "old-a",
   });
-  await writeJson(path.join(fixture.relayRoot, "runtimes", "executor-b", "BUILD_INFO.json"), {
-    sourceSha: fixture.fixtureSha,
-    sourceShortSha: fixture.fixtureSha.slice(0, 7),
-    packageIdentity: fixture.fixturePackage,
-    reciprocalCapabilities: { candidatePreviewArtifactLifecycle: 1 },
-  });
+  const runtimeBDir = path.join(fixture.relayRoot, "runtimes", "executor-b");
+  await rm(runtimeBDir, { recursive: true, force: true });
+  await mkdir(runtimeBDir, { recursive: true });
+  await cp(fixture.candidateRuntimeDir, runtimeBDir, { recursive: true });
   await writeJson(path.join(fixture.relayRoot, "state", "executor-b", "automation.json"), {
     port: 4102,
     token: "test-token-B",
@@ -390,6 +422,7 @@ test("D183 approval adopts relay-verified B without re-promoting or restarting i
     ],
     sourceSha: fixture.fixtureSha,
     packageIdentity: fixture.fixturePackage,
+    immutablePackagePath: fixture.immutablePackagePath,
     proof: { bEndpoint: { sourceSha: fixture.fixtureSha, packageIdentity: fixture.fixturePackage, allowedProjectDir: fixture.copyA } },
     flags: { recoveryAuthorityReady: true },
     steps: [{ step: "recovery-authority-ready", ok: true, detail: "relay verified B", at: "2026-07-22T00:00:00.000Z" }],
