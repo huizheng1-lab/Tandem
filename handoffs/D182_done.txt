@@ -1,0 +1,51 @@
+D182 complete
+
+Round: D182
+
+Commits:
+- 9d070e582697ba79da434b431697c728bf1f0df8 D182-1: make recovery lifecycle durable
+
+Durable transition table:
+- package-ready
+- b-promote-started
+- b-promoted
+- b-start-started
+- b-started
+- b-verified
+- approval-recorded
+- a-stop-started
+- a-stopped
+- a-promote-started
+- a-promoted
+- a-start-started
+- a-started
+- a-verified
+- relay-completed
+- b-stop-started
+- b-stopped
+
+Fault-injection and lifecycle matrix:
+- Isolated Role=Both normal startup starts/preserves A and stops a real stale B child process when no recovery journal is active.
+- Passive acceptance packages the exact candidate, promotes B, starts B, and verifies B before the A-upgrade gate is exposed.
+- Dashboard approval flow records a durable runtime recovery journal under the isolated relay state root.
+- Crash injected after executor-a-stopped terminates the dashboard process; a fresh dashboard process reloads durable state, reuses the same approval record, promotes/restarts/verifies A, completes the relay gate, and stops B.
+- A restart failure leaves B online as recovery authority; retry from a fresh dashboard process reuses the same approved candidate and records only one approval.
+- E2E command evidence confirms B receives /status only and never receives /prompt.
+- Dashboard topology now distinguishes A running/B dormant, A running/verifying B, A running/B verified/awaiting approval, B recovery authority/A upgrading, A verified/stopping B, and returned A-only operation.
+
+Verification summary:
+- node --check dashboard-source\reciprocal-control-panel\server.mjs
+- node --test dashboard-source\reciprocal-control-panel\lib.nodecheck.mjs
+- node --test dashboard-source\reciprocal-control-panel\approval-flow.e2e.mjs
+- npx vitest run --configLoader runner tests/reciprocal-setup-script.test.ts
+- npx vitest run --configLoader runner tests/reciprocal-relay.test.ts
+- npx vitest run --configLoader runner tests/reciprocal-supervisor.test.ts
+- npm run typecheck
+- npm test
+- git diff --check
+- scripts\deploy-reciprocal-dashboard.ps1 against an isolated temp TargetRoot, followed by -VerifyOnly on that same isolated TargetRoot; verification.ok=true.
+
+Safety:
+- Did not deploy to or modify C:\Users\huizh\Apps\Tandem Reciprocal.
+- Did not pause, stop, prompt, promote, clean, reset, or mutate live W0027 executors, live relay state, or reciprocal worktrees.
+- Left unrelated modified scripts\setup-reciprocal-tandem.ps1 and untracked handoff/backlog files untouched.
