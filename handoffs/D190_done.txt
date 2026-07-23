@@ -1,0 +1,29 @@
+Round: D190
+
+Commits:
+- a69c95e D190-1: harden passive gate execution
+- f17383e D190-2: harden runtime recovery reruns
+
+Implementation summary:
+- Stable-baseline cleanup now unlinks only the temporary baseline worktree node_modules junction before git worktree removal, with a fallback cleanup path that preserves the live workspace dependency target.
+- Added real-junction regression coverage for stable success/candidate failure, stable failure, and forced worktree-remove fallback; all cases keep the workspace node_modules sentinel intact.
+- PassiveTest, A upgrade, and autonomous continuation command surfaces now use the current admin repo reciprocal-relay.ps1 instead of any stale script in a candidate checkout. The copy-a-driven regression proves a stale checkout script is not executed.
+- Updated reciprocal protocol docs and executor templates to document the admin-script invariant.
+- Runtime recovery reruns are now idempotent for already-advanced same-source/package journal stages, clear stale B automation tokens before launch, wait longer for B readiness, and accept older B /status schemas that omit echo-only port/token/source/package fields while still validating PID, instance, target, capability, runtime BUILD_INFO/package identity, and process path.
+- Vitest excludes tmp scratch trees so raw npm test does not execute stale review-copy tests.
+
+Live recovery proof:
+- Restored live copy-a dependencies with npm ci in C:\Users\huizh\Apps\Tandem Reciprocal\worktrees\copy-a.
+- copy-a node_modules was restored from an empty top-level tree to 361 top-level entries; node_modules\vitest\vitest.mjs and node_modules\.package-lock.json are present.
+- Cleared the evidence-free paused candidate-failure state and gave candidate 83421bbc0cd5a8dd2832f194b66e8bf8e9d72eb1 a fresh PassiveTest from live copy-a through C:\Users\huizh\Apps\HZ code\scripts\reciprocal-relay.ps1.
+- The final fair PassiveTest returned PASSIVE_ACCEPTED: npm run typecheck, npm test, npm run build, git diff --check candidate/stable, package-passive-runtime, promote executor B, and B launch verification all passed.
+- The relay is idle with stableCommit and lastCompletedCommit set to 83421bbc0cd5a8dd2832f194b66e8bf8e9d72eb1, candidateCommit cleared, passiveFailure null, and runtimeRecoveryStage cleared.
+- After the baseline-control-exercising live run, copy-a node_modules remained intact with 361 top-level entries, Vitest present, package-lock metadata present, and a clean copy-a git status.
+- Executor B was stopped after the accepted passive flow; its stale token file remains but the recorded B PID is no longer running.
+
+Verification:
+- npm test -- tests/reciprocal-relay.test.ts -t "D190" -- --reporter=dot
+- npm test -- tests/reciprocal-relay.test.ts -- --reporter=dot
+- npm run typecheck
+- npm test
+- git diff --check
