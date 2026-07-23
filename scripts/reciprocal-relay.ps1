@@ -140,6 +140,7 @@ function New-RelayState([string]$StableCommit) {
         lastCompletedCommit = $null
         lastSummary = $null
         lastRecoveryStash = $null
+        runtimeRecoveryStage = $null
         authorityRequest = $null
     }
 }
@@ -204,6 +205,9 @@ try {
     }
     if (-not $state.PSObject.Properties["authorityRequest"]) {
         $state | Add-Member -NotePropertyName authorityRequest -NotePropertyValue $null
+    }
+    if (-not $state.PSObject.Properties["runtimeRecoveryStage"]) {
+        $state | Add-Member -NotePropertyName runtimeRecoveryStage -NotePropertyValue $null
     }
 
     function Update-RelayRefs {
@@ -1528,6 +1532,8 @@ try {
             $packageScript = Join-Path $PSScriptRoot "package-passive-runtime.ps1"
         }
         if (-not (Test-Path -LiteralPath $packageScript)) { throw "Passive package helper is missing: $packageScript" }
+        $state.runtimeRecoveryStage = "passive-package-started"
+        Save-State
         $packageCommand = "powershell -NoProfile -ExecutionPolicy Bypass -File `"$packageScript`" -Workspace `"$Workspace`" -AdminRepo `"$adminRepo`" -SourceSha $head"
         $preparedPackage = [Environment]::GetEnvironmentVariable("TANDEM_PASSIVE_PACKAGE_PREPARED_WIN_UNPACKED")
         if ($preparedPackage) {
@@ -1561,6 +1567,49 @@ try {
         } catch {
             $runtimePackage = [pscustomobject]@{ output = (Limit-Text $packageCheck.output 6000) }
         }
+        $state.runtimeRecoveryStage = "passive-package-ready"
+        Save-State
+
+        $promotionScript = Join-Path $Workspace "scripts\promote-reciprocal-runtime.ps1"
+        if (-not (Test-Path -LiteralPath $promotionScript)) {
+            $promotionScript = Join-Path $PSScriptRoot "promote-reciprocal-runtime.ps1"
+        }
+        if (-not (Test-Path -LiteralPath $promotionScript)) { throw "Passive recovery promotion helper is missing: $promotionScript" }
+        $state.runtimeRecoveryStage = "b-runtime-promote-started"
+        Save-State
+        $bSourceDir = if ($runtimePackage -and $runtimePackage.targetDir) { [string]$runtimePackage.targetDir } else { Join-Path $adminRepo "release\win-unpacked" }
+        $promoteBCommand = "powershell -NoProfile -ExecutionPolicy Bypass -File `"$promotionScript`" -RelayRoot `"$defaultRelayRoot`" -Source `"$bSourceDir`" -SourceSha $head -TargetRole B -BuildRound D181 -PromotedRound D181"
+        $promoteBCheck = Invoke-ValidationCommand $promoteBCommand
+        $mechanical += $promoteBCheck
+        $failed = @($mechanical | Where-Object { -not $_.passed })
+        $checkSummary = @($mechanical | ForEach-Object {
+            [ordered]@{
+                command = $_.command
+                exitCode = [int]$_.exitCode
+                passed = [bool]$_.passed
+                output = (Limit-Text $_.output 6000)
+            }
+        })
+        if ($failed.Count -gt 0) {
+            $state.phase = "paused"
+            $state.pausedFromPhase = "passive-testing"
+            $state.pauseOrigin = [string]$taxonomy.pauseOrigins.machine
+            $state.pauseReasonCode = [string]$taxonomy.pauseReasonCodes.candidateFailure
+            $state.activeRole = $null
+            $state.lastSummary = "Executor B recovery runtime promotion failed for candidate $($state.candidateCommit): $((@($failed | ForEach-Object { $_.command })) -join ', ')"
+            Save-State
+            Write-Result "PASSIVE_FAILED" ([pscustomobject]@{ passiveChecks = $checkSummary })
+            exit 0
+        }
+        $bBuildInfoPath = Join-Path $defaultRelayRoot "runtimes\executor-b\BUILD_INFO.json"
+        if (-not (Test-Path -LiteralPath $bBuildInfoPath)) { throw "Executor B recovery runtime BUILD_INFO is missing: $bBuildInfoPath" }
+        $bBuildInfo = Get-Content -LiteralPath $bBuildInfoPath -Raw | ConvertFrom-Json
+        if ([string]$bBuildInfo.sourceSha -ne $head) { throw "Executor B recovery runtime BUILD_INFO sourceSha mismatch: $($bBuildInfo.sourceSha) != $head" }
+        if (-not $bBuildInfo.reciprocalCapabilities -or [int]$bBuildInfo.reciprocalCapabilities.candidatePreviewArtifactLifecycle -lt 1) {
+            throw "Executor B recovery runtime does not advertise candidatePreviewArtifactLifecycle v1."
+        }
+        $state.runtimeRecoveryStage = "b-runtime-promoted"
+        Save-State
 
         $acceptedKind = $state.candidateKind
         $previousStableCommit = $state.stableCommit
@@ -1583,6 +1632,7 @@ try {
         $state.phase = if ($continuation) { "idle" } else { "a-upgrade-pending" }
         $state.baseCommit = $null
         $state.startedAt = $null
+        $state.runtimeRecoveryStage = if ($continuation) { $null } else { "b-runtime-promoted" }
         Reset-ResumeCounter
         $state.lastCompletedCommit = $head
         $state.lastSummary = if ($Summary.Trim()) {
@@ -1596,6 +1646,12 @@ try {
         $extra = [pscustomobject]@{
             passiveChecks = $checkSummary
             runtimePackage = $runtimePackage
+            recoveryRuntime = [pscustomobject]@{
+                role = "B"
+                sourceSha = $head
+                buildInfoPath = $bBuildInfoPath
+                stage = $state.runtimeRecoveryStage
+            }
         }
         if ($continuation) {
             $continuation | Add-Member -NotePropertyName role -NotePropertyValue "A" -Force

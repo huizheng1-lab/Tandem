@@ -280,6 +280,7 @@ test("approval completion reports passive copy-a recovery after promoted A-upgra
     interruptedPhase: "a-upgrade-pending",
     pausedByFlow: true,
     relayResumed: false,
+    recoveryAuthorityReady: true,
     executorsStopped: true,
     promoted: true,
     executorsRestarted: true,
@@ -290,6 +291,7 @@ test("approval completion reports passive copy-a recovery after promoted A-upgra
     "run CompleteAUpgrade from passive copy-a (codex/reciprocal-a) to close the already-promoted A-upgrade gate",
   ]);
   assert.match(approvalFailureDetail(flow, "CompleteAUpgrade failed"), /runtime promotion succeeded/);
+  assert.match(approvalFailureDetail(flow, "CompleteAUpgrade failed"), /Executor B recovery authority was verified/);
   assert.match(approvalFailureDetail(flow, "CompleteAUpgrade failed"), /passive copy-a \(codex\/reciprocal-a\)/);
 });
 

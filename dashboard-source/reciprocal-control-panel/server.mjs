@@ -20,6 +20,7 @@ import {
   rejectedCandidateOriginRetirement,
   rejectedCandidateRelayAction,
   rejectedCandidateWishlist,
+  requiredReciprocalCapabilities,
   runtimeTopologyHealth,
   reviewOriginItem,
   shortSha,
@@ -248,6 +249,10 @@ const delay = (milliseconds) => new Promise((resolve) => setTimeout(resolve, mil
 
 async function automationRequest(role, pathname, method = "GET", payload) {
   const config = automation[role];
+  if (testHarness) await recordHarnessCommand(["AUTOMATION", role, method, pathname]);
+  if (testHarness && testHarnessStartedRoles.has(role) && pathname === "/status") {
+    return { ok: true, running: false, pid: role === "A" ? 4101 : 4102, projectDir: config.projectDir, allowedProjectDir: config.projectDir };
+  }
   if (testHarness && process.env.TANDEM_DASHBOARD_TEST_REQUIRE_STARTED_AUTOMATION === "1") {
     if (!testHarnessStartedRoles.has(role)) throw new Error(`TEST executor ${role} automation is not started.`);
     if (pathname === "/status") {
@@ -288,6 +293,9 @@ async function automationRequest(role, pathname, method = "GET", payload) {
 
 async function waitForAutomation(role, timeoutMs = 30_000) {
   if (testHarness) {
+    if (process.env.TANDEM_DASHBOARD_TEST_FAIL_WAIT_ROLE === role) {
+      throw new Error(`TEST executor ${role} automation failed during wait.`);
+    }
     if (process.env.TANDEM_DASHBOARD_TEST_REQUIRE_STARTED_AUTOMATION === "1" && !testHarnessStartedRoles.has(role)) {
       throw new Error(`TEST executor ${role} automation is not started.`);
     }
@@ -1283,6 +1291,7 @@ async function runApprovalFlow(comment, candidate) {
   try {
     const boundary = await waitForApprovalBoundary(flow);
     flow.forcedBoundary = boundary.forced;
+    await prepareRecoveryAuthority(flow, candidate);
     await recordUpdateReview("approve", comment, candidate);
     await approvalStep(flow, "review-recorded", `Approved candidate ${candidate.shortSha}.`);
 
@@ -1290,7 +1299,7 @@ async function runApprovalFlow(comment, candidate) {
     flow.executorsStopped = true;
     await approvalStep(flow, "executor-a-stopped", stopOutput || "Executor A stopped; verified B remains the recovery authority.");
 
-    const promoteOutput = await powershell("-File", path.join(repoRoot, "scripts", "promote-reciprocal-runtime.ps1"), "-RelayRoot", relayRoot, "-Source", candidateSource, "-TargetRole", "A", "-BuildRound", "D123", "-PromotedRound", "D123");
+    const promoteOutput = await powershell("-File", path.join(repoRoot, "scripts", "promote-reciprocal-runtime.ps1"), "-RelayRoot", relayRoot, "-Source", candidateSource, "-SourceSha", candidate.sourceSha, "-TargetRole", "A", "-BuildRound", "D123", "-PromotedRound", "D123");
     flow.promoted = true;
     const [buildA, buildB, listing] = await Promise.all([
       jsonFile(path.join(relayRoot, "runtimes", "executor-a", "BUILD_INFO.json"), {}),
@@ -1331,6 +1340,28 @@ async function runApprovalFlow(comment, candidate) {
     await audit("update.approvePromote", { ok: false, ...approvalSnapshot(), sourceSha: candidate.sourceSha });
     throw error;
   }
+}
+
+async function prepareRecoveryAuthority(flow, candidate) {
+  flow.recoveryStage = "b-runtime-promote";
+  const promoteBOutput = await powershell("-File", path.join(repoRoot, "scripts", "promote-reciprocal-runtime.ps1"), "-RelayRoot", relayRoot, "-Source", candidateSource, "-SourceSha", candidate.sourceSha, "-TargetRole", "B", "-BuildRound", "D123", "-PromotedRound", "D123");
+  const buildB = await jsonFile(path.join(relayRoot, "runtimes", "executor-b", "BUILD_INFO.json"), {});
+  if (buildB.sourceSha !== candidate.sourceSha) throw new Error(`Executor B recovery runtime BUILD_INFO mismatch: B=${shortSha(buildB.sourceSha)}, candidate=${candidate.shortSha}.`);
+  if (capabilityVersion(buildB, "candidatePreviewArtifactLifecycle") < requiredReciprocalCapabilities.candidatePreviewArtifactLifecycle) {
+    throw new Error("Executor B recovery runtime lacks candidatePreviewArtifactLifecycle capability.");
+  }
+  await approvalStep(flow, "recovery-authority-promoted", `${promoteBOutput} BUILD_INFO B=${shortSha(buildB.sourceSha)}.`);
+
+  flow.recoveryStage = "b-runtime-start";
+  const startBOutput = await powershell("-File", path.join(repoRoot, "scripts", "start-reciprocal-tandem.ps1"), "-Role", "B", "-RelayRoot", relayRoot);
+  const statusB = await waitForAutomation("B");
+  const endpointB = await automationRequest("B", "/status");
+  const target = path.resolve(endpointB.allowedProjectDir || endpointB.projectDir || statusB.allowedProjectDir || "");
+  const expectedTarget = path.resolve(automation.B.projectDir);
+  if (target !== expectedTarget) throw new Error(`Executor B recovery endpoint target mismatch: ${target} != ${expectedTarget}.`);
+  flow.recoveryAuthorityReady = true;
+  flow.recoveryStage = "b-runtime-verified";
+  await approvalStep(flow, "recovery-authority-ready", `${startBOutput} B PID ${statusB.pid || endpointB.pid || "ready"} targets ${target}; source ${shortSha(buildB.sourceSha)}.`);
 }
 
 async function recoverAlreadyPromotedAUpgrade(comment, sourceSha) {

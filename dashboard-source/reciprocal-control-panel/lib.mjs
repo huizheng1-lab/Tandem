@@ -354,9 +354,10 @@ export function approvalCompletionRecoveryStep(interruptedPhase) {
 
 export function approvalRemainingActions(flow = {}) {
   const remaining = [];
-  if (!flow.executorsStopped) remaining.push("stop both executors after reaching or overriding the safe boundary");
-  if (!flow.promoted) remaining.push("promote the candidate runtime to both pinned executor directories");
-  if (!flow.executorsRestarted) remaining.push("restart both executors hidden and verify their automation endpoints");
+  if (!flow.recoveryAuthorityReady) remaining.push("start and verify Executor B from the exact candidate package as recovery authority");
+  if (!flow.executorsStopped) remaining.push("stop Executor A after verified B is online");
+  if (!flow.promoted) remaining.push("promote the exact verified candidate runtime to Executor A only");
+  if (!flow.executorsRestarted) remaining.push("restart Executor A and verify its automation endpoint");
   if (flow.pausedByFlow && !flow.relayResumed) remaining.push(approvalCompletionRecoveryStep(flow.interruptedPhase));
   return remaining;
 }
@@ -365,8 +366,9 @@ export function approvalFailureDetail(flow = {}, errorMessage = "Approval failed
   const remaining = approvalRemainingActions(flow);
   const completed = [];
   if ((flow.steps || []).some((entry) => entry.step === "review-recorded")) completed.push("review was recorded");
+  if (flow.recoveryAuthorityReady) completed.push("Executor B recovery authority was verified");
   if (flow.promoted) completed.push("runtime promotion succeeded");
-  if (flow.executorsRestarted) completed.push("executors restarted");
+  if (flow.executorsRestarted) completed.push("Executor A restarted");
   const completedText = completed.length ? ` Completed before the failure: ${completed.join("; ")}.` : "";
   const remainingText = remaining.length ? ` Remaining recovery action: ${remaining.join("; ")}.` : "";
   return `${errorMessage}.${completedText}${remainingText}`.replace(/\.\./g, ".");

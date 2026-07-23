@@ -680,6 +680,7 @@ describe("reciprocal relay script", () => {
 
   windowsIt("D151: passive test accepts a candidate and stops at the A-upgrade human gate", async () => {
     const repo = await mkdtemp(path.join(tmpdir(), "tandem-relay-d151-passive-"));
+    const relayRoot = path.join(path.dirname(repo), "Tandem Reciprocal");
     try {
       await initRepo(repo);
       const candidateCommit = await createCandidate(repo);
@@ -703,6 +704,10 @@ describe("reciprocal relay script", () => {
       const buildInfo = JSON.parse(await readFile(path.join(repo, "release", "win-unpacked", "BUILD_INFO.json"), "utf8"));
       expect(buildInfo.sourceSha).toBe(candidateCommit);
       expect(await readFile(path.join(repo, "release", "win-unpacked", "Tandem.exe"), "utf8")).toContain("fake exe");
+      expect(accepted.recoveryRuntime).toMatchObject({ role: "B", sourceSha: candidateCommit, stage: "b-runtime-promoted" });
+      const recoveryBuildInfo = JSON.parse(await readFile(path.join(relayRoot, "runtimes", "executor-b", "BUILD_INFO.json"), "utf8"));
+      expect(recoveryBuildInfo.sourceSha).toBe(candidateCommit);
+      expect(recoveryBuildInfo.reciprocalCapabilities.candidatePreviewArtifactLifecycle).toBe(1);
 
       const waitingClaim = await relay(repo, "-Action", "Claim", "-Role", "A");
       expect(waitingClaim).toMatchObject({ outcome: "A_UPGRADE_PENDING" });
@@ -714,6 +719,7 @@ describe("reciprocal relay script", () => {
       const completed = await relay(repo, "-Action", "CompleteAUpgrade", "-Role", "A", "-Force", "-Summary", "human confirmed A rebuild");
       expect(completed).toMatchObject({ outcome: "A_UPGRADE_COMPLETED", phase: "idle", nextRole: "A" });
     } finally {
+      await rm(relayRoot, { recursive: true, force: true });
       await rm(repo, { recursive: true, force: true });
     }
   }, 30_000);

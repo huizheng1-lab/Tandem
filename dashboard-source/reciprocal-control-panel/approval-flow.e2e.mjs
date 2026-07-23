@@ -129,6 +129,7 @@ async function makeFixture(t) {
     sourceSha: fixtureSha,
     sourceShortSha: fixtureSha.slice(0, 7),
     builtAt: "2026-07-22T00:00:00.000Z",
+    reciprocalCapabilities: { candidatePreviewArtifactLifecycle: 1 },
   });
   await writeFile(path.join(repoRoot, "release", "win-unpacked", "Tandem.exe"), "fixture candidate\n", "utf8");
   for (const role of ["a", "b"]) {
@@ -272,6 +273,8 @@ test("approval flow uses the real relay to complete an inactive A-upgrade bounda
     assert.equal(result.result.current, "complete");
     assert.deepEqual(result.result.steps.map((step) => step.step), [
       "a-upgrade-boundary",
+      "recovery-authority-promoted",
+      "recovery-authority-ready",
       "review-recorded",
       "executor-a-stopped",
       "runtime-a-promoted",
@@ -293,15 +296,17 @@ test("approval flow uses the real relay to complete an inactive A-upgrade bounda
   assert.equal(completeArgs.includes("-Workspace") && path.resolve(completeArgs[completeArgs.indexOf("-Workspace") + 1]) === path.resolve(fixture.copyA), true);
   assert.equal(completeArgs.includes("-Summary") && completeArgs[completeArgs.indexOf("-Summary") + 1].trim().length > 0, true);
   const promoteCommands = commands.filter((entry) => String(entry.args[1]).endsWith("promote-reciprocal-runtime.ps1"));
-  assert.equal(promoteCommands.length, 1);
-  assert.equal(promoteCommands[0].args.includes("-TargetRole"), true);
-  assert.equal(promoteCommands[0].args[promoteCommands[0].args.indexOf("-TargetRole") + 1], "A");
+  assert.equal(promoteCommands.length, 2);
+  assert.deepEqual(promoteCommands.map((entry) => entry.args[entry.args.indexOf("-TargetRole") + 1]), ["B", "A"]);
+  assert.equal(promoteCommands.every((entry) => entry.args.includes("-SourceSha") && entry.args[entry.args.indexOf("-SourceSha") + 1] === fixture.fixtureSha), true);
   const approvalStartCommands = commands.filter((entry) => String(entry.args[1]).endsWith("start-reciprocal-tandem.ps1"));
-  assert.equal(approvalStartCommands.length, 1);
-  assert.equal(approvalStartCommands[0].args.includes("-Role"), true);
-  assert.equal(approvalStartCommands[0].args[approvalStartCommands[0].args.indexOf("-Role") + 1], "A");
+  assert.equal(approvalStartCommands.length, 2);
+  assert.deepEqual(approvalStartCommands.map((entry) => entry.args[entry.args.indexOf("-Role") + 1]), ["B", "A"]);
   const stopCommands = commands.filter((entry) => String(entry.args[1]).endsWith("stop-reciprocal-tandem.ps1"));
   assert.deepEqual(stopCommands.map((entry) => entry.args[entry.args.indexOf("-Role") + 1]), ["A", "B"]);
+  const automationCalls = commands.filter((entry) => entry.args[0] === "AUTOMATION");
+  assert.equal(automationCalls.some((entry) => entry.args[1] === "B" && entry.args[3] === "/prompt"), false);
+  assert.equal(automationCalls.some((entry) => entry.args[1] === "B" && entry.args[3] === "/status"), true);
 
   const state = await readJson(fixture.statePath);
   assert.equal(state.phase, "idle");
@@ -311,6 +316,37 @@ test("approval flow uses the real relay to complete an inactive A-upgrade bounda
   const audit = await readJsonl(fixture.auditPath);
   assert.equal(audit.some((entry) => entry.step === "a-upgrade-completed" && /a_upgrade_completed/.test(entry.detail)), true);
   await writeEvidence("approval-flow", { commands, actions, state, auditSteps: audit.filter((entry) => entry.action === "update.approvalStep").map((entry) => ({ step: entry.step, detail: entry.detail })) });
+});
+
+test("D181 failed A restart leaves B online as recovery authority", async (t) => {
+  const fixture = await makeFixture(t);
+  await fixture.setState();
+  const previousFailRole = process.env.TANDEM_DASHBOARD_TEST_FAIL_WAIT_ROLE;
+  process.env.TANDEM_DASHBOARD_TEST_FAIL_WAIT_ROLE = "A";
+  try {
+    await withServer(t, fixture, async ({ post }) => {
+      const { response, result } = await post("/api/update/approve", { comment: "fixture approval with restart failure" });
+      assert.equal(response.status, 400, JSON.stringify(result));
+      assert.match(result.error, /executor A automation failed/i);
+    });
+  } finally {
+    if (previousFailRole === undefined) delete process.env.TANDEM_DASHBOARD_TEST_FAIL_WAIT_ROLE;
+    else process.env.TANDEM_DASHBOARD_TEST_FAIL_WAIT_ROLE = previousFailRole;
+  }
+
+  const commands = await readJsonl(fixture.commandLog);
+  const promoteCommands = commands.filter((entry) => String(entry.args[1]).endsWith("promote-reciprocal-runtime.ps1"));
+  assert.deepEqual(promoteCommands.map((entry) => entry.args[entry.args.indexOf("-TargetRole") + 1]), ["B", "A"]);
+  const startCommands = commands.filter((entry) => String(entry.args[1]).endsWith("start-reciprocal-tandem.ps1"));
+  assert.deepEqual(startCommands.map((entry) => entry.args[entry.args.indexOf("-Role") + 1]), ["B", "A"]);
+  const stopCommands = commands.filter((entry) => String(entry.args[1]).endsWith("stop-reciprocal-tandem.ps1"));
+  assert.deepEqual(stopCommands.map((entry) => entry.args[entry.args.indexOf("-Role") + 1]), ["A"]);
+  assert.equal(commandActions(commands).some((entry) => entry.action === "CompleteAUpgrade"), false);
+  const automationCalls = commands.filter((entry) => entry.args[0] === "AUTOMATION");
+  assert.equal(automationCalls.some((entry) => entry.args[1] === "B" && entry.args[3] === "/prompt"), false);
+  const state = await readJson(fixture.statePath);
+  assert.equal(state.phase, "a-upgrade-pending");
+  assert.equal(state.activeRole, null);
 });
 
 test("authority flow uses authenticated dashboard API to approve one relay checkpoint", async (t) => {
