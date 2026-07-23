@@ -1,0 +1,47 @@
+Round: D194
+
+Commits:
+- 81cd937 D194-1: finalize promotion operation journals
+
+Terminal-stage definition:
+- Non-terminal promotion stages remain fail-closed for different packages: staging-verified, backup-created, and target-swapped.
+- Terminal success is now recorded as stage "completed" after the target runtime verifies against the requested source SHA and package identity.
+- Legacy stage "target-verified" records are treated as terminal only when the currently installed target runtime still verifies against that record's source SHA and package identity.
+
+Finalize mechanism:
+- On successful promotion, promote-reciprocal-runtime.ps1 writes stage "completed", completedAt, targetProof, and updatedAt.
+- When a later promotion for the same executor targets a different package, the script verifies the existing terminal operation against the installed target, archives it under state/promotion-operations/completed/, and starts a fresh operation.
+- If the existing operation is non-terminal and targets a different package, promotion still fails closed with the existing inspection error.
+
+Regression coverage:
+- tests/runtime-package-integrity.test.ts: D184 promotion retry preserves one original runtime backup and verifies the target
+- tests/runtime-package-integrity.test.ts: D193 retires completed promotion operations before promoting a different package
+- tests/runtime-package-integrity.test.ts: D194 keeps in-flight promotion operations fail-closed for different packages
+
+Live proof:
+- The old executor-B blocker was finalized through the code path during the prior fair D193 retest, not bare-deleted.
+- Archived old record:
+  - C:\Users\huizh\Apps\Tandem Reciprocal\state\promotion-operations\completed\executor-b-promote-b-83421bb-32912-20260723090137.json
+  - sourceSha: 83421bbc0cd5a8dd2832f194b66e8bf8e9d72eb1
+  - packageIdentity: 047AD955EA83E61E30217038F69B5FFD6848D8148E441EECAA990F9256F133E3
+- Fresh executor-B operation record:
+  - C:\Users\huizh\Apps\Tandem Reciprocal\state\promotion-operations\executor-b.json
+  - stage: target-verified
+  - sourceSha: efb3b06a37390fcf191eb9f07f4fa479d49faee7
+  - packageIdentity: C5D4CB4625BAA9BBF87A66568756A531C9766EF6914154A6B23BEA06BB30A57B
+- Relay state is already at the intended human gate from the fair D193/D194 incident retest:
+  - phase: a-upgrade-pending
+  - stableCommit: efb3b06a37390fcf191eb9f07f4fa479d49faee7
+  - candidateCommit: null
+  - passiveFailure: null
+- The A runtime promotion gate was not crossed.
+
+Verification:
+- npm test -- tests/runtime-package-integrity.test.ts -- --reporter=dot: passed, 5 tests
+- npm run typecheck: passed
+- npm test: passed, 53 files passed and 1 skipped; 576 tests passed and 1 skipped
+- git diff --check: passed
+
+Notes:
+- The current live executor-B operation was produced before D194 changed the terminal label from legacy target-verified to completed. D194 preserves target-verified as a legacy terminal-success stage when the installed target verifies, so this live record remains valid and supersedable by the next package through the audited path.
+- Unrelated untracked handoff docs and the pre-existing unstaged scheduler cadence hunk in scripts/setup-reciprocal-tandem.ps1 were left untouched.
