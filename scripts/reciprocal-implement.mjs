@@ -21,7 +21,7 @@ const controlPath = arg("control-path", process.env.TANDEM_RECIPROCAL_CONTROL ||
 const statePath = arg("state-path", process.env.TANDEM_RECIPROCAL_STATE || "");
 const claimedItemId = arg("claimed-item-id", process.env.TANDEM_RECIPROCAL_CLAIMED_ITEM || "");
 const maxDurationMs = Number(arg("max-duration-ms", process.env.TANDEM_RECIPROCAL_MAX_DURATION_MS || 50 * 60 * 1000));
-const agentBin = arg("agent-bin", process.env.TANDEM_RECIPROCAL_IMPLEMENT_BIN || process.env.TANDEM_CLAUDE_BIN || "claude.cmd");
+const agentBin = arg("agent-bin", process.env.TANDEM_RECIPROCAL_IMPLEMENT_BIN || process.env.TANDEM_CLAUDE_BIN || "claude");
 const dryRun = boolArg("dry-run") || process.env.TANDEM_RECIPROCAL_DRY_RUN === "1";
 
 function die(code, payload) {
@@ -84,7 +84,11 @@ function workingTreeClean(cwd) {
   return r.stdout.length === 0;
 }
 
-function item() {
+function runAgent(cwd, args, timeout) {
+  const command = process.env.TANDEM_CLAUDE_BIN || process.env.TANDEM_RECIPROCAL_IMPLEMENT_BIN || "claude.cmd";
+  return spawnSync(command, args, { cwd, encoding: "utf8", windowsHide: true, timeout, shell: true });
+}
+
   let claimed;
   try {
     claimed = readClaimedItem();
@@ -127,7 +131,7 @@ function item() {
     "--allowedTools", "Bash(git add *),Bash(git commit *),Bash(git status),Bash(git log *),Bash(git rev-parse *),Read,Edit,Write,Glob,Grep",
     "--system-prompt", "Implement the wishlist item. Use git for version control. Be terse.",
   ];
-  const result = spawnSync(agentBin, args, { cwd: repo, encoding: "utf8", windowsHide: true, timeout: maxDurationMs });
+  const result = runAgent(repo, args, maxDurationMs);
   if (result.error) {
     die(1, { step: "agent-spawn", message: result.error.message, agent: agentBin });
   }
