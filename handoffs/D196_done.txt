@@ -1,0 +1,59 @@
+D196 done
+
+Round: D196
+
+Commits:
+- 2439f3a D196-1: add single reciprocal orchestrator
+- e078d55 D196-2: retire legacy mutation paths
+- d4941d1 D196-3: add orchestrator cutover mode
+- 0b43ca4 D196-4: stop B before cutover promotion
+- 007d5a8 D196-5: surface orchestrator status
+- D196-6: record handoff completion (this marker commit; final hash is reported by git log/final response)
+
+Implementation summary:
+- Replaced the reciprocal handoff path with one durable orchestrator state machine in scripts/reciprocal-orchestrator.mjs.
+- The orchestrator claims queued wishlist items, runs A implementation/tests, packages B just in time from the exact verified candidate source SHA, launches B only for swap/recovery, rebuilds/verifies A, updates refs/tandem-relay/stable, and stops B on success.
+- B never receives wishlist claims or prompt/agentic work from the orchestrator; B is a mechanical build/launch/recovery authority only.
+- Added restart-safe boundaries for B packaging/launch, B verification, A stop, A-only promotion, A restart/verification, stable-ref update, and B stop via orchestrator-state.json plus control/orchestrator-operations.ndjson.
+- Failure handling pauses in failed-paused with a failure report instead of continuing to mutate state; failed swap steps preserve at least the previously known-good executor path.
+- Retired dashboard mutation endpoints now return HTTP 410 with explicit D196 single-orchestrator guidance instead of pretending the old relay paths still own runtime upgrades.
+- Dashboard status now surfaces the D196 orchestrator state, stable commit, and legacy relay state truthfully.
+- Added focused regression coverage for happy path, retry feedback, two-strike pause, crash resume, idle/no work, explicit cutover, rejection/requeue semantics, disabled legacy relay entrypoints, dashboard retired mutation truthfulness, and runtime topology expectations.
+
+Live cutover proof:
+- No live QUEUED wishlist item existed when this round reached live proof. The handoff cutover section authorized replacing the parked legacy gate, so D196 used explicit cutover instead of inventing a fake live wishlist item.
+- Explicit cutover command completed at source 007d5a804382577d857ee7fe94ea1c99bfd169fb with ok=true.
+- Orchestrator state after cutover:
+  - phase: idle
+  - stableCommit: 007d5a804382577d857ee7fe94ea1c99bfd169fb
+  - lastSummary: Explicit D196 cutover completed; A is running accepted runtime and B is stopped.
+- Operation log tail recorded:
+  - 2026-07-24T02:04:40.414Z cutover.started
+  - 2026-07-24T02:05:15.056Z package-b.passed
+  - 2026-07-24T02:05:15.935Z start-b.passed
+  - 2026-07-24T02:05:16.384Z verify-runtime.passed
+  - 2026-07-24T02:05:20.919Z rebuild-a.passed
+  - 2026-07-24T02:05:21.369Z verify-a.passed
+  - 2026-07-24T02:05:21.747Z stop-b.passed
+  - 2026-07-24T02:05:21.955Z stable-ref.updated
+  - 2026-07-24T02:05:21.957Z cutover.completed
+- Runtime package verification:
+  - executor-a sourceSha 007d5a804382577d857ee7fe94ea1c99bfd169fb, packageIdentity 46AA3A8B1540C0090481CEFB13FB814701BAF5E1A63496A8CF0191FB28CF3BA1, files 74
+  - executor-b sourceSha 007d5a804382577d857ee7fe94ea1c99bfd169fb, packageIdentity 46AA3A8B1540C0090481CEFB13FB814701BAF5E1A63496A8CF0191FB28CF3BA1, files 74
+- Final live topology check:
+  - Executor A runtime process count: 4; automation endpoint ok, instanceId A, target C:\Users\huizh\Apps\Tandem Reciprocal\worktrees\copy-b, sourceSha 007d5a804382577d857ee7fe94ea1c99bfd169fb.
+  - Executor B runtime process count: 0.
+
+Verification:
+- npm run typecheck: passed.
+- npm test -- --reporter=json --outputFile tmp/npmtest-d196.json: passed through the npm test script; 149/149 suites passed, 545 passed tests, 0 failed tests. Plain npm test exited 1 without a failure body in the default Vitest reporter path, so JSON reporter output was used for the auditable suite result.
+- npx vitest run --configLoader runner --reporter=json --outputFile tmp/vitest-d196.json: passed; 149/149 suites passed, 545 passed tests, 0 failed tests.
+- git diff --check: passed; only warned that unrelated scripts/setup-reciprocal-tandem.ps1 will be normalized LF->CRLF if Git touches it.
+- node dashboard-source\reciprocal-control-panel\lib.nodecheck.mjs: passed; 20/20 tests.
+- node dashboard-source\reciprocal-control-panel\approval-flow.e2e.mjs: passed; 2 live-safe tests passed, 9 legacy/live-mutation tests intentionally skipped.
+- powershell -NoProfile -ExecutionPolicy Bypass -File scripts\deploy-reciprocal-dashboard.ps1 -VerifyOnly: passed; managedFileCount 16, no planned updates.
+- node scripts\runtime-package-integrity.mjs verify for executor-a and executor-b at 007d5a804382577d857ee7fe94ea1c99bfd169fb: passed.
+
+Notes:
+- Historical relay/runtime recovery JSON files remain on disk as audit artifacts, but D196 dashboard status and the new orchestrator do not rely on the retired mutation paths.
+- Existing unrelated working-tree changes and untracked handoff/process docs were left untouched.
