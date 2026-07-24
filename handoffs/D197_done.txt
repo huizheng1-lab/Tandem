@@ -1,0 +1,37 @@
+D197 completion marker
+
+Round: D197
+
+Commits:
+- 52fb3dc D197-1: freshen executor instructions and watchdog status
+- 5e9950d D197-2: attest executor instruction root
+- b7e38ac D197-3: remove executor-owned schedules
+
+Implementation summary:
+- Removed the dashboard watchdog's mutating supervisor tick path. The deployed dashboard now records read-only orchestrator.status audits instead of calling the retired continue-reciprocal-automation.ps1 supervisor path.
+- Added TANDEM_PROJECT_INSTRUCTIONS_ROOT as the executor instruction freshness boundary. start-reciprocal-tandem.ps1 sets it to the admin repo while launching executors, readProjectInstructions searches that root before the executor worktree, and /status reports the effective root.
+- Kept the retired continue-reciprocal-automation.ps1 guard intact; no new scheduler or dashboard path calls it.
+- Removed executor-owned schedules from reciprocal setup and disabled the live copy-a/copy-b schedules to empty arrays. Backups were left at:
+  - C:\Users\huizh\Apps\Tandem Reciprocal\worktrees\copy-a\.tandem\schedules.json.D197-disabled-20260724000802.bak
+  - C:\Users\huizh\Apps\Tandem Reciprocal\worktrees\copy-b\.tandem\schedules.json.D197-disabled-20260724000802.bak
+
+W0023 disposition:
+- Stopped Executor A before preserving W0023 drift.
+- Preserved the stale copy-b W0023 working state in stash@{0}: "D197 preserve old-path W0023 drift before orchestrator requeue".
+- Requeued W0023 through the control wishlist with note "D197 preserved old-path W0023 drift in copy-b stash before orchestrator requeue".
+- copy-b remains at stale head efb3b06a37390fcf191eb9f07f4fa479d49faee7 and clean, so no W0023 feature logic was landed from the old path.
+
+Live proof:
+- Executor A was rebuilt/promoted from exact admin commit b7e38ac5cc7d53ca138991d1b1794dc3cd6d77a1 and restarted as PID 41760.
+- Authenticated A /status returned sourceSha b7e38ac5cc7d53ca138991d1b1794dc3cd6d77a1, packageIdentity 387A6A68BE8193CFCF8D0C0F7140222A0DF08C0B2657BB45DF769DDBA08F2F2D, allowedProjectDir C:\Users\huizh\Apps\Tandem Reciprocal\worktrees\copy-b, projectInstructionsRoot C:\Users\huizh\Apps\HZ code, and scheduleStatus count 0.
+- Process check showed A=4 Tandem processes for executor-a and B=0 for executor-b, keeping B dormant.
+- Dashboard audit tail shows the final old supervisor.tick at 2026-07-24T04:03:43.498Z followed by repeated orchestrator.status entries at 2026-07-24T04:04:41Z through 2026-07-24T04:13:39Z.
+
+Verification:
+- npm run typecheck: passed.
+- npm test: passed, 54 files passed, 546 tests passed, 41 skipped.
+- git diff --check: passed.
+- node dashboard-source\reciprocal-control-panel\lib.nodecheck.mjs: passed, 20/20.
+- node dashboard-source\reciprocal-control-panel\approval-flow.e2e.mjs: passed, 3/3 active tests with 9 skipped.
+- powershell -NoProfile -ExecutionPolicy Bypass -File scripts\deploy-reciprocal-dashboard.ps1 -VerifyOnly: passed with no planned updates.
+- node scripts\runtime-package-integrity.mjs verify C:\Users\huizh\Apps\Tandem Reciprocal\runtimes\executor-a --source-sha b7e38ac5cc7d53ca138991d1b1794dc3cd6d77a1: passed.
