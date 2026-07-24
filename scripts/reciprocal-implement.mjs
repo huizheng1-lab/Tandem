@@ -21,7 +21,7 @@ const controlPath = arg("control-path", process.env.TANDEM_RECIPROCAL_CONTROL ||
 const statePath = arg("state-path", process.env.TANDEM_RECIPROCAL_STATE || "");
 const claimedItemId = arg("claimed-item-id", process.env.TANDEM_RECIPROCAL_CLAIMED_ITEM || "");
 const maxDurationMs = Number(arg("max-duration-ms", process.env.TANDEM_RECIPROCAL_MAX_DURATION_MS || 50 * 60 * 1000));
-const agentBin = arg("agent-bin", process.env.TANDEM_RECIPROCAL_IMPLEMENT_BIN || process.env.TANDEM_CLAUDE_BIN || "claude");
+const agentBin = arg("agent-bin", process.env.TANDEM_RECIPROCAL_IMPLEMENT_BIN || process.env.TANDEM_CLAUDE_BIN || "claude.cmd");
 const dryRun = boolArg("dry-run") || process.env.TANDEM_RECIPROCAL_DRY_RUN === "1";
 
 function die(code, payload) {
