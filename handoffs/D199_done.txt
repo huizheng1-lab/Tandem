@@ -1,0 +1,39 @@
+Round: D199
+
+Commits:
+- 8c6f81a D199-1: restore orchestrator trigger visibility
+
+Implementation:
+- Added host-level Windows Scheduled Task installer: scripts/register-reciprocal-orchestrator-task.ps1.
+- Registered TandemReciprocalOrchestrator from the admin repo C:\Users\huizh\Apps\HZ code with a 5-minute cadence.
+- Cadence justification: the retired per-worktree executor cron was roughly 30 minutes, while the D196 orchestrator cycle is fast enough to complete a clean round in minutes; 5 minutes keeps the reciprocal loop responsive while MultipleInstances IgnoreNew prevents overlapping cycles.
+- Added dashboard status visibility for orchestrator trigger presence, exact command target, working directory, last task run, next task run, last orchestrator state update, last operation, and staleness.
+- Dashboard health now surfaces "Orchestrator trigger" so missing, stale, or worktree-pointing triggers are visible.
+
+Regression coverage:
+- D199 dashboard reports admin-repo orchestrator trigger freshness.
+- D199 dashboard warns when the orchestrator trigger points outside the admin repo.
+- D199 scheduler installer targets the admin repo orchestrator script.
+
+Live proof:
+- Registered task: TandemReciprocalOrchestrator.
+- Command: powershell.exe -NoProfile -ExecutionPolicy Bypass -File "C:\Users\huizh\Apps\HZ code\scripts\reciprocal-orchestrator.ps1" -Repo "C:\Users\huizh\Apps\HZ code" -RelayRoot "C:\Users\huizh\Apps\Tandem Reciprocal".
+- Working directory: C:\Users\huizh\Apps\HZ code.
+- First unattended scheduled fire: LastRunTime 2026-07-24T12:03:27Z.
+- First proof log entry after registration: 2026-07-24T12:03:28.702Z action=a-tests.started item=W0023.
+- W0023 outcome from real scheduled tick: 2026-07-24T12:07:32.606Z action=cycle.completed; state phase=idle; summary="Completed W0023 through the single orchestrator."
+- Follow-up scheduled tick: 2026-07-24T12:08:29.676Z action=idle.no-work.
+- Live dashboard /api/status trigger proof after deploy: configured=true, ok=true, stale=false, lastStateUpdateAt=2026-07-24T12:08:29.675Z, lastTaskRunAt=2026-07-24T12:08:29Z.
+
+Verification:
+- node --test --test-name-pattern "D199" dashboard-source\reciprocal-control-panel\approval-flow.e2e.mjs: passed 3/3.
+- node --test dashboard-source\reciprocal-control-panel\lib.nodecheck.mjs: passed 20/20.
+- powershell -NoProfile -ExecutionPolicy Bypass -File scripts\deploy-reciprocal-dashboard.ps1 -DryRun: passed; planned approval-flow.e2e.mjs and server.mjs updates.
+- powershell -NoProfile -ExecutionPolicy Bypass -File scripts\deploy-reciprocal-dashboard.ps1: passed; dashboard restarted and deployed managed files.
+- powershell -NoProfile -ExecutionPolicy Bypass -File scripts\deploy-reciprocal-dashboard.ps1 -VerifyOnly: passed.
+- npm run typecheck: passed.
+- npm test: passed, 54 files / 546 tests; 2 files / 41 tests skipped.
+- git diff --check: passed.
+
+Known check note:
+- Full node --test dashboard-source\reciprocal-control-panel\approval-flow.e2e.mjs timed out with no failure details at both 180s and 600s. The D199-specific E2E cases passed, and npm test passed the full project suite.
