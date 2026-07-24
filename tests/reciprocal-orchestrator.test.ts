@@ -53,8 +53,8 @@ function commands(root: string, overrides: Record<string, string> = {}) {
   return { ...base, ...overrides };
 }
 
-async function run(root: string, relayRoot: string, commandMap: Record<string, string>) {
-  return execa("node", [script, "--repo", root, "--relay-root", relayRoot], {
+async function run(root: string, relayRoot: string, commandMap: Record<string, string>, extraArgs: string[] = []) {
+  return execa("node", [script, "--repo", root, "--relay-root", relayRoot, ...extraArgs], {
     cwd: root,
     env: { ...process.env, TANDEM_ORCHESTRATOR_COMMANDS_JSON: JSON.stringify(commandMap), TANDEM_ORCHESTRATOR_SOURCE_SHA: "fixture-sha" },
     reject: false,
@@ -136,6 +136,24 @@ describe("single reciprocal orchestrator", () => {
       const result = await run(f.root, f.relayRoot, commands(f.root));
       expect(result.exitCode).toBe(0);
       expect(JSON.parse(result.stdout)).toMatchObject({ ok: true, idle: true, state: { phase: "idle" } });
+    } finally {
+      await rm(f.root, { recursive: true, force: true });
+    }
+  });
+
+  windowsIt("runs explicit cutover through the mechanical swap path without claiming wishlist work", async () => {
+    const f = await fixture("cutover");
+    try {
+      const result = await run(f.root, f.relayRoot, commands(f.root), ["--cutover"]);
+      expect(result.exitCode).toBe(0);
+      expect(JSON.parse(result.stdout)).toMatchObject({ ok: true, cutover: true });
+      expect(await labels(f.root)).toEqual(["packageB", "startB", "verifyRuntime", "rebuildA", "verifyA", "stopB"]);
+      expect(await readFile(path.join(f.relayRoot, "control", "WISHLIST.md"), "utf8")).toMatch(/- \[ \] W0001 .* QUEUED/);
+      const state = JSON.parse(await readFile(path.join(f.relayRoot, "state", "orchestrator-state.json"), "utf8"));
+      expect(state).toMatchObject({ phase: "idle", currentItem: null, stableCommit: "fixture-sha" });
+      const log = await readFile(path.join(f.relayRoot, "control", "orchestrator-operations.ndjson"), "utf8");
+      expect(log).toMatch(/cutover\.started/);
+      expect(log).toMatch(/cutover\.completed/);
     } finally {
       await rm(f.root, { recursive: true, force: true });
     }

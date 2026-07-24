@@ -71,7 +71,7 @@ function loadCommands(repo, relayRoot) {
     return JSON.parse(process.env.TANDEM_ORCHESTRATOR_COMMANDS_JSON);
   }
   const q = (value) => `"${String(value).replaceAll('"', '\\"')}"`;
-  const sourceSha = process.env.TANDEM_ORCHESTRATOR_SOURCE_SHA || "HEAD";
+  const sourceSha = process.env.TANDEM_ORCHESTRATOR_SOURCE_SHA || runCommand("git rev-parse HEAD", repo).stdout.trim();
   return {
     implement: `powershell -NoProfile -ExecutionPolicy Bypass -File ${q(path.join(repo, "scripts", "reciprocal-direction.ps1"))} -Action Show -ControlPath ${q(path.join(relayRoot, "control", "WISHLIST.md"))}`,
     test: "npm run typecheck && npm test && git diff --check",
@@ -82,6 +82,34 @@ function loadCommands(repo, relayRoot) {
     verifyA: `node ${q(path.join(repo, "scripts", "runtime-package-integrity.mjs"))} verify ${q(path.join(relayRoot, "runtimes", "executor-a"))}`,
     stopB: `powershell -NoProfile -ExecutionPolicy Bypass -File ${q(path.join(repo, "dashboard-source", "reciprocal-control-panel", "stop-reciprocal-tandem.ps1"))} -Role B -RelayRoot ${q(relayRoot)}`,
   };
+}
+
+function runSwap({ repo, relayRoot, commands, state, statePath, logPath, reason = "cycle" }) {
+  state.phase = "swapping";
+  save(statePath, logPath, state, `${reason}.swap.started`);
+  const swapSteps = [
+    ["package-b", commands.packageB],
+    ["start-b", commands.startB],
+    ["verify-runtime", commands.verifyRuntime],
+    ["rebuild-a", commands.rebuildA],
+    ["verify-a", commands.verifyA],
+    ["stop-b", commands.stopB],
+  ];
+  for (const [name, command] of swapSteps) {
+    const result = runStep({ name, command, cwd: repo, state, statePath, logPath });
+    if (!result.ok) {
+      state.phase = "failed-paused";
+      state.lastSummary = `${name} failed; at least the previously known-good executor must remain alive.`;
+      state.failures = [...(state.failures || []), { command, exitCode: result.exitCode, output: result.output.slice(0, 12000), at: now() }];
+      const report = failReport(relayRoot, state.currentItem || { id: "cutover", text: "explicit cutover" }, state.failures);
+      state.failureReport = report;
+      save(statePath, logPath, state, `${reason}.swap.failed-paused`, { failedStep: name, report });
+      console.log(JSON.stringify({ ok: false, failedPaused: true, report, state }, null, 2));
+      process.exitCode = 3;
+      return false;
+    }
+  }
+  return true;
 }
 
 function parseWishlist(file) {
@@ -170,6 +198,35 @@ function main() {
     console.log(JSON.stringify({ ok: true, state, statePath, logPath }, null, 2));
     return;
   }
+  if (boolArg("cutover")) {
+    if (state.phase === "failed-paused") {
+      console.log(JSON.stringify({ ok: true, paused: true, state }, null, 2));
+      return;
+    }
+    state.currentItem = {
+      id: "cutover",
+      priority: "P0",
+      text: "Replace parked legacy A-upgrade gate with single-orchestrator runtime swap",
+      line: null,
+    };
+    state.consecutiveFailures = 0;
+    state.failures = [];
+    state.startedAt = now();
+    state.lastSummary = "Starting explicit D196 cutover.";
+    save(statePath, logPath, state, "cutover.started");
+    const swapped = runSwap({ repo, relayRoot, commands, state, statePath, logPath, reason: "cutover" });
+    if (!swapped) return;
+    state.phase = "idle";
+    state.step = null;
+    state.stableCommit = process.env.TANDEM_ORCHESTRATOR_SOURCE_SHA || runCommand("git rev-parse HEAD", repo).stdout.trim();
+    state.lastSummary = "Explicit D196 cutover completed; A is running accepted runtime and B is stopped.";
+    state.currentItem = null;
+    state.consecutiveFailures = 0;
+    state.failures = [];
+    save(statePath, logPath, state, "cutover.completed");
+    console.log(JSON.stringify({ ok: true, cutover: true, state }, null, 2));
+    return;
+  }
   if (existsSync(pausePath) && state.phase !== "failed-paused") {
     state.phase = "failed-paused";
     state.lastSummary = `Paused by ${pausePath}`;
@@ -220,30 +277,7 @@ function main() {
     }
   }
 
-  state.phase = "swapping";
-  save(statePath, logPath, state, "swap.started");
-  const swapSteps = [
-    ["package-b", commands.packageB],
-    ["start-b", commands.startB],
-    ["verify-runtime", commands.verifyRuntime],
-    ["rebuild-a", commands.rebuildA],
-    ["verify-a", commands.verifyA],
-    ["stop-b", commands.stopB],
-  ];
-  for (const [name, command] of swapSteps) {
-    const result = runStep({ name, command, cwd: repo, state, statePath, logPath });
-    if (!result.ok) {
-      state.phase = "failed-paused";
-      state.lastSummary = `${name} failed; at least the previously known-good executor must remain alive.`;
-      state.failures = [...(state.failures || []), { command, exitCode: result.exitCode, output: result.output.slice(0, 12000), at: now() }];
-      const report = failReport(relayRoot, state.currentItem, state.failures);
-      state.failureReport = report;
-      save(statePath, logPath, state, "swap.failed-paused", { failedStep: name, report });
-      console.log(JSON.stringify({ ok: false, failedPaused: true, report, state }, null, 2));
-      process.exitCode = 3;
-      return;
-    }
-  }
+  if (!runSwap({ repo, relayRoot, commands, state, statePath, logPath })) return;
 
   const lines = existsSync(wishlistPath) ? readFileSync(wishlistPath, utf8).split(/\r?\n/) : [];
   const currentLine = lines[state.currentItem.line] || "";
