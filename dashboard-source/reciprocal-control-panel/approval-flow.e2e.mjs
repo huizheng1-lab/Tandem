@@ -292,6 +292,21 @@ test("D196 dashboard reports retired mutation paths truthfully", async (t) => {
   });
 });
 
+test("D197 dashboard watchdog audits orchestrator status without retired supervisor calls", async (t) => {
+  const fixture = await makeFixture(t);
+  await writeJson(path.join(fixture.relayRoot, "state", "orchestrator-state.json"), {
+    phase: "idle",
+    currentItem: null,
+    stableCommit: fixture.fixtureSha,
+  });
+  await withServer(t, fixture, async () => {
+    await new Promise((resolve) => setTimeout(resolve, 2200));
+    const audit = await readJsonl(fixture.auditPath);
+    assert.equal(audit.some((entry) => entry.action === "orchestrator.status" && entry.source === "dashboard-startup"), true);
+    assert.equal(audit.some((entry) => entry.action === "supervisor.tick"), false);
+  }, { env: { TANDEM_DASHBOARD_ENABLE_TEST_ORCHESTRATOR_STATUS: "1" } });
+});
+
 legacyDashboardMutationTest("D181 Kickstart starts only Executor A and treats B dormant as healthy", async (t) => {
   const fixture = await makeFixture(t);
   await fixture.setState({ phase: "idle", activeRole: null });

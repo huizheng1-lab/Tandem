@@ -1240,6 +1240,18 @@ async function runSupervisorController(source = "tick") {
   }
 }
 
+async function auditOrchestratorStatus(source = "dashboard-watchdog-status") {
+  const state = await jsonFile(orchestratorStatePath, {});
+  await audit("orchestrator.status", {
+    source,
+    ok: !state?._readError,
+    phase: state?.phase || null,
+    currentItem: state?.currentItem?.id || null,
+    stableCommit: state?.stableCommit || null,
+  });
+  return state;
+}
+
 async function audit(action, detail = {}) {
   await appendFile(auditPath, `${JSON.stringify({ at: new Date().toISOString(), ...detail, action })}\n`, "utf8");
 }
@@ -2338,10 +2350,10 @@ server.listen(port, "127.0.0.1", () => {
   serverLog("server.start", `url=http://127.0.0.1:${port}`);
   console.log(`Tandem Reciprocal Control Panel: http://127.0.0.1:${port}`);
   console.log(`Control root: ${relayRoot}`);
-  if (!testHarness || process.env.TANDEM_DASHBOARD_ENABLE_TEST_SUPERVISOR === "1") {
-    const tickMs = Number(process.env.TANDEM_SUPERVISOR_TICK_MS || 60_000);
-    setTimeout(() => runSupervisorController("dashboard-startup").catch((error) => serverLog("supervisor.startup.error", errorText(error))), 1_500).unref();
-    setInterval(() => runSupervisorController("dashboard-watchdog-tick").catch((error) => serverLog("supervisor.tick.error", errorText(error))), Math.max(10_000, tickMs)).unref();
+  if (!testHarness || process.env.TANDEM_DASHBOARD_ENABLE_TEST_ORCHESTRATOR_STATUS === "1") {
+    const tickMs = Number(process.env.TANDEM_ORCHESTRATOR_STATUS_TICK_MS || process.env.TANDEM_SUPERVISOR_TICK_MS || 60_000);
+    setTimeout(() => auditOrchestratorStatus("dashboard-startup").catch((error) => serverLog("orchestrator.status.startup.error", errorText(error))), 1_500).unref();
+    setInterval(() => auditOrchestratorStatus("dashboard-watchdog-status").catch((error) => serverLog("orchestrator.status.tick.error", errorText(error))), Math.max(10_000, tickMs)).unref();
   }
   const fault = process.env.TANDEM_DASHBOARD_TEST_FAULT;
   if (fault === "unhandled-rejection") {

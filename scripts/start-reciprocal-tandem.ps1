@@ -155,11 +155,13 @@ function Start-Executor([string]$SelectedRole) {
     $oldCodexWritableRoots = $env:TANDEM_CODEX_WRITABLE_ROOTS
     $oldRuntimeBuildInfo = $env:TANDEM_RUNTIME_BUILD_INFO
     $oldRuntimePackageIdentity = $env:TANDEM_RUNTIME_PACKAGE_ID
+    $oldProjectInstructionsRoot = $env:TANDEM_PROJECT_INSTRUCTIONS_ROOT
     try {
         $env:TANDEM_HOME = $stateHome
         $env:TANDEM_INSTANCE_ID = $SelectedRole
         $env:TANDEM_RUNTIME_BUILD_INFO = $buildInfoPath
         $env:TANDEM_RUNTIME_PACKAGE_ID = [string]$buildInfo.packageIdentity
+        $env:TANDEM_PROJECT_INSTRUCTIONS_ROOT = $adminRepo
         $ownWorktree = Join-Path $RelayRoot "worktrees\copy-$slug"
         $protectedRoots = @(
             $oldProtectedRoots,
@@ -198,6 +200,7 @@ function Start-Executor([string]$SelectedRole) {
         $env:TANDEM_CODEX_WRITABLE_ROOTS = $oldCodexWritableRoots
         $env:TANDEM_RUNTIME_BUILD_INFO = $oldRuntimeBuildInfo
         $env:TANDEM_RUNTIME_PACKAGE_ID = $oldRuntimePackageIdentity
+        $env:TANDEM_PROJECT_INSTRUCTIONS_ROOT = $oldProjectInstructionsRoot
     }
     Write-Host "Started executor $SelectedRole hidden as breakaway PID $launchedPid ($mode); automation endpoint 127.0.0.1:$automationPort targets $targetWorktree."
 }

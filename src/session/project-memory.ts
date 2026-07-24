@@ -17,15 +17,32 @@ function normalizeNote(text: string): string {
   return text.replace(/\s+/g, " ").trim();
 }
 
+function instructionRoots(cwd: string): string[] {
+  const override = process.env.TANDEM_PROJECT_INSTRUCTIONS_ROOT?.trim();
+  if (!override) return [cwd];
+  const resolvedOverride = path.resolve(override);
+  const resolvedCwd = path.resolve(cwd);
+  return resolvedOverride.toLowerCase() === resolvedCwd.toLowerCase()
+    ? [resolvedCwd]
+    : [resolvedOverride, resolvedCwd];
+}
+
 export async function readProjectInstructions(cwd: string, limit = PROJECT_INSTRUCTION_CHAR_LIMIT): Promise<ProjectInstructions | undefined> {
-  for (const fileName of PROJECT_INSTRUCTION_FILES) {
-    const filePath = path.join(cwd, fileName);
-    if (!existsSync(filePath)) continue;
-    const raw = await readFile(filePath, "utf8");
-    const truncated = raw.length > limit;
-    const suffix = "\n[project instructions truncated]";
-    const content = truncated ? `${raw.slice(0, Math.max(0, limit - suffix.length))}${suffix}` : raw;
-    return { fileName, content, chars: raw.length, truncated };
+  const roots = instructionRoots(cwd);
+  const primaryRoot = roots[0];
+  for (const root of roots) {
+    for (const fileName of PROJECT_INSTRUCTION_FILES) {
+      const filePath = path.join(root, fileName);
+      if (!existsSync(filePath)) continue;
+      const raw = await readFile(filePath, "utf8");
+      const truncated = raw.length > limit;
+      const suffix = "\n[project instructions truncated]";
+      const content = truncated ? `${raw.slice(0, Math.max(0, limit - suffix.length))}${suffix}` : raw;
+      const sourcedName = root === primaryRoot && roots.length > 1
+        ? `${fileName} via TANDEM_PROJECT_INSTRUCTIONS_ROOT`
+        : fileName;
+      return { fileName: sourcedName, content, chars: raw.length, truncated };
+    }
   }
   return undefined;
 }
