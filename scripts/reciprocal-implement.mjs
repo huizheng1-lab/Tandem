@@ -89,6 +89,7 @@ function runAgent(cwd, args, timeout) {
   return spawnSync(command, args, { cwd, encoding: "utf8", windowsHide: true, timeout, shell: true });
 }
 
+function item() {
   let claimed;
   try {
     claimed = readClaimedItem();
