@@ -1,4 +1,4 @@
-import { mkdir, readFile } from "node:fs/promises";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
@@ -30,8 +30,12 @@ describe("desktop automation", () => {
   it("requires a bearer token and restricts session/prompt control to one project", async () => {
     const root = path.join(tmpdir(), `tandem-automation-${Date.now()}-${Math.random().toString(16).slice(2)}`);
     const projectDir = path.join(root, "peer");
+    const staleInstructions = "stale worktree tells executor to run retired commands\n";
+    const currentInstructions = "current admin-root orchestrator instructions for executor A\n";
     const tokenFile = path.join(root, "state", "automation.json");
     await mkdir(projectDir, { recursive: true });
+    await writeFile(path.join(root, "TANDEM.md"), currentInstructions, "utf8");
+    await writeFile(path.join(projectDir, "TANDEM.md"), staleInstructions, "utf8");
     let sessionId: string | undefined;
     let running = false;
     const prompts: string[] = [];
@@ -69,6 +73,17 @@ describe("desktop automation", () => {
         capabilities: { candidatePreviewArtifactLifecycle: 1 },
         scheduleStatus: { ok: false, error: "Malformed schedules.json at test path" },
       });
+      const proof = await fetch(`${base}/project-instructions`, { headers }).then((response) => response.json()) as Record<string, unknown>;
+      expect(proof).toMatchObject({
+        ok: true,
+        projectInstructionsRoot: root,
+        instructions: {
+          fileName: "TANDEM.md via TANDEM_PROJECT_INSTRUCTIONS_ROOT",
+          content: currentInstructions,
+          truncated: false,
+        },
+      });
+      expect(JSON.stringify(proof)).not.toContain(staleInstructions);
     } finally {
       if (oldInstructionsRoot === undefined) delete process.env.TANDEM_PROJECT_INSTRUCTIONS_ROOT;
       else process.env.TANDEM_PROJECT_INSTRUCTIONS_ROOT = oldInstructionsRoot;

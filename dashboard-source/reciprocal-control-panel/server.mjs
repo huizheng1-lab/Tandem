@@ -65,7 +65,6 @@ const automation = {
   A: { tokenFile: path.join(relayRoot, "state", "executor-a", "automation.json"), projectDir: worktrees.b.path },
   B: { tokenFile: path.join(relayRoot, "state", "executor-b", "automation.json"), projectDir: worktrees.a.path },
 };
-const kickstartPrompt = "Follow the injected TANDEM.md and execute one reciprocal improvement invocation as Executor A. Begin with the Claim command. If the relay reports PASSIVE_TEST, run the passive test command instead of starting new work. If it reports A_UPGRADE_PENDING, stop for the human gate.";
 const activeRelayPhases = new Set(["working", "validating", "rollback-verification", "passive-testing", "a-upgrade-pending"]);
 const approvalWaitTimeoutMs = Number(process.env.TANDEM_APPROVAL_WAIT_TIMEOUT_MS || 18_000_000);
 const testHarness = process.env.TANDEM_DASHBOARD_TEST_HARNESS === "1";
@@ -73,7 +72,6 @@ const testCommandLogPath = process.env.TANDEM_DASHBOARD_COMMAND_LOG || "";
 const testHarnessStartedRoles = new Set();
 const packageIntegrityPromise = import(pathToFileURL(path.join(repoRoot, "scripts", "runtime-package-integrity.mjs")).href);
 let approvalFlow = null;
-let supervisorTickRunning = false;
 
 const durableRecoveryStages = [
   "package-ready",
@@ -521,17 +519,6 @@ async function waitForAutomation(role, timeoutMs = 30_000) {
     }
   }
   throw new Error(`Executor ${role} automation did not become ready: ${lastError}`);
-}
-
-async function waitForRelayClaim(timeoutMs = 120_000) {
-  const deadline = Date.now() + timeoutMs;
-  let state = await jsonFile(statePath, {});
-  while (Date.now() < deadline) {
-    state = await jsonFile(statePath, {});
-    if (state.activeRole === "A" && state.phase !== "idle" && state.phase !== "paused") return state;
-    await delay(500);
-  }
-  throw new Error(`Prompt was accepted, but relay stayed ${state.phase || "unknown"} with owner ${state.activeRole || "none"}. Inspect Executor A automation status and logs.`);
 }
 
 async function textFile(file, fallback = "") {
@@ -1214,30 +1201,6 @@ async function getStatus() {
     health,
     recovery: recoveryPlan(state, { a, b }),
   };
-}
-
-async function runSupervisorController(source = "tick") {
-  if (supervisorTickRunning) return { ok: true, skipped: true, reason: "already-running" };
-  supervisorTickRunning = true;
-  try {
-    const result = await runResult("powershell", [
-      "-NoProfile", "-ExecutionPolicy", "Bypass",
-      "-File", path.join(repoRoot, "scripts", "continue-reciprocal-automation.ps1"),
-      "-Workspace", repoRoot,
-      "-RelayRoot", relayRoot,
-      "-MaxTransitions", "3",
-    ], repoRoot);
-    let parsed;
-    try {
-      parsed = JSON.parse(result.ok ? result.stdout : result.stderr || result.stdout);
-    } catch {
-      parsed = { ok: false, error: result.output };
-    }
-    await audit("supervisor.tick", { source, ok: Boolean(result.ok && parsed.ok), transitionsUsed: parsed.transitionsUsed || 0, finalPhase: parsed.finalPhase || null, actions: (parsed.actions || []).map((action) => ({ kind: action.kind, code: action.code || null, wishlistId: action.wishlistId || null })) });
-    return parsed;
-  } finally {
-    supervisorTickRunning = false;
-  }
 }
 
 async function auditOrchestratorStatus(source = "dashboard-watchdog-status") {
@@ -2233,46 +2196,6 @@ async function handle(request, response) {
       await recordMainUpdate(comment, result);
       await audit("main.update", { ok: true, comment, ...result });
       return send(response, 200, { ok: true, result });
-    }
-
-    if (url.pathname === "/api/executor/kickstart") {
-      const steps = [];
-      try {
-        const supervisorResult = await runSupervisorController("manual-kickstart");
-        steps.push({ step: "supervisor", ok: Boolean(supervisorResult.ok), detail: `Supervisor transitions=${supervisorResult.transitionsUsed ?? 0}; finalPhase=${supervisorResult.finalPhase || "unknown"}; actions=${(supervisorResult.actions || []).map((action) => action.kind).join(", ") || "none"}.` });
-        if (supervisorResult.ok && Number(supervisorResult.transitionsUsed || 0) > 0) {
-          const relayState = await jsonFile(statePath, {});
-          const result = { mode: "supervisor", executor: "A", targetWorktree: worktrees.b.path, steps, relay: relayState, supervisor: supervisorResult };
-          await audit("executor.kickstart", { ok: true, ...result });
-          return send(response, 200, { ok: true, result });
-        }
-        const relayState = await jsonFile(statePath, {});
-        if (relayState.activeRole || relayState.phase !== "idle") {
-          throw new Error(`Kickstart requires an idle relay with no owner; current phase=${relayState.phase || "unknown"}, owner=${relayState.activeRole || "none"}.`);
-        }
-        let endpointsReady = false;
-        try {
-          await waitForAutomation("A", 1000);
-          endpointsReady = true;
-          steps.push({ step: "start", ok: true, detail: "Executor A was already running with an authenticated automation endpoint; Executor B is intentionally dormant." });
-        } catch {
-          const stopOutput = await powershell("-File", path.join(here, "stop-reciprocal-tandem.ps1"), "-Role", "Both", "-RelayRoot", relayRoot);
-          const startOutput = await powershell("-File", path.join(repoRoot, "scripts", "start-reciprocal-tandem.ps1"), "-Role", "A", "-RelayRoot", relayRoot);
-          steps.push({ step: "start", ok: true, detail: [stopOutput, startOutput].filter(Boolean).join(" ") });
-        }
-        const statusA = endpointsReady ? await automationRequest("A", "/status") : await waitForAutomation("A");
-        steps.push({ step: "endpoint-ready", ok: true, detail: `Producer A PID ${statusA.pid || "ready"} -> ${statusA.allowedProjectDir}; B dormant by phase policy.` });
-        const accepted = await automationRequest("A", "/prompt", "POST", { projectDir: worktrees.b.path, prompt: kickstartPrompt });
-        steps.push({ step: "prompt-accepted", ok: true, detail: `Executor A accepted the first-turn prompt for ${accepted.projectDir}.` });
-        const claimed = await waitForRelayClaim();
-        steps.push({ step: "relay-claimed", ok: true, detail: `Relay phase=${claimed.phase}, activeRole=${claimed.activeRole}, turn=${claimed.turn}.` });
-        const result = { mode: "background-automation", executor: "A", targetWorktree: worktrees.b.path, steps, relay: claimed };
-        await audit("executor.kickstart", { ok: true, ...result });
-        return send(response, 200, { ok: true, result });
-      } catch (error) {
-        await audit("executor.kickstart", { ok: false, steps, error: error.message });
-        throw error;
-      }
     }
 
     if (url.pathname === "/api/relay/pause") {

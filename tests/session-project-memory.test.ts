@@ -37,7 +37,7 @@ describe("project memory", () => {
   it("uses admin-root instructions when an executor worktree is stale", async () => {
     const admin = await tempDir();
     const staleWorktree = await tempDir();
-    await writeFile(path.join(admin, "TANDEM.md"), "D197 current orchestrator instructions.\n", "utf8");
+    await writeFile(path.join(admin, "TANDEM.md"), "current admin-root orchestrator instructions.\n", "utf8");
     await writeFile(path.join(staleWorktree, "TANDEM.md"), "Old Claim/PassiveTest instructions.\n", "utf8");
     const old = process.env.TANDEM_PROJECT_INSTRUCTIONS_ROOT;
     process.env.TANDEM_PROJECT_INSTRUCTIONS_ROOT = admin;
@@ -48,8 +48,9 @@ describe("project memory", () => {
         fileName: "TANDEM.md via TANDEM_PROJECT_INSTRUCTIONS_ROOT",
         truncated: false,
       });
-      expect(formatProjectInstructions(instructions)).toContain("D197 current orchestrator instructions.");
+      expect(formatProjectInstructions(instructions)).toContain("current admin-root orchestrator instructions.");
       expect(formatProjectInstructions(instructions)).not.toContain("Old Claim/PassiveTest");
+      expect(formatProjectInstructions(instructions)).not.toMatch(/\b(Claim|PassiveTest|PrepareAUpgrade|CompleteAUpgrade)\b/);
     } finally {
       if (old === undefined) delete process.env.TANDEM_PROJECT_INSTRUCTIONS_ROOT;
       else process.env.TANDEM_PROJECT_INSTRUCTIONS_ROOT = old;

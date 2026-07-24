@@ -307,6 +307,15 @@ test("D197 dashboard watchdog audits orchestrator status without retired supervi
   }, { env: { TANDEM_DASHBOARD_ENABLE_TEST_ORCHESTRATOR_STATUS: "1" } });
 });
 
+test("D198 dashboard source has no legacy Kickstart supervisor implementation", async () => {
+  const source = await readFile(serverScript, "utf8");
+  assert.equal(source.includes("runSupervisorController"), false);
+  assert.equal(source.includes("kickstartPrompt"), false);
+  assert.equal(source.includes("manual-kickstart"), false);
+  assert.equal(source.includes("continue-reciprocal-automation.ps1"), false);
+  assert.match(source, /D196 replaced dashboard mutation paths/);
+});
+
 legacyDashboardMutationTest("D181 Kickstart starts only Executor A and treats B dormant as healthy", async (t) => {
   const fixture = await makeFixture(t);
   await fixture.setState({ phase: "idle", activeRole: null });

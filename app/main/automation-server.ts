@@ -3,6 +3,7 @@ import { createServer, type IncomingMessage, type ServerResponse } from "node:ht
 import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { SessionResumeResponse, SessionStartResponse } from "../shared/ipc.js";
+import { readProjectInstructions } from "../../src/session/project-memory.js";
 
 export interface AutomationService {
   startSession(request: { projectDir?: string }): Promise<SessionStartResponse>;
@@ -122,6 +123,15 @@ export async function startAutomationServer(options: AutomationServerOptions): P
           acceptedAt,
           completedAt,
           lastError
+        });
+      }
+      if (request.method === "GET" && url.pathname === "/project-instructions") {
+        const instructions = await readProjectInstructions(allowedProjectDir);
+        return send(response, 200, {
+          ok: true,
+          projectDir: allowedProjectDir,
+          projectInstructionsRoot: process.env.TANDEM_PROJECT_INSTRUCTIONS_ROOT || null,
+          instructions: instructions || null
         });
       }
       if (request.method !== "POST") return send(response, 404, { error: "Not found." });

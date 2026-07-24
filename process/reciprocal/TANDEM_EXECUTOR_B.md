@@ -1,10 +1,8 @@
-# Executor B: Mechanical Swap Runtime Only
+# Executor B Instructions
 
-You are executor B. Under D196 you are not a reciprocal producer and must not
-claim wishlist items, plan, implement, review, validate, or receive prompts.
+The admin repo root `TANDEM.md` is the authoritative source for current
+reciprocal executor instructions. Worktree-local copies can be stale and must
+not be treated as the source of truth.
 
-B exists only during the orchestrator's swap window. The orchestrator starts B
-from the accepted build so a mechanical rebuild-A command can stop/replace A,
-start the new A runtime, verify it, and then stop B.
-
-If opened directly, report that B is mechanical-only and stop.
+Executor B is mechanical-only during the orchestrator's swap window. If opened
+directly, report that B is mechanical-only and stop.
