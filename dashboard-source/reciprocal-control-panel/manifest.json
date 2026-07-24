@@ -1,11 +1,11 @@
 ﻿{
     "schemaVersion":  1,
-    "generatedAtUtc":  "2026-07-24T04:29:45.9407505Z",
+    "generatedAtUtc":  "2026-07-24T12:02:19.5787128Z",
     "files":  [
                   {
                       "path":  "approval-flow.e2e.mjs",
-                      "sha256":  "D73B8D7EC60C93F1927CD132F565CF1E3FE6D0A6E50A3456659BC7BECDA653FE",
-                      "bytes":  36981
+                      "sha256":  "9EFAEB7969BD47B936DC21452F0EABBD00719F33809D0B62DF4179F656F49FE9",
+                      "bytes":  40365
                   },
                   {
                       "path":  "dashboard-watchdog.ps1",
@@ -64,8 +64,8 @@
                   },
                   {
                       "path":  "server.mjs",
-                      "sha256":  "3F498B61EB7C946DC2C1D91BD5CCFC1B15351B95541A8E8AF8583A182CC8DD16",
-                      "bytes":  120248
+                      "sha256":  "4F139B849124241135C083423C6E643B376B5798ED3487EDCC06E7AD67F6BDD1",
+                      "bytes":  125589
                   },
                   {
                       "path":  "start-dashboard.ps1",

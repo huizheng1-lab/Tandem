@@ -35,6 +35,9 @@ const controlPath = path.join(relayRoot, "control", "SHARED_DIRECTION.md");
 const wishlistPath = path.join(relayRoot, "control", "WISHLIST.md");
 const statePath = path.join(repoRoot, ".git", "tandem-relay", "state.json");
 const orchestratorStatePath = path.join(relayRoot, "state", "orchestrator-state.json");
+const orchestratorOperationsPath = path.join(relayRoot, "control", "orchestrator-operations.ndjson");
+const orchestratorTaskName = process.env.TANDEM_ORCHESTRATOR_TASK_NAME || "TandemReciprocalOrchestrator";
+const orchestratorStaleAfterMs = Number(process.env.TANDEM_ORCHESTRATOR_STALE_AFTER_MS || 20 * 60_000);
 const auditPath = path.join(relayRoot, "control", "CONTROL_PANEL_AUDIT.jsonl");
 const supervisorStatePath = path.join(relayRoot, "control", "continuation-supervisor-state.json");
 const sourceReconciliationPendingPath = path.join(relayRoot, "control", "source-reconciliation-pending.json");
@@ -1071,6 +1074,103 @@ async function getMainVersionStatus(masterHead, stableSha, candidate, runtimeA, 
   };
 }
 
+function dateAgeMs(value) {
+  const time = Date.parse(value || "");
+  return Number.isFinite(time) ? Date.now() - time : null;
+}
+
+function normalizeCommandText(value) {
+  return String(value || "").replaceAll("\\", "/").toLowerCase();
+}
+
+async function lastOrchestratorOperation() {
+  try {
+    const text = await readFile(orchestratorOperationsPath, "utf8");
+    const line = text.split(/\r?\n/).filter(Boolean).at(-1);
+    return line ? JSON.parse(line) : null;
+  } catch {
+    return null;
+  }
+}
+
+async function getOrchestratorTriggerStatus(orchestratorState = null) {
+  const expectedScript = path.join(repoRoot, "scripts", "reciprocal-orchestrator.ps1");
+  const expectedRepo = path.resolve(repoRoot);
+  const expectedScriptKey = normalizeCommandText(expectedScript);
+  const expectedRepoKey = normalizeCommandText(expectedRepo);
+  let raw = null;
+  let queryError = null;
+
+  if (process.env.TANDEM_ORCHESTRATOR_TRIGGER_JSON) {
+    try {
+      raw = JSON.parse(process.env.TANDEM_ORCHESTRATOR_TRIGGER_JSON);
+    } catch (error) {
+      queryError = `Invalid TANDEM_ORCHESTRATOR_TRIGGER_JSON: ${error.message}`;
+    }
+  } else if (process.platform === "win32") {
+    const script = [
+      `$task = Get-ScheduledTask -TaskName '${orchestratorTaskName.replaceAll("'", "''")}' -ErrorAction SilentlyContinue`,
+      "if (-not $task) { [pscustomobject]@{ exists = $false } | ConvertTo-Json -Compress; exit 0 }",
+      "$info = $task | Get-ScheduledTaskInfo",
+      "$action = @($task.Actions)[0]",
+      "$last = if ($info.LastRunTime -and $info.LastRunTime.Year -gt 1900) { $info.LastRunTime.ToUniversalTime().ToString('o') } else { $null }",
+      "$next = if ($info.NextRunTime -and $info.NextRunTime.Year -gt 1900) { $info.NextRunTime.ToUniversalTime().ToString('o') } else { $null }",
+      "[pscustomobject]@{ exists = $true; taskName = $task.TaskName; state = [string]$task.State; executable = $action.Execute; arguments = $action.Arguments; workingDirectory = $action.WorkingDirectory; lastRunTime = $last; nextRunTime = $next; lastTaskResult = $info.LastTaskResult } | ConvertTo-Json -Compress",
+    ].join("; ");
+    try {
+      raw = JSON.parse(await powershell("-Command", script));
+    } catch (error) {
+      queryError = error.message;
+    }
+  } else {
+    queryError = "Windows Scheduled Task inspection is unavailable on this platform.";
+  }
+
+  const exists = Boolean(raw?.exists);
+  const commandText = [raw?.executable, raw?.arguments].filter(Boolean).join(" ");
+  const commandKey = normalizeCommandText(commandText);
+  const workingDirectoryKey = normalizeCommandText(raw?.workingDirectory);
+  const scriptMatchesAdminRepo = exists && commandKey.includes(expectedScriptKey);
+  const workingDirectoryMatchesAdminRepo = exists && (!raw?.workingDirectory || workingDirectoryKey === expectedRepoKey);
+  const configured = exists && scriptMatchesAdminRepo && workingDirectoryMatchesAdminRepo;
+  const stateUpdatedAt = orchestratorState?.updatedAt || null;
+  const stateAgeMs = dateAgeMs(stateUpdatedAt);
+  const stale = stateAgeMs === null ? true : stateAgeMs > orchestratorStaleAfterMs;
+  const operation = await lastOrchestratorOperation();
+  const detail = !exists
+    ? `No ${orchestratorTaskName} Scheduled Task registered`
+    : !scriptMatchesAdminRepo
+      ? `Task command does not target ${expectedScript}`
+      : !workingDirectoryMatchesAdminRepo
+        ? `Task working directory is ${raw?.workingDirectory || "unset"}, expected ${expectedRepo}`
+        : stale
+          ? `Last orchestrator state update ${stateUpdatedAt || "unknown"} is stale`
+          : `Trigger registered; orchestrator last ran at ${stateUpdatedAt}`;
+  return {
+    taskName: orchestratorTaskName,
+    exists,
+    configured,
+    ok: configured && !stale,
+    stale,
+    staleAfterMinutes: Math.round(orchestratorStaleAfterMs / 60_000),
+    lastStateUpdateAt: stateUpdatedAt,
+    lastTaskRunAt: raw?.lastRunTime || null,
+    nextTaskRunAt: raw?.nextRunTime || null,
+    lastOperationAt: operation?.at || null,
+    lastOperationAction: operation?.action || null,
+    state: raw?.state || null,
+    lastTaskResult: raw?.lastTaskResult ?? null,
+    command: commandText || null,
+    workingDirectory: raw?.workingDirectory || null,
+    expectedScript,
+    expectedWorkingDirectory: expectedRepo,
+    scriptMatchesAdminRepo,
+    workingDirectoryMatchesAdminRepo,
+    detail: queryError ? `${detail}; ${queryError}` : detail,
+    queryError,
+  };
+}
+
 async function getStatus() {
   const [legacyState, orchestratorState, directionText, wishlistText, supervisorState, sourceReconciliationPending, finalizationA, finalizationB, a, b, runtimeA, runtimeB, producerRelay, historyText, stableExists, masterHead, updateReviewIndex, recoveryJournal] = await Promise.all([
     jsonFile(statePath, {}),
@@ -1104,6 +1204,7 @@ async function getStatus() {
     legacyPhase: legacyState.phase || null,
     legacyStableCommit: legacyState.stableCommit || null,
   } : legacyState;
+  const orchestratorTrigger = await getOrchestratorTriggerStatus(orchestratorState);
   for (const runtime of [runtimeA, runtimeB]) {
     const sourceSha = runtime.buildInfo?.sourceSha || "";
     runtime.buildShortSha = shortSha(sourceSha) || runtime.buildInfo?.sourceShortSha || "unknown";
@@ -1153,6 +1254,7 @@ async function getStatus() {
   const health = [
     { label: "Stable recovery ref", ok: stableExists, detail: stableExists ? shortSha(state.stableCommit) : "Missing" },
     { label: "Orchestrator state", ok: Boolean(orchestratorState && !orchestratorState._readError), detail: orchestratorState?._readError ? `Unavailable: ${orchestratorState._readError.message}` : (state.phase || "Unavailable") },
+    { label: "Orchestrator trigger", ok: orchestratorTrigger.ok, detail: orchestratorTrigger.detail },
     { label: "Supervisor", ok: supervisorGate.category !== "hard-blocked", detail: `${supervisorState?.displayState || supervisorGate.nextAction}${supervisorState?.blocker?.nextAttemptAt ? `; next ${supervisorState.blocker.nextAttemptAt}` : ""}` },
     {
       label: "Resume circuit breaker",
@@ -1181,6 +1283,11 @@ async function getStatus() {
     master: { head: masterHead, shortHead: shortSha(masterHead) },
     drift: { warnings: driftWarnings, ok: driftWarnings.length === 0 },
     state: { ...sanitizedRelayState(state), shortStable: shortSha(state.stableCommit), shortCandidate: shortSha(state.candidateCommit), shortRollback: shortSha(state.rollbackCommit) },
+    orchestrator: {
+      statePath: orchestratorStatePath,
+      operationsPath: orchestratorOperationsPath,
+      trigger: orchestratorTrigger,
+    },
     legacyRelay: { phase: legacyState.phase || null, stableCommit: legacyState.stableCommit || null, shortStable: shortSha(legacyState.stableCommit) },
     direction,
     supervisor: {
@@ -1205,14 +1312,19 @@ async function getStatus() {
 
 async function auditOrchestratorStatus(source = "dashboard-watchdog-status") {
   const state = await jsonFile(orchestratorStatePath, {});
+  const trigger = await getOrchestratorTriggerStatus(state);
   await audit("orchestrator.status", {
     source,
-    ok: !state?._readError,
+    ok: !state?._readError && trigger.ok,
     phase: state?.phase || null,
     currentItem: state?.currentItem?.id || null,
     stableCommit: state?.stableCommit || null,
+    triggerConfigured: trigger.configured,
+    triggerStale: trigger.stale,
+    triggerDetail: trigger.detail,
+    lastRunAt: trigger.lastStateUpdateAt,
   });
-  return state;
+  return { state, trigger };
 }
 
 async function audit(action, detail = {}) {

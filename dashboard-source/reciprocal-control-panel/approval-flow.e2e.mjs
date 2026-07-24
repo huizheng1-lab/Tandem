@@ -307,6 +307,76 @@ test("D197 dashboard watchdog audits orchestrator status without retired supervi
   }, { env: { TANDEM_DASHBOARD_ENABLE_TEST_ORCHESTRATOR_STATUS: "1" } });
 });
 
+test("D199 dashboard reports admin-repo orchestrator trigger freshness", async (t) => {
+  const fixture = await makeFixture(t);
+  const updatedAt = new Date().toISOString();
+  await writeJson(path.join(fixture.relayRoot, "state", "orchestrator-state.json"), {
+    phase: "idle",
+    currentItem: null,
+    stableCommit: fixture.fixtureSha,
+    updatedAt,
+  });
+  const trigger = {
+    exists: true,
+    taskName: "TandemReciprocalOrchestrator",
+    state: "Ready",
+    executable: "powershell.exe",
+    arguments: `-NoProfile -ExecutionPolicy Bypass -File "${path.join(fixture.repoRoot, "scripts", "reciprocal-orchestrator.ps1")}" -Repo "${fixture.repoRoot}" -RelayRoot "${fixture.relayRoot}"`,
+    workingDirectory: fixture.repoRoot,
+    lastRunTime: updatedAt,
+    nextRunTime: new Date(Date.now() + 300_000).toISOString(),
+    lastTaskResult: 0,
+  };
+  await withServer(t, fixture, async ({ get }) => {
+    const { response, result } = await get("/api/status");
+    assert.equal(response.status, 200, JSON.stringify(result));
+    assert.equal(result.orchestrator.trigger.configured, true);
+    assert.equal(result.orchestrator.trigger.ok, true);
+    assert.equal(result.orchestrator.trigger.scriptMatchesAdminRepo, true);
+    assert.equal(result.orchestrator.trigger.workingDirectoryMatchesAdminRepo, true);
+    assert.equal(result.health.some((entry) => entry.label === "Orchestrator trigger" && entry.ok), true);
+  }, { env: { TANDEM_ORCHESTRATOR_TRIGGER_JSON: JSON.stringify(trigger) } });
+});
+
+test("D199 dashboard warns when the orchestrator trigger points outside the admin repo", async (t) => {
+  const fixture = await makeFixture(t);
+  await writeJson(path.join(fixture.relayRoot, "state", "orchestrator-state.json"), {
+    phase: "idle",
+    currentItem: null,
+    stableCommit: fixture.fixtureSha,
+    updatedAt: new Date().toISOString(),
+  });
+  const wrongWorktree = path.join(fixture.relayRoot, "worktrees", "copy-b");
+  const trigger = {
+    exists: true,
+    taskName: "TandemReciprocalOrchestrator",
+    state: "Ready",
+    executable: "powershell.exe",
+    arguments: `-NoProfile -ExecutionPolicy Bypass -File "${path.join(wrongWorktree, "scripts", "reciprocal-orchestrator.ps1")}"`,
+    workingDirectory: wrongWorktree,
+    lastRunTime: new Date().toISOString(),
+    nextRunTime: new Date(Date.now() + 300_000).toISOString(),
+    lastTaskResult: 0,
+  };
+  await withServer(t, fixture, async ({ get }) => {
+    const { response, result } = await get("/api/status");
+    assert.equal(response.status, 200, JSON.stringify(result));
+    assert.equal(result.orchestrator.trigger.configured, false);
+    assert.equal(result.orchestrator.trigger.ok, false);
+    assert.match(result.orchestrator.trigger.detail, /does not target/);
+    assert.equal(result.health.some((entry) => entry.label === "Orchestrator trigger" && !entry.ok), true);
+  }, { env: { TANDEM_ORCHESTRATOR_TRIGGER_JSON: JSON.stringify(trigger) } });
+});
+
+test("D199 scheduler installer targets the admin repo orchestrator script", async () => {
+  const source = await readFile(path.join(adminRepo, "scripts", "register-reciprocal-orchestrator-task.ps1"), "utf8");
+  assert.match(source, /reciprocal-orchestrator\.ps1/);
+  assert.match(source, /-Repo/);
+  assert.match(source, /-RelayRoot/);
+  assert.match(source, /-WorkingDirectory \$Repo/);
+  assert.match(source, /MultipleInstances IgnoreNew/);
+});
+
 test("D198 dashboard source has no legacy Kickstart supervisor implementation", async () => {
   const source = await readFile(serverScript, "utf8");
   assert.equal(source.includes("runSupervisorController"), false);
