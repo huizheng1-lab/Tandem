@@ -114,6 +114,7 @@ export async function startAutomationServer(options: AutomationServerOptions): P
           instanceId: options.instanceId || null,
           allowedProjectDir,
           tokenFile: options.tokenFile,
+          projectInstructionsRoot: process.env.TANDEM_PROJECT_INSTRUCTIONS_ROOT || null,
           ...state.serviceState,
           ...runtime,
           capabilities: runtime.capabilities || { candidatePreviewArtifactLifecycle: 1 },

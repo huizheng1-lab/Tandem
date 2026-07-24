@@ -48,6 +48,8 @@ describe("desktop automation", () => {
       },
       getAutomationState: () => ({ projectDir, sessionId, running, scheduleStatus: { ok: false, path: path.join(projectDir, ".tandem", "schedules.json"), error: "Malformed schedules.json at test path" } })
     };
+    const oldInstructionsRoot = process.env.TANDEM_PROJECT_INSTRUCTIONS_ROOT;
+    process.env.TANDEM_PROJECT_INSTRUCTIONS_ROOT = root;
     const server = await startAutomationServer({ port: 0, tokenFile, projectDir, instanceId: "A", service });
     try {
       const credentials = JSON.parse(await readFile(tokenFile, "utf8")) as { token: string; port: number };
@@ -63,10 +65,13 @@ describe("desktop automation", () => {
         ok: true,
         instanceId: "A",
         allowedProjectDir: projectDir,
+        projectInstructionsRoot: root,
         capabilities: { candidatePreviewArtifactLifecycle: 1 },
         scheduleStatus: { ok: false, error: "Malformed schedules.json at test path" },
       });
     } finally {
+      if (oldInstructionsRoot === undefined) delete process.env.TANDEM_PROJECT_INSTRUCTIONS_ROOT;
+      else process.env.TANDEM_PROJECT_INSTRUCTIONS_ROOT = oldInstructionsRoot;
       await server.close();
     }
   });
