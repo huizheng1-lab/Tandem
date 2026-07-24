@@ -1,41 +1,21 @@
-# Executor A: Reciprocal Producer Instructions
+# Executor A: Orchestrator-Driven Producer
 
-You are executor A. This selected project is target worktree B on branch `codex/reciprocal-b`. Your own pinned Tandem runtime and worktree A are outside this project and must never be modified.
+You are executor A. Under D196 you do not start reciprocal work by claiming the
+relay yourself. The admin-repo orchestrator is the only state writer and the only
+owner of a full improvement cycle.
 
-Read `process/reciprocal/PROTOCOL.md` fully and follow it. A is the only reciprocal producer. Execute at most one normal A lifecycle unless the relay reports a passive or human-gated step instead.
-
-Start every invocation with the admin repo relay script, not the checkout copy under test:
-
-```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File "<admin-repo>\scripts\reciprocal-relay.ps1" -Action Claim -Role A
-```
-
-Interpret the result:
-
-- `CLAIMED`: proceed with one `working` producer lifecycle.
-- `RESUME`: continue the same interrupted A lifecycle from `.tandem/reciprocal-checkpoint.md`.
-- `PASSIVE_TEST`: do not start new work. Switch to copy A and run the returned `PassiveTest` command.
-- `A_UPGRADE_PENDING`: stop for the human A-runtime promotion gate only for a final source-changing runtime replacement. You may report the `PrepareAUpgrade -DryRun` command.
-- `WAIT` or `PAUSED`: answer with the relay status and stop. A machine-created paused-from-idle breadth/planning pause is recoverable by the supervisor and is not a request for new human planning metadata.
-
-For implementation, claim a shared-direction item with `scripts/reciprocal-direction.ps1 -Action Start -Id <id> -Role A`, keep `.tandem/reciprocal-checkpoint.md` current, implement a narrow one-commit candidate, and run focused checks plus `npm run typecheck` and `git diff --check`. If the highest-priority human item is ordinary `QUEUED` work that is broad, architectural, or missing epic metadata, first run `NormalizeQueued -Id <id>` and create `process/reciprocal/epics/<ID>-plan.md`; preserve the same wishlist ID/text/priority and do not implement product changes in the plan-only turn. Keep `authoritative-only: npm test` in the plan verification list so Tandem's authoritative runner executes the full suite outside the sandbox.
-
-After verification, submit a completion report with exact `filesChanged` and a concise summary. Do not run `git add`, `git commit`, wishlist `Candidate`, or relay `Complete` from inside Codex; Tandem's app layer performs those guarded actions. If the app layer returns `COMPLETED` with `passiveTestCommand`, use that returned admin relay command for any immediate passive-test chaining; do not run a checkout-relative relay path from this file.
-
-If no human item exists or the next exact step needs new credentials, pairing, permissions, sandbox weakening, destructive action, paid/public publication, or final live-runtime promotion:
+If invoked directly, stop and report this command:
 
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File "<admin-repo>\scripts\reciprocal-relay.ps1" -Action Pause -Role A -Summary "<why human direction is needed>"
+powershell -NoProfile -ExecutionPolicy Bypass -File "<admin-repo>\scripts\reciprocal-orchestrator.ps1"
 ```
 
-If a passive candidate is ready, run from copy A with the admin repo relay script; this checks the candidate and produces the canonical Launch Candidate package:
+When the orchestrator invokes you for a claimed wishlist item, implement only
+that item in copy B, run the requested checks, and return the result to the
+orchestrator. B is dormant while you work. Do not run `git add`, `git commit`,
+legacy relay `Claim`, `PassiveTest`, `Complete`, `Accept`, or dashboard
+approval/promotion actions.
 
-```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File "<admin-repo>\scripts\reciprocal-relay.ps1" -Action PassiveTest -Role A
-```
-
-If the relay is at the A-upgrade gate, prepare the human action:
-
-```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File "<admin-repo>\scripts\reciprocal-relay.ps1" -Action PrepareAUpgrade -Role A -DryRun
-```
+If tests fail, return the full failure output. The orchestrator will retry once
+with that feedback; after two consecutive failed A rounds it writes a failure
+report and pauses for human reading.

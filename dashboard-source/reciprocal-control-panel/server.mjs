@@ -1833,6 +1833,20 @@ async function handle(request, response) {
     if (request.method !== "POST") return send(response, 404, { error: "Not found" });
     if (request.headers["x-control-token"] !== token) return send(response, 403, { error: "Invalid control token" });
     const input = await body(request);
+    const d196AllowedMutations = new Set([
+      "/api/wishlist/requeue",
+      "/api/update/reject",
+      "/api/relay/pause",
+      "/api/quit",
+    ]);
+    if (!d196AllowedMutations.has(url.pathname)) {
+      return send(response, 410, {
+        ok: false,
+        error: "D196 replaced dashboard mutation paths with the single reciprocal orchestrator.",
+        orchestrator: "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/reciprocal-orchestrator.ps1",
+        allowedMutations: Array.from(d196AllowedMutations).sort(),
+      });
+    }
 
     if (url.pathname === "/api/wishlist") {
       const text = String(input.text || "").replace(/\s+/g, " ").trim();

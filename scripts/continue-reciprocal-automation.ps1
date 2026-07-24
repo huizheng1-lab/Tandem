@@ -6,6 +6,14 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
+if ($env:TANDEM_ALLOW_LEGACY_RECIPROCAL -ne "1") {
+    [ordered]@{
+        ok = $false
+        message = "D196 removed the continuation supervisor; run the single reciprocal orchestrator instead."
+        orchestratorCommand = "powershell -NoProfile -ExecutionPolicy Bypass -File scripts\reciprocal-orchestrator.ps1"
+    } | ConvertTo-Json -Depth 5
+    exit 1
+}
 $Utf8StrictNoBom = [Text.UTF8Encoding]::new($false, $true)
 $MaxRelayStateBytes = 5MB
 

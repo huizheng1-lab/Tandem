@@ -37,6 +37,16 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
+if ($env:TANDEM_ALLOW_LEGACY_RECIPROCAL -ne "1") {
+    [ordered]@{
+        outcome = "LEGACY_DISABLED"
+        ok = $false
+        message = "D196 replaced reciprocal-relay.ps1 actions with the single reciprocal orchestrator."
+        orchestratorCommand = "powershell -NoProfile -ExecutionPolicy Bypass -File scripts\reciprocal-orchestrator.ps1"
+        requestedAction = $Action
+    } | ConvertTo-Json -Depth 5
+    exit 1
+}
 $ResumePauseThreshold = 3
 $CandidatePreviewArtifactCapability = 1
 $MaxRelayStateBytes = 5MB

@@ -10,6 +10,7 @@ const scriptPath = path.resolve("scripts", "continue-reciprocal-automation.ps1")
 const PROCESS_SPAWNING_TEST_TIMEOUT_MS = 30_000;
 
 vi.setConfig({ testTimeout: PROCESS_SPAWNING_TEST_TIMEOUT_MS });
+process.env.TANDEM_ALLOW_LEGACY_RECIPROCAL = "1";
 
 async function fixture() {
   const root = path.join(tmpdir(), `tandem-supervisor-${Date.now()}-${Math.random().toString(16).slice(2)}`);

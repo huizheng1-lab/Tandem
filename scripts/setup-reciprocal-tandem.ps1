@@ -75,8 +75,8 @@ function Initialize-ExecutorState([string]$Role, [string]$TargetWorktree) {
 }
 
 function Initialize-Schedule([string]$TargetWorktree, [string]$Role, [string]$Cron) {
-    $adminRelayScript = Join-Path $SourceRepo "scripts\reciprocal-relay.ps1"
-    $prompt = "Follow the injected TANDEM.md and execute one reciprocal improvement invocation as Executor A. Begin with the admin relay Claim command: powershell -NoProfile -ExecutionPolicy Bypass -File `"$adminRelayScript`" -Action Claim -Role A. If the relay reports PASSIVE_TEST, run the returned admin-script passive test command instead of starting new work. If Complete returns passiveTestCommand, use that returned admin-script command for immediate passive testing. If it reports A_UPGRADE_PENDING, stop for the human gate."
+    $orchestratorScript = Join-Path $SourceRepo "scripts\reciprocal-orchestrator.ps1"
+    $prompt = "Run the D196 single reciprocal orchestrator tick from the admin repo: powershell -NoProfile -ExecutionPolicy Bypass -File `"$orchestratorScript`" -Repo `"$SourceRepo`" -RelayRoot `"$RelayRoot`". Do not run legacy relay Claim/PassiveTest/Complete actions."
     $schedule = @([ordered]@{
         id = "relay-$($Role.ToLowerInvariant())"
         cron = $Cron
@@ -124,8 +124,8 @@ New-Item -ItemType Directory -Path (Split-Path $excludePath -Parent) -Force | Ou
 $exclude = if (Test-Path -LiteralPath $excludePath) { Get-Content -LiteralPath $excludePath } else { @() }
 if ($exclude -notcontains "/TANDEM.md") { Add-Content -LiteralPath $excludePath -Value "/TANDEM.md" }
 
-# Executor A edits copy-b as the sole producer. Copy-a remains B's passive build/launch
-# target and intentionally receives no scheduled agentic wishlist prompt.
+# Executor A remains the sole producer, but cron now invokes the admin-repo
+# orchestrator instead of prompting either executor directly.
 Copy-Item -LiteralPath $templateA -Destination (Join-Path $worktreeB "TANDEM.md") -Force
 Copy-Item -LiteralPath $templateB -Destination (Join-Path $worktreeA "TANDEM.md") -Force
 Initialize-SharedDirection @($worktreeA, $worktreeB)
@@ -152,13 +152,13 @@ if (-not $SkipRuntimeCopy) {
 
 $relayStatePath = Join-Path $commonDir "tandem-relay\state.json"
 if ($ResetRelay -or -not (Test-Path -LiteralPath $relayStatePath)) {
-    Invoke-Checked powershell @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", (Join-Path $SourceRepo "scripts\reciprocal-relay.ps1"), "-Action", "Reset", "-Workspace", $SourceRepo, "-Force")
+    Invoke-Checked powershell @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", (Join-Path $SourceRepo "scripts\reciprocal-orchestrator.ps1"), "-Repo", $SourceRepo, "-RelayRoot", $RelayRoot, "-Status")
 }
 
 [ordered]@{
     relayRoot = $RelayRoot
-    executorA = [ordered]@{ runtime = (Join-Path $RelayRoot "runtimes\executor-a\Tandem.exe"); target = $worktreeB; branch = $branchB; cron = "7 * * * *"; role = "sole-producer" }
-    executorB = [ordered]@{ runtime = (Join-Path $RelayRoot "runtimes\executor-b\Tandem.exe"); target = $worktreeA; branch = $branchA; cron = $null; role = "passive-build-launch-target" }
+    executorA = [ordered]@{ runtime = (Join-Path $RelayRoot "runtimes\executor-a\Tandem.exe"); target = $worktreeB; branch = $branchB; cron = "7 * * * *"; role = "orchestrator-invoked-producer" }
+    executorB = [ordered]@{ runtime = (Join-Path $RelayRoot "runtimes\executor-b\Tandem.exe"); target = $worktreeA; branch = $branchA; cron = $null; role = "mechanical-swap-runtime-only" }
     sharedDirection = (Join-Path $RelayRoot "control\SHARED_DIRECTION.md")
     wishlist = (Join-Path $RelayRoot "control\WISHLIST.md")
     nextRole = "A"

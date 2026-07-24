@@ -11,6 +11,7 @@ const windowsIt = process.platform === "win32" ? it : it.skip;
 const PROCESS_SPAWNING_TEST_TIMEOUT_MS = 30_000;
 
 vi.setConfig({ testTimeout: PROCESS_SPAWNING_TEST_TIMEOUT_MS });
+process.env.TANDEM_ALLOW_LEGACY_RECIPROCAL = "1";
 
 describe("reciprocal relay script", () => {
   async function initRepo(repo: string) {
