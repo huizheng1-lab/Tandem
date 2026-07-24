@@ -34,6 +34,7 @@ const repoRoot = path.resolve(process.env.TANDEM_SOURCE_REPO || path.join(relayR
 const controlPath = path.join(relayRoot, "control", "SHARED_DIRECTION.md");
 const wishlistPath = path.join(relayRoot, "control", "WISHLIST.md");
 const statePath = path.join(repoRoot, ".git", "tandem-relay", "state.json");
+const orchestratorStatePath = path.join(relayRoot, "state", "orchestrator-state.json");
 const auditPath = path.join(relayRoot, "control", "CONTROL_PANEL_AUDIT.jsonl");
 const supervisorStatePath = path.join(relayRoot, "control", "continuation-supervisor-state.json");
 const sourceReconciliationPendingPath = path.join(relayRoot, "control", "source-reconciliation-pending.json");
@@ -1084,8 +1085,9 @@ async function getMainVersionStatus(masterHead, stableSha, candidate, runtimeA, 
 }
 
 async function getStatus() {
-  const [state, directionText, wishlistText, supervisorState, sourceReconciliationPending, finalizationA, finalizationB, a, b, runtimeA, runtimeB, producerRelay, historyText, stableExists, masterHead, updateReviewIndex, recoveryJournal] = await Promise.all([
+  const [legacyState, orchestratorState, directionText, wishlistText, supervisorState, sourceReconciliationPending, finalizationA, finalizationB, a, b, runtimeA, runtimeB, producerRelay, historyText, stableExists, masterHead, updateReviewIndex, recoveryJournal] = await Promise.all([
     jsonFile(statePath, {}),
+    jsonFile(orchestratorStatePath, null),
     textFile(controlPath),
     textFile(wishlistPath),
     jsonFile(supervisorStatePath, {}),
@@ -1103,6 +1105,18 @@ async function getStatus() {
     getUpdateReviewIndex(),
     loadRuntimeRecoveryJournal(),
   ]);
+  const state = orchestratorState ? {
+    schemaVersion: "D196-orchestrator",
+    turn: null,
+    activeRole: null,
+    nextRole: "A",
+    candidateCommit: null,
+    rollbackCommit: null,
+    ...orchestratorState,
+    stableCommit: orchestratorState.stableCommit || legacyState.stableCommit || null,
+    legacyPhase: legacyState.phase || null,
+    legacyStableCommit: legacyState.stableCommit || null,
+  } : legacyState;
   for (const runtime of [runtimeA, runtimeB]) {
     const sourceSha = runtime.buildInfo?.sourceSha || "";
     runtime.buildShortSha = shortSha(sourceSha) || runtime.buildInfo?.sourceShortSha || "unknown";
@@ -1151,7 +1165,7 @@ async function getStatus() {
   });
   const health = [
     { label: "Stable recovery ref", ok: stableExists, detail: stableExists ? shortSha(state.stableCommit) : "Missing" },
-    { label: "Relay state", ok: Boolean(state.schemaVersion === 2 && !state._readError), detail: state._readError ? `Unavailable: ${state._readError.message}` : (state.phase || "Unavailable") },
+    { label: "Orchestrator state", ok: Boolean(orchestratorState && !orchestratorState._readError), detail: orchestratorState?._readError ? `Unavailable: ${orchestratorState._readError.message}` : (state.phase || "Unavailable") },
     { label: "Supervisor", ok: supervisorGate.category !== "hard-blocked", detail: `${supervisorState?.displayState || supervisorGate.nextAction}${supervisorState?.blocker?.nextAttemptAt ? `; next ${supervisorState.blocker.nextAttemptAt}` : ""}` },
     {
       label: "Resume circuit breaker",
@@ -1180,6 +1194,7 @@ async function getStatus() {
     master: { head: masterHead, shortHead: shortSha(masterHead) },
     drift: { warnings: driftWarnings, ok: driftWarnings.length === 0 },
     state: { ...sanitizedRelayState(state), shortStable: shortSha(state.stableCommit), shortCandidate: shortSha(state.candidateCommit), shortRollback: shortSha(state.rollbackCommit) },
+    legacyRelay: { phase: legacyState.phase || null, stableCommit: legacyState.stableCommit || null, shortStable: shortSha(legacyState.stableCommit) },
     direction,
     supervisor: {
       ...supervisorState,

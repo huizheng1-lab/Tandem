@@ -184,6 +184,17 @@ function runStep({ name, command, cwd, state, statePath, logPath }) {
   return result;
 }
 
+function acceptedSourceSha(repo) {
+  return process.env.TANDEM_ORCHESTRATOR_SOURCE_SHA || runCommand("git rev-parse HEAD", repo).stdout.trim();
+}
+
+function updateStableRef(repo, sourceSha, logPath) {
+  if (!/^[0-9a-f]{40}$/i.test(sourceSha)) return;
+  const result = runCommand(`git update-ref refs/tandem-relay/stable ${sourceSha}`, repo);
+  appendLog(logPath, { action: result.ok ? "stable-ref.updated" : "stable-ref.failed", sourceSha, exitCode: result.exitCode, outputHash: sha(result.output).slice(0, 16) });
+  if (!result.ok) throw new Error(`Failed to update stable ref to ${sourceSha}: ${result.output}`);
+}
+
 function main() {
   const repo = path.resolve(arg("repo", process.cwd()));
   const relayRoot = path.resolve(arg("relay-root", process.env.TANDEM_RECIPROCAL_ROOT || path.join(path.dirname(repo), "Tandem Reciprocal")));
@@ -218,7 +229,8 @@ function main() {
     if (!swapped) return;
     state.phase = "idle";
     state.step = null;
-    state.stableCommit = process.env.TANDEM_ORCHESTRATOR_SOURCE_SHA || runCommand("git rev-parse HEAD", repo).stdout.trim();
+    state.stableCommit = acceptedSourceSha(repo);
+    updateStableRef(repo, state.stableCommit, logPath);
     state.lastSummary = "Explicit D196 cutover completed; A is running accepted runtime and B is stopped.";
     state.currentItem = null;
     state.consecutiveFailures = 0;
@@ -286,7 +298,8 @@ function main() {
   }
   state.phase = "idle";
   state.step = null;
-  state.stableCommit = process.env.TANDEM_ORCHESTRATOR_SOURCE_SHA || state.stableCommit || "accepted-version";
+  state.stableCommit = acceptedSourceSha(repo) || state.stableCommit || "accepted-version";
+  updateStableRef(repo, state.stableCommit, logPath);
   state.lastSummary = `Completed ${state.currentItem.id} through the single orchestrator.`;
   const completedItem = state.currentItem;
   state.currentItem = null;

@@ -64,8 +64,8 @@
                   },
                   {
                       "path":  "server.mjs",
-                      "sha256":  "645424001BCE8E2617766A06F95CB5BFEB07C9F3FA895DE43EAA54BB649EA785",
-                      "bytes":  124091
+                      "sha256":  "25557F53053171CD6686F50649748221DF20E4A7E439A1FED841ADF249945BAE",
+                      "bytes":  124856
                   },
                   {
                       "path":  "start-dashboard.ps1",
