@@ -67,8 +67,8 @@ function sha(text) {
 }
 
 function implementCommand(repo, relayRoot, claimedItemId) {
-  const q = (value) => `"${String(value).replaceAll('"', '\\"')}"`;
-  return `node "${q(path.join(repo, "scripts", "reciprocal-implement.mjs"))}" -Repo "${q(repo)}" -ControlPath "${q(path.join(relayRoot, "control", "WISHLIST.md"))}" -StatePath "${q(path.join(relayRoot, "state", "orchestrator-state.json"))}" -ClaimedItemId "${q(claimedItemId)}"`;
+  const quote = (value) => `"${String(value).replaceAll('"', '\\"')}"`;
+  return `node ${quote(path.join(repo, "scripts", "reciprocal-implement.mjs"))} --repo ${quote(repo)} --control-path ${quote(path.join(relayRoot, "control", "WISHLIST.md"))} --state-path ${quote(path.join(relayRoot, "state", "orchestrator-state.json"))} --claimed-item-id ${quote(claimedItemId)}`;
 }
 
 function loadSwapCommands(repo, relayRoot, sourceSha) {
