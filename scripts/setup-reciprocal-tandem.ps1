@@ -124,14 +124,14 @@ New-Item -ItemType Directory -Path (Split-Path $excludePath -Parent) -Force | Ou
 $exclude = if (Test-Path -LiteralPath $excludePath) { Get-Content -LiteralPath $excludePath } else { @() }
 if ($exclude -notcontains "/TANDEM.md") { Add-Content -LiteralPath $excludePath -Value "/TANDEM.md" }
 
-# Executor A remains the sole producer, but cron now invokes the admin-repo
-# orchestrator instead of prompting either executor directly.
+# Executor worktrees must not own reciprocal schedule prompts. The admin-repo
+# orchestrator is the only component allowed to claim wishlist work.
 Copy-Item -LiteralPath $templateA -Destination (Join-Path $worktreeB "TANDEM.md") -Force
 Copy-Item -LiteralPath $templateB -Destination (Join-Path $worktreeA "TANDEM.md") -Force
 Initialize-SharedDirection @($worktreeA, $worktreeB)
 Initialize-ExecutorState "A" $worktreeB
 Initialize-ExecutorState "B" $worktreeA
-Initialize-Schedule $worktreeB "A" "7 * * * *"
+Write-Json @() (Join-Path $worktreeB ".tandem\schedules.json")
 Write-Json @() (Join-Path $worktreeA ".tandem\schedules.json")
 
 if (-not $SkipInstall) {
@@ -157,8 +157,9 @@ if ($ResetRelay -or -not (Test-Path -LiteralPath $relayStatePath)) {
 
 [ordered]@{
     relayRoot = $RelayRoot
-    executorA = [ordered]@{ runtime = (Join-Path $RelayRoot "runtimes\executor-a\Tandem.exe"); target = $worktreeB; branch = $branchB; cron = "7 * * * *"; role = "orchestrator-invoked-producer" }
+    executorA = [ordered]@{ runtime = (Join-Path $RelayRoot "runtimes\executor-a\Tandem.exe"); target = $worktreeB; branch = $branchB; cron = $null; role = "orchestrator-controlled-producer" }
     executorB = [ordered]@{ runtime = (Join-Path $RelayRoot "runtimes\executor-b\Tandem.exe"); target = $worktreeA; branch = $branchA; cron = $null; role = "mechanical-swap-runtime-only" }
+    orchestrator = [ordered]@{ command = "powershell -NoProfile -ExecutionPolicy Bypass -File `"$SourceRepo\scripts\reciprocal-orchestrator.ps1`" -Repo `"$SourceRepo`" -RelayRoot `"$RelayRoot`""; scheduler = "admin-repo only" }
     sharedDirection = (Join-Path $RelayRoot "control\SHARED_DIRECTION.md")
     wishlist = (Join-Path $RelayRoot "control\WISHLIST.md")
     nextRole = "A"
