@@ -75,11 +75,11 @@ function loadCommands(repo, relayRoot) {
   return {
     implement: `powershell -NoProfile -ExecutionPolicy Bypass -File ${q(path.join(repo, "scripts", "reciprocal-direction.ps1"))} -Action Show -ControlPath ${q(path.join(relayRoot, "control", "WISHLIST.md"))}`,
     test: "npm run typecheck && npm test && git diff --check",
-    packageB: `powershell -NoProfile -ExecutionPolicy Bypass -File ${q(path.join(repo, "scripts", "promote-reciprocal-runtime.ps1"))} -TargetRole B -SourceSha ${sourceSha} -RelayRoot ${q(relayRoot)}`,
+    packageB: `powershell -NoProfile -ExecutionPolicy Bypass -File ${q(path.join(repo, "scripts", "package-passive-runtime.ps1"))} -Workspace ${q(repo)} -AdminRepo ${q(repo)} -SourceSha ${sourceSha} && powershell -NoProfile -ExecutionPolicy Bypass -File ${q(path.join(repo, "scripts", "promote-reciprocal-runtime.ps1"))} -TargetRole B -SourceSha ${sourceSha} -RelayRoot ${q(relayRoot)}`,
     startB: `powershell -NoProfile -ExecutionPolicy Bypass -File ${q(path.join(repo, "scripts", "start-reciprocal-tandem.ps1"))} -Role B -RelayRoot ${q(relayRoot)}`,
     verifyRuntime: `node ${q(path.join(repo, "scripts", "runtime-package-integrity.mjs"))} verify ${q(path.join(relayRoot, "runtimes", "executor-b"))}`,
-    rebuildA: `powershell -NoProfile -ExecutionPolicy Bypass -File ${q(path.join(repo, "scripts", "promote-reciprocal-runtime.ps1"))} -TargetRole A -SourceSha ${sourceSha} -RelayRoot ${q(relayRoot)}`,
-    restartA: `powershell -NoProfile -ExecutionPolicy Bypass -File ${q(path.join(repo, "scripts", "start-reciprocal-tandem.ps1"))} -Role A -RelayRoot ${q(relayRoot)}`,
+    rebuildA: `powershell -NoProfile -ExecutionPolicy Bypass -File ${q(path.join(repo, "scripts", "reciprocal-rebuild-a.ps1"))} -SourceSha ${sourceSha} -RelayRoot ${q(relayRoot)}`,
+    verifyA: `node ${q(path.join(repo, "scripts", "runtime-package-integrity.mjs"))} verify ${q(path.join(relayRoot, "runtimes", "executor-a"))}`,
     stopB: `powershell -NoProfile -ExecutionPolicy Bypass -File ${q(path.join(repo, "dashboard-source", "reciprocal-control-panel", "stop-reciprocal-tandem.ps1"))} -Role B -RelayRoot ${q(relayRoot)}`,
   };
 }
@@ -227,7 +227,7 @@ function main() {
     ["start-b", commands.startB],
     ["verify-runtime", commands.verifyRuntime],
     ["rebuild-a", commands.rebuildA],
-    ["restart-a", commands.restartA],
+    ["verify-a", commands.verifyA],
     ["stop-b", commands.stopB],
   ];
   for (const [name, command] of swapSteps) {

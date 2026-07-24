@@ -24,6 +24,7 @@ function findAdminRepo(start) {
 const adminRepo = findAdminRepo(here);
 const relayScript = path.join(adminRepo, "scripts", "reciprocal-relay.ps1");
 const serverScript = path.join(here, "server.mjs");
+const legacyDashboardMutationTest = process.env.TANDEM_RUN_LEGACY_DASHBOARD_MUTATION_E2E === "1" ? test : test.skip;
 
 function execFile(command, args, cwd) {
   return new Promise((resolve, reject) => {
@@ -272,7 +273,26 @@ test("D184 dashboard reports canonical package state without the test harness", 
   }, { harness: false });
 });
 
-test("D181 Kickstart starts only Executor A and treats B dormant as healthy", async (t) => {
+test("D196 dashboard reports retired mutation paths truthfully", async (t) => {
+  const fixture = await makeFixture(t);
+  await withServer(t, fixture, async ({ post }) => {
+    for (const [endpoint, body] of [
+      ["/api/executor/kickstart", {}],
+      ["/api/update/approve", { comment: "retired approval path" }],
+      ["/api/authority/approve", { decisionId: "authority-test", secret: "dashboard-secret" }],
+      ["/api/update/recover-approved", { comment: "retired recovery path" }],
+    ]) {
+      const { response, result } = await post(endpoint, body);
+      assert.equal(response.status, 410, endpoint);
+      assert.equal(result.ok, false, endpoint);
+      assert.match(result.error, /D196 replaced dashboard mutation paths/);
+      assert.match(result.orchestrator, /reciprocal-orchestrator\.ps1/);
+      assert.deepEqual(result.allowedMutations, ["/api/quit", "/api/relay/pause", "/api/update/reject", "/api/wishlist/requeue"]);
+    }
+  });
+});
+
+legacyDashboardMutationTest("D181 Kickstart starts only Executor A and treats B dormant as healthy", async (t) => {
   const fixture = await makeFixture(t);
   await fixture.setState({ phase: "idle", activeRole: null });
   const old = process.env.TANDEM_DASHBOARD_TEST_REQUIRE_STARTED_AUTOMATION;
@@ -300,7 +320,7 @@ test("D181 Kickstart starts only Executor A and treats B dormant as healthy", as
   assert.deepEqual(actions.map((entry) => entry.action), []);
 });
 
-test("approval flow uses the real relay to complete an inactive A-upgrade boundary", async (t) => {
+legacyDashboardMutationTest("approval flow uses the real relay to complete an inactive A-upgrade boundary", async (t) => {
   const fixture = await makeFixture(t);
   await fixture.setState();
 
@@ -377,7 +397,7 @@ test("approval flow uses the real relay to complete an inactive A-upgrade bounda
   await writeEvidence("approval-flow", { commands, actions, state, journal, auditSteps: audit.filter((entry) => entry.action === "update.approvalStep").map((entry) => ({ step: entry.step, detail: entry.detail })) });
 });
 
-test("D183 approval adopts relay-verified B without re-promoting or restarting it", async (t) => {
+legacyDashboardMutationTest("D183 approval adopts relay-verified B without re-promoting or restarting it", async (t) => {
   const fixture = await makeFixture(t);
   await fixture.setState({ runtimeRecoveryStage: "b-runtime-verified" });
   await writeJson(path.join(fixture.relayRoot, "runtimes", "executor-a", "BUILD_INFO.json"), {
@@ -448,7 +468,7 @@ test("D183 approval adopts relay-verified B without re-promoting or restarting i
   assert.equal(finalJournal.packageIdentity, fixture.fixturePackage);
 });
 
-test("D195 approval accepts older endpoint status without optional echo fields", async (t) => {
+legacyDashboardMutationTest("D195 approval accepts older endpoint status without optional echo fields", async (t) => {
   const fixture = await makeFixture(t);
   await fixture.setState();
 
@@ -468,7 +488,7 @@ test("D195 approval accepts older endpoint status without optional echo fields",
   assert.equal(state.nextRole, "A");
 });
 
-test("D195 approval still rejects hard endpoint identity mismatches", async (t) => {
+legacyDashboardMutationTest("D195 approval still rejects hard endpoint identity mismatches", async (t) => {
   const fixture = await makeFixture(t);
   await fixture.setState();
 
@@ -485,7 +505,7 @@ test("D195 approval still rejects hard endpoint identity mismatches", async (t) 
   assert.equal(state.activeRole, null);
 });
 
-test("D181 failed A restart leaves B online as recovery authority", async (t) => {
+legacyDashboardMutationTest("D181 failed A restart leaves B online as recovery authority", async (t) => {
   const fixture = await makeFixture(t);
   await fixture.setState();
   const previousFailRole = process.env.TANDEM_DASHBOARD_TEST_FAIL_WAIT_ROLE;
@@ -529,7 +549,7 @@ test("D181 failed A restart leaves B online as recovery authority", async (t) =>
   assert.equal(audit.filter((entry) => entry.action === "update.review" && entry.decision === "approve").length, 1);
 });
 
-test("D182 dashboard crash after A stop resumes from durable recovery journal", async (t) => {
+legacyDashboardMutationTest("D182 dashboard crash after A stop resumes from durable recovery journal", async (t) => {
   const fixture = await makeFixture(t);
   await fixture.setState();
   const previousCrash = process.env.TANDEM_DASHBOARD_TEST_CRASH_AFTER_STEP;
@@ -571,7 +591,7 @@ test("D182 dashboard crash after A stop resumes from durable recovery journal", 
   await writeEvidence("approval-crash-boundary", { commands, journalAfterCrash, finalJournal });
 });
 
-test("authority flow uses authenticated dashboard API to approve one relay checkpoint", async (t) => {
+legacyDashboardMutationTest("authority flow uses authenticated dashboard API to approve one relay checkpoint", async (t) => {
   const fixture = await makeFixture(t);
   await fixture.setState({
     phase: "working",
@@ -623,7 +643,7 @@ test("authority flow uses authenticated dashboard API to approve one relay check
   });
 });
 
-test("recovery flow closes the stranded gate without promotion and rejects unsafe states", async (t) => {
+legacyDashboardMutationTest("recovery flow closes the stranded gate without promotion and rejects unsafe states", async (t) => {
   const fixture = await makeFixture(t);
   await fixture.setState({ phase: "paused", pausedFromPhase: "a-upgrade-pending" });
   await fixture.setRuntimeShas(fixture.fixtureSha);

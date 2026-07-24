@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, rm, stat, writeFile, unlink } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, stat, writeFile, unlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { createHash } from "node:crypto";
 import path from "node:path";
@@ -21,7 +21,6 @@ const relayRoot = path.resolve(options["relay-root"] || path.join(repoRoot, ".."
 const comment = String(options.comment || "").trim();
 const statePath = path.join(repoRoot, ".git", "tandem-relay", "state.json");
 const directionPath = path.join(relayRoot, "control", "WISHLIST.md");
-const relayScript = path.join(repoRoot, "scripts", "reciprocal-relay.ps1");
 const worktreeA = path.join(relayRoot, "worktrees", "copy-a");
 const worktreeB = path.join(relayRoot, "worktrees", "copy-b");
 const branchA = "codex/reciprocal-a";
@@ -44,16 +43,78 @@ async function gitText(args, cwd = repoRoot) {
   return (await git(args, cwd)).output.trim();
 }
 
-async function relay(action, extra = []) {
-  const result = await command("powershell", [
-    "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", relayScript,
-    "-Action", action, "-Workspace", worktreeB, ...extra,
-  ]);
-  return JSON.parse(result.output.replace(/^\uFEFF/, ""));
-}
-
 async function readJson(file) {
   return JSON.parse((await readFile(file, "utf8")).replace(/^\uFEFF/, ""));
+}
+
+async function writeJson(file, value) {
+  await mkdir(path.dirname(file), { recursive: true });
+  await writeFile(file, `${JSON.stringify(value, null, 2)}\n`, "utf8");
+}
+
+async function readRelayState() {
+  return readJson(statePath);
+}
+
+async function writeRelayState(state, summary) {
+  await writeJson(statePath, {
+    ...state,
+    lastSummary: summary || state.lastSummary || null,
+    updatedAt: new Date().toISOString(),
+  });
+}
+
+async function pauseRelayState(summary) {
+  const state = await readRelayState();
+  if (state.activeRole || state.candidateCommit || state.rollbackCommit) {
+    throw new Error("Cannot pause main update gate while a reciprocal turn has active work.");
+  }
+  await writeRelayState({
+    ...state,
+    phase: "paused",
+    pausedFromPhase: state.phase || "idle",
+    pauseOrigin: "human",
+    pauseReasonCode: "explicit-human-pause",
+  }, summary);
+}
+
+async function reconcileMainState(newStableCommit, summary) {
+  await git(["update-ref", stableRef, newStableCommit]);
+  const state = await readRelayState();
+  if (state.activeRole || state.candidateCommit || state.rollbackCommit) {
+    throw new Error("Cannot reconcile main while reciprocal state has active work.");
+  }
+  await writeRelayState({
+    ...state,
+    stableCommit: newStableCommit,
+    lastCompletedCommit: newStableCommit,
+    baseCommit: null,
+    rollbackCommit: null,
+    candidateCommit: null,
+    candidateKind: null,
+  }, summary);
+}
+
+async function resumeRelayState(summary) {
+  const state = await readRelayState();
+  if (state.activeRole || state.candidateCommit || state.rollbackCommit) {
+    throw new Error("Cannot resume main update gate while a reciprocal turn has active work.");
+  }
+  if (state.phase !== "paused") return state;
+  const nextTurn = Number.isFinite(Number(state.turn)) ? Number(state.turn) + 1 : state.turn;
+  const resumeCount = Number.isFinite(Number(state.resumeCount)) ? Number(state.resumeCount) + 1 : 1;
+  await writeRelayState({
+    ...state,
+    phase: state.pausedFromPhase || "idle",
+    pausedFromPhase: null,
+    pauseOrigin: null,
+    pauseReasonCode: null,
+    pauseAfterTurn: false,
+    resumeCount,
+    resumeTurn: nextTurn,
+    turn: nextTurn,
+  }, summary);
+  return readRelayState();
 }
 
 async function readTransaction() {
@@ -85,13 +146,13 @@ async function resumePushedSync(transaction, adminDirtyBefore) {
   maybeFault("after-copy-a");
   await git(["merge", "--ff-only", transaction.masterSha], worktreeB);
   maybeFault("after-copy-b");
-  await relay("ReconcileMain", ["-NewStableCommit", transaction.masterSha, "-Summary", `Resumed ${transaction.tag}: ${comment}`]);
+  await reconcileMainState(transaction.masterSha, `Resumed ${transaction.tag}: ${comment}`);
   maybeFault("after-relay");
   result.branchesResynced = true;
   if (transaction.resumeRequired) {
-    const relayState = await relay("Status");
+    const relayState = await readRelayState();
     if (relayState.phase === "paused" && relayState.pausedFromPhase === "idle" && relayState.pauseOrigin === "human" && relayState.pauseReasonCode === "explicit-human-pause" && !relayState.activeRole && !relayState.candidateCommit && relayState.stableCommit === transaction.masterSha) {
-      await relay("Resume", ["-Summary", `Completed ${transaction.tag}; reciprocal branches synchronized with master.`]);
+      await resumeRelayState(`Completed ${transaction.tag}; reciprocal branches synchronized with master.`);
       result.relayResumed = true;
     } else if (relayState.phase === "idle" && !relayState.activeRole && !relayState.candidateCommit && relayState.stableCommit === transaction.masterSha) {
       result.relayResumed = true;
@@ -354,7 +415,7 @@ try {
   result.adminDirtyBefore = adminDirtyBefore;
   result.turn = state.turn;
   if (!wasPaused) {
-    await relay("Pause", ["-Summary", `Human main update gate for stable ${stableSha.slice(0, 7)}`]);
+    await pauseRelayState(`Human main update gate for stable ${stableSha.slice(0, 7)}`);
     result.pausedByFlow = true;
   }
 
@@ -458,7 +519,7 @@ try {
   maybeFault("after-copy-a");
   await git(["merge", "--ff-only", result.masterSha], worktreeB);
   maybeFault("after-copy-b");
-  await relay("ReconcileMain", ["-NewStableCommit", result.masterSha, "-Summary", `Reconciled at ${result.tag}: ${comment}`]);
+  await reconcileMainState(result.masterSha, `Reconciled at ${result.tag}: ${comment}`);
   maybeFault("after-relay");
   result.branchesResynced = true;
   result.adminDirtyAfter = await dirtyAdminSnapshot();
@@ -466,7 +527,7 @@ try {
 
   result.stage = "resume";
   if (result.pausedByFlow) {
-    await relay("Resume", ["-Summary", `Completed ${result.tag}; reciprocal branches synchronized with master.`]);
+    await resumeRelayState(`Completed ${result.tag}; reciprocal branches synchronized with master.`);
     result.relayResumed = true;
   }
   result.stage = "complete";
@@ -488,7 +549,7 @@ try {
   }
   if (result.pausedByFlow && !result.masterUpdated) {
     try {
-      await relay("Resume", ["-Summary", `Main update stopped safely during ${result.stage}: ${error.message}`]);
+      await resumeRelayState(`Main update stopped safely during ${result.stage}: ${error.message}`);
       result.relayResumed = true;
     } catch (resumeError) {
       result.resumeError = resumeError.message;

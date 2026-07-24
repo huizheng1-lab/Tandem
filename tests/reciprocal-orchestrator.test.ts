@@ -2,10 +2,13 @@ import { mkdir, mkdtemp, readFile, writeFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { execa } from "execa";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 const windowsIt = process.platform === "win32" ? it : it.skip;
 const script = path.resolve("scripts/reciprocal-orchestrator.mjs");
+const PROCESS_SPAWNING_TEST_TIMEOUT_MS = 30_000;
+
+vi.setConfig({ testTimeout: PROCESS_SPAWNING_TEST_TIMEOUT_MS });
 
 async function fixture(name: string) {
   const root = await mkdtemp(path.join(tmpdir(), `tandem-orchestrator-${name}-`));
@@ -44,7 +47,7 @@ function commands(root: string, overrides: Record<string, string> = {}) {
     startB: command(root, "startB"),
     verifyRuntime: command(root, "verifyRuntime"),
     rebuildA: command(root, "rebuildA"),
-    restartA: command(root, "restartA"),
+    verifyA: command(root, "verifyA"),
     stopB: command(root, "stopB"),
   };
   return { ...base, ...overrides };
@@ -69,7 +72,7 @@ describe("single reciprocal orchestrator", () => {
       const result = await run(f.root, f.relayRoot, commands(f.root));
       expect(result.exitCode).toBe(0);
       expect(JSON.parse(result.stdout)).toMatchObject({ ok: true, completed: "W0001" });
-      expect(await labels(f.root)).toEqual(["implement", "test", "packageB", "startB", "verifyRuntime", "rebuildA", "restartA", "stopB"]);
+      expect(await labels(f.root)).toEqual(["implement", "test", "packageB", "startB", "verifyRuntime", "rebuildA", "verifyA", "stopB"]);
       expect(await readFile(path.join(f.relayRoot, "control", "WISHLIST.md"), "utf8")).toMatch(/- \[x\] W0001 .* DONE/);
       const state = JSON.parse(await readFile(path.join(f.relayRoot, "state", "orchestrator-state.json"), "utf8"));
       expect(state).toMatchObject({ phase: "idle", currentItem: null, stableCommit: "fixture-sha" });
@@ -85,7 +88,7 @@ describe("single reciprocal orchestrator", () => {
       const retryTest = `node -e "const fs=require('fs'); const p='${sentinel}'; const n=fs.existsSync(p)?2:1; fs.writeFileSync(p,String(n)); fs.appendFileSync('${commandLog(f.root).replaceAll("\\", "\\\\")}', JSON.stringify({label:'test', attempt:n})+'\\n'); process.exit(n===1?9:0)"`;
       const result = await run(f.root, f.relayRoot, commands(f.root, { test: retryTest }));
       expect(result.exitCode).toBe(0);
-      expect(await labels(f.root)).toEqual(["implement", "test", "implement", "test", "packageB", "startB", "verifyRuntime", "rebuildA", "restartA", "stopB"]);
+      expect(await labels(f.root)).toEqual(["implement", "test", "implement", "test", "packageB", "startB", "verifyRuntime", "rebuildA", "verifyA", "stopB"]);
       const log = await readFile(path.join(f.relayRoot, "control", "orchestrator-operations.ndjson"), "utf8");
       expect(log).toMatch(/cycle.retry-feedback/);
       expect(log).toMatch(/feedbackBytes/);
@@ -120,7 +123,7 @@ describe("single reciprocal orchestrator", () => {
       );
       const result = await run(f.root, f.relayRoot, commands(f.root));
       expect(result.exitCode).toBe(0);
-      expect(await labels(f.root)).toEqual(["implement", "test", "packageB", "startB", "verifyRuntime", "rebuildA", "restartA", "stopB"]);
+      expect(await labels(f.root)).toEqual(["implement", "test", "packageB", "startB", "verifyRuntime", "rebuildA", "verifyA", "stopB"]);
     } finally {
       await rm(f.root, { recursive: true, force: true });
     }

@@ -7,11 +7,12 @@ import net from "node:net";
 import { execa } from "execa";
 import { describe, expect, it, vi } from "vitest";
 
-const windowsIt = process.platform === "win32" ? it : it.skip;
+const runLegacyRelayTests = process.platform === "win32" && process.env.TANDEM_RUN_LEGACY_RECIPROCAL_TESTS === "1";
+const windowsIt = runLegacyRelayTests ? it : it.skip;
 const PROCESS_SPAWNING_TEST_TIMEOUT_MS = 30_000;
 
 vi.setConfig({ testTimeout: PROCESS_SPAWNING_TEST_TIMEOUT_MS });
-process.env.TANDEM_ALLOW_LEGACY_RECIPROCAL = "1";
+if (runLegacyRelayTests) process.env.TANDEM_ALLOW_LEGACY_RECIPROCAL = "1";
 
 describe("reciprocal relay script", () => {
   async function initRepo(repo: string) {
