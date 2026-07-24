@@ -1,0 +1,45 @@
+D198 completion marker
+
+Round: D198
+
+Commits:
+- 05e206d D198-1: make admin instructions authoritative
+
+Chosen instruction mechanism:
+- Added a real admin-root TANDEM.md and force-added it because the repo ignore rules otherwise hide root TANDEM.md.
+- The admin-root TANDEM.md is now the authoritative reciprocal executor instruction source used through TANDEM_PROJECT_INSTRUCTIONS_ROOT.
+- process/reciprocal/TANDEM_EXECUTOR_A.md and TANDEM_EXECUTOR_B.md were reduced to small role aliases that point back to the admin-root TANDEM.md instead of duplicating operational commands.
+- The authoritative instructions describe the current orchestrator-driven flow and avoid the retired relay command names.
+
+Regression proof:
+- tests/session-project-memory.test.ts now asserts that readProjectInstructions(cwd) returns the override-root TANDEM.md content while a stale worktree TANDEM.md exists, and that returned content does not contain retired command names.
+- tests/automation-server.test.ts now exercises the authenticated /project-instructions endpoint and proves returned content, not just /status.projectInstructionsRoot, comes from the admin root rather than the stale worktree.
+
+Kickstart disposition:
+- Removed the dashboard source's legacy Kickstart implementation, including the stale prompt, wait-for-relay-claim helper, and runSupervisorController function that called continue-reciprocal-automation.ps1.
+- The D196 dashboard mutation guard remains the active disposition for /api/executor/kickstart, returning 410 with the orchestrator message.
+- dashboard-source/reciprocal-control-panel/approval-flow.e2e.mjs now has a D198 regression that the legacy Kickstart supervisor implementation strings are absent from server.mjs.
+
+Live proof:
+- Built package 5D192E78EA50ADB07293187BC525C825F086B06B335C7E9A42FEEEF807602266 from exact source 05e206d0f64d2fefca822e2103c7b7c6bc6f4e48.
+- Promoted executor-a to that package and restarted Executor A as PID 41980 on port 4783.
+- Authenticated /status returned sourceSha 05e206d0f64d2fefca822e2103c7b7c6bc6f4e48, packageIdentity 5D192E78EA50ADB07293187BC525C825F086B06B335C7E9A42FEEEF807602266, allowedProjectDir C:\Users\huizh\Apps\Tandem Reciprocal\worktrees\copy-b, projectInstructionsRoot C:\Users\huizh\Apps\HZ code, and scheduleStatus count 0.
+- Authenticated /project-instructions returned instructions.fileName "TANDEM.md via TANDEM_PROJECT_INSTRUCTIONS_ROOT" with the admin-root TANDEM.md content and chars 1694 while A targeted stale copy-b.
+- Process check showed A=4 Tandem processes and B=0, preserving the dormant-B topology.
+- copy-b remains clean with stash@{0}: "D197 preserve old-path W0023 drift before orchestrator requeue".
+
+W0023 disposition:
+- W0023 remains preserved in the D197 stash and was not modified by D198.
+- I did not run the full orchestrator cycle for W0023 because the current orchestrator implementation command is a read-only wishlist show; running the full loop from this handoff would risk falsely marking W0023 complete without doing the W0023 feature work. The safe proof boundary was the live A instruction-content endpoint plus read-only orchestrator status.
+
+Verification:
+- npx vitest run --configLoader runner tests/session-project-memory.test.ts tests/automation-server.test.ts: passed, 8/8.
+- node dashboard-source\reciprocal-control-panel\approval-flow.e2e.mjs: passed, 4 active tests with 9 skipped.
+- node dashboard-source\reciprocal-control-panel\lib.nodecheck.mjs: passed, 20/20.
+- npm run typecheck: passed.
+- npm test: passed, 54 files passed, 546 tests passed, 41 skipped.
+- git diff --check: passed.
+- powershell -NoProfile -ExecutionPolicy Bypass -File scripts\deploy-reciprocal-dashboard.ps1: passed and restarted dashboard.
+- powershell -NoProfile -ExecutionPolicy Bypass -File scripts\deploy-reciprocal-dashboard.ps1 -VerifyOnly: passed with no planned updates.
+- node scripts\runtime-package-integrity.mjs verify C:\Users\huizh\Apps\Tandem Reciprocal\runtimes\executor-a --source-sha 05e206d0f64d2fefca822e2103c7b7c6bc6f4e48: passed.
+- powershell -NoProfile -ExecutionPolicy Bypass -File scripts\reciprocal-orchestrator.ps1 -Repo C:\Users\huizh\Apps\HZ code -RelayRoot C:\Users\huizh\Apps\Tandem Reciprocal -Status: passed.
