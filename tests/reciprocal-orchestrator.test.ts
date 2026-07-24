@@ -1,4 +1,5 @@
 import { mkdir, mkdtemp, readFile, writeFile, rm } from "node:fs/promises";
+import { writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { execa } from "execa";
@@ -26,6 +27,10 @@ async function fixture(name: string) {
     ].join("\n"),
     "utf8",
   );
+  await execa("git", ["init", "--initial-branch=master", root]);
+  await execa("git", ["-C", root, "config", "user.email", "test@tandem"]);
+  await execa("git", ["-C", root, "config", "user.name", "test"]);
+  await execa("git", ["-C", root, "commit", "--allow-empty", "-m", "fixture base"]);
   return { root, relayRoot };
 }
 
@@ -39,9 +44,26 @@ function command(root: string, label: string, exitCode = 0, extra = "") {
   return `node -e "require('fs').appendFileSync('${log}', JSON.stringify({label:'${label}', argv:process.argv.slice(1), text:'${text}'})+'\\n'); process.exit(${exitCode})"`;
 }
 
+function implementingCommand(root: string, label: string) {
+  const stub = path.join(root, `${label}.stub.cjs`);
+  const log = commandLog(root);
+  const lines = [
+    "const fs = require('fs');",
+    "const cp = require('child_process');",
+    `const root = ${JSON.stringify(root)};`,
+    `const log = ${JSON.stringify(log)};`,
+    `fs.appendFileSync(log, JSON.stringify({label:${JSON.stringify(label)}}) + "\\n");`,
+    `cp.execFileSync('git', ['-C', root, 'add', '-A'], {stdio:'ignore'});`,
+    `cp.execFileSync('git', ['-C', root, 'commit', '-m', ${JSON.stringify(`D200-N: ${label} stub`)}, '--allow-empty'], {stdio:'ignore'});`,
+    "process.exit(0);",
+  ];
+  writeFileSync(stub, lines.join("\n"), "utf8");
+  return `node "${stub}"`;
+}
+
 function commands(root: string, overrides: Record<string, string> = {}) {
   const base = {
-    implement: command(root, "implement"),
+    implement: implementingCommand(root, "implement"),
     test: command(root, "test"),
     packageB: command(root, "packageB"),
     startB: command(root, "startB"),
@@ -51,6 +73,11 @@ function commands(root: string, overrides: Record<string, string> = {}) {
     stopB: command(root, "stopB"),
   };
   return { ...base, ...overrides };
+}
+
+function noCommitCommand(root: string) {
+  const log = commandLog(root).replaceAll("\\", "\\\\");
+  return `node -e "require('fs').appendFileSync('${log}', JSON.stringify({label:'implement'})+'\\n'); process.exit(0)"`;
 }
 
 async function run(root: string, relayRoot: string, commandMap: Record<string, string>, extraArgs: string[] = []) {
@@ -66,6 +93,38 @@ async function labels(root: string) {
 }
 
 describe("single reciprocal orchestrator", () => {
+  windowsIt("aborts a successful no-op implementation and requeues the item", async () => {
+    const f = await fixture("d200-no-commit");
+    try {
+      const result = await run(f.root, f.relayRoot, commands(f.root, { implement: noCommitCommand(f.root) }));
+      expect(result.exitCode).toBe(3);
+      const parsed = JSON.parse(result.stdout);
+      expect(parsed).toMatchObject({ ok: false, aborted: "no-commit" });
+      expect(parsed.headAfter).toBe(parsed.headBefore);
+      const wishlist = await readFile(path.join(f.relayRoot, "control", "WISHLIST.md"), "utf8");
+      expect(wishlist).toMatch(/- \[ \] W0001 .* QUEUED .*D200 no-commit abort/);
+      const log = await readFile(path.join(f.relayRoot, "control", "orchestrator-operations.ndjson"), "utf8");
+      expect(log).toMatch(/cycle\.aborted\.no-commit/);
+      expect(log).not.toMatch(/cycle\\.completed/);
+    } finally {
+      await rm(f.root, { recursive: true, force: true });
+    }
+  });
+
+  windowsIt("accepts only a descendant implementation commit", async () => {
+    const f = await fixture("d200-commit");
+    try {
+      const result = await run(f.root, f.relayRoot, commands(f.root));
+      expect(result.exitCode).toBe(0);
+      const parsed = JSON.parse(result.stdout);
+      expect(parsed.state.lastImplementCommit).toMatch(/^[0-9a-f]{40}$/);
+      expect(parsed.state.stableCommit).toBe(parsed.state.lastImplementCommit);
+      expect(await readFile(path.join(f.relayRoot, "control", "WISHLIST.md"), "utf8")).toMatch(/- \[x\] W0001 .* DONE/);
+    } finally {
+      await rm(f.root, { recursive: true, force: true });
+    }
+  });
+
   windowsIt("drives the happy-path full cycle with B as mechanical swap authority", async () => {
     const f = await fixture("happy");
     try {
@@ -75,7 +134,10 @@ describe("single reciprocal orchestrator", () => {
       expect(await labels(f.root)).toEqual(["implement", "test", "packageB", "startB", "verifyRuntime", "rebuildA", "verifyA", "stopB"]);
       expect(await readFile(path.join(f.relayRoot, "control", "WISHLIST.md"), "utf8")).toMatch(/- \[x\] W0001 .* DONE/);
       const state = JSON.parse(await readFile(path.join(f.relayRoot, "state", "orchestrator-state.json"), "utf8"));
-      expect(state).toMatchObject({ phase: "idle", currentItem: null, stableCommit: "fixture-sha" });
+      expect(state.phase).toBe("idle");
+      expect(state.currentItem).toBeNull();
+      expect(state.lastImplementCommit).toMatch(/^[0-9a-f]{40}$/);
+      expect(state.stableCommit).toBe(state.lastImplementCommit);
     } finally {
       await rm(f.root, { recursive: true, force: true });
     }

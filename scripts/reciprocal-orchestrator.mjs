@@ -66,21 +66,35 @@ function sha(text) {
   return createHash("sha256").update(text).digest("hex");
 }
 
-function loadCommands(repo, relayRoot) {
-  if (process.env.TANDEM_ORCHESTRATOR_COMMANDS_JSON) {
-    return JSON.parse(process.env.TANDEM_ORCHESTRATOR_COMMANDS_JSON);
-  }
+function implementCommand(repo, relayRoot, claimedItemId) {
   const q = (value) => `"${String(value).replaceAll('"', '\\"')}"`;
-  const sourceSha = process.env.TANDEM_ORCHESTRATOR_SOURCE_SHA || runCommand("git rev-parse HEAD", repo).stdout.trim();
+  return `node "${q(path.join(repo, "scripts", "reciprocal-implement.mjs"))}" -Repo "${q(repo)}" -ControlPath "${q(path.join(relayRoot, "control", "WISHLIST.md"))}" -StatePath "${q(path.join(relayRoot, "state", "orchestrator-state.json"))}" -ClaimedItemId "${q(claimedItemId)}"`;
+}
+
+function loadSwapCommands(repo, relayRoot, sourceSha) {
+  const q = (value) => `"${String(value).replaceAll('"', '\\"')}"`;
   return {
-    implement: `powershell -NoProfile -ExecutionPolicy Bypass -File ${q(path.join(repo, "scripts", "reciprocal-direction.ps1"))} -Action Show -ControlPath ${q(path.join(relayRoot, "control", "WISHLIST.md"))}`,
-    test: "npm run typecheck && npm test && git diff --check",
     packageB: `powershell -NoProfile -ExecutionPolicy Bypass -File ${q(path.join(repo, "dashboard-source", "reciprocal-control-panel", "stop-reciprocal-tandem.ps1"))} -Role B -RelayRoot ${q(relayRoot)} && powershell -NoProfile -ExecutionPolicy Bypass -File ${q(path.join(repo, "scripts", "package-passive-runtime.ps1"))} -Workspace ${q(repo)} -AdminRepo ${q(repo)} -SourceSha ${sourceSha} && powershell -NoProfile -ExecutionPolicy Bypass -File ${q(path.join(repo, "scripts", "promote-reciprocal-runtime.ps1"))} -TargetRole B -SourceSha ${sourceSha} -RelayRoot ${q(relayRoot)}`,
     startB: `powershell -NoProfile -ExecutionPolicy Bypass -File ${q(path.join(repo, "scripts", "start-reciprocal-tandem.ps1"))} -Role B -RelayRoot ${q(relayRoot)}`,
     verifyRuntime: `node ${q(path.join(repo, "scripts", "runtime-package-integrity.mjs"))} verify ${q(path.join(relayRoot, "runtimes", "executor-b"))}`,
     rebuildA: `powershell -NoProfile -ExecutionPolicy Bypass -File ${q(path.join(repo, "scripts", "reciprocal-rebuild-a.ps1"))} -SourceSha ${sourceSha} -RelayRoot ${q(relayRoot)}`,
     verifyA: `node ${q(path.join(repo, "scripts", "runtime-package-integrity.mjs"))} verify ${q(path.join(relayRoot, "runtimes", "executor-a"))}`,
     stopB: `powershell -NoProfile -ExecutionPolicy Bypass -File ${q(path.join(repo, "dashboard-source", "reciprocal-control-panel", "stop-reciprocal-tandem.ps1"))} -Role B -RelayRoot ${q(relayRoot)}`,
+  };
+}
+
+function loadCommands(repo, relayRoot, state) {
+  if (process.env.TANDEM_ORCHESTRATOR_COMMANDS_JSON) {
+    return JSON.parse(process.env.TANDEM_ORCHESTRATOR_COMMANDS_JSON);
+  }
+  const claimedItemId = state?.currentItem?.id || "";
+  const sourceSha = process.env.TANDEM_ORCHESTRATOR_SOURCE_SHA
+    || state?.lastImplementCommit
+    || runCommand("git rev-parse HEAD", repo).stdout.trim();
+  return {
+    implement: implementCommand(repo, relayRoot, claimedItemId),
+    test: "npm run typecheck && npm test && git diff --check",
+    ...loadSwapCommands(repo, relayRoot, sourceSha),
   };
 }
 
@@ -184,8 +198,10 @@ function runStep({ name, command, cwd, state, statePath, logPath }) {
   return result;
 }
 
-function acceptedSourceSha(repo) {
-  return process.env.TANDEM_ORCHESTRATOR_SOURCE_SHA || runCommand("git rev-parse HEAD", repo).stdout.trim();
+function acceptedSourceSha(repo, state) {
+  if (state?.lastImplementCommit && /^[0-9a-f]{40}$/i.test(state.lastImplementCommit)) return state.lastImplementCommit;
+  if (process.env.TANDEM_ORCHESTRATOR_SOURCE_SHA) return process.env.TANDEM_ORCHESTRATOR_SOURCE_SHA;
+  return runCommand("git rev-parse HEAD", repo).stdout.trim();
 }
 
 function updateStableRef(repo, sourceSha, logPath) {
@@ -195,6 +211,25 @@ function updateStableRef(repo, sourceSha, logPath) {
   if (!result.ok) throw new Error(`Failed to update stable ref to ${sourceSha}: ${result.output}`);
 }
 
+function requeueCurrentItem(wishlistPath, item, note) {
+  if (!item || !existsSync(wishlistPath)) return;
+  const lines = readFileSync(wishlistPath, utf8).split(/\r?\n/);
+  const targetRe = new RegExp(`^- \\[[ x]\\] ${item.id} \\|`);
+  const cleanNote = (note || "").replace(/\s+/g, " ").replaceAll("|", "/").trim();
+  for (let i = 0; i < lines.length; i += 1) {
+    if (!targetRe.test(lines[i])) continue;
+    const parts = lines[i].split(" | ");
+    if (parts.length < 4) return;
+    const head = `${parts[0]} | ${parts[1]} | ${parts[2]} | QUEUED`;
+    const existingNoteMatch = lines[i].match(/\bnote=([^ ]+)/);
+    const notes = [existingNoteMatch?.[1], cleanNote].filter(Boolean);
+    const noteSuffix = notes.length ? ` note=${notes.join(" / ")}` : "";
+    lines[i] = `${head}${noteSuffix} updated=${now()}`;
+    break;
+  }
+  writeFileSync(wishlistPath, `${lines.join("\n").replace(/\n*$/, "")}\n`, utf8);
+}
+
 function main() {
   const repo = path.resolve(arg("repo", process.cwd()));
   const relayRoot = path.resolve(arg("relay-root", process.env.TANDEM_RECIPROCAL_ROOT || path.join(path.dirname(repo), "Tandem Reciprocal")));
@@ -202,8 +237,8 @@ function main() {
   const logPath = path.join(relayRoot, "control", "orchestrator-operations.ndjson");
   const wishlistPath = path.join(relayRoot, "control", "WISHLIST.md");
   const pausePath = path.join(relayRoot, "control", "PAUSE");
-  const commands = loadCommands(repo, relayRoot);
   let state = readJson(statePath, initialState());
+  const commands = loadCommands(repo, relayRoot, state);
 
   if (boolArg("status")) {
     console.log(JSON.stringify({ ok: true, state, statePath, logPath }, null, 2));
@@ -229,7 +264,7 @@ function main() {
     if (!swapped) return;
     state.phase = "idle";
     state.step = null;
-    state.stableCommit = acceptedSourceSha(repo);
+    state.stableCommit = acceptedSourceSha(repo, state);
     updateStableRef(repo, state.stableCommit, logPath);
     state.lastSummary = "Explicit D196 cutover completed; A is running accepted runtime and B is stopped.";
     state.currentItem = null;
@@ -270,7 +305,29 @@ function main() {
   state.phase = "improving";
   save(statePath, logPath, state, "cycle.claimed");
   for (;;) {
-    const implementation = runStep({ name: "a-implements", command: commands.implement, cwd: repo, state, statePath, logPath });
+    const headBefore = runCommand("git rev-parse HEAD", repo).stdout.trim();
+    const implementation = runStep({ name: "a-implements", command: process.env.TANDEM_ORCHESTRATOR_COMMANDS_JSON ? commands.implement : implementCommand(repo, relayRoot, state.currentItem.id), cwd: repo, state, statePath, logPath });
+    if (implementation.ok) {
+      const headAfter = runCommand("git rev-parse HEAD", repo).stdout.trim();
+      const descendantCheck = runCommand(`git merge-base --is-ancestor ${headBefore} ${headAfter}`, repo);
+      if (headAfter === headBefore || !descendantCheck.ok) {
+        const noCommitError = {
+          step: "a-implements",
+          exitCode: implementation.exitCode,
+          headBefore,
+          headAfter,
+          descendant: descendantCheck.ok,
+          message: "a-implements reported success but produced no new descendant commit on top of HEAD. The cycle cannot false-complete; the wishlist item will be requeued for a real attempt.",
+        };
+        requeueCurrentItem(wishlistPath, state.currentItem, `D200 no-commit abort: ${headBefore}->${headAfter}; a-implements reported success but did not produce a descendant commit`);
+        save(statePath, logPath, state, "cycle.aborted.no-commit", noCommitError);
+        console.log(JSON.stringify({ ok: false, aborted: "no-commit", state, ...noCommitError }, null, 2));
+        process.exit(3);
+      }
+      state.lastImplementCommit = headAfter;
+      state.acceptedSourceSha = headAfter;
+      save(statePath, logPath, state, "implement-commit.accepted", { lastImplementCommit: headAfter });
+    }
     const test = implementation.ok ? runStep({ name: "a-tests", command: commands.test, cwd: repo, state, statePath, logPath }) : implementation;
     if (test.ok) break;
     state.consecutiveFailures += 1;
@@ -289,7 +346,11 @@ function main() {
     }
   }
 
-  if (!runSwap({ repo, relayRoot, commands, state, statePath, logPath })) return;
+  const acceptedCommit = acceptedSourceSha(repo, state);
+  const swapCommands = process.env.TANDEM_ORCHESTRATOR_COMMANDS_JSON
+    ? commands
+    : loadSwapCommands(repo, relayRoot, acceptedCommit);
+  if (!runSwap({ repo, relayRoot, commands: swapCommands, state, statePath, logPath })) return;
 
   const lines = existsSync(wishlistPath) ? readFileSync(wishlistPath, utf8).split(/\r?\n/) : [];
   const currentLine = lines[state.currentItem.line] || "";
@@ -298,7 +359,7 @@ function main() {
   }
   state.phase = "idle";
   state.step = null;
-  state.stableCommit = acceptedSourceSha(repo) || state.stableCommit || "accepted-version";
+  state.stableCommit = acceptedSourceSha(repo, state) || state.stableCommit || "accepted-version";
   updateStableRef(repo, state.stableCommit, logPath);
   state.lastSummary = `Completed ${state.currentItem.id} through the single orchestrator.`;
   const completedItem = state.currentItem;
