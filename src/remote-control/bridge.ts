@@ -84,7 +84,7 @@ export interface RemoteApprovalRequest {
   kind: "permission" | "plan";
   title: string;
   body: string;
-  onResolve: (approved: boolean, source: "telegram" | "timeout") => void;
+  onResolve: (approved: boolean, source: "telegram" | "timeout") => void | Promise<void>;
 }
 
 export interface RemoteBridgeDeps {
@@ -395,7 +395,7 @@ export class RemoteBridge {
       pending.resolved = true;
       this.pendingApprovals.delete(request.id);
       void this.audit("approval-timeout", { id: request.id, kind: request.kind });
-      request.onResolve(false, "timeout");
+      void Promise.resolve(request.onResolve(false, "timeout"));
       void this.editApprovalMessage(pending, "Timed out after 5 minutes: denied by default.");
     }, REMOTE_APPROVAL_TTL_MS);
     this.pendingApprovals.set(request.id, { request, chatId: pairedUserId, messageId: sent?.messageId, timeout, resolved: false });
@@ -505,7 +505,7 @@ export class RemoteBridge {
       return;
     }
     await this.resolveApproval(id, approved, "telegram");
-    pending.request.onResolve(approved, "telegram");
+    await pending.request.onResolve(approved, "telegram");
     if (message.callbackId) await this.transport?.answerCallback?.(message.callbackId, approved ? "Approved." : "Denied.");
   }
 
@@ -677,9 +677,7 @@ export class RemoteBridge {
       kind: approval.kind,
       title: approval.title,
       body: approval.body,
-      onResolve: (approved, source) => {
-        void this.handlePromptApprovalDecision(context, approved, source);
-      }
+      onResolve: (approved, source) => this.handlePromptApprovalDecision(context, approved, source)
     });
 
     if (!pushed) {
