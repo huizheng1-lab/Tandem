@@ -1,0 +1,119 @@
+(node:25912) [DEP0190] DeprecationWarning: Passing args to a child process with shell option true can lead to security vulnerabilities, as the arguments are not escaped, only concatenated.
+(Use `node --trace-deprecation ...` to show where the warning was created)
+(node:40828) [DEP0190] DeprecationWarning: Passing args to a child process with shell option true can lead to security vulnerabilities, as the arguments are not escaped, only concatenated.
+(Use `node --trace-deprecation ...` to show where the warning was created)
+
+⎯⎯⎯⎯⎯⎯⎯ Failed Tests 5 ⎯⎯⎯⎯⎯⎯⎯
+
+ FAIL  tests/candidate-preview-smoke.test.ts > candidate preview GUI smoke > D164: treats a responsive long-running GUI process as ready and cleans it up
+AssertionError: expected {} to deeply equal ArrayContaining [17872]
+
+- Expected:
+ArrayContaining [
+  17872,
+]
+
++ Received:
+{}
+
+ ❯ tests/candidate-preview-smoke.test.ts:52:37
+
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/5]⎯
+
+ FAIL  tests/reciprocal-direction.test.ts > reciprocal direction epics > auto-approves an independently accepted fully autonomous plan and audits it
+ExecaError: Command failed with exit code 1: powershell -NoProfile -ExecutionPolicy Bypass -File "C:\Users\huizh\Apps\HZ code\tmp\review-d189-f6c72bf\scripts\reciprocal-direction.ps1" -Action AutoApprovePlan -Id W0001 -Commit f6c72bfedf15ed7b11a105d4a4081938d88ec83e -ControlPath "C:\Users\huizh\AppData\Local\Temp\tandem-direction-1784825837121-4974da58331de8\SHARED_DIRECTION.md"
+
+git.exe : fatal: ambiguous argument 'refs/tandem-relay/stable': unknown revision or path not in the working tree.\r
+At C:\Users\huizh\Apps\HZ code\tmp\review-d189-f6c72bf\scripts\reciprocal-direction.ps1:128 char:17\r
++     $output = @(& git @Arguments 2>$null)\r
++                 ~~~~~~~~~~~~~~~~~~~~~~~~\r
+    + CategoryInfo          : NotSpecified: (fatal: ambiguou...e working tree.:String) [], RemoteException\r
+    + FullyQualifiedErrorId : NativeCommandError\r
+ 
+ ❯ getFinalError ../../../HZ%20code/node_modules/execa/lib/return/final-error.js:6:9
+ ❯ makeError ../../../HZ%20code/node_modules/execa/lib/return/result.js:108:16
+ ❯ getAsyncResult ../../../HZ%20code/node_modules/execa/lib/methods/main-async.js:168:4
+ ❯ handlePromise ../../../HZ%20code/node_modules/execa/lib/methods/main-async.js:151:17
+ ❯ tests/reciprocal-direction.test.ts:377:5
+    375|     await direction(file, "-Action", "Start", "-Id", added.id, "-Role"…
+    376|     await direction(file, "-Action", "Candidate", "-Id", added.id, "-C…
+    377|     await direction(file, "-Action", "AutoApprovePlan", "-Id", added.i…
+       |     ^
+    378|     await direction(file, "-Action", "Start", "-Id", added.id, "-Role"…
+    379|
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[2/5]⎯
+
+ FAIL  tests/reciprocal-direction.test.ts > reciprocal direction epics > canonicalizes an accepted abbreviated plan commit during auto-approval
+ExecaError: Command failed with exit code 1: powershell -NoProfile -ExecutionPolicy Bypass -File "C:\Users\huizh\Apps\HZ code\tmp\review-d189-f6c72bf\scripts\reciprocal-direction.ps1" -Action AutoApprovePlan -Id W0001 -Commit f6c72bfedf15ed7b11a105d4a4081938d88ec83e -ControlPath "C:\Users\huizh\AppData\Local\Temp\tandem-direction-1784825839817-f074d6e5d85ae8\SHARED_DIRECTION.md"
+
+git.exe : fatal: ambiguous argument 'refs/tandem-relay/stable': unknown revision or path not in the working tree.\r
+At C:\Users\huizh\Apps\HZ code\tmp\review-d189-f6c72bf\scripts\reciprocal-direction.ps1:128 char:17\r
++     $output = @(& git @Arguments 2>$null)\r
++                 ~~~~~~~~~~~~~~~~~~~~~~~~\r
+    + CategoryInfo          : NotSpecified: (fatal: ambiguou...e working tree.:String) [], RemoteException\r
+    + FullyQualifiedErrorId : NativeCommandError\r
+ 
+ ❯ getFinalError ../../../HZ%20code/node_modules/execa/lib/return/final-error.js:6:9
+ ❯ makeError ../../../HZ%20code/node_modules/execa/lib/return/result.js:108:16
+ ❯ getAsyncResult ../../../HZ%20code/node_modules/execa/lib/methods/main-async.js:168:4
+ ❯ handlePromise ../../../HZ%20code/node_modules/execa/lib/methods/main-async.js:151:17
+ ❯ tests/reciprocal-direction.test.ts:395:5
+    393|     await direction(file, "-Action", "Start", "-Id", added.id, "-Role"…
+    394|     await direction(file, "-Action", "Candidate", "-Id", added.id, "-C…
+    395|     await direction(file, "-Action", "AutoApprovePlan", "-Id", added.i…
+       |     ^
+    396|
+    397|     expect(await readBoard(file)).toContain(`PLAN_APPROVED epic=true a…
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[3/5]⎯
+
+ FAIL  tests/reciprocal-direction.test.ts > reciprocal direction epics > uses the board autonomy default and allows sensitive prose unless authority metadata is explicit
+ExecaError: Command failed with exit code 1: powershell -NoProfile -ExecutionPolicy Bypass -File "C:\Users\huizh\Apps\HZ code\tmp\review-d189-f6c72bf\scripts\reciprocal-direction.ps1" -Action AutoApprovePlan -Id W0001 -Commit f6c72bfedf15ed7b11a105d4a4081938d88ec83e -ControlPath "C:\Users\huizh\AppData\Local\Temp\tandem-direction-1784825842450-ffb32ef8199b8\SHARED_DIRECTION.md"
+
+git.exe : fatal: ambiguous argument 'refs/tandem-relay/stable': unknown revision or path not in the working tree.\r
+At C:\Users\huizh\Apps\HZ code\tmp\review-d189-f6c72bf\scripts\reciprocal-direction.ps1:128 char:17\r
++     $output = @(& git @Arguments 2>$null)\r
++                 ~~~~~~~~~~~~~~~~~~~~~~~~\r
+    + CategoryInfo          : NotSpecified: (fatal: ambiguou...e working tree.:String) [], RemoteException\r
+    + FullyQualifiedErrorId : NativeCommandError\r
+ 
+ ❯ getFinalError ../../../HZ%20code/node_modules/execa/lib/return/final-error.js:6:9
+ ❯ makeError ../../../HZ%20code/node_modules/execa/lib/return/result.js:108:16
+ ❯ getAsyncResult ../../../HZ%20code/node_modules/execa/lib/methods/main-async.js:168:4
+ ❯ handlePromise ../../../HZ%20code/node_modules/execa/lib/methods/main-async.js:151:17
+ ❯ tests/reciprocal-direction.test.ts:409:5
+    407|     await direction(file, "-Action", "Start", "-Id", ordinary.id, "-Ro…
+    408|     await direction(file, "-Action", "Candidate", "-Id", ordinary.id, …
+    409|     await direction(file, "-Action", "AutoApprovePlan", "-Id", ordinar…
+       |     ^
+    410|
+    411|     const sensitive = JSON.parse((await direction(file, "-Action", "Ad…
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[4/5]⎯
+
+ FAIL  tests/reciprocal-direction.test.ts > reciprocal direction epics > treats requeue with a note as retroactive rejection of an autonomous plan
+ExecaError: Command failed with exit code 1: powershell -NoProfile -ExecutionPolicy Bypass -File "C:\Users\huizh\Apps\HZ code\tmp\review-d189-f6c72bf\scripts\reciprocal-direction.ps1" -Action AutoApprovePlan -Id W0001 -Commit f6c72bfedf15ed7b11a105d4a4081938d88ec83e -ControlPath "C:\Users\huizh\AppData\Local\Temp\tandem-direction-1784825845239-399b33badb6f58\SHARED_DIRECTION.md"
+
+git.exe : fatal: ambiguous argument 'refs/tandem-relay/stable': unknown revision or path not in the working tree.\r
+At C:\Users\huizh\Apps\HZ code\tmp\review-d189-f6c72bf\scripts\reciprocal-direction.ps1:128 char:17\r
++     $output = @(& git @Arguments 2>$null)\r
++                 ~~~~~~~~~~~~~~~~~~~~~~~~\r
+    + CategoryInfo          : NotSpecified: (fatal: ambiguou...e working tree.:String) [], RemoteException\r
+    + FullyQualifiedErrorId : NativeCommandError\r
+ 
+ ❯ getFinalError ../../../HZ%20code/node_modules/execa/lib/return/final-error.js:6:9
+ ❯ makeError ../../../HZ%20code/node_modules/execa/lib/return/result.js:108:16
+ ❯ getAsyncResult ../../../HZ%20code/node_modules/execa/lib/methods/main-async.js:168:4
+ ❯ handlePromise ../../../HZ%20code/node_modules/execa/lib/methods/main-async.js:151:17
+ ❯ tests/reciprocal-direction.test.ts:425:5
+    423|     await direction(file, "-Action", "Start", "-Id", added.id, "-Role"…
+    424|     await direction(file, "-Action", "Candidate", "-Id", added.id, "-C…
+    425|     await direction(file, "-Action", "AutoApprovePlan", "-Id", added.i…
+       |     ^
+    426|     await direction(file, "-Action", "Start", "-Id", added.id, "-Role"…
+    427|     await direction(file, "-Action", "Requeue", "-Id", added.id, "-Not…
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[5/5]⎯
+

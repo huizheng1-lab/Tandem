@@ -28,6 +28,8 @@ export class TelegramSessionStream {
   private appliedVersion = 0;
   private lastSnapshot?: StreamingSnapshot;
   private finishing = false;
+  private awaitingApproval = false;
+  private cancelledForApproval = false;
 
   constructor(private readonly options: TelegramSessionStreamOptions) {
     this.gateway = new StreamingSessionGateway({
@@ -62,6 +64,7 @@ export class TelegramSessionStream {
   async resetForSubmission(): Promise<void> {
     const snapshot = this.lastSnapshot;
     const role = snapshot?.role ?? "user";
+    this.awaitingApproval = false;
     this.pending = undefined;
     this.pendingText = `${role} / submitting / 0s\nhealthy\nSubmitting prompt...`;
     await this.drain();
@@ -72,6 +75,53 @@ export class TelegramSessionStream {
       ? formatStreamingSnapshot(this.lastSnapshot)
       : `user / submitting / 0s\nhealthy`;
     const footer = `Submission failed: ${oneLine(message)}`;
+    this.pending = undefined;
+    this.pendingText = `${base}\n${footer}`;
+    await this.drain();
+  }
+
+  async pauseForApproval(cardText: string): Promise<void> {
+    if (this.stopped) return;
+    this.awaitingApproval = true;
+    this.pending = undefined;
+    this.pendingText = cardText;
+    await this.drain();
+  }
+
+  async resumeAfterDecision(decision: "approved" | "denied" | "timeout", reason?: string): Promise<void> {
+    if (this.stopped) return;
+    this.awaitingApproval = false;
+    if (decision === "approved") {
+      await this.resetForSubmission();
+      return;
+    }
+    await this.showDecisionFooter(decision, reason);
+  }
+
+  cancelForApproval(): void {
+    if (this.stopped) return;
+    this.cancelledForApproval = true;
+    this.awaitingApproval = false;
+    this.stop();
+  }
+
+  wasCancelledForApproval(): boolean {
+    return this.cancelledForApproval;
+  }
+
+  isAwaitingApproval(): boolean {
+    return this.awaitingApproval;
+  }
+
+  private async showDecisionFooter(decision: "denied" | "timeout", reason?: string): Promise<void> {
+    const base = this.lastSnapshot
+      ? formatStreamingSnapshot(this.lastSnapshot)
+      : `user / submitting / 0s\nhealthy`;
+    const footer = decision === "timeout"
+      ? "Timed out after 5 minutes: denied by default."
+      : reason
+        ? `Denied: ${oneLine(reason)}`
+        : "Denied.";
     this.pending = undefined;
     this.pendingText = `${base}\n${footer}`;
     await this.drain();
@@ -91,6 +141,7 @@ export class TelegramSessionStream {
   private enqueue(snapshot: StreamingSnapshot): void {
     if (this.stopped || snapshot.version <= this.appliedVersion) return;
     this.lastSnapshot = snapshot;
+    if (this.awaitingApproval) return;
     this.pending = snapshot;
     this.pendingText = undefined;
     void this.drain();

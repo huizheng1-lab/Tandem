@@ -84,12 +84,11 @@ function workingTreeClean(cwd) {
   return r.stdout.length === 0;
 }
 
-function runAgent(cwd, args, timeout) {
-  const command = process.env.TANDEM_CLAUDE_BIN || process.env.TANDEM_RECIPROCAL_IMPLEMENT_BIN || "claude.cmd";
-  return spawnSync(command, args, { cwd, encoding: "utf8", windowsHide: true, timeout, shell: true });
+function runAgent(cwd, command, args, timeout, input) {
+  return spawnSync(command, args, { cwd, encoding: "utf8", windowsHide: true, timeout, shell: true, input });
 }
 
-function item() {
+function main() {
   let claimed;
   try {
     claimed = readClaimedItem();
@@ -107,56 +106,76 @@ function item() {
     `The item text is:`,
     claimed.text,
     "",
-    "Inspect the repository (use git status, git ls-files, and file reads) to find the existing code",
-    "this item relates to. If no existing code applies, propose a minimal, isolated change in a new file",
-    "that addresses the item without touching unrelated areas.",
+    "Inspect the repository (use file reads and directory listing) to find the existing code this item",
+    "relates to. If no existing code applies, propose a minimal, isolated change in a new file that",
+    "addresses the item without touching unrelated areas.",
     "",
-    "Make a real code change that addresses the item. Then run `git add` and `git commit` so the change",
-    "becomes a NEW commit on top of HEAD (do NOT amend an existing commit, do NOT rebase, do NOT push).",
+    "Make a real code change that addresses the item, using the Edit/Write tools. Do NOT run git yourself",
+    "(you have no Bash tool) - a wrapper script commits your file changes for you after you finish.",
     "",
     "Do NOT modify the wishlist file, the orchestrator state file, the relay state, or any swap/promotion",
-    "machinery; the orchestrator owns those. Do NOT mark the item DONE.",
+    "machinery; the orchestrator owns those. Do NOT mark the item DONE. Do NOT run the test suite; the",
+    "orchestrator runs the full test suite itself as a separate step after your change is committed.",
     "",
-    "Commit message format: `D200-N: <short summary>` where N is the next available D200-N number for",
-    "this batch (check `git log --oneline -20` to pick the next unused number).",
+    "This is a fully unattended, non-interactive run: there is no human available to answer questions.",
+    "Never ask for confirmation, never present options for a human to choose between, and never pause",
+    "waiting on input. Decide autonomously and proceed. If you are genuinely blocked, print `ABORT <short",
+    "reason>` and exit non-zero instead of asking anything.",
     "",
-    "When you finish, print exactly one line on the last stdout line: `DONE <new-commit-sha>` with the",
-    "full 40-char SHA of the new commit. If you cannot make a real change, print `ABORT <short reason>`",
-    "and exit with a non-zero status.",
+    "When you finish, print exactly one line on the last stdout line: `SUMMARY: <short one-line summary of",
+    "the change>`. If you cannot make a real change, print `ABORT <short reason>` and exit non-zero.",
   ].join("\n");
   const args = [
-    "-p", prompt,
+    "-p",
     "--output-format", "json",
     "--no-session-persistence",
     "--permission-mode", "acceptEdits",
-    "--allowedTools", "Bash(git add *),Bash(git commit *),Bash(git status),Bash(git log *),Bash(git rev-parse *),Read,Edit,Write,Glob,Grep",
-    "--system-prompt", "Implement the wishlist item. Use git for version control. Be terse.",
+    "--allowedTools", "Read,Edit,Write,Glob,Grep",
+    "--system-prompt", "Implement the wishlist item by editing files. Be terse. This is a headless, unattended run: never ask questions or wait for confirmation; decide autonomously. You have no Bash/git access - a wrapper commits your changes afterward.",
   ];
-  const result = runAgent(repo, args, maxDurationMs);
+  const result = runAgent(repo, agentBin, args, maxDurationMs, prompt);
   if (result.error) {
     die(1, { step: "agent-spawn", message: result.error.message, agent: agentBin });
   }
   const exitCode = result.status ?? 1;
-  const headAfter = headSha(repo);
   if (exitCode !== 0) {
     die(1, {
       step: "agent-exit",
       message: `agent exited ${exitCode}`,
       agent: agentBin,
       headBefore,
-      headAfter,
       stdoutTail: String(result.stdout || "").slice(-2000),
       stderrTail: String(result.stderr || "").slice(-2000),
     });
   }
+  if (workingTreeClean(repo)) {
+    die(2, {
+      step: "verify-no-commit",
+      message: "agent exited 0 but made no file changes; no implementing commit was produced",
+      item: claimed.id,
+      headBefore,
+      stdoutTail: String(result.stdout || "").slice(-2000),
+    });
+  }
+  const out = String(result.stdout || "");
+  const summaryMatch = out.match(/SUMMARY:\s*(.+)/);
+  const summary = summaryMatch ? summaryMatch[1].trim().slice(0, 200) : `${claimed.id}: ${claimed.text}`.slice(0, 200);
+  const addResult = git(repo, ["add", "-A"]);
+  if (!addResult.ok) {
+    die(2, { step: "git-add", message: `git add -A failed: ${addResult.stderr}`, item: claimed.id, headBefore });
+  }
+  const commitResult = git(repo, ["commit", "-m", `Wishlist ${claimed.id}: ${summary}`]);
+  if (!commitResult.ok) {
+    die(2, { step: "git-commit", message: `git commit failed: ${commitResult.stderr}`, item: claimed.id, headBefore });
+  }
+  const headAfter = headSha(repo);
   if (headAfter === headBefore) {
     die(2, {
       step: "verify-no-commit",
-      message: "agent exited 0 but HEAD did not advance; no implementing commit was produced",
+      message: "git commit reported success but HEAD did not advance",
       item: claimed.id,
       headBefore,
       headAfter,
-      stdoutTail: String(result.stdout || "").slice(-2000),
     });
   }
   if (!isAncestor(repo, headBefore, headAfter)) {
@@ -168,9 +187,7 @@ function item() {
       headAfter,
     });
   }
-  const out = String(result.stdout || "");
-  const shaMatch = out.match(/DONE ([0-9a-f]{40})/);
-  const newSha = shaMatch ? shaMatch[1] : headAfter;
+  const newSha = headAfter;
   if (!workingTreeClean(repo)) {
     die(2, {
       step: "verify-clean",
@@ -190,4 +207,4 @@ function item() {
   })}\n`);
 }
 
-item();
+main();

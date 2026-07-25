@@ -5,6 +5,7 @@ import { TelegramSessionStream } from "./telegram-session-stream.js";
 import type { SessionEventSubscription } from "./streaming-session.js";
 import {
   submitRemotePrompt,
+  type PromptApprovalPayload,
   type SessionPromptSubmission
 } from "./prompt-submission.js";
 
@@ -132,6 +133,14 @@ interface PendingRemoteApproval {
   resolved: boolean;
 }
 
+interface PendingPromptApprovalContext {
+  approvalId: string;
+  sessionId: string;
+  chatId: number;
+  stream?: TelegramSessionStream;
+  text: string;
+}
+
 const PAIRING_TTL_MS = 5 * 60 * 1000;
 const RATE_LIMIT_WINDOW_MS = 60 * 1000;
 const RATE_LIMIT_MAX = 10;
@@ -184,6 +193,7 @@ export class RemoteBridge {
   private lastError: string | undefined;
   private stopConfirmation?: StopConfirmation;
   private readonly pendingApprovals = new Map<string, PendingRemoteApproval>();
+  private readonly pendingPromptApprovals = new Map<string, PendingPromptApprovalContext>();
   private readonly sessionStreamsByMessage = new Map<string, TelegramSessionStream>();
   private readonly sessionStreamsBySession = new Map<string, TelegramSessionStream>();
   private readonly selectedSessionsByChat = new Map<number, string>();
@@ -327,6 +337,7 @@ export class RemoteBridge {
   stop(): void {
     for (const approval of this.pendingApprovals.values()) clearTimeout(approval.timeout);
     this.pendingApprovals.clear();
+    this.pendingPromptApprovals.clear();
     this.stopTransport();
   }
 
@@ -623,12 +634,139 @@ export class RemoteBridge {
     if (result.status === "submitted") {
       return;
     }
+    if (result.status === "requires-approval") {
+      await this.handlePromptApproval(message.chatId, sessionId, stream, result.approval, text);
+      return;
+    }
 
-    const failure = result.status === "requires-approval"
-      ? "Prompt requires approval; approval routing is not enabled for this stream yet."
-      : result.message;
+    const failure = result.message;
     if (stream) await stream.showSubmissionError(failure);
     else await this.send(message.chatId, `Submission failed: ${failure}`, "prompt-failed");
+  }
+
+  private async handlePromptApproval(
+    chatId: number,
+    sessionId: string,
+    stream: TelegramSessionStream | undefined,
+    approval: PromptApprovalPayload,
+    text: string
+  ): Promise<void> {
+    const cardText = formatApprovalRequest({
+      id: approval.id,
+      kind: approval.kind,
+      title: approval.title,
+      body: approval.body,
+      onResolve: () => {}
+    });
+
+    if (stream) {
+      await stream.pauseForApproval(cardText);
+    }
+
+    const context: PendingPromptApprovalContext = {
+      approvalId: approval.id,
+      sessionId,
+      chatId,
+      stream,
+      text
+    };
+    this.pendingPromptApprovals.set(approval.id, context);
+
+    const pushed = await this.pushApproval({
+      id: approval.id,
+      kind: approval.kind,
+      title: approval.title,
+      body: approval.body,
+      onResolve: (approved, source) => {
+        void this.handlePromptApprovalDecision(context, approved, source);
+      }
+    });
+
+    if (!pushed) {
+      this.pendingPromptApprovals.delete(approval.id);
+      if (stream) await stream.showSubmissionError("Approval routing is unavailable.");
+      else await this.send(chatId, "Submission failed: Approval routing is unavailable.", "prompt-approval-unavailable");
+      await this.audit("prompt", { sessionId, outcome: "approval-unavailable", argsHash: hashArgs(text) });
+    }
+  }
+
+  private async handlePromptApprovalDecision(
+    context: PendingPromptApprovalContext,
+    approved: boolean,
+    source: "desktop" | "telegram" | "timeout"
+  ): Promise<void> {
+    if (!this.pendingPromptApprovals.has(context.approvalId)) return;
+    this.pendingPromptApprovals.delete(context.approvalId);
+
+    // Ensure the Round C bookkeeping (pendingApprovals deletion, message edit) runs
+    // for desktop/timeout paths that did not already route through resolveApproval.
+    // Telegram callback and timeout paths already performed their bookkeeping; this
+    // call is a no-op via the pending.resolved guard in resolveApproval.
+    await this.resolveApproval(context.approvalId, approved, source);
+
+    if (!approved) {
+      const decision: "denied" | "timeout" = source === "timeout" ? "timeout" : "denied";
+      // The timeout footer is self-contained ("Timed out after 5 minutes: denied by
+      // default.") per the Round C timeout message; only pass a source-specific
+      // reason for explicit denials so the live message names the decision channel.
+      const reason = decision === "timeout"
+        ? undefined
+        : source === "desktop"
+          ? "on desktop"
+          : "from Telegram";
+      if (context.stream && !context.stream.wasCancelledForApproval()) {
+        await context.stream.resumeAfterDecision(decision, reason);
+      }
+      await this.audit("prompt", {
+        sessionId: context.sessionId,
+        outcome: decision,
+        argsHash: hashArgs(context.text)
+      });
+      return;
+    }
+
+    // Approved: reuse the existing submitPrompt seam without consuming another
+    // rate-limit slot; the original requires-approval already consumed one.
+    if (context.stream) await context.stream.resetForSubmission();
+    const submit = this.deps.submitPrompt;
+    if (!submit) {
+      const message = "Prompt submission is unavailable in this build.";
+      if (context.stream) await context.stream.showSubmissionError(message);
+      else await this.send(context.chatId, `Submission failed: ${message}`, "prompt-failed");
+      await this.audit("prompt", {
+        sessionId: context.sessionId,
+        outcome: "approval-unavailable",
+        argsHash: hashArgs(context.text)
+      });
+      return;
+    }
+
+    let followup: PromptApprovalPayload | undefined;
+    let failureMessage: string | undefined;
+    try {
+      const result = await submit({ chatId: context.chatId, sessionId: context.sessionId, text: context.text });
+      if (result.status === "requires-approval") followup = result.approval;
+      else if (result.status === "rejected") failureMessage = result.message;
+    } catch (error) {
+      failureMessage = errorMessage(error) || "Prompt submission failed.";
+    }
+
+    await this.audit("prompt", {
+      sessionId: context.sessionId,
+      outcome: "approved",
+      argsHash: hashArgs(context.text)
+    });
+
+    if (followup) {
+      const note = "Another approval is required; please retry the prompt.";
+      if (context.stream) await context.stream.showSubmissionError(note);
+      else await this.send(context.chatId, `Submission failed: ${note}`, "prompt-failed");
+      return;
+    }
+    if (failureMessage !== undefined) {
+      if (context.stream) await context.stream.showSubmissionError(failureMessage);
+      else await this.send(context.chatId, `Submission failed: ${failureMessage}`, "prompt-failed");
+    }
   }
 
   private async handleCancel(message: RemoteInboundMessage): Promise<void> {
@@ -637,6 +775,37 @@ export class RemoteBridge {
       : this.sessionStreamsByMessage.get(this.streamMessageKey(message.chatId, message.replyToMessageId));
     const selectedSession = this.selectedSessionsByChat.get(message.chatId);
     const stream = repliedStream ?? (selectedSession ? this.sessionStreamsBySession.get(selectedSession) : undefined);
+
+    // Cancel a pending prompt approval bound to this chat first so the live
+    // binding is released even if the underlying stream is still awaiting
+    // Round C to resolve the request.
+    const pendingSessionId = stream?.sessionId ?? selectedSession;
+    let pendingContext: PendingPromptApprovalContext | undefined;
+    if (pendingSessionId) {
+      for (const candidate of this.pendingPromptApprovals.values()) {
+        if (candidate.sessionId === pendingSessionId && candidate.chatId === message.chatId) {
+          pendingContext = candidate;
+          break;
+        }
+      }
+    }
+    if (pendingContext) {
+      this.pendingPromptApprovals.delete(pendingContext.approvalId);
+      // Cancel the live binding first so a race with a Telegram callback or the
+      // approval timeout does not repaint the stream after cancellation.
+      if (pendingContext.stream) pendingContext.stream.cancelForApproval();
+      // Reuse the Round C bookkeeping (pendingApprovals deletion, message edit)
+      // so the approval card is retired exactly as it would be by timeout.
+      await this.resolveApproval(pendingContext.approvalId, false, "timeout");
+      await this.audit("cancel", { sessionId: pendingContext.sessionId, outcome: "approval-cancelled" });
+      await this.send(
+        message.chatId,
+        `Cancelled ${pendingContext.sessionId}: approval request cancelled.`,
+        "cancel"
+      );
+      return;
+    }
+
     if (!stream) {
       await this.send(message.chatId, noActiveSessionMessage(), "cancel-no-session");
       return;
