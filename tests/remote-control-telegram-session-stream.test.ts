@@ -104,6 +104,100 @@ describe("TelegramSessionStream", () => {
     expect(failedStop).toHaveBeenCalledOnce();
     expect(failed.unsubscribe).toHaveBeenCalledOnce();
   });
+
+  it("paints the approval card, suppresses streaming deltas, and resumes on approval", async () => {
+    vi.useFakeTimers();
+    const source = subscription();
+    const editMessage = vi.fn(async (_chatId: number, _messageId: number, _text: string) => {});
+    const stream = new TelegramSessionStream({
+      chatId: 10,
+      messageId: 20,
+      sessionId: "session-1",
+      telegram: { editMessage },
+      subscribe: source.subscribe
+    });
+    stream.start();
+
+    source.emit({ role: "leader", phase: "working", lastEventKind: "text", text: "warming up" });
+    await vi.advanceTimersByTimeAsync(1_500);
+    const editsBeforePause = editMessage.mock.calls.length;
+    expect(editsBeforePause).toBeGreaterThan(0);
+    const lastBeforePause = editMessage.mock.calls.at(-1)?.[2] ?? "";
+    expect(lastBeforePause).toContain("leader");
+
+    await stream.pauseForApproval("Permission request\nbash: npm test\nRun npm test");
+    expect(stream.isAwaitingApproval()).toBe(true);
+    const afterPause = editMessage.mock.calls.at(-1)?.[2] ?? "";
+    expect(afterPause).toBe("Permission request\nbash: npm test\nRun npm test");
+
+    // Streaming deltas that arrive while paused must not repaint the card.
+    source.emit({ role: "leader", phase: "working", lastEventKind: "text", text: "ignored while paused" });
+    await vi.advanceTimersByTimeAsync(1_500);
+    expect(editMessage.mock.calls.at(-1)?.[2]).toBe("Permission request\nbash: npm test\nRun npm test");
+
+    await stream.resumeAfterDecision("approved");
+    expect(stream.isAwaitingApproval()).toBe(false);
+    expect(editMessage.mock.calls.at(-1)?.[2]).toContain("Submitting prompt...");
+  });
+
+  it("renders a denied footer that preserves the last streaming snapshot verbatim", async () => {
+    vi.useFakeTimers();
+    const source = subscription();
+    const editMessage = vi.fn(async (_chatId: number, _messageId: number, _text: string) => {});
+    const stream = new TelegramSessionStream({
+      chatId: 10,
+      messageId: 20,
+      sessionId: "session-1",
+      telegram: { editMessage },
+      subscribe: source.subscribe
+    });
+    stream.start();
+
+    source.emit({ role: "leader", phase: "working", lastEventKind: "text", text: "planning next step" });
+    await vi.advanceTimersByTimeAsync(1_500);
+    const streamingBaseline = editMessage.mock.calls.at(-1)?.[2] ?? "";
+    expect(streamingBaseline).toContain("planning next step");
+
+    await stream.pauseForApproval("Permission request\nbash\nRun a command");
+    await stream.resumeAfterDecision("denied", "from Telegram");
+    const denied = editMessage.mock.calls.at(-1)?.[2] ?? "";
+    expect(denied).toContain(streamingBaseline);
+    expect(denied.endsWith("\nDenied: from Telegram")).toBe(true);
+
+    // Timeout footer matches the Round C default-deny wording verbatim.
+    await stream.pauseForApproval("Permission request\nbash\nRun another command");
+    await stream.resumeAfterDecision("timeout");
+    const timed = editMessage.mock.calls.at(-1)?.[2] ?? "";
+    expect(timed.endsWith("\nTimed out after 5 minutes: denied by default.")).toBe(true);
+  });
+
+  it("cancelForApproval releases the live binding and marks the cancellation reason", async () => {
+    vi.useFakeTimers();
+    const source = subscription();
+    const editMessage = vi.fn(async (_chatId: number, _messageId: number, _text: string) => {});
+    const stopped = vi.fn();
+    const stream = new TelegramSessionStream({
+      chatId: 10,
+      messageId: 20,
+      sessionId: "session-1",
+      telegram: { editMessage },
+      subscribe: source.subscribe,
+      onStopped: stopped
+    });
+    stream.start();
+
+    await stream.pauseForApproval("Permission request");
+    stream.cancelForApproval();
+    expect(stream.wasCancelledForApproval()).toBe(true);
+    expect(stopped).toHaveBeenCalledOnce();
+    expect(source.unsubscribe).toHaveBeenCalledOnce();
+
+    // Deltas after cancellation must not trigger further edits.
+    const editsAtCancel = editMessage.mock.calls.length;
+    source.emit({ text: "post-cancel" });
+    await vi.advanceTimersByTimeAsync(1_500);
+    expect(editMessage.mock.calls.length).toBe(editsAtCancel);
+  });
 });
 
 class StreamTransport implements RemoteTransport {

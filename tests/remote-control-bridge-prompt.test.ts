@@ -167,6 +167,121 @@ describe("RemoteBridge prompt routing", () => {
   });
 });
 
+describe("RemoteBridge prompt approval integration", () => {
+  it("paints the Round C approval card, resubmits on approve, and audits the flow", async () => {
+    const transport = new PromptTransport();
+    const submissions: string[] = [];
+    let submitCall = 0;
+    const bridge = await createBridge(transport, async (prompt) => {
+      submitCall += 1;
+      submissions.push(prompt.text);
+      if (submitCall === 1) {
+        return {
+          status: "requires-approval",
+          approval: { id: "approval-1", kind: "permission", title: "bash: npm test", body: "Run npm test" }
+        };
+      }
+      return { status: "submitted" };
+    });
+
+    await bridge.handleMessage(message("/use session"));
+    await bridge.handleMessage(message("run the tests"));
+
+    // The bridge repaints the bound live message with the Round C approval card in place.
+    const cardEdit = transport.edited.at(-1)?.text ?? "";
+    expect(cardEdit).toContain("Permission request");
+    expect(cardEdit).toContain("bash: npm test");
+
+    // A separate approval message must carry the Approve / Deny inline keyboard.
+    const approvalPushed = transport.sent.find((entry) => entry.text.includes("Permission request"));
+    expect(approvalPushed?.options?.inlineKeyboard?.[0]?.map((button) => button.text)).toEqual([
+      "Approve",
+      "Deny"
+    ]);
+    expect(approvalPushed?.options?.inlineKeyboard?.[0]?.[0]?.data).toBe("approval:approval-1:approve");
+
+    // Telegram approve callback resubmits without consuming a second prompt-rate-limit slot.
+    await bridge.handleMessage(callback("approval:approval-1:approve"));
+    expect(submissions).toEqual(["run the tests", "run the tests"]);
+    expect(transport.edited.at(-1)?.text).toContain("Submitting prompt...");
+  });
+
+  it("renders a denied footer on Telegram deny and preserves the selected session", async () => {
+    const transport = new PromptTransport();
+    let submitCall = 0;
+    const bridge = await createBridge(transport, async () => {
+      submitCall += 1;
+      if (submitCall === 1) {
+        return {
+          status: "requires-approval",
+          approval: { id: "approval-deny", kind: "permission", title: "bash: rm", body: "Run rm" }
+        };
+      }
+      return { status: "submitted" };
+    });
+
+    await bridge.handleMessage(message("/use session"));
+    await bridge.handleMessage(message("delete stuff"));
+    const editsBeforeDecision = transport.edited.length;
+
+    await bridge.handleMessage(callback("approval:approval-deny:deny"));
+
+    expect(transport.edited.length).toBeGreaterThan(editsBeforeDecision);
+    expect(transport.edited.at(-1)?.text).toMatch(/Denied: from Telegram\.?$/);
+    expect(submitCall).toBe(1);
+
+    // The selected session must survive the denial so subsequent plain messages route
+    // to the same session.
+    await bridge.handleMessage(message("try again"));
+    expect(submitCall).toBe(2);
+  });
+
+  it("default-denies after five minutes with the Round C timeout footer", async () => {
+    vi.useFakeTimers();
+    const transport = new PromptTransport();
+    let submitCall = 0;
+    const bridge = await createBridge(transport, async () => {
+      submitCall += 1;
+      if (submitCall === 1) {
+        return {
+          status: "requires-approval",
+          approval: { id: "approval-timeout", kind: "plan", title: "Plan approval", body: "Please approve" }
+        };
+      }
+      return { status: "submitted" };
+    });
+
+    await bridge.handleMessage(message("/use session"));
+    await bridge.handleMessage(message("kick off"));
+    const editsBeforeTimeout = transport.edited.length;
+
+    await vi.advanceTimersByTimeAsync(5 * 60 * 1000 + 1);
+    // Flush the async resumeAfterDecision + audit writes triggered by the timeout timer.
+    for (let index = 0; index < 5; index += 1) await Promise.resolve();
+
+    expect(transport.edited.length).toBeGreaterThan(editsBeforeTimeout);
+    expect(transport.edited.at(-1)?.text).toContain("Timed out after 5 minutes: denied by default.");
+    expect(submitCall).toBe(1);
+  });
+
+  it("cancels a pending approval via /cancel and rejects a later stale callback", async () => {
+    const transport = new PromptTransport();
+    const bridge = await createBridge(transport, async () => ({
+      status: "requires-approval",
+      approval: { id: "approval-cancel", kind: "permission", title: "bash", body: "Do work" }
+    }));
+
+    await bridge.handleMessage(message("/use session"));
+    await bridge.handleMessage(message("please cancel me"));
+    await bridge.handleMessage(message("/cancel"));
+
+    expect(transport.sent.at(-1)?.text).toMatch(/approval request cancelled/i);
+
+    await bridge.handleMessage(callback("approval:approval-cancel:approve"));
+    expect(transport.answered.at(-1)?.text).toMatch(/already resolved/i);
+  });
+});
+
 describe("Telegram prompt reply metadata", () => {
   it("forwards reply_to_message.message_id to the bridge", async () => {
     const fetchImpl = vi.fn(async () => new Response(JSON.stringify({
