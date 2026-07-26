@@ -244,6 +244,20 @@ function main() {
     console.log(JSON.stringify({ ok: true, state, statePath, logPath }, null, 2));
     return;
   }
+  if (boolArg("resume")) {
+    const reason = arg("reason", "human reviewed failure report; retry authorized");
+    const previousPhase = state.phase;
+    const resumedItem = state.currentItem?.id || null;
+    state.phase = "idle";
+    state.step = null;
+    state.consecutiveFailures = 0;
+    state.failures = [];
+    state.failureReport = undefined;
+    state.lastSummary = `Resumed from ${previousPhase}: ${reason}`;
+    save(statePath, logPath, state, "failed-paused.resumed", { reason, previousPhase, resumedItem });
+    console.log(JSON.stringify({ ok: true, resumed: true, reason, previousPhase, state }, null, 2));
+    return;
+  }
   if (boolArg("cutover")) {
     if (state.phase === "failed-paused") {
       console.log(JSON.stringify({ ok: true, paused: true, state }, null, 2));

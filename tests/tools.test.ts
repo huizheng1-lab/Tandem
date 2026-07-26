@@ -1,7 +1,7 @@
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import { editFileTool, readFileTool, writeFileTool } from "../src/tools/fs.js";
 import type { ToolActivityEvent } from "../src/tools/fs.js";
 import { makeToolSet } from "../src/tools/index.js";
@@ -11,8 +11,11 @@ import { isDestructiveCommand } from "../src/tools/permissions.js";
 async function tempDir(): Promise<string> {
   const dir = path.join(tmpdir(), `tandem-tools-${Date.now()}-${Math.random().toString(16).slice(2)}`);
   await mkdir(dir, { recursive: true });
+  fixtureDirs.add(dir);
   return dir;
 }
+
+const fixtureDirs = new Set<string>();
 
 async function waitForFile(filePath: string, timeoutMs = 3000): Promise<string> {
   const deadline = Date.now() + timeoutMs;
@@ -38,6 +41,55 @@ async function expectProcessGone(pid: number): Promise<void> {
   }
   throw new Error(`Process ${pid} is still alive`);
 }
+
+function killPidIfAlive(pid: number): void {
+  if (!Number.isInteger(pid) || pid <= 0 || pid === process.pid) return;
+  try {
+    process.kill(pid, "SIGKILL");
+  } catch {
+    // Already gone or not owned by this process.
+  }
+}
+
+async function cleanupFixtureDir(cwd: string): Promise<void> {
+  let entries: string[] = [];
+  try {
+    entries = await readdir(cwd);
+  } catch {
+    return;
+  }
+  for (const entry of entries.filter((name) => name.endsWith(".pid"))) {
+    try {
+      const pid = Number((await readFile(path.join(cwd, entry), "utf8")).trim());
+      killPidIfAlive(pid);
+      if (Number.isInteger(pid)) await expectProcessGone(pid).catch(() => {});
+    } catch {
+      // Best-effort cleanup for test fixtures only.
+    }
+  }
+  await rmWithRetry(cwd);
+}
+
+async function rmWithRetry(cwd: string, attempts = 5): Promise<void> {
+  let lastError: unknown;
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    try {
+      await rm(cwd, { recursive: true, force: true });
+      return;
+    } catch (error) {
+      lastError = error;
+      if (attempt === attempts) break;
+      await new Promise((resolve) => setTimeout(resolve, 50 * attempt));
+    }
+  }
+  throw lastError;
+}
+
+afterEach(async () => {
+  const dirs = [...fixtureDirs];
+  fixtureDirs.clear();
+  await Promise.all(dirs.map((dir) => cleanupFixtureDir(dir)));
+});
 
 async function writeNestedProcessFixture(cwd: string): Promise<void> {
   await writeFile(
@@ -298,7 +350,9 @@ describe("tools", () => {
       path.join(cwd, "pipe-parent.cjs"),
       [
         'const { spawn } = require("node:child_process");',
+        'const fs = require("node:fs");',
         'const child = spawn(process.execPath, ["-e", "setTimeout(() => {}, 12000)"], { detached: true, stdio: ["ignore", "inherit", "inherit"] });',
+        'fs.writeFileSync("child.pid", String(child.pid));',
         "child.unref();",
         "process.exit(0);"
       ].join("\n"),

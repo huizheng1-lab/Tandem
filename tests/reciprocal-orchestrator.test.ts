@@ -174,6 +174,44 @@ describe("single reciprocal orchestrator", () => {
     }
   });
 
+  windowsIt("resumes failed-paused state after human-reviewed failure report", async () => {
+    const f = await fixture("resume-failed-paused");
+    try {
+      await mkdir(path.join(f.relayRoot, "state"), { recursive: true });
+      await writeFile(
+        path.join(f.relayRoot, "state", "orchestrator-state.json"),
+        JSON.stringify({
+          phase: "failed-paused",
+          currentItem: { id: "W0001", priority: "P0", text: "Build the thing", line: 4 },
+          consecutiveFailures: 2,
+          failures: [{ command: "old", exitCode: 1, output: "old failure" }],
+          failureReport: path.join(f.relayRoot, "control", "failure-reports", "W0001.md"),
+          step: "failed-paused",
+          updatedAt: new Date().toISOString()
+        }, null, 2),
+        "utf8",
+      );
+      const result = await run(f.root, f.relayRoot, commands(f.root), ["--resume", "--reason", "reviewed and fixed"]);
+      expect(result.exitCode).toBe(0);
+      const parsed = JSON.parse(result.stdout);
+      expect(parsed).toMatchObject({ ok: true, resumed: true, reason: "reviewed and fixed" });
+      const state = JSON.parse(await readFile(path.join(f.relayRoot, "state", "orchestrator-state.json"), "utf8"));
+      expect(state).toMatchObject({
+        phase: "idle",
+        currentItem: { id: "W0001" },
+        consecutiveFailures: 0,
+        step: null
+      });
+      expect(state.failures).toEqual([]);
+      expect(state.failureReport).toBeUndefined();
+      const log = await readFile(path.join(f.relayRoot, "control", "orchestrator-operations.ndjson"), "utf8");
+      expect(log).toMatch(/failed-paused\.resumed/);
+      expect(log).toMatch(/reviewed and fixed/);
+    } finally {
+      await rm(f.root, { recursive: true, force: true });
+    }
+  });
+
   windowsIt("resumes cleanly after a crash-mid-cycle state write", async () => {
     const f = await fixture("resume");
     try {
