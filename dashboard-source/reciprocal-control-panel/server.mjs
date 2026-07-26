@@ -36,6 +36,7 @@ const controlPath = path.join(relayRoot, "control", "SHARED_DIRECTION.md");
 const wishlistPath = path.join(relayRoot, "control", "WISHLIST.md");
 const statePath = path.join(repoRoot, ".git", "tandem-relay", "state.json");
 const orchestratorStatePath = path.join(relayRoot, "state", "orchestrator-state.json");
+const implementationModelConfigPath = path.join(relayRoot, "state", "reciprocal-implement-config.json");
 const orchestratorOperationsPath = path.join(relayRoot, "control", "orchestrator-operations.ndjson");
 const orchestratorTaskName = process.env.TANDEM_ORCHESTRATOR_TASK_NAME || "TandemReciprocalOrchestrator";
 const orchestratorStaleAfterMs = Number(process.env.TANDEM_ORCHESTRATOR_STALE_AFTER_MS || 20 * 60_000);
@@ -1038,6 +1039,25 @@ async function getModelSettings(role, runtime) {
   };
 }
 
+async function getImplementationModelSettings(executorA) {
+  const stored = await jsonFile(implementationModelConfigPath, null);
+  const explicit = Boolean(stored && !stored._readError);
+  const config = explicit ? stored : executorA;
+  return {
+    role: "Implementation",
+    configPath: implementationModelConfigPath,
+    running: false,
+    leader: config.leader || executorA.leader || "",
+    codexCliModel: config.codexCliModel || "",
+    claudeCliModel: config.claudeCliModel || "",
+    claudeCliModelOptions: executorA.claudeCliModelOptions,
+    codexCliReasoningEffort: config.codexCliReasoningEffort || "",
+    cliResolved: executorA.cliResolved,
+    models: executorA.models.filter((model) => ["codex/cli", "claude-code/cli"].includes(model.id)),
+    inherited: !explicit,
+  };
+}
+
 async function mainTagForSha(sha) {
   if (!sha) return null;
   const tags = await git(repoRoot, "tag", "--points-at", sha, "--list", "main-update-*", "--sort=-version:refname").catch(() => "");
@@ -1228,6 +1248,7 @@ async function getStatus() {
   candidateUpdate.candidateMainVersion = mainVersion.candidateTag;
   candidateUpdate.promoted = candidateUpdate.promoted.map((item) => ({ ...item, mainVersion: mainVersion.runtimeTags[item.role] }));
   const [modelsA, modelsB] = await Promise.all([getModelSettings("A", runtimeA), getModelSettings("B", runtimeB)]);
+  const implementationModel = await getImplementationModelSettings(modelsA);
   const direction = parseDirection(directionText);
   const workState = parseDirection(wishlistText);
   direction.autonomyDefault = directionText.match(/^AutonomyDefault:\s*(plan-gated|autonomous)\s*$/m)?.[1] || "plan-gated";
@@ -1308,7 +1329,7 @@ async function getStatus() {
     mainVersion,
     sourceReconciliationPending,
     pendingFinalization,
-    models: { a: modelsA, b: modelsB },
+    models: { a: modelsA, b: modelsB, implementation: implementationModel },
     history,
     health,
     recovery: recoveryPlan(state, { a, b }),
@@ -1941,6 +1962,7 @@ async function handle(request, response) {
     if (request.headers["x-control-token"] !== token) return send(response, 403, { error: "Invalid control token" });
     const input = await body(request);
     const d196AllowedMutations = new Set([
+      "/api/implementation-model",
       "/api/wishlist/requeue",
       "/api/update/dismiss-review",
       "/api/update/launch-candidate",
@@ -2131,6 +2153,33 @@ async function handle(request, response) {
       );
       await audit("models.update", { role, leader, worker, codexCliModel: codexCliModel || null, claudeCliModel: claudeCliModel || null, codexCliReasoningEffort: codexEffort || null });
       return send(response, 200, { ok: true, result: JSON.parse(output) });
+    }
+
+    if (url.pathname === "/api/implementation-model") {
+      const runtimeA = await getRuntime("A");
+      const executorA = await getModelSettings("A", runtimeA);
+      const selection = parseModelSelection(String(input.model || "").trim());
+      if (!["codex/cli", "claude-code/cli"].includes(selection.id)) {
+        throw new Error("Implementation helper must use Codex CLI or Claude Code CLI");
+      }
+      const selected = executorA.models.find((model) => model.id === selection.id);
+      if (!selected?.available) throw new Error(`Model requirement is not available: ${selection.id}`);
+      const config = {
+        schemaVersion: 1,
+        leader: selection.id,
+        codexCliModel: selection.id === "codex/cli" ? executorA.codexCliModel || null : null,
+        codexCliReasoningEffort: selection.id === "codex/cli" ? selection.codexCliReasoningEffort || null : null,
+        claudeCliModel: selection.id === "claude-code/cli" ? selection.claudeCliModel || null : null,
+        updatedAt: new Date().toISOString(),
+      };
+      await writeJsonAtomic(implementationModelConfigPath, config);
+      await audit("implementation-model.update", {
+        leader: config.leader,
+        codexCliModel: config.codexCliModel || null,
+        claudeCliModel: config.claudeCliModel || null,
+        codexCliReasoningEffort: config.codexCliReasoningEffort || null,
+      });
+      return send(response, 200, { ok: true, result: config });
     }
 
     if (url.pathname === "/api/executor/start") {

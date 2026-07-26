@@ -467,6 +467,44 @@ describe("D200 reciprocal implement script", () => {
     }
   });
 
+  windowsIt("prefers the dashboard implementation-helper model over Executor A's leader", async () => {
+    const f = await claimedImplementFixture("implementation-helper-model");
+    try {
+      const codex = await codexAgentStub(f.helperRoot, "implementation-helper-agent");
+      const stateDir = path.dirname(f.statePath);
+      const configDir = path.join(stateDir, "executor-a");
+      await mkdir(configDir, { recursive: true });
+      await writeFile(path.join(configDir, "config.json"), JSON.stringify({
+        leader: "minimax/minimax-m3",
+        worker: "minimax/minimax-m3",
+        codexCliPath: codex.launcher,
+      }), "utf8");
+      const implementationConfigPath = path.join(stateDir, "reciprocal-implement-config.json");
+      await writeFile(implementationConfigPath, JSON.stringify({
+        schemaVersion: 1,
+        leader: "codex/cli",
+        codexCliReasoningEffort: "high",
+      }), "utf8");
+      const result = spawnSync("node", [implementScript, "--repo", f.root, "--state-path", f.statePath, "--claimed-item-id", "W9202"], {
+        cwd: f.root,
+        encoding: "utf8",
+      });
+      expect(result.status).toBe(0);
+      const out = JSON.parse(String(result.stdout));
+      expect(out).toMatchObject({
+        ok: true,
+        provider: "codex",
+        agent: codex.launcher,
+        configSource: "implementation-helper",
+      });
+      const invocation = JSON.parse(await readFile(codex.log, "utf8"));
+      expect(invocation.argv).toEqual(expect.arrayContaining(["-c", "model_reasoning_effort=high"]));
+    } finally {
+      await rm(f.root, { recursive: true, force: true });
+      await rm(f.helperRoot, { recursive: true, force: true });
+    }
+  });
+
   windowsIt("fails closed instead of silently falling back to Claude for a non-CLI leader", async () => {
     const f = await claimedImplementFixture("unsupported-leader");
     try {

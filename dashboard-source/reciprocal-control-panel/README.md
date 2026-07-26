@@ -28,6 +28,7 @@ On Windows, you can double-click `Launch Reciprocal Control Panel.bat` in this d
 - Wishlist additions use the existing mutex-protected `reciprocal-direction.ps1` helper.
 - General Direction edits use that same mutex and preserve the guardrails, wishlist, and human notes sections.
 - Model controls mirror Tandem's leader/worker picker, including media badges, unavailable-provider labels, Claude CLI variants, and Codex reasoning variants. Updates to each stopped executor's isolated config are atomic and never expose credential values.
+- The Models view also exposes an independent Implementation helper model. It controls the CLI coding agent used for isolated wishlist implementation runs, applies on the next run without changing either executor, and falls back to Executor A only until the first explicit helper selection is saved.
 - Start and stop actions affect only the selected pinned Tandem runtime. Stopping preserves relay state, checkpoints, refs, and stashes.
 - Pause and resume actions affect only relay turn-claiming. They do not stop executor apps, clean worktrees, regenerate tokens, or move refs.
 - Kickstart is token-gated and audited. It starts and waits for Executor A only during normal idle work; Executor B being dormant is the healthy topology until the relay reaches the verified recovery-authority phase. Because the current Tandem desktop app exposes no safe local IPC/CLI trigger for an immediate prompt, the panel provides the exact first-turn prompt for Executor A as a copy-paste fallback instead of synthesizing fragile UI keystrokes.
@@ -41,4 +42,5 @@ On Windows, you can double-click `Launch Reciprocal Control Panel.bat` in this d
 - Direction and wishlist: `C:\Users\huizh\Apps\Tandem Reciprocal\control\SHARED_DIRECTION.md`
 - Relay state: `C:\Users\huizh\Apps\HZ code\.git\tandem-relay\state.json`
 - Stable version: `refs/tandem-relay/stable`
+- Implementation helper model: `C:\Users\huizh\Apps\Tandem Reciprocal\state\reciprocal-implement-config.json`
 - Worktrees: `C:\Users\huizh\Apps\Tandem Reciprocal\worktrees\copy-a` and `copy-b`

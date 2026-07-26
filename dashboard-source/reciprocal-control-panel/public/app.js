@@ -164,7 +164,7 @@ function renderArtifactCapability(capability) {
 }
 
 function renderModels(configs) {
-  const cards = [configs.a, configs.b];
+  const cards = [configs.a, configs.b, configs.implementation].filter(Boolean);
   const active = document.activeElement;
   if (active?.closest?.(".model-form")) return;
   if (state.dirtyModelRoles.size) return;
@@ -207,8 +207,20 @@ function renderModels(configs) {
         return [option(model.id, model.id, model, selected)];
       }).join("");
     };
-    const selectedModels = [config.leader, config.worker].map((id) => config.models.find((model) => model.id === id)).filter(Boolean);
-    const allReady = selectedModels.length === 2 && selectedModels.every((model) => model.available);
+    const implementation = config.role === "Implementation";
+    const selectedModels = (implementation ? [config.leader] : [config.leader, config.worker]).map((id) => config.models.find((model) => model.id === id)).filter(Boolean);
+    const allReady = selectedModels.length === (implementation ? 1 : 2) && selectedModels.every((model) => model.available);
+    if (implementation) {
+      return `<article class="panel model-card">
+        <div class="panel-head"><div><p class="eyebrow">Reciprocal orchestration</p><h2>Implementation helper</h2></div><span class="status-chip">${config.inherited ? "Using Executor A fallback" : "Explicit"}</span></div>
+        <form class="model-form" data-role="Implementation">
+          <label>Implementation model<select name="model">${options(config.leader)}</select></label>
+          <p class="model-description">Runs wishlist implementation in an isolated worktree. Changes apply to the next implementation run and do not alter either executor's leader.</p>
+          <div class="model-meta"><span>CLI coding agents only</span><span class="${allReady ? "ready" : "missing"}">${allReady ? "Selected model ready" : "Selected model requirement missing"}</span></div>
+          <div class="model-save-row"><span class="model-save-note">${config.inherited ? "Currently follows Executor A for compatibility" : "Independent dashboard setting"}</span><button class="button primary" type="submit">Save helper</button></div>
+        </form>
+      </article>`;
+    }
     return `<article class="panel model-card">
       <div class="panel-head"><div><p class="eyebrow">Tandem Copy ${config.role}</p><h2>Executor ${config.role}</h2></div><span class="status-chip">${config.running ? "Running" : "Stopped"}</span></div>
       <form class="model-form" data-role="${config.role}">
@@ -426,9 +438,10 @@ $("#model-grid").addEventListener("submit", async (event) => {
   submit.disabled = true;
   try {
     const values = Object.fromEntries(new FormData(form));
-    await api("/api/models", { method: "POST", body: JSON.stringify({ role: form.dataset.role, ...values }) });
+    const implementation = form.dataset.role === "Implementation";
+    await api(implementation ? "/api/implementation-model" : "/api/models", { method: "POST", body: JSON.stringify({ role: form.dataset.role, ...values }) });
     state.dirtyModelRoles.delete(form.dataset.role);
-    toast(`Copy ${form.dataset.role} models updated`);
+    toast(implementation ? "Implementation helper model updated" : `Copy ${form.dataset.role} models updated`);
     await refresh(true, true);
   } catch (error) { setAlert(error.message); } finally { submit.disabled = false; }
 });

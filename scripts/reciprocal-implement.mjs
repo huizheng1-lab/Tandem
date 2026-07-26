@@ -120,6 +120,12 @@ function executorAConfig() {
   return { configPath, config: readJson(configPath) };
 }
 
+function implementationConfig() {
+  const explicitPath = arg("implementation-config-path", process.env.TANDEM_RECIPROCAL_IMPLEMENT_MODEL_CONFIG || "");
+  const configPath = explicitPath || (statePath ? path.join(path.dirname(statePath), "reciprocal-implement-config.json") : "");
+  return { configPath, config: readJson(configPath) };
+}
+
 function newestCodexFallback() {
   if (process.platform !== "win32" || !process.env.LOCALAPPDATA) return "";
   const root = path.join(process.env.LOCALAPPDATA, "OpenAI", "Codex", "bin");
@@ -132,7 +138,11 @@ function newestCodexFallback() {
 }
 
 function configuredAgent() {
-  const { configPath, config } = executorAConfig();
+  const executor = executorAConfig();
+  const implementation = implementationConfig();
+  const hasImplementationConfig = Boolean(implementation.config);
+  const config = hasImplementationConfig ? { ...(executor.config || {}), ...implementation.config } : executor.config;
+  const configPath = hasImplementationConfig ? implementation.configPath : executor.configPath;
   const configuredLeader = config?.leader || "";
   const provider = explicitProvider || (explicitAgentBin ? "custom" : configuredLeader === "codex/cli" ? "codex" : configuredLeader === "claude-code/cli" ? "claude" : "");
   if (!provider) {
@@ -144,7 +154,13 @@ function configuredAgent() {
   const bin = explicitAgentBin || (provider === "codex"
     ? config?.codexCliPath || process.env.CODEX_CLI_PATH || newestCodexFallback() || "codex"
     : config?.claudeCliPath || process.env.TANDEM_CLAUDE_BIN || "claude");
-  return { provider, bin, config: config || {}, configPath };
+  return {
+    provider,
+    bin,
+    config: config || {},
+    configPath,
+    configSource: hasImplementationConfig ? "implementation-helper" : "executor-a-fallback",
+  };
 }
 
 function agentArgs(agent, cwd) {
@@ -225,7 +241,7 @@ function main() {
     } catch (error) {
       die(2, { step: "resolve-agent", message: error.message, item: claimed.id, headBefore });
     }
-    process.stdout.write(`${JSON.stringify({ ok: true, dryRun: true, item: claimed.id, headBefore, agent: agent.bin, provider: agent.provider, configPath: agent.configPath || null })}\n`);
+    process.stdout.write(`${JSON.stringify({ ok: true, dryRun: true, item: claimed.id, headBefore, agent: agent.bin, provider: agent.provider, configPath: agent.configPath || null, configSource: agent.configSource })}\n`);
     return;
   }
   let sharedStatus;
@@ -295,6 +311,7 @@ function main() {
       message: `agent exited ${exitCode}`,
       agent: agent.bin,
       provider: agent.provider,
+      configSource: agent.configSource,
       headBefore,
       stdoutTail: String(result.stdout || "").slice(-2000),
       stderrTail: String(result.stderr || "").slice(-2000),
@@ -404,6 +421,7 @@ function main() {
     paths,
     agent: agent.bin,
     provider: agent.provider,
+    configSource: agent.configSource,
     exitCode,
   })}\n`);
 }
