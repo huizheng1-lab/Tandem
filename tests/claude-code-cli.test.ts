@@ -199,17 +199,17 @@ describe("claude code cli execution", () => {
       "-p",
       "--output-format",
       "json",
-      "--json-schema",
-      JSON.stringify(buildPlanJsonSchema),
+      "--model",
+      "haiku",
       "--permission-mode",
       "plan",
       "--no-session-persistence",
-      "--system-prompt",
-      "system rules",
       "--tools",
       "Read,Grep,Glob",
-      "--model",
-      "haiku"
+      "--json-schema",
+      JSON.stringify(buildPlanJsonSchema),
+      "--system-prompt",
+      "system rules"
     ]);
   });
 

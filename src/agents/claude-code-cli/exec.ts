@@ -83,20 +83,15 @@ export function buildClaudeExecArgv(input: {
   const args = [
     "-p",
     "--output-format",
-    "json",
-    "--json-schema",
-    JSON.stringify(input.schema),
-    "--permission-mode",
-    input.permissionMode,
-    "--no-session-persistence",
-    "--system-prompt",
-    input.systemPrompt
+    "json"
   ];
-  if (input.readOnly) args.push("--tools", "Read,Grep,Glob");
   if (input.modelName) args.push("--model", input.modelName);
   if (typeof input.maxBudgetUsd === "number" && input.maxBudgetUsd > 0) {
     args.push("--max-budget-usd", String(input.maxBudgetUsd));
   }
+  args.push("--permission-mode", input.permissionMode, "--no-session-persistence");
+  if (input.readOnly) args.push("--tools", "Read,Grep,Glob");
+  args.push("--json-schema", JSON.stringify(input.schema), "--system-prompt", input.systemPrompt);
   return args;
 }
 

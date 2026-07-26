@@ -8,6 +8,7 @@ export const CLAUDE_CLI_MODEL_OPTIONS = ["haiku", "sonnet", "opus", "claude-fabl
 export function configuredCliModelName(entry: Pick<ModelEntry, "id" | "provider">, config: TandemConfig): string | undefined {
   if (entry.provider === "codex-cli" && "id" in entry && entry.id === "codex/cli") return config.codexCliModel;
   if (entry.provider === "claude-code-cli" && "id" in entry && entry.id === "claude-code/cli") return config.claudeCliModel;
+  if (entry.provider === "claude-code-cli" && "id" in entry && entry.id === CLAUDE_CLI_OPUS_5_ID) return CLAUDE_CLI_OPUS_5_MODEL;
   return undefined;
 }
 
