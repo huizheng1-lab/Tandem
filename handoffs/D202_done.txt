@@ -1,0 +1,44 @@
+Round: D202
+
+Commits:
+- d571697 D202-1: isolate reciprocal implementation commits
+
+Implementation boundary:
+- scripts/reciprocal-implement.mjs now refuses real unattended implementation when the shared admin worktree is dirty before launch.
+- The agent runs in a detached isolated git worktree rooted at the exact pre-run HEAD.
+- The wrapper stages and commits only changed paths inside that isolated worktree.
+- Integration into the shared worktree requires the shared HEAD and status to remain unchanged, then uses a fast-forward-only merge to the exact isolated implementation commit.
+- If the shared worktree changes during the agent run, integration aborts and leaves the known-good shared HEAD untouched.
+
+27b0547 provenance audit and correction:
+- Audited 27b0547 against parent f9302f0c48141bdb796914635f1e2661d45ef734.
+- Audited stash 02f4e3a1b28bcbf9d9a6923c402ce5f39da27c7f parents:
+  - ^1 base: f9302f0c48141bdb796914635f1e2661d45ef734
+  - ^2 index: a2205fd4827820bbae38e9fcbcb691d8b77e6080
+  - ^3 untracked: da09c929ba875f5c55fa75d231d47af30222bfad
+- Stash tracked snapshot contained four modified paths: src/remote-control/bridge.ts, src/remote-control/telegram-session-stream.ts, tests/remote-control-bridge-prompt.test.ts, tests/remote-control-telegram-session-stream.test.ts.
+- 27b0547 modified scripts/reciprocal-implement.mjs, src/remote-control/bridge.ts, and src/remote-control/telegram-session-stream.ts, and added 177 unrelated docs/scripts/tmp artifacts.
+- Corrected the certain accidental tracking with git rm --cached for those 177 added paths only. The files were preserved on disk as untracked files; no history rewrite, reset, broad cleanup, or product rollback was used.
+
+False-completion audit:
+- scripts/reciprocal-false-completion-audit.mjs now honors --since D196-1 via tag or matching D196-1 commit subject.
+- Completion evidence is cycle-local: claim through completion, same item, implement-commit.accepted SHA in that cycle, and matching stable-ref.updated in that cycle.
+- Live read-only audit command:
+  node scripts\reciprocal-false-completion-audit.mjs --repo . --log-path "..\Tandem Reciprocal\control\orchestrator-operations.ndjson" --since D196-1
+- Live result after fix: totalCycleCompletions=3, falseCompletionsSuspected=2.
+- Historical placeholder completions reported truthfully:
+  - W0023 claimed 2026-07-24T12:03:28.213Z, completed 2026-07-24T12:07:32.606Z, no cycle-local implement-commit.accepted entry.
+  - W0023 claimed 2026-07-24T12:48:29.273Z, completed 2026-07-24T12:51:52.931Z, no cycle-local implement-commit.accepted entry.
+
+Verification:
+- npx vitest run --configLoader runner tests/reciprocal-implement-no-commit.test.ts: PASS, 10 tests.
+- npx vitest run --configLoader runner tests/reciprocal-implement-no-commit.test.ts tests/reciprocal-orchestrator.test.ts: PASS, 22 tests.
+- npm run typecheck: PASS.
+- npm test: PASS, 56 files passed, 2 skipped; 577 tests passed, 41 skipped.
+- git diff --check: PASS.
+
+Safety notes:
+- Did not modify W0023 product logic or DONE status.
+- Did not recover or resume W0029.
+- Did not touch live W0027 runtimes, relay state, control board, reciprocal worktrees, or verified package sequence.
+- Left untracked handoff docs and preserved artifacts untouched on disk.
