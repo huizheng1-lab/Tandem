@@ -121,6 +121,18 @@ function isolatedAgentStub(root: string, label: string, relativePath = "evidence
   return `node "${stub}"`;
 }
 
+function deletingAgentStub(root: string, label: string, relativePath: string) {
+  const stub = path.join(root, `${label}.agent.cjs`);
+  const lines = [
+    "const fs = require('fs');",
+    "const path = require('path');",
+    `fs.unlinkSync(path.join(process.cwd(), ${JSON.stringify(relativePath)}));`,
+    "process.stdout.write('SUMMARY: isolated deletion\\n');",
+  ];
+  writeFileSync(stub, lines.join("\n"), "utf8");
+  return `node "${stub}"`;
+}
+
 async function claimedImplementFixture(name: string) {
   const root = await mkdtemp(path.join(tmpdir(), `tandem-d202-${name}-`));
   const helperRoot = await mkdtemp(path.join(tmpdir(), `tandem-d202-helper-${name}-`));
@@ -379,6 +391,30 @@ describe("D200 reciprocal implement script", () => {
       const changed = (await execa("git", ["-C", f.root, "diff-tree", "--no-commit-id", "--name-only", "-r", "HEAD"])).stdout.split(/\r?\n/).filter(Boolean);
       expect(changed).toEqual(["evidence/D202-isolated.txt"]);
       expect((await readFile(path.join(f.root, "evidence", "D202-isolated.txt"), "utf8")).replace(/\r\n/g, "\n")).toBe("isolated implementation\n");
+    } finally {
+      await rm(f.root, { recursive: true, force: true });
+      await rm(f.helperRoot, { recursive: true, force: true });
+    }
+  });
+
+  windowsIt("stages isolated deletions without dropping the first path character", async () => {
+    const f = await claimedImplementFixture("isolated-delete");
+    try {
+      const target = path.join(f.root, "app", "renderer", "src", "cli-model-options.ts");
+      await mkdir(path.dirname(target), { recursive: true });
+      await writeFile(target, "export const oldModel = 'sonnet';\n", "utf8");
+      await execa("git", ["-C", f.root, "add", "app/renderer/src/cli-model-options.ts"]);
+      await execa("git", ["-C", f.root, "commit", "-m", "add app model fixture"]);
+      const agent = deletingAgentStub(f.helperRoot, "delete-agent", "app/renderer/src/cli-model-options.ts");
+      const result = spawnSync("node", [implementScript, "--repo", f.root, "--state-path", f.statePath, "--claimed-item-id", "W9202", "--agent-bin", agent], {
+        cwd: f.root,
+        encoding: "utf8",
+      });
+      expect(result.status).toBe(0);
+      const out = JSON.parse(String(result.stdout));
+      expect(out.paths).toEqual(["app/renderer/src/cli-model-options.ts"]);
+      const changed = (await execa("git", ["-C", f.root, "diff-tree", "--no-commit-id", "--name-status", "-r", "HEAD"])).stdout;
+      expect(changed).toContain("D\tapp/renderer/src/cli-model-options.ts");
     } finally {
       await rm(f.root, { recursive: true, force: true });
       await rm(f.helperRoot, { recursive: true, force: true });

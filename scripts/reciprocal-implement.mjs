@@ -102,7 +102,8 @@ function untrackedPaths(cwd) {
 function changedPaths(cwd) {
   const status = workingTreeStatus(cwd);
   return status.split(/\r?\n/).filter(Boolean).map((line) => {
-    const raw = line.slice(3);
+    const match = /^(?:[ MADRCU?!]{1,2})\s+(.+)$/.exec(line);
+    const raw = match ? match[1] : line.slice(3);
     return raw.includes(" -> ") ? raw.split(" -> ").pop() : raw;
   }).filter(Boolean);
 }
