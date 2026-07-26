@@ -1,0 +1,36 @@
+Round: D201
+
+Commit:
+- 5edcb15 D201-1: gate candidate review on orchestrator state
+
+Scope decision:
+- The candidate-preview review panel is now an independent build-review gate after D196. There is no live `a-upgrade-pending` equivalent in the reciprocal orchestrator's normal idle/improving/swapping/failed-paused model.
+- Idle candidate review is governed by `release/win-unpacked` BUILD_INFO plus promoted runtime BUILD_INFO. The retired legacy `.git/tandem-relay/state.json` is ignored for this live gate.
+- A genuine mismatch is still blocked when the current orchestrator is actively `swapping` a concrete `acceptedSourceSha`; in that case the candidate must match the accepted source until the swap settles.
+
+Fix:
+- Added `candidatePreviewReviewExpectation()` in `dashboard-source/reciprocal-control-panel/lib.mjs`.
+- Repointed `getCandidateUpdate()` and `currentCandidateOrThrow()` to `orchestrator-state.json`.
+- Restored non-agentic candidate preview controls through the D196 mutation guard: launch, stop, and dismiss-review.
+- Kept retired/agentic mutation paths such as approve-promote blocked by the D196 guard.
+- Updated dashboard manifest hashes and deployed through `scripts/deploy-reciprocal-dashboard.ps1`.
+
+Dashboard sweep:
+- Candidate launch/review gating no longer reads `.git/tandem-relay/state.json`.
+- Remaining legacy state reads are limited to legacy relay/authority/recovery surfaces, status compatibility display, or test harness simulation for the retired relay workflow.
+
+Verification:
+- `node dashboard-source/reciprocal-control-panel/lib.nodecheck.mjs` passed: 21 tests.
+- `node --test --test-name-pattern "D196|D201" dashboard-source/reciprocal-control-panel/approval-flow.e2e.mjs` passed.
+- Full `node --test dashboard-source/reciprocal-control-panel/approval-flow.e2e.mjs` was attempted but timed out in the pre-existing harness after 244s and left a fixture server, which was cleaned up.
+- `npm run typecheck` passed.
+- `npm test` passed: 56 files, 573 tests.
+- `git diff --check` passed.
+- Dashboard deploy passed with managed-file verification and restarted the live dashboard.
+
+Live proof:
+- Built a fresh real candidate with `npm run dist:app`; `release/win-unpacked/BUILD_INFO.json` was stamped for 5edcb1531622d3dfae0da9d2720dde3aa5d90956.
+- Live `/api/status` reported candidate `5edcb15`, `pending=true`, `matchesRelayExpected=true`, `expectedReason=independent-candidate-review`, `message=Update available`.
+- Live `/api/update/launch-candidate` succeeded with PID 57332 from `release/win-unpacked/Tandem.exe`.
+- Live status observed candidate preview running, then `/api/update/stop-candidate` stopped PIDs 37384, 44080, 46044, and 57332.
+- Final live status confirmed candidate preview `running=false`.
