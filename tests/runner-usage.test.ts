@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { enrichAgentError, estimatePromptSize, toolCallThinkingDelta, usageTokens } from "../src/agents/runner.js";
+import { enrichAgentError, estimatePromptSize, isUnsupportedGeminiModelError, toolCallThinkingDelta, usageTokens } from "../src/agents/runner.js";
 
 describe("usageTokens", () => {
   it("reads raw OpenAI-compatible usage when AI SDK fields are NaN", () => {
@@ -39,6 +39,26 @@ describe("usageTokens", () => {
     expect(enriched.message).toContain("status: 413");
     expect(enriched.message).toContain("Approx input:");
     expect(enriched.message).toContain("worker minimax/minimax-m2.7");
+  });
+
+  it("reports unsupported Gemini model responses as an actionable configuration error", () => {
+    const error = Object.assign(new Error("models/gemini-3.6-flash is not found for API version v1beta"), {
+      status: 404,
+      responseBody: { error: { message: "models/gemini-3.6-flash is not found" } }
+    });
+    const entry = { id: "google/gemini-3.6-flash", provider: "google" as const, modelName: "gemini-3.6-flash", envKey: "GEMINI_API_KEY", contextWindow: 1000000 };
+
+    expect(isUnsupportedGeminiModelError(error, entry)).toBe(true);
+    const enriched = enrichAgentError(error, {
+      costRole: "leader",
+      modelEntry: entry,
+      system: "system",
+      messages: [{ role: "user", content: "hello" }]
+    });
+
+    expect(enriched.message).toContain("Gemini provider rejected model google/gemini-3.6-flash");
+    expect(enriched.message).toContain("choose a Gemini model available to this GEMINI_API_KEY account");
+    expect(enriched.message).toContain("models/gemini-3.6-flash is not found");
   });
 
   it("estimates prompt size from system and messages", () => {

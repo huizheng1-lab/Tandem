@@ -86,6 +86,14 @@ export const builtInModels: ModelEntry[] = [
     media: { images: true, pdf: true }
   },
   {
+    id: "google/gemini-3.6-flash",
+    provider: "google",
+    modelName: "gemini-3.6-flash",
+    envKey: "GEMINI_API_KEY",
+    contextWindow: 1000000,
+    media: { images: true, pdf: true }
+  },
+  {
     id: "google/gemini-3.1-pro-preview",
     provider: "google",
     modelName: "gemini-3.1-pro-preview",

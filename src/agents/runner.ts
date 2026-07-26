@@ -107,7 +107,22 @@ export function isNoOutputGeneratedError(error: unknown): boolean {
   return /NoOutputGenerated|AI_NoOutputGenerated|No output generated/i.test(text);
 }
 
+export function isUnsupportedGeminiModelError(error: unknown, entry?: ModelEntry): boolean {
+  if (entry?.provider !== "google" || !entry.modelName.toLowerCase().includes("gemini")) return false;
+  const value = error as { name?: unknown; code?: unknown };
+  const detail = providerDetail(error);
+  const text = `${String(value.name ?? "")} ${String(value.code ?? "")} ${String(error)} ${detail}`;
+  return /unknown model|unsupported model|model[^.]*not (found|recognized|supported|available|provided|enabled)|not (found|recognized|supported|available|provided|enabled)[^.]*model|models\/[^"'\s]+ is not found|404/i.test(text);
+}
+
+function unsupportedGeminiModelMessage(error: unknown, entry?: ModelEntry): string | undefined {
+  if (!isUnsupportedGeminiModelError(error, entry) || !entry) return undefined;
+  return `Gemini provider rejected model ${entry.id} (${entry.modelName}). Update @ai-sdk/google/Google Generative AI provider support or choose a Gemini model available to this GEMINI_API_KEY account. Provider detail: ${providerDetail(error)}.`;
+}
+
 export function enrichAgentError(error: unknown, options: Pick<AgentRunOptions, "system" | "messages" | "costRole" | "modelEntry">): Error {
+  const unsupportedGemini = unsupportedGeminiModelMessage(error, options.modelEntry);
+  if (unsupportedGemini) return new Error(unsupportedGemini, { cause: error });
   if (!isNoOutputGeneratedError(error)) return error instanceof Error ? error : new Error(String(error));
   const estimate = estimatePromptSize(options.system, options.messages);
   const role = options.costRole ?? "agent";

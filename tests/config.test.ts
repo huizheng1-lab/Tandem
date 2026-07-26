@@ -260,12 +260,23 @@ describe("config", () => {
   });
 
   it("registers the current Gemini 3.x built-ins without guessed pricing", () => {
-    for (const id of ["google/gemini-3.5-flash", "google/gemini-3.1-pro-preview", "google/gemini-3-pro-preview", "google/gemini-3.1-flash-lite"]) {
+    for (const id of ["google/gemini-3.5-flash", "google/gemini-3.6-flash", "google/gemini-3.1-pro-preview", "google/gemini-3-pro-preview", "google/gemini-3.1-flash-lite"]) {
       const entry = resolveModel(id, []);
       expect(entry).toMatchObject({ provider: "google", envKey: "GEMINI_API_KEY", media: { images: true, pdf: true } });
       expect(entry.costHints).toBeUndefined();
     }
     expect(() => resolveModel("google/gemini-3.5-pro", [])).toThrow(/Unknown model/);
+  });
+
+  it("persists Gemini 3.6 Flash leader and worker selections", async () => {
+    const home = await tempDir("gemini36-home");
+    const cwd = await tempDir("gemini36-cwd");
+
+    await saveGlobalConfigPatch({ leader: "google/gemini-3.6-flash", worker: "google/gemini-3.6-flash" }, home);
+
+    const saved = JSON.parse(await readFile(globalConfigPath(home), "utf8")) as Record<string, unknown>;
+    expect(saved).toMatchObject({ leader: "google/gemini-3.6-flash", worker: "google/gemini-3.6-flash" });
+    expect(loadConfig({ cwd, homeDir: home })).toMatchObject({ leader: "google/gemini-3.6-flash", worker: "google/gemini-3.6-flash" });
   });
 
   it("D98: default MiniMax M3 custom model includes standard-tier cost hints", () => {

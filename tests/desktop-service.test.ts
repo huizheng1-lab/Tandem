@@ -435,6 +435,32 @@ describe("TandemService", () => {
     });
   });
 
+  it("lists and persists Gemini 3.6 Flash for desktop leader and worker pickers", async () => {
+    const cwd = await tempDir();
+    const home = await tempDir();
+    await mkdir(path.join(home, ".tandem"), { recursive: true });
+    await writeFile(path.join(home, ".tandem", ".env"), "GEMINI_API_KEY=gemini-test\n", "utf8");
+
+    const { window } = fakeWindow();
+    const service = new TandemService(window as never, { registerIpcResponses: false, homeDir: home, baseEnv: {} });
+
+    expect(service.listModels().find((model) => model.id === "google/gemini-3.6-flash")).toMatchObject({
+      provider: "google",
+      modelName: "gemini-3.6-flash",
+      available: true,
+      media: { images: true, pdf: true }
+    });
+
+    await service.setConfig({ leader: "google/gemini-3.6-flash", worker: "google/gemini-3.6-flash" });
+    const started = await service.startSession({ projectDir: cwd });
+
+    expect(started.config).toMatchObject({ leader: "google/gemini-3.6-flash", worker: "google/gemini-3.6-flash" });
+    await expect(readFile(path.join(home, ".tandem", "config.json"), "utf8").then(JSON.parse)).resolves.toMatchObject({
+      leader: "google/gemini-3.6-flash",
+      worker: "google/gemini-3.6-flash"
+    });
+  });
+
   it("passes project instructions to agents and writes remember notes to TANDEM.md", async () => {
     const cwd = await tempDir();
     await writeFile(path.join(cwd, "TANDEM.md"), "# Project\nUse Vitest.\n", "utf8");
