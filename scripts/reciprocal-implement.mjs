@@ -91,6 +91,14 @@ function workingTreeStatus(cwd) {
   return r.stdout;
 }
 
+function trackedWorktreeStatus(cwd) {
+  return workingTreeStatus(cwd).split(/\r?\n/).filter((line) => line && !line.startsWith("?? ")).join("\n");
+}
+
+function untrackedPaths(cwd) {
+  return workingTreeStatus(cwd).split(/\r?\n/).filter((line) => line.startsWith("?? ")).map((line) => line.slice(3));
+}
+
 function changedPaths(cwd) {
   const status = workingTreeStatus(cwd);
   return status.split(/\r?\n/).filter(Boolean).map((line) => {
@@ -133,14 +141,14 @@ function main() {
   }
   let sharedStatus;
   try {
-    sharedStatus = workingTreeStatus(repo);
+    sharedStatus = trackedWorktreeStatus(repo);
   } catch (error) {
     die(2, { step: "shared-worktree-status", message: error.message, item: claimed.id, headBefore });
   }
   if (sharedStatus) {
     die(2, {
       step: "shared-worktree-dirty",
-      message: "shared worktree has pre-existing tracked or untracked changes; refusing to run an unattended implementation where ownership would be ambiguous",
+      message: "shared worktree has pre-existing tracked or staged changes; refusing to run an unattended implementation where ownership would be ambiguous",
       item: claimed.id,
       headBefore,
       status: sharedStatus,
@@ -257,7 +265,7 @@ function main() {
     });
   }
   const sharedHeadNow = headSha(repo);
-  const sharedStatusBeforeIntegrate = workingTreeStatus(repo);
+  const sharedStatusBeforeIntegrate = trackedWorktreeStatus(repo);
   if (sharedHeadNow !== headBefore || sharedStatusBeforeIntegrate) {
     cleanupIsolatedWorktree(isolated.parent, isolated.worktree);
     die(2, {
@@ -268,6 +276,18 @@ function main() {
       sharedHeadNow,
       status: sharedStatusBeforeIntegrate,
       isolatedHead,
+    });
+  }
+  const untrackedCollisions = paths.filter((candidate) => untrackedPaths(repo).includes(candidate));
+  if (untrackedCollisions.length) {
+    cleanupIsolatedWorktree(isolated.parent, isolated.worktree);
+    die(2, {
+      step: "shared-untracked-collision",
+      message: "isolated implementation touches path(s) that already exist as untracked files in the shared worktree; refusing to overwrite ambiguous local content",
+      item: claimed.id,
+      headBefore,
+      isolatedHead,
+      paths: untrackedCollisions,
     });
   }
   const mergeResult = git(repo, ["merge", "--ff-only", isolatedHead]);
@@ -281,8 +301,9 @@ function main() {
   if (headAfter !== isolatedHead) {
     die(2, { step: "verify-integrated", message: "shared HEAD did not advance to the isolated implementation commit", item: claimed.id, headBefore, headAfter, isolatedHead });
   }
-  if (!workingTreeClean(repo)) {
-    die(2, { step: "verify-clean", message: "shared worktree is dirty after integrating the isolated implementation commit", item: claimed.id, newSha });
+  const trackedStatusAfterIntegrate = trackedWorktreeStatus(repo);
+  if (trackedStatusAfterIntegrate) {
+    die(2, { step: "verify-clean", message: "shared worktree has tracked or staged changes after integrating the isolated implementation commit", item: claimed.id, newSha, status: trackedStatusAfterIntegrate });
   }
   process.stdout.write(`${JSON.stringify({
     ok: true,

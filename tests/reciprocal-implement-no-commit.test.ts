@@ -289,12 +289,39 @@ describe("D200 reciprocal implement script", () => {
     }
   });
 
-  windowsIt("aborts before invoking the agent when the shared worktree is dirty", async () => {
-    const f = await claimedImplementFixture("dirty-abort");
+  windowsIt("allows unrelated untracked files in the shared worktree and preserves them", async () => {
+    const f = await claimedImplementFixture("untracked-allowed");
     try {
       const preexisting = path.join(f.root, "preexisting-user-file.txt");
       await writeFile(preexisting, "user-owned bytes\n", "utf8");
-      const agent = isolatedAgentStub(f.helperRoot, "dirty-agent");
+      const agent = isolatedAgentStub(f.helperRoot, "untracked-agent");
+      const result = spawnSync("node", [implementScript, "--repo", f.root, "--state-path", f.statePath, "--claimed-item-id", "W9202", "--agent-bin", agent], {
+        cwd: f.root,
+        encoding: "utf8",
+      });
+      expect(result.status).toBe(0);
+      const out = JSON.parse(String(result.stdout));
+      expect(out).toMatchObject({ ok: true, item: "W9202", isolated: true });
+      expect(await readFile(preexisting, "utf8")).toBe("user-owned bytes\n");
+      const status = (await execa("git", ["-C", f.root, "status", "--porcelain=v1", "--untracked-files=all"])).stdout.split(/\r?\n/).filter(Boolean);
+      expect(status).toEqual(["?? preexisting-user-file.txt"]);
+      const changed = (await execa("git", ["-C", f.root, "diff-tree", "--no-commit-id", "--name-only", "-r", "HEAD"])).stdout.split(/\r?\n/).filter(Boolean);
+      expect(changed).toEqual(["evidence/D202-isolated.txt"]);
+    } finally {
+      await rm(f.root, { recursive: true, force: true });
+      await rm(f.helperRoot, { recursive: true, force: true });
+    }
+  });
+
+  windowsIt("still aborts before invoking the agent when tracked files are dirty", async () => {
+    const f = await claimedImplementFixture("tracked-dirty-abort");
+    try {
+      await writeFile(path.join(f.root, "state", "orchestrator-state.json"), JSON.stringify({
+        phase: "improving",
+        currentItem: { id: "W9202", priority: "P0", text: "Create isolated evidence after tracked dirt" },
+        consecutiveFailures: 0,
+      }, null, 2), "utf8");
+      const agent = isolatedAgentStub(f.helperRoot, "tracked-dirty-agent");
       const result = spawnSync("node", [implementScript, "--repo", f.root, "--state-path", f.statePath, "--claimed-item-id", "W9202", "--agent-bin", agent], {
         cwd: f.root,
         encoding: "utf8",
@@ -302,11 +329,32 @@ describe("D200 reciprocal implement script", () => {
       expect(result.status).not.toBe(0);
       const out = JSON.parse(String(result.stdout));
       expect(out).toMatchObject({ ok: false, step: "shared-worktree-dirty", item: "W9202" });
-      expect(await readFile(preexisting, "utf8")).toBe("user-owned bytes\n");
-      const head = (await execa("git", ["-C", f.root, "rev-parse", "HEAD"])).stdout;
+      expect(out.message).toMatch(/tracked or staged/);
       const log = (await execa("git", ["-C", f.root, "log", "--oneline", "--max-count=1"])).stdout;
       expect(log).toContain("fixture base");
-      expect(head).toMatch(/^[0-9a-f]{40}$/);
+    } finally {
+      await rm(f.root, { recursive: true, force: true });
+      await rm(f.helperRoot, { recursive: true, force: true });
+    }
+  });
+
+  windowsIt("aborts narrowly when the isolated commit would overwrite an untracked shared-worktree path", async () => {
+    const f = await claimedImplementFixture("untracked-collision");
+    try {
+      await mkdir(path.join(f.root, "evidence"), { recursive: true });
+      await writeFile(path.join(f.root, "evidence", "D202-isolated.txt"), "user-owned collision\n", "utf8");
+      const agent = isolatedAgentStub(f.helperRoot, "collision-agent");
+      const result = spawnSync("node", [implementScript, "--repo", f.root, "--state-path", f.statePath, "--claimed-item-id", "W9202", "--agent-bin", agent], {
+        cwd: f.root,
+        encoding: "utf8",
+      });
+      expect(result.status).not.toBe(0);
+      const out = JSON.parse(String(result.stdout));
+      expect(out).toMatchObject({ ok: false, step: "shared-untracked-collision", item: "W9202" });
+      expect(out.paths).toEqual(["evidence/D202-isolated.txt"]);
+      expect(await readFile(path.join(f.root, "evidence", "D202-isolated.txt"), "utf8")).toBe("user-owned collision\n");
+      const log = (await execa("git", ["-C", f.root, "log", "--oneline", "--max-count=1"])).stdout;
+      expect(log).toContain("fixture base");
     } finally {
       await rm(f.root, { recursive: true, force: true });
       await rm(f.helperRoot, { recursive: true, force: true });
