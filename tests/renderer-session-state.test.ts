@@ -80,6 +80,6 @@ describe("renderer session resume state", () => {
     expect(visibleText).toContain("Implemented the change.");
     expect(visibleText).toContain("BUILDING round 1/3");
     expect(visibleText).toContain("Final summary");
-    expect(replay.entries.some((entry) => entry.kind === "message" && entry.thinking)).toBe(false);
+    expect(replay.entries).toContainEqual({ id: 2, kind: "message", role: "worker", text: "Thinking", thinking: true });
   });
 });

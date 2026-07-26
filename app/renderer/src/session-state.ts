@@ -11,10 +11,20 @@ export type VisibleTranscriptEntry =
   | { id: number; kind: "message"; role: TranscriptRole; text: string; thinking?: boolean }
   | { id: number; kind: "artifact"; name: string; value: unknown; open: boolean };
 
+export const THINKING_STATUS_TEXT = "Thinking";
+
 export interface VisibleSessionReplay {
   entries: VisibleTranscriptEntry[];
   checkpoint?: OrchestrationCheckpoint;
 }
+
+type TranscriptEntryWithOptionalMessageFields = {
+  id: number;
+  kind: string;
+  role?: unknown;
+  text?: unknown;
+  thinking?: unknown;
+};
 
 export function sessionFromResume(response: SessionResumeResponse): SessionStartResponse {
   return {
@@ -54,6 +64,12 @@ function appendAgentText(entries: VisibleTranscriptEntry[], role: "leader" | "wo
   }
 }
 
+export function appendThinkingStatus<T extends TranscriptEntryWithOptionalMessageFields>(entries: T[], role: "leader" | "worker", nextId: () => number): void {
+  const last = entries.at(-1);
+  if (last?.kind === "message" && last.role === role && last.thinking && last.text === THINKING_STATUS_TEXT) return;
+  entries.push({ id: nextId(), kind: "message", role, text: THINKING_STATUS_TEXT, thinking: true } as T);
+}
+
 export function replayVisibleSessionEvents(
   events: SessionEvent[],
   nextId: () => number,
@@ -64,6 +80,10 @@ export function replayVisibleSessionEvents(
 
   for (const stored of events) {
     const payload = stored.payload;
+    if (stored.type === "thinking" && isRecord(payload) && (payload.role === "leader" || payload.role === "worker")) {
+      appendThinkingStatus(entries, payload.role, nextId);
+      continue;
+    }
     if (stored.type === "thinking") continue;
     if (stored.type === "user" && isRecord(payload) && typeof payload.prompt === "string") {
       entries.push({ id: nextId(), kind: "message", role: "user", text: boundText(payload.prompt) });
