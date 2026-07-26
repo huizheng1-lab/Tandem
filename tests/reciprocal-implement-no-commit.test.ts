@@ -107,6 +107,38 @@ function implementingStub(root: string, label: string, acceptancePath: string) {
   return `node "${stub}"`;
 }
 
+function isolatedAgentStub(root: string, label: string, relativePath = "evidence/D202-isolated.txt") {
+  const stub = path.join(root, `${label}.agent.cjs`);
+  const lines = [
+    "const fs = require('fs');",
+    "const path = require('path');",
+    `const target = path.join(process.cwd(), ${JSON.stringify(relativePath)});`,
+    "fs.mkdirSync(path.dirname(target), { recursive: true });",
+    "fs.writeFileSync(target, 'isolated implementation\\n');",
+    "process.stdout.write('SUMMARY: isolated implementation\\n');",
+  ];
+  writeFileSync(stub, lines.join("\n"), "utf8");
+  return `node "${stub}"`;
+}
+
+async function claimedImplementFixture(name: string) {
+  const root = await mkdtemp(path.join(tmpdir(), `tandem-d202-${name}-`));
+  const helperRoot = await mkdtemp(path.join(tmpdir(), `tandem-d202-helper-${name}-`));
+  const stateDir = path.join(root, "state");
+  await mkdir(stateDir, { recursive: true });
+  await writeFile(path.join(stateDir, "orchestrator-state.json"), JSON.stringify({
+    phase: "improving",
+    currentItem: { id: "W9202", priority: "P0", text: "Create isolated evidence" },
+    consecutiveFailures: 0,
+  }), "utf8");
+  await execa("git", ["init", "--initial-branch=master", root]);
+  await execa("git", ["-C", root, "config", "user.email", "test@tandem"]);
+  await execa("git", ["-C", root, "config", "user.name", "test"]);
+  await execa("git", ["-C", root, "add", "state/orchestrator-state.json"]);
+  await execa("git", ["-C", root, "commit", "-m", "fixture base"]);
+  return { root, helperRoot, statePath: path.join(stateDir, "orchestrator-state.json") };
+}
+
 function swapStubs(root: string) {
   const log = commandsLogPath(root);
   const stubFor = (label: string) => {
@@ -256,6 +288,54 @@ describe("D200 reciprocal implement script", () => {
       await rm(root, { recursive: true, force: true });
     }
   });
+
+  windowsIt("aborts before invoking the agent when the shared worktree is dirty", async () => {
+    const f = await claimedImplementFixture("dirty-abort");
+    try {
+      const preexisting = path.join(f.root, "preexisting-user-file.txt");
+      await writeFile(preexisting, "user-owned bytes\n", "utf8");
+      const agent = isolatedAgentStub(f.helperRoot, "dirty-agent");
+      const result = spawnSync("node", [implementScript, "--repo", f.root, "--state-path", f.statePath, "--claimed-item-id", "W9202", "--agent-bin", agent], {
+        cwd: f.root,
+        encoding: "utf8",
+      });
+      expect(result.status).not.toBe(0);
+      const out = JSON.parse(String(result.stdout));
+      expect(out).toMatchObject({ ok: false, step: "shared-worktree-dirty", item: "W9202" });
+      expect(await readFile(preexisting, "utf8")).toBe("user-owned bytes\n");
+      const head = (await execa("git", ["-C", f.root, "rev-parse", "HEAD"])).stdout;
+      const log = (await execa("git", ["-C", f.root, "log", "--oneline", "--max-count=1"])).stdout;
+      expect(log).toContain("fixture base");
+      expect(head).toMatch(/^[0-9a-f]{40}$/);
+    } finally {
+      await rm(f.root, { recursive: true, force: true });
+      await rm(f.helperRoot, { recursive: true, force: true });
+    }
+  });
+
+  windowsIt("integrates a single isolated implementation commit with only agent-owned paths", async () => {
+    const f = await claimedImplementFixture("isolated-success");
+    try {
+      const agent = isolatedAgentStub(f.helperRoot, "success-agent");
+      const result = spawnSync("node", [implementScript, "--repo", f.root, "--state-path", f.statePath, "--claimed-item-id", "W9202", "--agent-bin", agent], {
+        cwd: f.root,
+        encoding: "utf8",
+      });
+      expect(result.status).toBe(0);
+      const out = JSON.parse(String(result.stdout));
+      expect(out).toMatchObject({ ok: true, item: "W9202", isolated: true });
+      expect(out.headAfter).toBe(out.newSha);
+      expect(out.paths).toEqual(["evidence/D202-isolated.txt"]);
+      const status = (await execa("git", ["-C", f.root, "status", "--porcelain=v1", "--untracked-files=all"])).stdout;
+      expect(status).toBe("");
+      const changed = (await execa("git", ["-C", f.root, "diff-tree", "--no-commit-id", "--name-only", "-r", "HEAD"])).stdout.split(/\r?\n/).filter(Boolean);
+      expect(changed).toEqual(["evidence/D202-isolated.txt"]);
+      expect((await readFile(path.join(f.root, "evidence", "D202-isolated.txt"), "utf8")).replace(/\r\n/g, "\n")).toBe("isolated implementation\n");
+    } finally {
+      await rm(f.root, { recursive: true, force: true });
+      await rm(f.helperRoot, { recursive: true, force: true });
+    }
+  });
 });
 
 describe("D200 retroactive false-completion audit", () => {
@@ -285,6 +365,73 @@ describe("D200 retroactive false-completion audit", () => {
       expect(parsed.findings[0].reason).toMatch(/read-only/);
       const after = await readFile(log, "utf8");
       expect(after).toEqual(before);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  windowsIt("does not attribute an unrelated stable update outside the claim/completion window", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "tandem-d202-audit-unrelated-"));
+    const log = path.join(root, "orchestrator-operations.ndjson");
+    const entries = [
+      { at: "2026-07-24T01:00:00.000Z", action: "cycle.claimed", phase: "improving", item: "W9998", step: null },
+      { at: "2026-07-24T01:00:01.000Z", action: "a-implements.started", phase: "improving", item: "W9998", step: "a-implements", command: "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/reciprocal-direction.ps1 -Action Show -ControlPath wishlist" },
+      { at: "2026-07-24T01:00:02.000Z", action: "a-implements.passed", phase: "improving", item: "W9998", step: "a-implements", command: "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/reciprocal-direction.ps1 -Action Show -ControlPath wishlist", exitCode: 0 },
+      { at: "2026-07-24T01:00:03.000Z", action: "cycle.completed", phase: "idle", completedItem: "W9998" },
+      { at: "2026-07-24T01:01:00.000Z", action: "implement-commit.accepted", phase: "improving", item: "W9997", lastImplementCommit: "1111111111111111111111111111111111111111" },
+      { at: "2026-07-24T01:01:01.000Z", action: "stable-ref.updated", phase: "swapping", sourceSha: "1111111111111111111111111111111111111111" },
+    ];
+    await writeFile(log, entries.map((entry) => JSON.stringify(entry)).join("\n") + "\n", "utf8");
+    try {
+      const result = spawnSync("node", [auditScript, "--log-path", log, "--repo", root], {
+        cwd: root,
+        encoding: "utf8",
+      });
+      expect(result.status).toBe(0);
+      const parsed = JSON.parse(String(result.stdout));
+      expect(parsed.falseCompletionsSuspected).toBe(1);
+      expect(parsed.findings[0].item).toBe("W9998");
+      expect(parsed.findings[0].verifiedImplementingCommit).toMatchObject({
+        implemented: false,
+        reason: "no cycle-local implement-commit.accepted entry",
+      });
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  windowsIt("honors the since tag boundary and verifies exact cycle-local implementation promotion", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "tandem-d202-audit-since-"));
+    const log = path.join(root, "orchestrator-operations.ndjson");
+    await execa("git", ["init", "--initial-branch=master", root]);
+    await execa("git", ["-C", root, "config", "user.email", "test@tandem"]);
+    await execa("git", ["-C", root, "config", "user.name", "test"]);
+    await execa("git", ["-C", root, "commit", "--allow-empty", "-m", "before boundary"], {
+      env: {
+        ...process.env,
+        GIT_AUTHOR_DATE: "2026-07-24T00:00:00.000Z",
+        GIT_COMMITTER_DATE: "2026-07-24T00:00:00.000Z",
+      },
+    });
+    await execa("git", ["-C", root, "tag", "D196-1"]);
+    const entries = [
+      { at: "2026-07-23T23:59:00.000Z", action: "cycle.claimed", phase: "improving", item: "WOLD", step: null },
+      { at: "2026-07-23T23:59:01.000Z", action: "cycle.completed", phase: "idle", completedItem: "WOLD" },
+      { at: "2026-07-24T00:01:00.000Z", action: "cycle.claimed", phase: "improving", item: "WNEW", step: null },
+      { at: "2026-07-24T00:01:01.000Z", action: "implement-commit.accepted", phase: "improving", item: "WNEW", lastImplementCommit: "2222222222222222222222222222222222222222" },
+      { at: "2026-07-24T00:01:02.000Z", action: "stable-ref.updated", phase: "swapping", sourceSha: "2222222222222222222222222222222222222222" },
+      { at: "2026-07-24T00:01:03.000Z", action: "cycle.completed", phase: "idle", completedItem: "WNEW" },
+    ];
+    await writeFile(log, entries.map((entry) => JSON.stringify(entry)).join("\n") + "\n", "utf8");
+    try {
+      const result = spawnSync("node", [auditScript, "--log-path", log, "--repo", root, "--since", "D196-1"], {
+        cwd: root,
+        encoding: "utf8",
+      });
+      expect(result.status).toBe(0);
+      const parsed = JSON.parse(String(result.stdout));
+      expect(parsed.totalCycleCompletions).toBe(1);
+      expect(parsed.falseCompletionsSuspected).toBe(0);
     } finally {
       await rm(root, { recursive: true, force: true });
     }

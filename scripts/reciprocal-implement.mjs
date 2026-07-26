@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import { spawnSync } from "node:child_process";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
 import path from "node:path";
 
 function arg(name, fallback = "") {
@@ -84,8 +85,38 @@ function workingTreeClean(cwd) {
   return r.stdout.length === 0;
 }
 
+function workingTreeStatus(cwd) {
+  const r = git(cwd, ["status", "--porcelain=v1", "--untracked-files=all"]);
+  if (!r.ok) throw new Error(`git status failed: ${r.stderr}`);
+  return r.stdout;
+}
+
+function changedPaths(cwd) {
+  const status = workingTreeStatus(cwd);
+  return status.split(/\r?\n/).filter(Boolean).map((line) => {
+    const raw = line.slice(3);
+    return raw.includes(" -> ") ? raw.split(" -> ").pop() : raw;
+  }).filter(Boolean);
+}
+
 function runAgent(cwd, command, args, timeout, input) {
   return spawnSync(command, args, { cwd, encoding: "utf8", windowsHide: true, timeout, shell: true, input });
+}
+
+function makeIsolatedWorktree(baseSha) {
+  const parent = mkdtempSync(path.join(tmpdir(), "tandem-reciprocal-implement-"));
+  const worktree = path.join(parent, "worktree");
+  const add = git(repo, ["worktree", "add", "--detach", worktree, baseSha]);
+  if (!add.ok) {
+    rmSync(parent, { recursive: true, force: true });
+    throw new Error(`git worktree add failed: ${add.stderr}`);
+  }
+  return { parent, worktree };
+}
+
+function cleanupIsolatedWorktree(parent, worktree) {
+  if (worktree) git(repo, ["worktree", "remove", "--force", worktree]);
+  if (parent) rmSync(parent, { recursive: true, force: true });
 }
 
 function main() {
@@ -100,8 +131,29 @@ function main() {
     process.stdout.write(`${JSON.stringify({ ok: true, dryRun: true, item: claimed.id, headBefore, agent: agentBin })}\n`);
     return;
   }
+  let sharedStatus;
+  try {
+    sharedStatus = workingTreeStatus(repo);
+  } catch (error) {
+    die(2, { step: "shared-worktree-status", message: error.message, item: claimed.id, headBefore });
+  }
+  if (sharedStatus) {
+    die(2, {
+      step: "shared-worktree-dirty",
+      message: "shared worktree has pre-existing tracked or untracked changes; refusing to run an unattended implementation where ownership would be ambiguous",
+      item: claimed.id,
+      headBefore,
+      status: sharedStatus,
+    });
+  }
+  let isolated;
+  try {
+    isolated = makeIsolatedWorktree(headBefore);
+  } catch (error) {
+    die(2, { step: "isolate-worktree", message: error.message, item: claimed.id, headBefore });
+  }
   const prompt = [
-    `You are implementing wishlist item ${claimed.id} in the current repository (cwd: ${repo}).`,
+    `You are implementing wishlist item ${claimed.id} in an isolated repository worktree (cwd: ${isolated.worktree}).`,
     "",
     `The item text is:`,
     claimed.text,
@@ -133,12 +185,14 @@ function main() {
     "--allowedTools", "Read,Edit,Write,Glob,Grep",
     "--system-prompt", "Implement the wishlist item by editing files. Be terse. This is a headless, unattended run: never ask questions or wait for confirmation; decide autonomously. You have no Bash/git access - a wrapper commits your changes afterward.",
   ];
-  const result = runAgent(repo, agentBin, args, maxDurationMs, prompt);
+  const result = runAgent(isolated.worktree, agentBin, args, maxDurationMs, prompt);
   if (result.error) {
+    cleanupIsolatedWorktree(isolated.parent, isolated.worktree);
     die(1, { step: "agent-spawn", message: result.error.message, agent: agentBin });
   }
   const exitCode = result.status ?? 1;
   if (exitCode !== 0) {
+    cleanupIsolatedWorktree(isolated.parent, isolated.worktree);
     die(1, {
       step: "agent-exit",
       message: `agent exited ${exitCode}`,
@@ -148,7 +202,8 @@ function main() {
       stderrTail: String(result.stderr || "").slice(-2000),
     });
   }
-  if (workingTreeClean(repo)) {
+  if (workingTreeClean(isolated.worktree)) {
+    cleanupIsolatedWorktree(isolated.parent, isolated.worktree);
     die(2, {
       step: "verify-no-commit",
       message: "agent exited 0 but made no file changes; no implementing commit was produced",
@@ -160,41 +215,74 @@ function main() {
   const out = String(result.stdout || "");
   const summaryMatch = out.match(/SUMMARY:\s*(.+)/);
   const summary = summaryMatch ? summaryMatch[1].trim().slice(0, 200) : `${claimed.id}: ${claimed.text}`.slice(0, 200);
-  const addResult = git(repo, ["add", "-A"]);
+  const paths = changedPaths(isolated.worktree);
+  const addResult = git(isolated.worktree, ["add", "--", ...paths]);
   if (!addResult.ok) {
-    die(2, { step: "git-add", message: `git add -A failed: ${addResult.stderr}`, item: claimed.id, headBefore });
+    cleanupIsolatedWorktree(isolated.parent, isolated.worktree);
+    die(2, { step: "git-add", message: `git add failed in isolated worktree: ${addResult.stderr}`, item: claimed.id, headBefore, paths });
   }
-  const commitResult = git(repo, ["commit", "-m", `Wishlist ${claimed.id}: ${summary}`]);
+  const commitResult = git(isolated.worktree, ["commit", "-m", `Wishlist ${claimed.id}: ${summary}`]);
   if (!commitResult.ok) {
-    die(2, { step: "git-commit", message: `git commit failed: ${commitResult.stderr}`, item: claimed.id, headBefore });
+    cleanupIsolatedWorktree(isolated.parent, isolated.worktree);
+    die(2, { step: "git-commit", message: `git commit failed in isolated worktree: ${commitResult.stderr}`, item: claimed.id, headBefore });
   }
-  const headAfter = headSha(repo);
-  if (headAfter === headBefore) {
+  const isolatedHead = headSha(isolated.worktree);
+  if (isolatedHead === headBefore) {
+    cleanupIsolatedWorktree(isolated.parent, isolated.worktree);
     die(2, {
       step: "verify-no-commit",
       message: "git commit reported success but HEAD did not advance",
       item: claimed.id,
       headBefore,
-      headAfter,
+      headAfter: isolatedHead,
     });
   }
-  if (!isAncestor(repo, headBefore, headAfter)) {
+  if (!isAncestor(isolated.worktree, headBefore, isolatedHead)) {
+    cleanupIsolatedWorktree(isolated.parent, isolated.worktree);
     die(2, {
       step: "verify-descendant",
       message: "HEAD changed but the new commit is not a descendant of the pre-implementation HEAD (amend, rebase, or external HEAD move detected)",
       item: claimed.id,
       headBefore,
-      headAfter,
+      headAfter: isolatedHead,
     });
   }
-  const newSha = headAfter;
-  if (!workingTreeClean(repo)) {
+  if (!workingTreeClean(isolated.worktree)) {
+    cleanupIsolatedWorktree(isolated.parent, isolated.worktree);
     die(2, {
       step: "verify-clean",
-      message: "implementing commit was produced but the working tree is still dirty",
+      message: "implementing commit was produced but the isolated working tree is still dirty",
       item: claimed.id,
-      newSha,
+      newSha: isolatedHead,
     });
+  }
+  const sharedHeadNow = headSha(repo);
+  const sharedStatusBeforeIntegrate = workingTreeStatus(repo);
+  if (sharedHeadNow !== headBefore || sharedStatusBeforeIntegrate) {
+    cleanupIsolatedWorktree(isolated.parent, isolated.worktree);
+    die(2, {
+      step: "shared-worktree-changed",
+      message: "shared worktree changed while the isolated agent was running; refusing to integrate automatically",
+      item: claimed.id,
+      headBefore,
+      sharedHeadNow,
+      status: sharedStatusBeforeIntegrate,
+      isolatedHead,
+    });
+  }
+  const mergeResult = git(repo, ["merge", "--ff-only", isolatedHead]);
+  if (!mergeResult.ok) {
+    cleanupIsolatedWorktree(isolated.parent, isolated.worktree);
+    die(2, { step: "integrate-commit", message: `git merge --ff-only failed: ${mergeResult.stderr}`, item: claimed.id, headBefore, isolatedHead });
+  }
+  cleanupIsolatedWorktree(isolated.parent, isolated.worktree);
+  const headAfter = headSha(repo);
+  const newSha = headAfter;
+  if (headAfter !== isolatedHead) {
+    die(2, { step: "verify-integrated", message: "shared HEAD did not advance to the isolated implementation commit", item: claimed.id, headBefore, headAfter, isolatedHead });
+  }
+  if (!workingTreeClean(repo)) {
+    die(2, { step: "verify-clean", message: "shared worktree is dirty after integrating the isolated implementation commit", item: claimed.id, newSha });
   }
   process.stdout.write(`${JSON.stringify({
     ok: true,
@@ -202,6 +290,8 @@ function main() {
     headBefore,
     headAfter,
     newSha,
+    isolated: true,
+    paths,
     agent: agentBin,
     exitCode,
   })}\n`);
