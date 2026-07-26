@@ -138,8 +138,12 @@ function parseWishlist(file) {
 
 function markWishlist(file, item, status, note = "") {
   const lines = existsSync(file) ? readFileSync(file, utf8).split(/\r?\n/) : [];
-  if (lines[item.line]) {
-    lines[item.line] = `- [${status === "DONE" ? "x" : " "}] ${item.id} | ${item.priority} | ${item.text} | ${status}${note ? ` note=${note.replace(/\s+/g, " ").replaceAll("|", "/")}` : ""} updated=${now()}`;
+  let line = Number.isInteger(item.line) ? item.line : -1;
+  if (!lines[line]?.includes(` ${item.id} |`)) {
+    line = lines.findIndex((candidate) => new RegExp(`^- \\[[ x]\\] ${item.id} \\|`).test(candidate));
+  }
+  if (line >= 0 && lines[line]) {
+    lines[line] = `- [${status === "DONE" ? "x" : " "}] ${item.id} | ${item.priority} | ${item.text} | ${status}${note ? ` note=${note.replace(/\s+/g, " ").replaceAll("|", "/")}` : ""} updated=${now()}`;
     writeFileSync(file, `${lines.join("\n").replace(/\n*$/, "")}\n`, utf8);
   }
 }

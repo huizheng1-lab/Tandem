@@ -795,7 +795,16 @@ export class RemoteBridge {
       // Reuse the Round C bookkeeping (pendingApprovals deletion, message edit)
       // so the approval card is retired exactly as it would be by timeout.
       await this.resolveApproval(pendingContext.approvalId, false, "timeout");
+      // Emit the full audit pair: `cancel` records the operator action and
+      // `prompt` records the prompt-level outcome per the W0023 audit spec so
+      // `prompt` outcomes cover the full set { approved, denied, timeout,
+      // cancelled, approval-unavailable }.
       await this.audit("cancel", { sessionId: pendingContext.sessionId, outcome: "approval-cancelled" });
+      await this.audit("prompt", {
+        sessionId: pendingContext.sessionId,
+        outcome: "cancelled",
+        argsHash: hashArgs(pendingContext.text)
+      });
       await this.send(
         message.chatId,
         `Cancelled ${pendingContext.sessionId}: approval request cancelled.`,

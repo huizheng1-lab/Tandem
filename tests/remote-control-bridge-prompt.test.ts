@@ -1,4 +1,4 @@
-import { mkdir } from "node:fs/promises";
+import { mkdir, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -279,6 +279,16 @@ describe("RemoteBridge prompt approval integration", () => {
 
     await bridge.handleMessage(callback("approval:approval-cancel:approve"));
     expect(transport.answered.at(-1)?.text).toMatch(/already resolved/i);
+
+    // The audit trail covers the full W0023 prompt-outcome set: `cancel` for
+    // the operator action and `prompt` with outcome "cancelled" so the
+    // prompt-level audit family stays exhaustive alongside approved/denied/
+    // timeout/approval-unavailable.
+    const audit = await readFile(bridge.auditPath, "utf8");
+    expect(audit).toContain('"event":"cancel"');
+    expect(audit).toContain('"outcome":"approval-cancelled"');
+    expect(audit).toContain('"event":"prompt"');
+    expect(audit).toContain('"outcome":"cancelled"');
   });
 });
 
@@ -366,11 +376,12 @@ async function createBridge(
   transport: PromptTransport,
   submitPrompt: NonNullable<ConstructorParameters<typeof RemoteBridge>[0]["submitPrompt"]>,
   subscribeSessionEvents: NonNullable<ConstructorParameters<typeof RemoteBridge>[0]["subscribeSessionEvents"]> = () => () => {}
-): Promise<RemoteBridge> {
+): Promise<RemoteBridge & { auditPath: string }> {
   const auditDir = path.join(tmpdir(), `tandem-prompt-${Date.now()}-${Math.random().toString(16).slice(2)}`);
   await mkdir(auditDir, { recursive: true });
+  const auditPath = path.join(auditDir, "audit.jsonl");
   const bridge = new RemoteBridge({
-    auditPath: path.join(auditDir, "audit.jsonl"),
+    auditPath,
     transportFactory: () => transport,
     tokenProvider: () => "token",
     statusProvider: () => ({
@@ -392,5 +403,5 @@ async function createBridge(
     submitPrompt
   });
   await bridge.configure({ enabled: true, telegramUserId: 42 });
-  return bridge;
+  return Object.assign(bridge, { auditPath });
 }
