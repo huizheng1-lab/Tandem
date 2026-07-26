@@ -93,6 +93,25 @@ describe("StreamingSessionGateway", () => {
     expect(formatStreamingSnapshot(emitted[0] as StreamingSnapshot)).toContain("leader: Here is the full answer.");
   });
 
+  it("W0031: replaces thinking stream text with a concise status in live snapshots", async () => {
+    vi.useFakeTimers();
+    let receive: ((event: StreamingSessionEvent) => void) | undefined;
+    const emitted: StreamingSnapshot[] = [];
+    const gateway = new StreamingSessionGateway({
+      sessionId: "session-1",
+      subscribe: (_sessionId, onEvent) => { receive = onEvent; },
+      onSnapshot: (value) => emitted.push(value)
+    });
+    gateway.start();
+
+    receive?.({ role: "worker", lastEventKind: "thinking", text: "private reasoning should not be visible" });
+    receive?.({ role: "worker", lastEventKind: "text", text: "Visible result" });
+    await vi.advanceTimersByTimeAsync(1_500);
+
+    expect(emitted[0]?.recentText).toEqual(["worker: Thinking", "worker: Visible result"]);
+    expect(formatStreamingSnapshot(emitted[0] as StreamingSnapshot)).not.toContain("private reasoning");
+  });
+
   it("releases a synchronous terminal subscription after it returns", () => {
     const unsubscribe = vi.fn();
     const onSnapshot = vi.fn();

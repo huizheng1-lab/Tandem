@@ -1,7 +1,20 @@
 import type { SessionMetadata, SessionResumeResponse, SessionStartResponse } from "../../shared/ipc.js";
 import type { TandemConfig } from "../../../src/config/schema.js";
+import type { MachineEvent, OrchestrationCheckpoint } from "../../../src/orchestrator/machine.js";
+import type { SessionEvent } from "../../../src/session/store.js";
 
 export const MODEL_STALL_WARNING_SECONDS = 180;
+
+export type TranscriptRole = "user" | "leader" | "worker" | "system";
+
+export type VisibleTranscriptEntry =
+  | { id: number; kind: "message"; role: TranscriptRole; text: string; thinking?: boolean }
+  | { id: number; kind: "artifact"; name: string; value: unknown; open: boolean };
+
+export interface VisibleSessionReplay {
+  entries: VisibleTranscriptEntry[];
+  checkpoint?: OrchestrationCheckpoint;
+}
 
 export function sessionFromResume(response: SessionResumeResponse): SessionStartResponse {
   return {
@@ -25,4 +38,50 @@ export function effectiveRendererConfig(session: Pick<SessionStartResponse, "con
 
 export function isSessionActionable(item: Pick<SessionMetadata, "projectDir">): boolean {
   return Boolean(item.projectDir);
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function appendAgentText(entries: VisibleTranscriptEntry[], role: "leader" | "worker", delta: string, nextId: () => number, boundText: (text: string) => string): void {
+  if (!delta.trim()) return;
+  const last = entries.at(-1);
+  if (last?.kind === "message" && last.role === role && !last.thinking) {
+    last.text = boundText(`${last.text}${delta}`);
+  } else {
+    entries.push({ id: nextId(), kind: "message", role, text: boundText(delta) });
+  }
+}
+
+export function replayVisibleSessionEvents(
+  events: SessionEvent[],
+  nextId: () => number,
+  boundText: (text: string) => string = (text) => text
+): VisibleSessionReplay {
+  const entries: VisibleTranscriptEntry[] = [];
+  let checkpoint: OrchestrationCheckpoint | undefined;
+
+  for (const stored of events) {
+    const payload = stored.payload;
+    if (stored.type === "thinking") continue;
+    if (stored.type === "user" && isRecord(payload) && typeof payload.prompt === "string") {
+      entries.push({ id: nextId(), kind: "message", role: "user", text: boundText(payload.prompt) });
+    }
+    if (stored.type === "text" && isRecord(payload) && (payload.role === "leader" || payload.role === "worker") && typeof payload.delta === "string") {
+      appendAgentText(entries, payload.role, payload.delta, nextId, boundText);
+    }
+    if (stored.type === "machine" && isRecord(payload)) {
+      const event = payload as MachineEvent;
+      if (event.type === "artifact") entries.push({ id: nextId(), kind: "artifact", name: event.name, value: event.value, open: false });
+      if (event.type === "transition") entries.push({ id: nextId(), kind: "message", role: "system", text: boundText(event.message) });
+      if (event.type === "error") entries.push({ id: nextId(), kind: "message", role: "system", text: boundText(event.message) });
+      if (event.type === "checkpoint") checkpoint = event.checkpoint;
+    }
+    if (stored.type === "done" && isRecord(payload) && typeof payload.summary === "string") {
+      entries.push({ id: nextId(), kind: "message", role: "system", text: boundText(`${payload.summary}${payload.takeover ? " (takeover)" : ""}`) });
+    }
+  }
+
+  return { entries, checkpoint };
 }

@@ -94,8 +94,14 @@ export class StreamingSessionGateway {
     else this.elapsedMs = Math.max(0, this.now() - this.startedAt);
     if (event.health !== undefined) this.health = event.health;
     if (event.lastEventKind !== undefined) this.lastEventKind = event.lastEventKind;
-    if (event.text) {
-      const textRole = event.role ? `${event.role}${event.lastEventKind === "thinking" ? " thinking" : ""}` : "system";
+    if (event.lastEventKind === "thinking") {
+      const textRole = event.role ? `${event.role} thinking` : "thinking";
+      if (this.lastTextRole !== textRole) {
+        this.recentText.push(`${event.role ?? "model"}: Thinking`);
+        this.lastTextRole = textRole;
+      }
+    } else if (event.text) {
+      const textRole = event.role ?? "system";
       const canCoalesce = textRole !== "system" && this.lastTextRole === textRole && this.recentText.length > 0;
       if (canCoalesce) {
         this.recentText[this.recentText.length - 1] += event.text;
@@ -103,9 +109,9 @@ export class StreamingSessionGateway {
         this.recentText.push(`${textRole}: ${event.text}`);
       }
       this.lastTextRole = textRole;
-      if (this.recentText.length > this.maxRecentLines) {
-        this.recentText.splice(0, this.recentText.length - this.maxRecentLines);
-      }
+    }
+    if (this.recentText.length > this.maxRecentLines) {
+      this.recentText.splice(0, this.recentText.length - this.maxRecentLines);
     }
     this.ended ||= event.ended === true;
     this.dirty = true;

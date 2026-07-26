@@ -697,7 +697,7 @@ export class TandemService {
       phase: this.currentPhase.toLowerCase(),
       health: "healthy",
       lastEventKind: thinking ? "thinking" : "text",
-      text: delta
+      text: thinking ? undefined : delta
     });
     const totals = this.costTotals();
     this.window.webContents.send(ipcChannels.costEvent, this.costEventTotals(totals));

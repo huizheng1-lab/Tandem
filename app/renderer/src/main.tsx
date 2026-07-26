@@ -26,7 +26,7 @@ import { ErrorBoundary } from "./ErrorBoundary.js";
 import { activityStripState } from "./activity-strip.js";
 import { claudeCliModelOptions } from "./cli-model-options.js";
 import { cumulativeTooltip, formatCumulativeCost, formatTotalCost } from "./cost-display.js";
-import { MODEL_STALL_WARNING_SECONDS, effectiveRendererConfig, isSessionActionable, needsProjectPickForSession, sessionFromResume } from "./session-state.js";
+import { MODEL_STALL_WARNING_SECONDS, effectiveRendererConfig, isSessionActionable, needsProjectPickForSession, replayVisibleSessionEvents, sessionFromResume } from "./session-state.js";
 import { SearchSessionResults, useSessionSearchController, type SessionSearchApi } from "./search-session-results.js";
 import { boundedMessageTextForState, MessageText } from "./TranscriptText.js";
 import { applyDesktopTheme, THEME_REFRESH_INTERVAL_MS } from "./theme.js";
@@ -269,7 +269,6 @@ function App(): React.ReactElement {
   const [planModal, setPlanModal] = useState<PlanConfirmEvent>();
   const [missingKey, setMissingKey] = useState<MissingKeyInfo>();
   const [sessionAutoApprove, setSessionAutoApprove] = useState<SessionAutoApproveMode>("none");
-  const [showThinking, setShowThinking] = useState(false);
   const [thinkingRoles, setThinkingRoles] = useState<Set<"leader" | "worker">>(new Set());
   const [activityPulse, setActivityPulse] = useState<{ role: "leader" | "worker"; kind: "thinking" | "writing"; startedAt: number }>();
   const [activeTool, setActiveTool] = useState<(ToolActivityEvent & { startedAt: number }) | undefined>();
@@ -299,7 +298,6 @@ function App(): React.ReactElement {
   const nextId = useRef(2);
   const transcriptEnd = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const showThinkingRef = useRef(false);
   const thinkingTimers = useRef<Partial<Record<"leader" | "worker", ReturnType<typeof setTimeout>>>>({});
   const loopTimerRef = useRef<ReturnType<typeof setInterval>>();
   const loopRunningRef = useRef(false);
@@ -441,18 +439,7 @@ function App(): React.ReactElement {
   };
 
   const appendThinking = (role: "leader" | "worker", delta: string) => {
-    if (delta) markActivity(role, "thinking");
-    if (!showThinkingRef.current) {
-      markThinking(role);
-      return;
-    }
-    setEntries((current) => {
-      const last = current.at(-1);
-      if (last?.kind === "message" && last.role === role && last.thinking) {
-        return [...current.slice(0, -1), { ...last, text: boundedMessageTextForState(`${last.text}${delta}`) }];
-      }
-      return [...current, { id: nextId.current++, kind: "message", role, text: boundedMessageTextForState(delta), thinking: true }];
-    });
+    if (delta) markThinking(role);
   };
 
   const handleMachineEvent = (event: MachineEvent) => {
@@ -488,8 +475,6 @@ function App(): React.ReactElement {
     setSession(started);
     setConfig(started.config);
     setAppState({ projectDir: started.projectDir, lastProjectDir: started.defaultProject ? appState?.lastProjectDir : started.projectDir, config: started.config, projectSummary: started.projectSummary });
-    setShowThinking(started.config.showThinking);
-    showThinkingRef.current = started.config.showThinking;
     const startEntry = { id: nextId.current++, kind: "message" as const, role: "system" as const, text: sessionStartedText(started) };
     if (resetTranscript) replaceTranscript([startEntry], false);
     else setBoundedEntries((current) => [...current, startEntry]);
@@ -540,36 +525,12 @@ function App(): React.ReactElement {
     setSession(resumedSession);
     setConfig(resumed.config);
     setAppState({ projectDir: resumed.projectDir, lastProjectDir: resumed.projectDir, config: resumed.config, projectSummary: resumed.projectSummary });
-    setShowThinking(resumed.config.showThinking);
-    showThinkingRef.current = resumed.config.showThinking;
     setCost(resumed.cost);
-    const replayed: TranscriptEntry[] = [];
-    for (const stored of resumed.events) {
-      const payload = stored.payload as { prompt?: string; role?: "leader" | "worker"; delta?: string; summary?: string; takeover?: boolean } | MachineEvent;
-      if (stored.type === "user" && "prompt" in payload) replayed.push({ id: nextId.current++, kind: "message", role: "user", text: boundedMessageTextForState(payload.prompt ?? "") });
-      if (stored.type === "text" && "role" in payload && "delta" in payload) {
-        const last = replayed.at(-1);
-        if (last?.kind === "message" && last.role === payload.role) last.text = boundedMessageTextForState(`${last.text}${payload.delta ?? ""}`);
-        else replayed.push({ id: nextId.current++, kind: "message", role: payload.role ?? "system", text: boundedMessageTextForState(payload.delta ?? "") });
-      }
-      if (stored.type === "thinking" && showThinking && "role" in payload && "delta" in payload) {
-        const last = replayed.at(-1);
-        if (last?.kind === "message" && last.role === payload.role && last.thinking) last.text = boundedMessageTextForState(`${last.text}${payload.delta ?? ""}`);
-        else replayed.push({ id: nextId.current++, kind: "message", role: payload.role ?? "system", text: boundedMessageTextForState(payload.delta ?? ""), thinking: true });
-      }
-      if (stored.type === "machine") {
-        const event = payload as MachineEvent;
-        if (event.type === "artifact") replayed.push({ id: nextId.current++, kind: "artifact", name: event.name, value: event.value, open: false });
-        if (event.type === "transition") replayed.push({ id: nextId.current++, kind: "message", role: "system", text: boundedMessageTextForState(event.message) });
-        if (event.type === "error") replayed.push({ id: nextId.current++, kind: "message", role: "system", text: boundedMessageTextForState(event.message) });
-        if (event.type === "checkpoint") {
-          setPhase(event.checkpoint.phase);
-          setRound(event.checkpoint.round);
-        }
-      }
-      if (stored.type === "done" && "summary" in payload) {
-        replayed.push({ id: nextId.current++, kind: "message", role: "system", text: boundedMessageTextForState(`${payload.summary}${payload.takeover ? " (takeover)" : ""}`) });
-      }
+    const replay = replayVisibleSessionEvents(resumed.events, () => nextId.current++, boundedMessageTextForState);
+    const replayed: TranscriptEntry[] = replay.entries;
+    if (replay.checkpoint) {
+      setPhase(replay.checkpoint.phase);
+      setRound(replay.checkpoint.round);
     }
     replayed.push({ id: nextId.current++, kind: "message", role: "system", text: `Resumed session ${id}. The next prompt will continue from its latest checkpoint.` });
     replaceTranscript(replayed.length > 1 ? replayed : [{ id: nextId.current++, kind: "message", role: "system", text: `Session ${id} has no transcript events.` }], Boolean(resumed.eventsTruncated));
@@ -591,10 +552,6 @@ function App(): React.ReactElement {
   useEffect(() => {
     transcriptEnd.current?.scrollIntoView({ block: "end" });
   }, [entries]);
-
-  useEffect(() => {
-    showThinkingRef.current = showThinking;
-  }, [showThinking]);
 
   useEffect(() => {
     const refreshTheme = () => applyDesktopTheme(desktopTheme);
@@ -639,8 +596,6 @@ function App(): React.ReactElement {
         const [state, modelItems, remoteState] = await Promise.all([tandem.getAppState(), tandem.listModels(), tandem.getRemoteControl(), refreshSidebar()]);
         setAppState(state);
         setConfig(state.config);
-        setShowThinking(state.config.showThinking);
-        showThinkingRef.current = state.config.showThinking;
         setModels(modelItems);
         setRemoteControl(remoteState);
       })
@@ -696,14 +651,6 @@ function App(): React.ReactElement {
     setConfig(nextConfig);
     setSession((current) => (current ? { ...current, config: nextConfig } : current));
     if (running) appendMessage("system", "permission mode applies from the next run.");
-  };
-
-  const updateShowThinking = async (value: boolean) => {
-    setShowThinking(value);
-    showThinkingRef.current = value;
-    const nextConfig = await tandem.setConfig({ showThinking: value });
-    setConfig(nextConfig);
-    setSession((current) => (current ? { ...current, config: nextConfig } : current));
   };
 
   const pickProject = async () => {
@@ -1437,10 +1384,6 @@ if (args.length === 1 && sub === "clear") {
               <option value="auto-edit">Auto-edit</option>
               <option value="yolo">Auto</option>
             </select>
-          </label>
-          <label className="checkRow">
-            <input type="checkbox" checked={showThinking} onChange={(event) => void updateShowThinking(event.target.checked)} />
-            Show thinking
           </label>
           <label>
             Theme

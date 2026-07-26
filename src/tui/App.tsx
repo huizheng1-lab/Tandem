@@ -272,8 +272,6 @@ export function App({ config: initialConfig, env, cwd, initialError }: { config:
         abortSignal: controller.signal,
         onLeaderText: (text) => appendDelta("LEADER", text),
         onWorkerText: (text) => appendDelta("WORKER", text),
-        onLeaderThinking: config.showThinking ? (text) => appendDelta("LEADER", text) : undefined,
-        onWorkerThinking: config.showThinking ? (text) => appendDelta("WORKER", text) : undefined,
         onToolEvent: addToolMessage,
         projectInstructions: currentProjectInstructions,
         rememberNote: rememberSessionNote,
@@ -312,7 +310,6 @@ export function App({ config: initialConfig, env, cwd, initialError }: { config:
         ledger,
         abortSignal: controller.signal,
         onLeaderText: (text) => appendDelta("LEADER", text),
-        onLeaderThinking: config.showThinking ? (text) => appendDelta("LEADER", text) : undefined,
         goals: activeGoalObjects,
         userSummary: result.summary
       });
