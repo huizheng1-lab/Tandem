@@ -133,6 +133,30 @@ function deletingAgentStub(root: string, label: string, relativePath: string) {
   return `node "${stub}"`;
 }
 
+async function codexAgentStub(root: string, label: string, relativePath = "evidence/D204-codex.txt") {
+  const stub = path.join(root, `${label}.codex.cjs`);
+  const launcher = path.join(root, `${label}.codex.cmd`);
+  const log = path.join(root, `${label}.codex.json`);
+  const lines = [
+    "const fs = require('fs');",
+    "const path = require('path');",
+    "let input = '';",
+    "process.stdin.setEncoding('utf8');",
+    "process.stdin.on('data', (chunk) => input += chunk);",
+    "process.stdin.on('end', () => {",
+    `  const target = path.join(process.cwd(), ${JSON.stringify(relativePath)});`,
+    "  fs.mkdirSync(path.dirname(target), { recursive: true });",
+    "  fs.writeFileSync(target, 'codex implementation\\n');",
+    `  fs.writeFileSync(${JSON.stringify(log)}, JSON.stringify({ argv: process.argv.slice(2), input }, null, 2));`,
+    "  process.stdout.write(JSON.stringify({ type: 'item.completed', item: { type: 'agent_message', text: 'SUMMARY: codex implementation' } }) + '\\n');",
+    "  process.stdout.write(JSON.stringify({ type: 'turn.completed', usage: { input_tokens: 1, output_tokens: 1 } }) + '\\n');",
+    "});",
+  ];
+  await writeFile(stub, lines.join("\n"), "utf8");
+  await writeFile(launcher, `@echo off\r\n"${process.execPath}" "${stub}" %*\r\n`, "utf8");
+  return { launcher, log };
+}
+
 async function claimedImplementFixture(name: string) {
   const root = await mkdtemp(path.join(tmpdir(), `tandem-d202-${name}-`));
   const helperRoot = await mkdtemp(path.join(tmpdir(), `tandem-d202-helper-${name}-`));
@@ -278,6 +302,12 @@ describe("D200 reciprocal implement script", () => {
     const root = await mkdtemp(path.join(tmpdir(), "tandem-d200-impl-dry-"));
     const stateDir = path.join(root, "state");
     await mkdir(stateDir, { recursive: true });
+    await mkdir(path.join(stateDir, "executor-a"), { recursive: true });
+    await writeFile(path.join(stateDir, "executor-a", "config.json"), JSON.stringify({
+      leader: "codex/cli",
+      worker: "minimax/minimax-m3",
+      codexCliReasoningEffort: "medium",
+    }), "utf8");
     await writeFile(path.join(stateDir, "orchestrator-state.json"), JSON.stringify({
       phase: "improving",
       currentItem: { id: "W9002", priority: "P0", text: "Dry run item" },
@@ -294,7 +324,7 @@ describe("D200 reciprocal implement script", () => {
       });
       expect(result.status).toBe(0);
       const out = JSON.parse(String(result.stdout));
-      expect(out).toMatchObject({ ok: true, dryRun: true, item: "W9002" });
+      expect(out).toMatchObject({ ok: true, dryRun: true, item: "W9002", provider: "codex" });
       expect(out.headBefore).toMatch(/^[0-9a-f]{40}$/);
     } finally {
       await rm(root, { recursive: true, force: true });
@@ -391,6 +421,70 @@ describe("D200 reciprocal implement script", () => {
       const changed = (await execa("git", ["-C", f.root, "diff-tree", "--no-commit-id", "--name-only", "-r", "HEAD"])).stdout.split(/\r?\n/).filter(Boolean);
       expect(changed).toEqual(["evidence/D202-isolated.txt"]);
       expect((await readFile(path.join(f.root, "evidence", "D202-isolated.txt"), "utf8")).replace(/\r\n/g, "\n")).toBe("isolated implementation\n");
+    } finally {
+      await rm(f.root, { recursive: true, force: true });
+      await rm(f.helperRoot, { recursive: true, force: true });
+    }
+  });
+
+  windowsIt("uses Executor A's Codex leader with CLI-default model and medium reasoning", async () => {
+    const f = await claimedImplementFixture("configured-codex");
+    try {
+      const codex = await codexAgentStub(f.helperRoot, "configured-codex-agent");
+      const configDir = path.join(path.dirname(f.statePath), "executor-a");
+      await mkdir(configDir, { recursive: true });
+      await writeFile(path.join(configDir, "config.json"), JSON.stringify({
+        leader: "codex/cli",
+        worker: "minimax/minimax-m3",
+        codexCliPath: codex.launcher,
+        codexCliReasoningEffort: "medium",
+      }), "utf8");
+      const result = spawnSync("node", [implementScript, "--repo", f.root, "--state-path", f.statePath, "--claimed-item-id", "W9202"], {
+        cwd: f.root,
+        encoding: "utf8",
+      });
+      expect(result.status).toBe(0);
+      const out = JSON.parse(String(result.stdout));
+      expect(out).toMatchObject({ ok: true, item: "W9202", isolated: true, provider: "codex", agent: codex.launcher });
+      expect(out.paths).toEqual(["evidence/D204-codex.txt"]);
+      const invocation = JSON.parse(await readFile(codex.log, "utf8"));
+      expect(invocation.argv).toEqual(expect.arrayContaining([
+        "exec",
+        "--sandbox",
+        "workspace-write",
+        "--ephemeral",
+        "--json",
+        "-c",
+        "model_reasoning_effort=medium",
+        "-",
+      ]));
+      expect(invocation.argv).not.toContain("-m");
+      expect(invocation.input).toMatch(/wishlist item W9202/);
+      expect((await readFile(path.join(f.root, "evidence", "D204-codex.txt"), "utf8")).replace(/\r\n/g, "\n")).toBe("codex implementation\n");
+    } finally {
+      await rm(f.root, { recursive: true, force: true });
+      await rm(f.helperRoot, { recursive: true, force: true });
+    }
+  });
+
+  windowsIt("fails closed instead of silently falling back to Claude for a non-CLI leader", async () => {
+    const f = await claimedImplementFixture("unsupported-leader");
+    try {
+      const configDir = path.join(path.dirname(f.statePath), "executor-a");
+      await mkdir(configDir, { recursive: true });
+      await writeFile(path.join(configDir, "config.json"), JSON.stringify({
+        leader: "minimax/minimax-m3",
+        worker: "minimax/minimax-m3",
+      }), "utf8");
+      const result = spawnSync("node", [implementScript, "--repo", f.root, "--state-path", f.statePath, "--claimed-item-id", "W9202"], {
+        cwd: f.root,
+        encoding: "utf8",
+      });
+      expect(result.status).not.toBe(0);
+      const out = JSON.parse(String(result.stdout));
+      expect(out).toMatchObject({ ok: false, step: "resolve-agent", item: "W9202" });
+      expect(out.message).toMatch(/not a supported CLI implementation provider/);
+      expect(out.message).toMatch(/minimax\/minimax-m3/);
     } finally {
       await rm(f.root, { recursive: true, force: true });
       await rm(f.helperRoot, { recursive: true, force: true });

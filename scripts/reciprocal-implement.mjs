@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
@@ -22,7 +22,8 @@ const controlPath = arg("control-path", process.env.TANDEM_RECIPROCAL_CONTROL ||
 const statePath = arg("state-path", process.env.TANDEM_RECIPROCAL_STATE || "");
 const claimedItemId = arg("claimed-item-id", process.env.TANDEM_RECIPROCAL_CLAIMED_ITEM || "");
 const maxDurationMs = Number(arg("max-duration-ms", process.env.TANDEM_RECIPROCAL_MAX_DURATION_MS || 50 * 60 * 1000));
-const agentBin = arg("agent-bin", process.env.TANDEM_RECIPROCAL_IMPLEMENT_BIN || process.env.TANDEM_CLAUDE_BIN || "claude");
+const explicitAgentBin = arg("agent-bin", process.env.TANDEM_RECIPROCAL_IMPLEMENT_BIN || "");
+const explicitProvider = arg("agent-provider", process.env.TANDEM_RECIPROCAL_IMPLEMENT_PROVIDER || "");
 const dryRun = boolArg("dry-run") || process.env.TANDEM_RECIPROCAL_DRY_RUN === "1";
 
 function die(code, payload) {
@@ -108,8 +109,89 @@ function changedPaths(cwd) {
   }).filter(Boolean);
 }
 
-function runAgent(cwd, command, args, timeout, input) {
-  return spawnSync(command, args, { cwd, encoding: "utf8", windowsHide: true, timeout, shell: true, input });
+function readJson(pathname) {
+  if (!pathname || !existsSync(pathname)) return null;
+  return JSON.parse(readFileSync(pathname, "utf8").replace(/^\uFEFF/, ""));
+}
+
+function executorAConfig() {
+  const explicitPath = arg("config-path", process.env.TANDEM_RECIPROCAL_IMPLEMENT_CONFIG || "");
+  const configPath = explicitPath || (statePath ? path.join(path.dirname(statePath), "executor-a", "config.json") : "");
+  return { configPath, config: readJson(configPath) };
+}
+
+function newestCodexFallback() {
+  if (process.platform !== "win32" || !process.env.LOCALAPPDATA) return "";
+  const root = path.join(process.env.LOCALAPPDATA, "OpenAI", "Codex", "bin");
+  if (!existsSync(root)) return "";
+  return readdirSync(root)
+    .map((entry) => path.join(root, entry, "codex.exe"))
+    .filter((candidate) => existsSync(candidate))
+    .map((candidate) => ({ candidate, mtimeMs: statSync(candidate).mtimeMs }))
+    .sort((left, right) => right.mtimeMs - left.mtimeMs)[0]?.candidate || "";
+}
+
+function configuredAgent() {
+  const { configPath, config } = executorAConfig();
+  const configuredLeader = config?.leader || "";
+  const provider = explicitProvider || (explicitAgentBin ? "custom" : configuredLeader === "codex/cli" ? "codex" : configuredLeader === "claude-code/cli" ? "claude" : "");
+  if (!provider) {
+    throw new Error(`Executor A leader is not a supported CLI implementation provider (leader=${configuredLeader || "missing"}, config=${configPath || "missing"}). Configure codex/cli or claude-code/cli explicitly.`);
+  }
+  if (!["custom", "codex", "claude"].includes(provider)) {
+    throw new Error(`Unsupported reciprocal implementation provider: ${provider}`);
+  }
+  const bin = explicitAgentBin || (provider === "codex"
+    ? config?.codexCliPath || process.env.CODEX_CLI_PATH || newestCodexFallback() || "codex"
+    : config?.claudeCliPath || process.env.TANDEM_CLAUDE_BIN || "claude");
+  return { provider, bin, config: config || {}, configPath };
+}
+
+function agentArgs(agent, cwd) {
+  if (agent.provider === "codex") {
+    const args = [
+      "exec",
+      "-C", cwd,
+      "--sandbox", "workspace-write",
+      "--skip-git-repo-check",
+      "--ephemeral",
+      "--json",
+    ];
+    if (agent.config.codexCliModel) args.push("-m", agent.config.codexCliModel);
+    if (agent.config.codexCliReasoningEffort) args.push("-c", `model_reasoning_effort=${agent.config.codexCliReasoningEffort}`);
+    args.push("-");
+    return args;
+  }
+  return [
+    "-p",
+    "--output-format", "json",
+    "--no-session-persistence",
+    "--permission-mode", "acceptEdits",
+    "--allowedTools", "Read,Edit,Write,Glob,Grep",
+    "--system-prompt", "Implement the wishlist item by editing files. Be terse. This is a headless, unattended run: never ask questions or wait for confirmation; decide autonomously. Do not use Bash or git - a wrapper commits your changes afterward.",
+  ];
+}
+
+function runAgent(cwd, agent, args, timeout, input) {
+  const shell = agent.provider === "custom" || (process.platform === "win32" && /\.(?:cmd|bat)$/i.test(agent.bin));
+  return spawnSync(agent.bin, args, { cwd, encoding: "utf8", windowsHide: true, timeout, shell, input, maxBuffer: 64 * 1024 * 1024 });
+}
+
+function summaryFromOutput(provider, output, fallback) {
+  if (provider === "codex") {
+    const messages = [];
+    for (const line of output.split(/\r?\n/)) {
+      if (!line.trim()) continue;
+      try {
+        const event = JSON.parse(line);
+        if (event.type === "item.completed" && event.item?.type === "agent_message" && event.item.text) messages.push(event.item.text);
+      } catch {}
+    }
+    const summary = messages.reverse().map((message) => message.match(/SUMMARY:\s*(.+)/)?.[1]?.trim()).find(Boolean);
+    return (summary || fallback).slice(0, 200);
+  }
+  const summaryMatch = output.match(/SUMMARY:\s*(.+)/);
+  return (summaryMatch ? summaryMatch[1].trim() : fallback).slice(0, 200);
 }
 
 function makeIsolatedWorktree(baseSha) {
@@ -137,7 +219,13 @@ function main() {
   }
   const headBefore = headSha(repo);
   if (dryRun) {
-    process.stdout.write(`${JSON.stringify({ ok: true, dryRun: true, item: claimed.id, headBefore, agent: agentBin })}\n`);
+    let agent;
+    try {
+      agent = configuredAgent();
+    } catch (error) {
+      die(2, { step: "resolve-agent", message: error.message, item: claimed.id, headBefore });
+    }
+    process.stdout.write(`${JSON.stringify({ ok: true, dryRun: true, item: claimed.id, headBefore, agent: agent.bin, provider: agent.provider, configPath: agent.configPath || null })}\n`);
     return;
   }
   let sharedStatus;
@@ -161,6 +249,13 @@ function main() {
   } catch (error) {
     die(2, { step: "isolate-worktree", message: error.message, item: claimed.id, headBefore });
   }
+  let agent;
+  try {
+    agent = configuredAgent();
+  } catch (error) {
+    cleanupIsolatedWorktree(isolated.parent, isolated.worktree);
+    die(2, { step: "resolve-agent", message: error.message, item: claimed.id, headBefore });
+  }
   const prompt = [
     `You are implementing wishlist item ${claimed.id} in an isolated repository worktree (cwd: ${isolated.worktree}).`,
     "",
@@ -171,8 +266,8 @@ function main() {
     "relates to. If no existing code applies, propose a minimal, isolated change in a new file that",
     "addresses the item without touching unrelated areas.",
     "",
-    "Make a real code change that addresses the item, using the Edit/Write tools. Do NOT run git yourself",
-    "(you have no Bash tool) - a wrapper script commits your file changes for you after you finish.",
+    "Make a real code change that addresses the item. Do NOT run git yourself - a wrapper script commits",
+    "your file changes after you finish. Do not run tests; the orchestrator owns authoritative verification.",
     "",
     "Do NOT modify the wishlist file, the orchestrator state file, the relay state, or any swap/promotion",
     "machinery; the orchestrator owns those. Do NOT mark the item DONE. Do NOT run the test suite; the",
@@ -186,18 +281,11 @@ function main() {
     "When you finish, print exactly one line on the last stdout line: `SUMMARY: <short one-line summary of",
     "the change>`. If you cannot make a real change, print `ABORT <short reason>` and exit non-zero.",
   ].join("\n");
-  const args = [
-    "-p",
-    "--output-format", "json",
-    "--no-session-persistence",
-    "--permission-mode", "acceptEdits",
-    "--allowedTools", "Read,Edit,Write,Glob,Grep",
-    "--system-prompt", "Implement the wishlist item by editing files. Be terse. This is a headless, unattended run: never ask questions or wait for confirmation; decide autonomously. You have no Bash/git access - a wrapper commits your changes afterward.",
-  ];
-  const result = runAgent(isolated.worktree, agentBin, args, maxDurationMs, prompt);
+  const args = agentArgs(agent, isolated.worktree);
+  const result = runAgent(isolated.worktree, agent, args, maxDurationMs, prompt);
   if (result.error) {
     cleanupIsolatedWorktree(isolated.parent, isolated.worktree);
-    die(1, { step: "agent-spawn", message: result.error.message, agent: agentBin });
+    die(1, { step: "agent-spawn", message: result.error.message, agent: agent.bin, provider: agent.provider });
   }
   const exitCode = result.status ?? 1;
   if (exitCode !== 0) {
@@ -205,7 +293,8 @@ function main() {
     die(1, {
       step: "agent-exit",
       message: `agent exited ${exitCode}`,
-      agent: agentBin,
+      agent: agent.bin,
+      provider: agent.provider,
       headBefore,
       stdoutTail: String(result.stdout || "").slice(-2000),
       stderrTail: String(result.stderr || "").slice(-2000),
@@ -222,8 +311,7 @@ function main() {
     });
   }
   const out = String(result.stdout || "");
-  const summaryMatch = out.match(/SUMMARY:\s*(.+)/);
-  const summary = summaryMatch ? summaryMatch[1].trim().slice(0, 200) : `${claimed.id}: ${claimed.text}`.slice(0, 200);
+  const summary = summaryFromOutput(agent.provider, out, `${claimed.id}: ${claimed.text}`);
   const paths = changedPaths(isolated.worktree);
   const addResult = git(isolated.worktree, ["add", "--", ...paths]);
   if (!addResult.ok) {
@@ -314,7 +402,8 @@ function main() {
     newSha,
     isolated: true,
     paths,
-    agent: agentBin,
+    agent: agent.bin,
+    provider: agent.provider,
     exitCode,
   })}\n`);
 }
