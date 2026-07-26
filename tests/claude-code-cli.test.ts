@@ -352,6 +352,28 @@ process.exit(1);
     expect(isClaudeOpus5UnsupportedError("haiku", "Unknown model: haiku", "")).toBe(false);
   });
 
+  it("reports an actionable Opus 5 error from Claude JSON error envelopes", () => {
+    expect(() =>
+      parseClaudeEnvelope(
+        JSON.stringify({
+          type: "result",
+          subtype: "error",
+          is_error: true,
+          result: "model claude-opus-5 is not available for this account",
+          structured_output: undefined,
+          usage: {},
+          total_cost_usd: 0
+        }),
+        {
+          role: "leader",
+          entry: { ...claudeEntry, id: CLAUDE_CLI_OPUS_5_ID, modelName: CLAUDE_CLI_OPUS_5_MODEL },
+          ledger: new CostLedger(),
+          modelName: CLAUDE_CLI_OPUS_5_MODEL
+        }
+      )
+    ).toThrow(/does not recognize or provide Opus 5.*Update Claude Code CLI/s);
+  });
+
   it("reuses the stricter shared Codex schema helpers", () => {
     expect(completionReportJsonSchema.required).toContain("taskResults");
     expect(stripNulls({ taskResults: [{ notes: null }] })).toEqual({ taskResults: [{}] });

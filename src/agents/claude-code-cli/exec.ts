@@ -121,6 +121,10 @@ export function formatClaudeOpus5UnsupportedError(stderr: unknown, stdout: unkno
   return `Claude Code CLI does not recognize or provide Opus 5 (${CLAUDE_CLI_OPUS_5_MODEL}). Update Claude Code CLI to a version/account that supports Opus 5, or choose another Tandem model such as claude-code/cli with a supported Claude CLI model.${suffix}`;
 }
 
+function claudeErrorDetail(envelope: ClaudeEnvelope): string {
+  return [jsonText(envelope.error), envelope.result].filter(Boolean).join("\n");
+}
+
 function formatPermissionDenials(denials: unknown[] | undefined): string {
   if (!denials || denials.length === 0) return "";
   return `Claude Code permission denials: ${jsonText(denials)}`;
@@ -156,7 +160,7 @@ function detectRateLimit(envelope: ClaudeEnvelope): string {
   return "";
 }
 
-export function parseClaudeEnvelope(stdout: string, options: Pick<ClaudeExecOptions, "role" | "ledger" | "entry" | "onText">): unknown {
+export function parseClaudeEnvelope(stdout: string, options: Pick<ClaudeExecOptions, "role" | "ledger" | "entry" | "onText" | "modelName">): unknown {
   const envelope = JSON.parse(stdout) as ClaudeEnvelope;
   const usage = envelope.usage ?? {};
   const inputTokens = usageNumber(usage.input_tokens) + usageNumber(usage.cache_creation_input_tokens) + usageNumber(usage.cache_read_input_tokens);
@@ -181,7 +185,11 @@ export function parseClaudeEnvelope(stdout: string, options: Pick<ClaudeExecOpti
   const denials = formatPermissionDenials(envelope.permission_denials);
   if (denials) throw new Error(denials);
   if (envelope.is_error || envelope.subtype === "error") {
-    throw new Error(`Claude Code CLI returned an error: ${[jsonText(envelope.error), envelope.result].filter(Boolean).join("\n")}`);
+    const detail = claudeErrorDetail(envelope);
+    if (isClaudeOpus5UnsupportedError(options.modelName, detail, "")) {
+      throw new Error(formatClaudeOpus5UnsupportedError(detail, ""));
+    }
+    throw new Error(`Claude Code CLI returned an error: ${detail}`);
   }
   if (envelope.structured_output === undefined) throw new Error(`Claude Code CLI response did not include structured_output. Result: ${envelope.result ?? "(empty)"}`);
   return stripNulls(envelope.structured_output);

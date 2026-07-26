@@ -56,4 +56,8 @@ describe("renderer session resume state", () => {
   it("D113: includes verified Claude Code CLI Fable 5 option", () => {
     expect(claudeCliModelOptions).toEqual(expect.arrayContaining(["haiku", "sonnet", "opus", "claude-fable-5"]));
   });
+
+  it("includes the Claude Code CLI Opus 5 option", () => {
+    expect(claudeCliModelOptions).toEqual(expect.arrayContaining(["claude-opus-5"]));
+  });
 });
