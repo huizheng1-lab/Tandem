@@ -12,6 +12,7 @@ import {
   approvalFlowRuntimeTopology,
   approvalRemainingActions,
   candidatePreviewArtifactCapabilityStatus,
+  candidatePreviewReviewExpectation,
   capabilityVersion,
   classifyReciprocalGate,
   detailMetadata,
@@ -579,6 +580,7 @@ async function fileSignature(file) {
 
 async function currentRevision() {
   const files = [
+    orchestratorStatePath,
     statePath,
     controlPath,
     wishlistPath,
@@ -764,9 +766,10 @@ async function getCandidateUpdate(runtimeA, runtimeB, relayState = {}, reviewInd
   const candidateSha = buildInfo?.sourceSha || "";
   const candidateShortSha = shortSha(candidateSha);
   const unknown = exeExists && !candidateSha;
-  const relayExpectedSha = relayState.phase === "a-upgrade-pending" ? relayState.stableCommit || "" : "";
+  const reviewExpectation = candidatePreviewReviewExpectation({ orchestratorState: relayState, candidateSha });
+  const relayExpectedSha = reviewExpectation.expectedSha;
   const expectedShortSha = shortSha(relayExpectedSha);
-  const matchesRelayExpected = Boolean(!relayExpectedSha || candidateSha === relayExpectedSha);
+  const matchesRelayExpected = reviewExpectation.matches;
   const reviewed = candidateSha ? reviewIndex[candidateSha] || null : null;
   const pending = Boolean(exeExists && candidateSha && matchesRelayExpected && !reviewed && promoted.some((item) => item.sourceSha !== candidateSha));
   const message = unknown
@@ -802,6 +805,8 @@ async function getCandidateUpdate(runtimeA, runtimeB, relayState = {}, reviewInd
     expectedSha: relayExpectedSha,
     expectedShortSha,
     matchesRelayExpected,
+    expectedReason: reviewExpectation.reason,
+    expectedDetail: reviewExpectation.detail,
     reviewed,
     builtAt: buildInfo?.builtAt || null,
     pending,
@@ -1479,16 +1484,16 @@ async function backupToOrigin() {
 }
 
 async function currentCandidateOrThrow(options = {}) {
-  const [runtimeA, runtimeB, relayState] = await Promise.all([getRuntime("A"), getRuntime("B"), jsonFile(statePath, {})]);
+  const [runtimeA, runtimeB, orchestratorState] = await Promise.all([getRuntime("A"), getRuntime("B"), jsonFile(orchestratorStatePath, {})]);
   for (const runtime of [runtimeA, runtimeB]) {
     const sourceSha = runtime.buildInfo?.sourceSha || "";
     runtime.buildShortSha = shortSha(sourceSha) || runtime.buildInfo?.sourceShortSha || "unknown";
   }
-  const candidate = await getCandidateUpdate(runtimeA, runtimeB, relayState, await getUpdateReviewIndex());
+  const candidate = await getCandidateUpdate(runtimeA, runtimeB, orchestratorState, await getUpdateReviewIndex());
   if (!candidate.exists) throw new Error("No candidate build found at release/win-unpacked.");
   if (candidate.unknownProvenance) throw new Error("Candidate build has unknown provenance; rebuild with npm run dist:app first.");
-  if (relayState.phase === "a-upgrade-pending" && relayState.stableCommit && candidate.sourceSha !== relayState.stableCommit) {
-    throw new Error(`Candidate build ${candidate.shortSha || "unknown"} does not match accepted stable ${shortSha(relayState.stableCommit)}; rebuild the preview before launch or review.`);
+  if (!candidate.matchesRelayExpected) {
+    throw new Error(`Candidate build ${candidate.shortSha || "unknown"} does not match current accepted source ${candidate.expectedShortSha}; rebuild the preview before launch or review.`);
   }
   if (candidate.reviewed) {
     if (options.allowReviewed) return { candidate, runtimeA, runtimeB };
@@ -1937,7 +1942,10 @@ async function handle(request, response) {
     const input = await body(request);
     const d196AllowedMutations = new Set([
       "/api/wishlist/requeue",
+      "/api/update/dismiss-review",
+      "/api/update/launch-candidate",
       "/api/update/reject",
+      "/api/update/stop-candidate",
       "/api/relay/pause",
       "/api/quit",
     ]);
@@ -2139,6 +2147,10 @@ async function handle(request, response) {
       const existingProcesses = await getProcessesByPath(candidateExe);
       if (existingProcesses.length) throw new Error(`Candidate preview is already running as PID ${existingProcesses.map((item) => item.Id).join(", ")}.`);
       await Promise.all([mkdir(candidateHome, { recursive: true }), mkdir(candidateUserData, { recursive: true }), mkdir(candidateProject, { recursive: true })]);
+      if (testHarness) {
+        await audit("update.launchCandidate", { pid: 0, exe: candidateExe, home: candidateHome, userData: candidateUserData, project: candidateProject, simulated: true });
+        return send(response, 200, { ok: true, pid: 0, exe: candidateExe, home: candidateHome, userData: candidateUserData, project: candidateProject, simulated: true });
+      }
       const child = spawn(candidateExe, [`--user-data-dir=${candidateUserData}`], {
         cwd: candidateProject,
         detached: true,
@@ -2165,23 +2177,13 @@ async function handle(request, response) {
 
     if (url.pathname === "/api/update/dismiss-review") {
       const comment = String(input.comment || "").replace(/\r\n/g, "\n").trim();
-      const relayState = await jsonFile(statePath, {});
-      if (relayState.phase !== "a-upgrade-pending" || !relayState.stableCommit) {
-        throw new Error("No human-gated accepted stable SHA is waiting for review.");
-      }
+      const { candidate } = await currentCandidateOrThrow({ allowReviewed: true });
       const reviews = await getUpdateReviewIndex();
-      if (reviews[relayState.stableCommit]) {
-        return send(response, 200, { ok: true, decision: reviews[relayState.stableCommit].decision, sourceSha: relayState.stableCommit, alreadyReviewed: true });
+      if (reviews[candidate.sourceSha]) {
+        return send(response, 200, { ok: true, decision: reviews[candidate.sourceSha].decision, sourceSha: candidate.sourceSha, alreadyReviewed: true });
       }
-      const candidate = {
-        sourceSha: relayState.stableCommit,
-        shortSha: shortSha(relayState.stableCommit),
-        builtAt: null,
-        sourceDir: candidateSource,
-        preview: { home: candidateHome },
-      };
       await recordUpdateReview("dismiss", comment || "Reviewed from dashboard; no runtime promotion requested.", candidate);
-      return send(response, 200, { ok: true, decision: "dismiss", sourceSha: relayState.stableCommit });
+      return send(response, 200, { ok: true, decision: "dismiss", sourceSha: candidate.sourceSha });
     }
 
     if (url.pathname === "/api/update/reject") {

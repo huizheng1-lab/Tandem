@@ -177,6 +177,17 @@ async function makeFixture(t) {
     });
   }
 
+  async function setOrchestratorState(overrides = {}) {
+    await writeJson(path.join(relayRoot, "state", "orchestrator-state.json"), {
+      phase: "idle",
+      currentItem: null,
+      stableCommit: fixtureSha,
+      consecutiveFailures: 0,
+      updatedAt: "2026-07-22T00:00:00.000Z",
+      ...overrides,
+    });
+  }
+
   async function setRuntimeShas(sourceSha) {
     const candidateBuildInfo = await readJson(path.join(candidateRuntimeDir, "BUILD_INFO.json"));
     for (const role of ["a", "b"]) {
@@ -195,7 +206,7 @@ async function makeFixture(t) {
     }
   }
 
-  return { root, relayRoot, repoRoot, copyA, copyB, fixtureSha, fixturePackage, immutablePackagePath, candidateRuntimeDir, oldSha, statePath, reviewIndexPath, auditPath, commandLog, wishlistPath: path.join(relayRoot, "control", "WISHLIST.md"), setState, setRuntimeShas };
+  return { root, relayRoot, repoRoot, copyA, copyB, fixtureSha, fixturePackage, immutablePackagePath, candidateRuntimeDir, oldSha, statePath, reviewIndexPath, auditPath, commandLog, wishlistPath: path.join(relayRoot, "control", "WISHLIST.md"), setState, setOrchestratorState, setRuntimeShas };
 }
 
 async function withServer(t, fixture, runTest, options = {}) {
@@ -273,6 +284,34 @@ test("D184 dashboard reports canonical package state without the test harness", 
   }, { harness: false });
 });
 
+test("D201 launch candidate ignores stale legacy relay state and honors current orchestrator mismatch", async (t) => {
+  const fixture = await makeFixture(t);
+  const staleSha = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+  await fixture.setState({ phase: "a-upgrade-pending", stableCommit: staleSha });
+  await fixture.setOrchestratorState({ phase: "idle", stableCommit: fixture.fixtureSha });
+  await withServer(t, fixture, async ({ get, post }) => {
+    const status = await get("/api/status");
+    assert.equal(status.response.status, 200, JSON.stringify(status.result));
+    assert.equal(status.result.candidateUpdate.sourceSha, fixture.fixtureSha);
+    assert.equal(status.result.candidateUpdate.matchesRelayExpected, true);
+    assert.equal(status.result.candidateUpdate.expectedReason, "independent-candidate-review");
+    assert.equal(status.result.legacyRelay.stableCommit, staleSha);
+
+    const launched = await post("/api/update/launch-candidate", {});
+    assert.equal(launched.response.status, 200, JSON.stringify(launched.result));
+    assert.equal(launched.result.ok, true);
+    assert.equal(launched.result.exe.endsWith(path.join("release", "win-unpacked", "Tandem.exe")), true);
+
+    await fixture.setOrchestratorState({
+      phase: "swapping",
+      acceptedSourceSha: "dddddddddddddddddddddddddddddddddddddddd",
+    });
+    const blocked = await post("/api/update/launch-candidate", {});
+    assert.equal(blocked.response.status, 400);
+    assert.match(blocked.result.error, /does not match current accepted source ddddddd/);
+  });
+});
+
 test("D196 dashboard reports retired mutation paths truthfully", async (t) => {
   const fixture = await makeFixture(t);
   await withServer(t, fixture, async ({ post }) => {
@@ -287,7 +326,7 @@ test("D196 dashboard reports retired mutation paths truthfully", async (t) => {
       assert.equal(result.ok, false, endpoint);
       assert.match(result.error, /D196 replaced dashboard mutation paths/);
       assert.match(result.orchestrator, /reciprocal-orchestrator\.ps1/);
-      assert.deepEqual(result.allowedMutations, ["/api/quit", "/api/relay/pause", "/api/update/reject", "/api/wishlist/requeue"]);
+      assert.deepEqual(result.allowedMutations, ["/api/quit", "/api/relay/pause", "/api/update/dismiss-review", "/api/update/launch-candidate", "/api/update/reject", "/api/update/stop-candidate", "/api/wishlist/requeue"]);
     }
   });
 });

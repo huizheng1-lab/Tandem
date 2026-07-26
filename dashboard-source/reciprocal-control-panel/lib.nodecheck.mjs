@@ -7,6 +7,7 @@ import {
   approvalFlowRuntimeTopology,
   approvalRemainingActions,
   candidatePreviewArtifactCapabilityStatus,
+  candidatePreviewReviewExpectation,
   classifyReciprocalGate,
   expectedRuntimeTopology,
   loadReciprocalTaxonomy,
@@ -465,4 +466,46 @@ test("D181 dormant B is not a preview capability blocker unless it is started", 
   const staleStartedB = candidatePreviewArtifactCapabilityStatus({ producer, runtimeA: upgradedA, runtimeB: { ...staleDormantB, running: true }, topology });
   assert.equal(staleStartedB.compatible, false);
   assert.match(staleStartedB.message, /Executor B runtime has v0/);
+});
+
+test("D201 candidate review ignores retired legacy relay state and honors live orchestrator swaps", () => {
+  const candidateSha = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+  const staleLegacy = {
+    phase: "a-upgrade-pending",
+    stableCommit: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  };
+
+  const idle = candidatePreviewReviewExpectation({
+    candidateSha,
+    legacyState: staleLegacy,
+    orchestratorState: {
+      phase: "idle",
+      stableCommit: "cccccccccccccccccccccccccccccccccccccccc",
+    },
+  });
+  assert.equal(idle.matches, true);
+  assert.equal(idle.expectedSha, "");
+  assert.equal(idle.reason, "independent-candidate-review");
+
+  const swapping = candidatePreviewReviewExpectation({
+    candidateSha,
+    legacyState: staleLegacy,
+    orchestratorState: {
+      phase: "swapping",
+      acceptedSourceSha: "dddddddddddddddddddddddddddddddddddddddd",
+    },
+  });
+  assert.equal(swapping.matches, false);
+  assert.equal(swapping.expectedSha, "dddddddddddddddddddddddddddddddddddddddd");
+  assert.equal(swapping.reason, "orchestrator-accepted-source");
+
+  const matchingSwap = candidatePreviewReviewExpectation({
+    candidateSha,
+    orchestratorState: {
+      phase: "swapping",
+      acceptedSourceSha: candidateSha,
+    },
+  });
+  assert.equal(matchingSwap.matches, true);
+  assert.equal(matchingSwap.expectedSha, candidateSha);
 });

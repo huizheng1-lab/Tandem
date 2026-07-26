@@ -79,6 +79,29 @@ export function candidatePreviewArtifactCapabilityStatus({ producer = null, runt
   };
 }
 
+export function candidatePreviewReviewExpectation({ orchestratorState = {}, legacyState = {}, candidateSha = "" } = {}) {
+  void legacyState;
+  const phase = String(orchestratorState?.phase || "");
+  const acceptedSha = String(orchestratorState?.acceptedSourceSha || orchestratorState?.stableCommit || "").trim();
+  const blocksForAcceptedSource = phase === "swapping" && /^[0-9a-f]{40}$/i.test(acceptedSha);
+  if (!blocksForAcceptedSource) {
+    return {
+      expectedSha: "",
+      expectedShortSha: null,
+      matches: true,
+      reason: "independent-candidate-review",
+      detail: "Candidate review is governed by release/win-unpacked provenance and promoted runtime BUILD_INFO; retired legacy relay state is ignored.",
+    };
+  }
+  return {
+    expectedSha: acceptedSha,
+    expectedShortSha: shortSha(acceptedSha),
+    matches: Boolean(candidateSha && candidateSha === acceptedSha),
+    reason: "orchestrator-accepted-source",
+    detail: "The reciprocal orchestrator is actively swapping an accepted source; candidate review must match that source until the swap settles.",
+  };
+}
+
 export function expectedRuntimeTopology(state = {}, recovery = null) {
   const phase = String(state?.phase || "unknown");
   const activeRole = state?.activeRole || null;
