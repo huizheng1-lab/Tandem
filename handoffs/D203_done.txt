@@ -1,0 +1,41 @@
+Round: D203
+
+Commits:
+- 6f76ae7 D203-1: allow unrelated untracked reciprocal files
+- 120a409 D203-2: parse isolated deletion paths correctly
+
+Corrected guard condition:
+- scripts/reciprocal-implement.mjs now blocks only pre-existing tracked or staged shared-worktree dirt before launching an unattended implementation.
+- Unrelated shared-worktree untracked files no longer block, because the implementation agent runs inside a detached isolated worktree rooted at the claimed HEAD.
+- The isolated-worktree scoped-add and fast-forward-only integration boundary from D202 remains intact.
+- A narrow untracked collision check was added before integration: if the isolated commit touches a path that already exists as an untracked file in the shared worktree, the wrapper aborts with shared-untracked-collision instead of overwriting ambiguous local content.
+- Final shared-worktree verification now checks tracked/staged dirt only, so preserved unrelated untracked files remain allowed.
+
+Regression coverage:
+- tests/reciprocal-implement-no-commit.test.ts proves unrelated untracked files in the shared worktree are preserved and do not block isolated implementation.
+- It still proves tracked dirty files abort before the agent runs.
+- It proves an isolated commit that would overwrite an untracked shared path aborts narrowly with shared-untracked-collision.
+- It also covers the live-exposed status parser issue where isolated deletions under app/... were parsed as pp/... before git add.
+
+Live proof:
+- Resumed W0029 with:
+  node scripts\reciprocal-orchestrator.mjs --repo . --relay-root "..\Tandem Reciprocal" --resume --reason "D203 narrowed shared-worktree guard to tracked dirt; retry W0029 with unrelated untracked files preserved"
+- The first live retry passed the old untracked-file guard and exposed a new git-add path parser issue; this was fixed in 120a409.
+- Resumed again with:
+  node scripts\reciprocal-orchestrator.mjs --repo . --relay-root "..\Tandem Reciprocal" --resume --reason "D203 fixed isolated status path parsing after live W0029 retry exposed app-path truncation"
+- The second live retry again passed the shared-worktree guard in this repo's real untracked-dirty state and reached the actual Claude implementation agent.
+- W0029 then failed-paused for a fresh external Claude API 429 limit, not for shared-worktree dirt:
+  C:\Users\huizh\Apps\Tandem Reciprocal\control\failure-reports\W0029-2026-07-26T13-45-03-537Z.md
+- The failure report records two agent-exit failures with api_error_status=429 and headBefore=120a40966f29343ef44d1a3aa479ba32a39b1d28.
+
+Verification:
+- npx vitest run --configLoader runner tests/reciprocal-implement-no-commit.test.ts: PASS, 13 tests.
+- npx vitest run --configLoader runner tests/reciprocal-implement-no-commit.test.ts tests/reciprocal-orchestrator.test.ts: PASS, 25 tests.
+- npm run typecheck: PASS.
+- npm test: PASS, 56 files passed, 2 skipped; 580 tests passed, 41 skipped.
+- git diff --check: PASS.
+
+Safety notes:
+- Did not clean up, commit, delete, or otherwise change the long-standing untracked admin-repo files.
+- Did not touch W0023 DONE status, D201 dashboard behavior, or verified package/promotion/rebuild sequence.
+- W0029 remains failed-paused with a new external 429 report for human review/retry after the provider limit resets.
