@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { mkdirSync, readFileSync, renameSync, statSync, writeFileSync, appendFileSync, existsSync } from "node:fs";
+import { mkdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync, appendFileSync, existsSync } from "node:fs";
 import path from "node:path";
 
 const utf8 = "utf8";
@@ -26,6 +26,36 @@ function now() {
 
 function ensureDir(dir) {
   mkdirSync(dir, { recursive: true });
+}
+
+function processAlive(pid) {
+  if (!Number.isInteger(pid) || pid <= 0) return false;
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function acquireInvocationLock(relayRoot, logPath, state) {
+  const lockDir = path.join(relayRoot, "state", "orchestrator.lock");
+  ensureDir(path.dirname(lockDir));
+  for (;;) {
+    try {
+      mkdirSync(lockDir);
+      writeJsonAtomic(path.join(lockDir, "owner.json"), { pid: process.pid, startedAt: now(), argv: process.argv.slice(2) });
+      return () => rmSync(lockDir, { recursive: true, force: true });
+    } catch (error) {
+      if (error?.code !== "EEXIST") throw error;
+      const owner = readJson(path.join(lockDir, "owner.json"), {});
+      if (processAlive(owner?.pid)) {
+        appendLog(logPath, { action: "invocation.locked", phase: state.phase, item: state.currentItem?.id || null, step: state.step || null, ownerPid: owner.pid });
+        return null;
+      }
+      rmSync(lockDir, { recursive: true, force: true });
+    }
+  }
 }
 
 function readJson(file, fallback = null) {
@@ -248,10 +278,38 @@ function main() {
     console.log(JSON.stringify({ ok: true, state, statePath, logPath }, null, 2));
     return;
   }
+
+  const releaseLock = acquireInvocationLock(relayRoot, logPath, state);
+  if (!releaseLock) {
+    console.log(JSON.stringify({ ok: true, locked: true, state }, null, 2));
+    return;
+  }
+  try {
   if (boolArg("resume")) {
     const reason = arg("reason", "human reviewed failure report; retry authorized");
     const previousPhase = state.phase;
     const resumedItem = state.currentItem?.id || null;
+    if (boolArg("finalize-accepted")) {
+      const sourceSha = state.acceptedSourceSha || state.lastImplementCommit || "";
+      if (!/^[0-9a-f]{40}$/i.test(sourceSha) || !state.currentItem) {
+        console.log(JSON.stringify({ ok: false, finalized: false, reason: "no accepted source SHA or current item to finalize", state }, null, 2));
+        process.exitCode = 2;
+        return;
+      }
+      markWishlist(wishlistPath, state.currentItem, "DONE", `orchestrator-cycle-complete stable=${sourceSha}`);
+      updateStableRef(repo, sourceSha, logPath);
+      state.phase = "idle";
+      state.step = null;
+      state.stableCommit = sourceSha;
+      state.consecutiveFailures = 0;
+      state.failures = [];
+      state.failureReport = undefined;
+      state.lastSummary = `Finalized accepted ${resumedItem} from ${previousPhase}: ${reason}`;
+      state.currentItem = null;
+      save(statePath, logPath, state, "failed-paused.accepted-finalized", { reason, previousPhase, resumedItem, sourceSha });
+      console.log(JSON.stringify({ ok: true, finalized: true, reason, previousPhase, sourceSha, state }, null, 2));
+      return;
+    }
     state.phase = "idle";
     state.step = null;
     state.consecutiveFailures = 0;
@@ -370,11 +428,7 @@ function main() {
     : loadSwapCommands(repo, relayRoot, acceptedCommit);
   if (!runSwap({ repo, relayRoot, commands: swapCommands, state, statePath, logPath })) return;
 
-  const lines = existsSync(wishlistPath) ? readFileSync(wishlistPath, utf8).split(/\r?\n/) : [];
-  const currentLine = lines[state.currentItem.line] || "";
-  if (currentLine.includes(` ${state.currentItem.id} |`)) {
-    markWishlist(wishlistPath, { ...state.currentItem, line: state.currentItem.line }, "DONE", "orchestrator-cycle-complete");
-  }
+  markWishlist(wishlistPath, state.currentItem, "DONE", "orchestrator-cycle-complete");
   state.phase = "idle";
   state.step = null;
   state.stableCommit = acceptedSourceSha(repo, state) || state.stableCommit || "accepted-version";
@@ -386,6 +440,9 @@ function main() {
   state.failures = [];
   save(statePath, logPath, state, "cycle.completed", { completedItem: completedItem.id });
   console.log(JSON.stringify({ ok: true, completed: completedItem.id, state }, null, 2));
+  } finally {
+    releaseLock();
+  }
 }
 
 main();

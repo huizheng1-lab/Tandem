@@ -125,6 +125,30 @@ describe("single reciprocal orchestrator", () => {
     }
   });
 
+  windowsIt("marks a completed wishlist item by id when the stored line is stale", async () => {
+    const f = await fixture("d200-stale-line");
+    try {
+      await mkdir(path.join(f.relayRoot, "state"), { recursive: true });
+      await writeFile(
+        path.join(f.relayRoot, "state", "orchestrator-state.json"),
+        JSON.stringify({
+          phase: "improving",
+          currentItem: { id: "W0001", priority: "P0", text: "Build the thing", line: 999 },
+          consecutiveFailures: 0,
+          failures: [],
+          step: "a-tests",
+          updatedAt: new Date().toISOString()
+        }, null, 2),
+        "utf8",
+      );
+      const result = await run(f.root, f.relayRoot, commands(f.root));
+      expect(result.exitCode).toBe(0);
+      expect(await readFile(path.join(f.relayRoot, "control", "WISHLIST.md"), "utf8")).toMatch(/- \[x\] W0001 .* DONE/);
+    } finally {
+      await rm(f.root, { recursive: true, force: true });
+    }
+  });
+
   windowsIt("drives the happy-path full cycle with B as mechanical swap authority", async () => {
     const f = await fixture("happy");
     try {
@@ -207,6 +231,40 @@ describe("single reciprocal orchestrator", () => {
       const log = await readFile(path.join(f.relayRoot, "control", "orchestrator-operations.ndjson"), "utf8");
       expect(log).toMatch(/failed-paused\.resumed/);
       expect(log).toMatch(/reviewed and fixed/);
+    } finally {
+      await rm(f.root, { recursive: true, force: true });
+    }
+  });
+
+  windowsIt("finalizes an already accepted item during resume after a duplicate pause", async () => {
+    const f = await fixture("resume-finalize-accepted");
+    try {
+      const head = (await execa("git", ["-C", f.root, "rev-parse", "HEAD"])).stdout.trim();
+      await mkdir(path.join(f.relayRoot, "state"), { recursive: true });
+      await writeFile(
+        path.join(f.relayRoot, "state", "orchestrator-state.json"),
+        JSON.stringify({
+          phase: "failed-paused",
+          currentItem: { id: "W0001", priority: "P0", text: "Build the thing", line: 999 },
+          consecutiveFailures: 2,
+          failures: [{ command: "duplicate", exitCode: 1, output: "limit" }],
+          failureReport: path.join(f.relayRoot, "control", "failure-reports", "W0001.md"),
+          step: "failed-paused",
+          lastImplementCommit: head,
+          acceptedSourceSha: head,
+          updatedAt: new Date().toISOString()
+        }, null, 2),
+        "utf8",
+      );
+      const result = await run(f.root, f.relayRoot, commands(f.root), ["--resume", "--finalize-accepted", "--reason", "accepted source already promoted"]);
+      expect(result.exitCode).toBe(0);
+      const parsed = JSON.parse(result.stdout);
+      expect(parsed).toMatchObject({ ok: true, finalized: true, sourceSha: head });
+      expect(await readFile(path.join(f.relayRoot, "control", "WISHLIST.md"), "utf8")).toMatch(/- \[x\] W0001 .* DONE .*stable=/);
+      const state = JSON.parse(await readFile(path.join(f.relayRoot, "state", "orchestrator-state.json"), "utf8"));
+      expect(state).toMatchObject({ phase: "idle", currentItem: null, stableCommit: head, consecutiveFailures: 0 });
+      const log = await readFile(path.join(f.relayRoot, "control", "orchestrator-operations.ndjson"), "utf8");
+      expect(log).toMatch(/failed-paused\.accepted-finalized/);
     } finally {
       await rm(f.root, { recursive: true, force: true });
     }
