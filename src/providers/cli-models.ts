@@ -5,9 +5,20 @@ export const CLAUDE_CLI_OPUS_5_MODEL = "claude-opus-5";
 export const CLAUDE_CLI_OPUS_5_ID = "claude-code/opus-5";
 export const CLAUDE_CLI_MODEL_OPTIONS = ["haiku", "sonnet", "opus", "claude-fable-5", CLAUDE_CLI_OPUS_5_MODEL] as const;
 
+export function normalizeClaudeCliModelName(value: string): string {
+  const trimmed = value.trim();
+  const normalized = trimmed.toLowerCase().replace(/[\s_]+/g, "-");
+  if (normalized === "opus-5" || normalized === "opus5" || normalized === "claude-opus5" || normalized === CLAUDE_CLI_OPUS_5_MODEL) {
+    return CLAUDE_CLI_OPUS_5_MODEL;
+  }
+  return trimmed;
+}
+
 export function configuredCliModelName(entry: Pick<ModelEntry, "id" | "provider">, config: TandemConfig): string | undefined {
   if (entry.provider === "codex-cli" && "id" in entry && entry.id === "codex/cli") return config.codexCliModel;
-  if (entry.provider === "claude-code-cli" && "id" in entry && entry.id === "claude-code/cli") return config.claudeCliModel;
+  if (entry.provider === "claude-code-cli" && "id" in entry && entry.id === "claude-code/cli") {
+    return config.claudeCliModel ? normalizeClaudeCliModelName(config.claudeCliModel) : undefined;
+  }
   if (entry.provider === "claude-code-cli" && "id" in entry && entry.id === CLAUDE_CLI_OPUS_5_ID) return CLAUDE_CLI_OPUS_5_MODEL;
   return undefined;
 }
@@ -25,7 +36,7 @@ export function modelDisplayName(modelId: string | undefined, config: TandemConf
     return `${modelId} (${parts.join(", ")})`;
   }
   if (modelId === "claude-code/cli") {
-    return `${modelId} (model ${config.claudeCliModel ?? "CLI default"})`;
+    return `${modelId} (model ${config.claudeCliModel ? normalizeClaudeCliModelName(config.claudeCliModel) : "CLI default"})`;
   }
   if (modelId === CLAUDE_CLI_OPUS_5_ID) {
     return `${modelId} (model ${CLAUDE_CLI_OPUS_5_MODEL})`;
@@ -42,9 +53,10 @@ export function cliModelPatch(target: string | undefined, value: string | undefi
   if (!normalized) return { usage: modelCommandUsage };
   const cleared = normalized === "clear" || normalized === "default";
   if (target === "claude-cli") {
+    const modelName = cleared ? undefined : normalizeClaudeCliModelName(normalized);
     return {
-      patch: { claudeCliModel: cleared ? undefined : normalized },
-      message: cleared ? "Set Claude Code CLI model to CLI default." : `Set Claude Code CLI model to ${normalized}.`
+      patch: { claudeCliModel: modelName },
+      message: cleared ? "Set Claude Code CLI model to CLI default." : `Set Claude Code CLI model to ${modelName}.`
     };
   }
   if (target === "codex-cli") {

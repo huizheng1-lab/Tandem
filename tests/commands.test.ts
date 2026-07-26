@@ -4,7 +4,7 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { dispatchCommand } from "../src/commands/index.js";
 import { defaultConfig, type TandemConfig } from "../src/config/schema.js";
-import { CLAUDE_CLI_OPUS_5_ID } from "../src/providers/cli-models.js";
+import { CLAUDE_CLI_OPUS_5_ID, CLAUDE_CLI_OPUS_5_MODEL } from "../src/providers/cli-models.js";
 import { CostLedger } from "../src/session/cost.js";
 
 async function tempDir(): Promise<string> {
@@ -35,6 +35,18 @@ describe("slash commands", () => {
     await expect(dispatchCommand("/model claude-cli clear", context(cwd, config, (next) => (config = next)))).resolves.toBe("Set Claude Code CLI model to CLI default.");
     expect(config.claudeCliModel).toBeUndefined();
     await expect(readFile(path.join(cwd, ".tandem", "config.json"), "utf8").then(JSON.parse)).resolves.not.toHaveProperty("claudeCliModel");
+  });
+
+  it("persists generic Claude CLI Opus 5 pins with the Claude CLI model identifier", async () => {
+    const cwd = await tempDir();
+    let config = { ...defaultConfig };
+
+    await expect(dispatchCommand("/model claude-cli opus-5", context(cwd, config, (next) => (config = next)))).resolves.toBe(
+      `Set Claude Code CLI model to ${CLAUDE_CLI_OPUS_5_MODEL}.`
+    );
+
+    expect(config.claudeCliModel).toBe(CLAUDE_CLI_OPUS_5_MODEL);
+    await expect(readFile(path.join(cwd, ".tandem", "config.json"), "utf8").then(JSON.parse)).resolves.toMatchObject({ claudeCliModel: CLAUDE_CLI_OPUS_5_MODEL });
   });
 
   it("persists dedicated Claude CLI Opus 5 leader and worker selections", async () => {

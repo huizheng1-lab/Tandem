@@ -218,6 +218,18 @@ describe("config", () => {
         modelName: claudePinned.entry.modelName
       })
     ).toEqual(expect.arrayContaining(["--model", "haiku"]));
+
+    const claudeOpus5Alias = await makeModel("claude-code/cli", { ...defaultConfig, claudeCliPath, claudeCliModel: "opus5" }, { CLAUDE_CLI_PATH: claudeCliPath });
+    expect(claudeOpus5Alias.entry.modelName).toBe(CLAUDE_CLI_OPUS_5_MODEL);
+    expect(
+      buildClaudeExecArgv({
+        prompt: "answer",
+        systemPrompt: "rules",
+        schema: { type: "object" },
+        permissionMode: "plan",
+        modelName: claudeOpus5Alias.entry.modelName
+      })
+    ).toEqual(expect.arrayContaining(["--model", CLAUDE_CLI_OPUS_5_MODEL]));
   });
 
   it("registers and persists Claude CLI Opus 5 without inheriting the generic CLI model pin", async () => {
