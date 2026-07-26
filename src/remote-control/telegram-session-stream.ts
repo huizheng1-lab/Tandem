@@ -75,6 +75,11 @@ export class TelegramSessionStream {
       ? formatStreamingSnapshot(this.lastSnapshot)
       : `user / submitting / 0s\nhealthy`;
     const footer = `Submission failed: ${oneLine(message)}`;
+    // Clear any lingering approval-paused state so a submission error that
+    // follows a pauseForApproval (for example, pushApproval returning false in
+    // the Round D Step 3 flow) does not leave enqueue() silently dropping
+    // subsequent session events after the error footer is painted.
+    this.awaitingApproval = false;
     this.pending = undefined;
     this.pendingText = `${base}\n${footer}`;
     await this.drain();
