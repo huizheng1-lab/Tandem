@@ -352,6 +352,12 @@ process.exit(1);
     expect(isClaudeOpus5UnsupportedError("haiku", "Unknown model: haiku", "")).toBe(false);
   });
 
+  it("recognizes direct Opus 5 availability failures even when Claude omits a model-shaped phrase", () => {
+    expect(isClaudeOpus5UnsupportedError(CLAUDE_CLI_OPUS_5_MODEL, "Claude Opus 5 is not available for this account", "")).toBe(true);
+    expect(isClaudeOpus5UnsupportedError(CLAUDE_CLI_OPUS_5_MODEL, "claude-opus-5 access requires an eligible plan", "")).toBe(true);
+    expect(isClaudeOpus5UnsupportedError("haiku", "Claude Opus 5 is not available for this account", "")).toBe(false);
+  });
+
   it("reports an actionable Opus 5 error from Claude JSON error envelopes", () => {
     expect(() =>
       parseClaudeEnvelope(

@@ -109,10 +109,17 @@ export function formatClaudeExitError(exitCode: number | null | undefined, stder
   return `Claude Code CLI exited with code ${exitCode}: ${detail}`;
 }
 
+function mentionsClaudeOpus5(detail: string): boolean {
+  return /\b(?:claude-)?opus[-\s]?5\b/i.test(detail);
+}
+
 export function isClaudeOpus5UnsupportedError(modelName: string | undefined, stderr: unknown, stdout: unknown): boolean {
   if (modelName !== CLAUDE_CLI_OPUS_5_MODEL) return false;
   const detail = [trimOutput(stderr), trimOutput(stdout)].filter(Boolean).join("\n");
-  return /(unknown|invalid|unsupported|unrecognized|not\s+(available|found|recognized)|does\s+not\s+(exist|support|recognize|provide)|no\s+such)\s+model|model\s+.*(unknown|invalid|unsupported|unrecognized|not\s+(available|found|recognized))/i.test(detail);
+  return (
+    /(unknown|invalid|unsupported|unrecognized|not\s+(available|found|recognized)|does\s+not\s+(exist|support|recognize|provide)|no\s+such)\s+model|model\s+.*(unknown|invalid|unsupported|unrecognized|not\s+(available|found|recognized))/i.test(detail) ||
+    (mentionsClaudeOpus5(detail) && /(unknown|invalid|unsupported|unrecognized|not\s+(available|found|recognized|provided)|does\s+not\s+(exist|support|recognize|provide)|no\s+such|unavailable|access|entitled|eligible)/i.test(detail))
+  );
 }
 
 export function formatClaudeOpus5UnsupportedError(stderr: unknown, stdout: unknown): string {
