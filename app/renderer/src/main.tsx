@@ -323,7 +323,7 @@ function App(): React.ReactElement {
   }, [cost, effectiveConfig, models]);
 
   const costTitle = cost
-    ? `Leader: ${cost.leader.inputTokens}/${cost.leader.outputTokens} tokens, $${cost.leader.dollars.toFixed(4)}${effectiveConfig?.leader === "codex/cli" ? " (billed via your Codex CLI account, not by token price)" : ""}${effectiveConfig?.leader === "claude-code/cli" ? " (reported directly by Claude Code CLI)" : ""}\nWorker: ${cost.worker.inputTokens}/${cost.worker.outputTokens} tokens, $${cost.worker.dollars.toFixed(4)}${effectiveConfig?.worker === "codex/cli" ? " (billed via your Codex CLI account, not by token price)" : ""}${effectiveConfig?.worker === "claude-code/cli" ? " (reported directly by Claude Code CLI)" : ""}`
+    ? `Leader: ${cost.leader.inputTokens}/${cost.leader.outputTokens} tokens, $${cost.leader.dollars.toFixed(4)}${effectiveConfig?.leader === "codex/cli" ? " (billed via your Codex CLI account, not by token price)" : ""}${effectiveConfig?.leader?.startsWith("claude-code/") ? " (reported directly by Claude Code CLI)" : ""}\nWorker: ${cost.worker.inputTokens}/${cost.worker.outputTokens} tokens, $${cost.worker.dollars.toFixed(4)}${effectiveConfig?.worker === "codex/cli" ? " (billed via your Codex CLI account, not by token price)" : ""}${effectiveConfig?.worker?.startsWith("claude-code/") ? " (reported directly by Claude Code CLI)" : ""}`
     : "No usage yet";
   const cumulativeCostTitle = cumulativeTooltip(cost, effectiveConfig);
   const remoteStatus = useMemo(() => {

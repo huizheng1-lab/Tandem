@@ -3,13 +3,14 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { createLiveAgents } from "../src/agents/live.js";
-import { buildClaudeExecArgv, claudePermissionFor, formatClaudeExitError, parseClaudeEnvelope, RateLimitError, runClaudeExec } from "../src/agents/claude-code-cli/exec.js";
+import { buildClaudeExecArgv, claudePermissionFor, formatClaudeExitError, isClaudeOpus5UnsupportedError, parseClaudeEnvelope, RateLimitError, runClaudeExec } from "../src/agents/claude-code-cli/exec.js";
 import { buildClaudeLeaderPlanPrompts, buildClaudeLeaderReviewPrompts, buildClaudeLeaderTakeoverPrompts, claudeLeaderReview, claudeLeaderTakeover } from "../src/agents/claude-code-cli/leader.js";
 import { clearClaudeCliPathCache, locateClaudeCli } from "../src/agents/claude-code-cli/locate.js";
 import { buildClaudeWorkerPrompts } from "../src/agents/claude-code-cli/worker.js";
 import { buildPlanJsonSchema, completionReportJsonSchema, stripNulls } from "../src/agents/codex-cli/schema-json.js";
 import { defaultConfig } from "../src/config/schema.js";
 import type { BuildPlan, CompletionReport } from "../src/orchestrator/artifacts.js";
+import { CLAUDE_CLI_OPUS_5_ID, CLAUDE_CLI_OPUS_5_MODEL } from "../src/providers/cli-models.js";
 import type { ModelEntry } from "../src/providers/registry.js";
 import { CostLedger } from "../src/session/cost.js";
 
@@ -76,6 +77,27 @@ const output = args[args.indexOf("--output-last-message") + 1];
 const value = { kind: "implementation", answer: null, plan: { title: "Hello", objective: "Create hello file", constraints: [], tasks: [{ id: "T1", description: "Create file", files: null }], acceptanceCriteria: ["file exists"], verification: ["npm test"] } };
 console.log(JSON.stringify({ type: "turn.completed", usage: { input_tokens: 1, output_tokens: 1 } }));
 fs.writeFileSync(output, JSON.stringify(value));
+`
+  );
+}
+
+async function fakeClaudeCaptureScript(capturePath: string, mode: "answer" | "completion"): Promise<string> {
+  return makeNodeShim(
+    "claude",
+    `
+const fs = require("fs");
+const args = process.argv.slice(2);
+if (args.includes("--version")) { console.log("2.1.144 (Claude Code)"); process.exit(0); }
+let prompt = "";
+process.stdin.setEncoding("utf8");
+process.stdin.on("data", (chunk) => { prompt += chunk; });
+process.stdin.on("end", () => {
+  fs.writeFileSync(${JSON.stringify(capturePath)}, JSON.stringify({ args, prompt }, null, 2));
+  const structured_output = ${JSON.stringify(mode)} === "completion"
+    ? { status: "complete", summary: "claude worker done", taskResults: [{ id: "T1", status: "done" }], filesChanged: [], verificationResults: [{ command: "npm test", passed: true, output: "ok" }], deviationsFromPlan: [] }
+    : { kind: "question", answer: "4", plan: null };
+  console.log(JSON.stringify({ type: "result", subtype: "success", is_error: false, result: "ok", structured_output, usage: { input_tokens: 1, output_tokens: 1 }, total_cost_usd: 0.01, permission_denials: [] }));
+});
 `
   );
 }
@@ -191,6 +213,18 @@ describe("claude code cli execution", () => {
     ]);
   });
 
+  it("builds argv with the Claude CLI Opus 5 model identifier", () => {
+    expect(
+      buildClaudeExecArgv({
+        prompt: "answer",
+        systemPrompt: "system rules",
+        schema: buildPlanJsonSchema,
+        permissionMode: "plan",
+        modelName: CLAUDE_CLI_OPUS_5_MODEL
+      })
+    ).toEqual(expect.arrayContaining(["--model", CLAUDE_CLI_OPUS_5_MODEL]));
+  });
+
   it("D83: keeps the prompt off argv so large reviews travel through stdin", () => {
     const prompt = "x".repeat(50000);
     const argv = buildClaudeExecArgv({
@@ -286,6 +320,36 @@ describe("claude code cli execution", () => {
     expect(output).toMatchObject({ status: "complete", summary: "claude worker done" });
     expect(JSON.stringify(output)).not.toContain("notes");
     expect(ledger.totals().worker.dollars).toBe(0.25);
+  });
+
+  it("reports an actionable error when Claude CLI does not support Opus 5", async () => {
+    const cwd = await tempDir("project");
+    const claudeCliPath = await makeNodeShim(
+      "claude",
+      `
+const args = process.argv.slice(2);
+if (args.includes("--version")) { console.log("2.1.144 (Claude Code)"); process.exit(0); }
+console.error("Unknown model: claude-opus-5");
+process.exit(1);
+`
+    );
+    await expect(
+      runClaudeExec({
+        cwd,
+        prompt: "answer",
+        systemPrompt: "rules",
+        schema: "plan-or-answer",
+        permissionMode: "yolo",
+        claudeCliPath,
+        env: { ...process.env, PATH: path.dirname(claudeCliPath) },
+        role: "leader",
+        entry: { ...claudeEntry, id: CLAUDE_CLI_OPUS_5_ID, modelName: CLAUDE_CLI_OPUS_5_MODEL },
+        ledger: new CostLedger(),
+        modelName: CLAUDE_CLI_OPUS_5_MODEL
+      })
+    ).rejects.toThrow(/does not recognize or provide Opus 5.*Update Claude Code CLI/s);
+    expect(isClaudeOpus5UnsupportedError(CLAUDE_CLI_OPUS_5_MODEL, "Unknown model: claude-opus-5", "")).toBe(true);
+    expect(isClaudeOpus5UnsupportedError("haiku", "Unknown model: haiku", "")).toBe(false);
   });
 
   it("reuses the stricter shared Codex schema helpers", () => {
@@ -422,6 +486,38 @@ describe("claude code cli mixed roles", () => {
     });
 
     await expect(agents.plan({ request: "What is 2+2?", goals: [] })).resolves.toEqual({ kind: "answer", answer: "4" });
+  });
+
+  it("passes Opus 5 for a Claude Code CLI leader selection", async () => {
+    const cwd = await tempDir("project");
+    const capturePath = path.join(cwd, "leader-capture.json");
+    const claudeCliPath = await fakeClaudeCaptureScript(capturePath, "answer");
+    const agents = await createLiveAgents({
+      config: { ...defaultConfig, leader: CLAUDE_CLI_OPUS_5_ID, worker: "minimax/minimax-m2.7", permissionMode: "yolo", claudeCliPath },
+      cwd,
+      env: { ...process.env, PATH: path.dirname(claudeCliPath), MINIMAX_API_KEY: "test-key" },
+      ledger: new CostLedger()
+    });
+
+    await expect(agents.plan({ request: "What is 2+2?", goals: [] })).resolves.toEqual({ kind: "answer", answer: "4" });
+    const captured = JSON.parse(await (await import("node:fs/promises")).readFile(capturePath, "utf8")) as { args: string[] };
+    expect(captured.args).toEqual(expect.arrayContaining(["--model", CLAUDE_CLI_OPUS_5_MODEL]));
+  });
+
+  it("passes Opus 5 for a Claude Code CLI worker selection", async () => {
+    const cwd = await tempDir("project");
+    const capturePath = path.join(cwd, "worker-capture.json");
+    const claudeCliPath = await fakeClaudeCaptureScript(capturePath, "completion");
+    const agents = await createLiveAgents({
+      config: { ...defaultConfig, leader: "google/gemini-2.5-flash", worker: CLAUDE_CLI_OPUS_5_ID, permissionMode: "yolo", claudeCliPath },
+      cwd,
+      env: { ...process.env, PATH: path.dirname(claudeCliPath), GEMINI_API_KEY: "test-key" },
+      ledger: new CostLedger()
+    });
+
+    await expect(agents.build({ plan, streamId: "__default__", tasks: plan.tasks, verification: plan.verification, round: 1, feedback: [] })).resolves.toMatchObject({ status: "complete" });
+    const captured = JSON.parse(await (await import("node:fs/promises")).readFile(capturePath, "utf8")) as { args: string[] };
+    expect(captured.args).toEqual(expect.arrayContaining(["--model", CLAUDE_CLI_OPUS_5_MODEL]));
   });
 
   it("supports Codex CLI leader plus Claude Code CLI worker", async () => {

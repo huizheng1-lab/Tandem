@@ -31,6 +31,6 @@ export function cumulativeTooltip(cost: CostTotals | undefined, config: TandemCo
   const cumulative = cost?.cumulative ?? cost;
   if (!cumulative) return "No usage yet";
   const cliNote = (role: "leader" | "worker") =>
-    config?.[role] === "codex/cli" ? " (billed via your Codex CLI account, not by token price)" : config?.[role] === "claude-code/cli" ? " (reported directly by Claude Code CLI)" : "";
+    config?.[role] === "codex/cli" ? " (billed via your Codex CLI account, not by token price)" : config?.[role]?.startsWith("claude-code/") ? " (reported directly by Claude Code CLI)" : "";
   return `Leader: ${cumulative.leader.inputTokens}/${cumulative.leader.outputTokens} tokens, $${cumulative.leader.dollars.toFixed(4)}${cliNote("leader")}\nWorker: ${cumulative.worker.inputTokens}/${cumulative.worker.outputTokens} tokens, $${cumulative.worker.dollars.toFixed(4)}${cliNote("worker")}`;
 }

@@ -1,6 +1,7 @@
 import { CustomModel } from "../config/schema.js";
 import { locateCodexCli } from "../agents/codex-cli/locate.js";
 import { locateClaudeCli } from "../agents/claude-code-cli/locate.js";
+import { CLAUDE_CLI_OPUS_5_ID, CLAUDE_CLI_OPUS_5_MODEL } from "./cli-models.js";
 
 export type ProviderKind = "anthropic" | "openai" | "google" | "openai-compatible" | "codex-cli" | "claude-code-cli";
 
@@ -138,6 +139,14 @@ export const builtInModels: ModelEntry[] = [
     modelName: "",
     contextWindow: 200000,
     media: { images: true, pdf: true }
+  },
+  {
+    id: CLAUDE_CLI_OPUS_5_ID,
+    provider: "claude-code-cli",
+    modelName: CLAUDE_CLI_OPUS_5_MODEL,
+    contextWindow: 200000,
+    media: { images: true, pdf: true },
+    costHints: { inputPerMillion: 15, outputPerMillion: 75 }
   }
 ];
 

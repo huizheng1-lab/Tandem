@@ -1,9 +1,12 @@
 import { CodexCliReasoningEffortSchema, type TandemConfig } from "../config/schema.js";
 import type { ModelEntry } from "./registry.js";
 
-export function configuredCliModelName(entry: Pick<ModelEntry, "provider">, config: TandemConfig): string | undefined {
-  if (entry.provider === "codex-cli") return config.codexCliModel;
-  if (entry.provider === "claude-code-cli") return config.claudeCliModel;
+export const CLAUDE_CLI_OPUS_5_MODEL = "claude-opus-5";
+export const CLAUDE_CLI_OPUS_5_ID = "claude-code/opus-5";
+
+export function configuredCliModelName(entry: Pick<ModelEntry, "id" | "provider">, config: TandemConfig): string | undefined {
+  if (entry.provider === "codex-cli" && "id" in entry && entry.id === "codex/cli") return config.codexCliModel;
+  if (entry.provider === "claude-code-cli" && "id" in entry && entry.id === "claude-code/cli") return config.claudeCliModel;
   return undefined;
 }
 
@@ -21,6 +24,9 @@ export function modelDisplayName(modelId: string | undefined, config: TandemConf
   }
   if (modelId === "claude-code/cli") {
     return `${modelId} (model ${config.claudeCliModel ?? "CLI default"})`;
+  }
+  if (modelId === CLAUDE_CLI_OPUS_5_ID) {
+    return `${modelId} (model ${CLAUDE_CLI_OPUS_5_MODEL})`;
   }
   return modelId;
 }

@@ -6,6 +6,7 @@ import type { ToolActivityEvent } from "../../tools/fs.js";
 import { assertSafeProjectDir } from "../../tools/protection.js";
 import { locateClaudeCli } from "./locate.js";
 import { jsonSchemaFor, stripNulls, type CodexSchemaKind } from "../codex-cli/schema-json.js";
+import { CLAUDE_CLI_OPUS_5_MODEL } from "../../providers/cli-models.js";
 
 export type ClaudeSchemaKind = CodexSchemaKind;
 export type ClaudePermissionMode = "acceptEdits" | "auto" | "bypassPermissions" | "default" | "dontAsk" | "plan";
@@ -106,6 +107,18 @@ function trimOutput(value: unknown): string {
 export function formatClaudeExitError(exitCode: number | null | undefined, stderr: unknown, denials: string, stdout: unknown): string {
   const detail = [trimOutput(stderr), denials, trimOutput(stdout)].filter(Boolean).join("\n");
   return `Claude Code CLI exited with code ${exitCode}: ${detail}`;
+}
+
+export function isClaudeOpus5UnsupportedError(modelName: string | undefined, stderr: unknown, stdout: unknown): boolean {
+  if (modelName !== CLAUDE_CLI_OPUS_5_MODEL) return false;
+  const detail = [trimOutput(stderr), trimOutput(stdout)].filter(Boolean).join("\n");
+  return /(unknown|invalid|unsupported|unrecognized|not\s+(available|found|recognized)|does\s+not\s+(exist|support|recognize|provide)|no\s+such)\s+model|model\s+.*(unknown|invalid|unsupported|unrecognized|not\s+(available|found|recognized))/i.test(detail);
+}
+
+export function formatClaudeOpus5UnsupportedError(stderr: unknown, stdout: unknown): string {
+  const detail = [trimOutput(stderr), trimOutput(stdout)].filter(Boolean).join("\n").trim();
+  const suffix = detail ? `\nClaude CLI output:\n${detail}` : "";
+  return `Claude Code CLI does not recognize or provide Opus 5 (${CLAUDE_CLI_OPUS_5_MODEL}). Update Claude Code CLI to a version/account that supports Opus 5, or choose another Tandem model such as claude-code/cli with a supported Claude CLI model.${suffix}`;
 }
 
 function formatPermissionDenials(denials: unknown[] | undefined): string {
@@ -226,6 +239,9 @@ export async function runClaudeExec(options: ClaudeExecOptions): Promise<unknown
         `Claude Code CLI is rate-limited (resets ${rateLimitReset}). Try again after that time or switch engines.`,
         rateLimitReset
       );
+    }
+    if (isClaudeOpus5UnsupportedError(options.modelName, result.stderr, result.stdout)) {
+      throw new Error(formatClaudeOpus5UnsupportedError(result.stderr, result.stdout));
     }
     throw new Error(formatClaudeExitError(result.exitCode, result.stderr, denials, result.stdout));
   }

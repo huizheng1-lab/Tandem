@@ -9,7 +9,7 @@ import { buildCodexExecArgv } from "../src/agents/codex-cli/exec.js";
 import { buildClaudeExecArgv } from "../src/agents/claude-code-cli/exec.js";
 import { ConfigSchema, defaultConfig } from "../src/config/schema.js";
 import { sessionDir } from "../src/session/store.js";
-import { withConfiguredCliModel } from "../src/providers/cli-models.js";
+import { CLAUDE_CLI_OPUS_5_ID, CLAUDE_CLI_OPUS_5_MODEL, withConfiguredCliModel } from "../src/providers/cli-models.js";
 
 async function tempDir(name: string): Promise<string> {
   const dir = path.join(tmpdir(), `tandem-${name}-${Date.now()}-${Math.random().toString(16).slice(2)}`);
@@ -218,6 +218,33 @@ describe("config", () => {
         modelName: claudePinned.entry.modelName
       })
     ).toEqual(expect.arrayContaining(["--model", "haiku"]));
+  });
+
+  it("registers and persists Claude CLI Opus 5 without inheriting the generic CLI model pin", async () => {
+    const cwd = await tempDir("claude-opus5-cwd");
+    const home = await tempDir("claude-opus5-home");
+    const claudeCliPath = path.join(cwd, process.platform === "win32" ? "claude.exe" : "claude");
+    await writeFile(claudeCliPath, "", "utf8");
+
+    await saveGlobalConfigPatch({ leader: CLAUDE_CLI_OPUS_5_ID, worker: CLAUDE_CLI_OPUS_5_ID, claudeCliModel: "haiku" }, home);
+    const config = loadConfig({ cwd, homeDir: home });
+
+    expect(config).toMatchObject({ leader: CLAUDE_CLI_OPUS_5_ID, worker: CLAUDE_CLI_OPUS_5_ID, claudeCliModel: "haiku" });
+    const entry = resolveModel(CLAUDE_CLI_OPUS_5_ID, config.customModels);
+    expect(entry).toMatchObject({ provider: "claude-code-cli", modelName: CLAUDE_CLI_OPUS_5_MODEL });
+    expect(withConfiguredCliModel(entry, config).modelName).toBe(CLAUDE_CLI_OPUS_5_MODEL);
+
+    const resolution = await makeModel(CLAUDE_CLI_OPUS_5_ID, { ...config, claudeCliPath }, { CLAUDE_CLI_PATH: claudeCliPath });
+    expect(resolution.entry.modelName).toBe(CLAUDE_CLI_OPUS_5_MODEL);
+    expect(
+      buildClaudeExecArgv({
+        prompt: "answer",
+        systemPrompt: "rules",
+        schema: { type: "object" },
+        permissionMode: "plan",
+        modelName: resolution.entry.modelName
+      })
+    ).toEqual(expect.arrayContaining(["--model", CLAUDE_CLI_OPUS_5_MODEL]));
   });
 
   it("registers the current Gemini 3.x built-ins without guessed pricing", () => {
