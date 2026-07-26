@@ -1,0 +1,26 @@
+Round: D200
+
+Implementation commits:
+- b99bb08 D200-1: enforce real implementation commits
+- 78bb040 D200-2: fix agent command quoting
+- 6bfac97 D200-3: resolve Windows Claude launcher
+- 989d17c D200-4: invoke Claude through Windows shell
+- f9302f0 D200-5: restore implement entrypoint
+- 8bce906 D200-6: await Telegram approval resubmission
+- 3cfe25f D200-7: resume failed orchestrator cycles
+- 19768d9 D200-8: finalize accepted orchestrator retries safely
+
+Live W0023 proof:
+- The reviewed failed-paused state was resumed with `--resume`.
+- The real orchestrator accepted and promoted W0023 commit 91c95dd.
+- A final live retry produced and promoted W0023 commit 75cc4116e56585039df0e018484db0cee9230ab8.
+- A duplicate scheduled invocation paused after Claude 429 limits after the successful promotion; D200-8 added stale-line completion recovery plus invocation locking.
+- The committed recovery action `--resume --finalize-accepted` finalized the already accepted source through the orchestrator, updated `refs/tandem-relay/stable`, and marked W0023 DONE in the real wishlist.
+- Final state: phase=idle, currentItem=null, stableCommit=75cc4116e56585039df0e018484db0cee9230ab8, action=failed-paused.accepted-finalized.
+
+Verification:
+- `npx vitest run --configLoader runner tests/tools.test.ts tests/reciprocal-orchestrator.test.ts` passed: 34 tests.
+- `npm run typecheck` passed.
+- `git diff --check` passed.
+- `npm test` passed: 56 files, 573 tests.
+- Live orchestrator a-tests for W0023 passed before promotion: `npm run typecheck && npm test && git diff --check`.
