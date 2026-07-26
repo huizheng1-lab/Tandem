@@ -12,6 +12,7 @@ import { safeDefaultProjectDir } from "../src/tools/protection.js";
 import { SessionStore } from "../src/session/store.js";
 import type { RemoteInboundMessage, RemoteSendOptions, RemoteTransport } from "../src/remote-control/bridge.js";
 import type { SessionSearchBatch } from "../src/session/search.js";
+import { CLAUDE_CLI_OPUS_5_ID, CLAUDE_CLI_OPUS_5_MODEL } from "../src/providers/cli-models.js";
 
 async function tempDir(): Promise<string> {
   const dir = path.join(tmpdir(), `tandem-desktop-${Date.now()}-${Math.random().toString(16).slice(2)}`);
@@ -392,6 +393,46 @@ describe("TandemService", () => {
     const service = new TandemService(window as never, { registerIpcResponses: false, homeDir: home, baseEnv: {} });
     await service.startSession({ projectDir: cwd });
     expect(service.listModels().find((model) => model.id === "minimax/minimax-m3")?.costHints).toEqual({ inputPerMillion: 0.3, outputPerMillion: 1.2 });
+  });
+
+  it("lists and persists the dedicated Claude CLI Opus 5 model separately from the generic Claude CLI pin", async () => {
+    const cwd = await tempDir();
+    const home = await tempDir();
+    const claudeCliPath = path.join(cwd, process.platform === "win32" ? "claude.exe" : "claude");
+    await writeFile(claudeCliPath, "", "utf8");
+
+    const { window } = fakeWindow();
+    const service = new TandemService(window as never, { registerIpcResponses: false, homeDir: home, baseEnv: {} });
+
+    await service.setConfig({
+      claudeCliPath,
+      claudeCliModel: "haiku",
+      leader: CLAUDE_CLI_OPUS_5_ID,
+      worker: CLAUDE_CLI_OPUS_5_ID
+    });
+
+    const models = service.listModels();
+    expect(models.find((model) => model.id === "claude-code/cli")).toMatchObject({
+      modelName: "haiku",
+      available: true
+    });
+    expect(models.find((model) => model.id === CLAUDE_CLI_OPUS_5_ID)).toMatchObject({
+      provider: "claude-code-cli",
+      modelName: CLAUDE_CLI_OPUS_5_MODEL,
+      available: true
+    });
+
+    const started = await service.startSession({ projectDir: cwd });
+    expect(started.config).toMatchObject({
+      leader: CLAUDE_CLI_OPUS_5_ID,
+      worker: CLAUDE_CLI_OPUS_5_ID,
+      claudeCliModel: "haiku"
+    });
+    await expect(readFile(path.join(home, ".tandem", "config.json"), "utf8").then(JSON.parse)).resolves.toMatchObject({
+      leader: CLAUDE_CLI_OPUS_5_ID,
+      worker: CLAUDE_CLI_OPUS_5_ID,
+      claudeCliModel: "haiku"
+    });
   });
 
   it("passes project instructions to agents and writes remember notes to TANDEM.md", async () => {

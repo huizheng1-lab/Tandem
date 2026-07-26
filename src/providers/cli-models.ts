@@ -3,6 +3,7 @@ import type { ModelEntry } from "./registry.js";
 
 export const CLAUDE_CLI_OPUS_5_MODEL = "claude-opus-5";
 export const CLAUDE_CLI_OPUS_5_ID = "claude-code/opus-5";
+export const CLAUDE_CLI_MODEL_OPTIONS = ["haiku", "sonnet", "opus", "claude-fable-5", CLAUDE_CLI_OPUS_5_MODEL] as const;
 
 export function configuredCliModelName(entry: Pick<ModelEntry, "id" | "provider">, config: TandemConfig): string | undefined {
   if (entry.provider === "codex-cli" && "id" in entry && entry.id === "codex/cli") return config.codexCliModel;
