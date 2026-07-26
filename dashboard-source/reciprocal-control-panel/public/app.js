@@ -1,3 +1,5 @@
+import { buildOverview } from "./overview-state.js";
+
 const token = document.querySelector('meta[name="control-token"]').content;
 const state = { data: null, filter: "open", busy: false, revision: "", dirtyModelRoles: new Set() };
 const $ = (selector) => document.querySelector(selector);
@@ -53,17 +55,14 @@ async function refresh(silent = false, force = false) {
 
 function render(data, audit) {
   const relay = data.state;
-  const supervisorDisplay = data.supervisor?.displayState || relay.phase || "Unknown";
+  const overview = buildOverview(relay, data.supervisor?.displayState);
   $("#updated").textContent = `Updated ${relative(data.now)}`;
-  $("#phase").textContent = supervisorDisplay;
+  $("#phase").textContent = overview.phase;
   $("#relay-pause").hidden = relay.phase === "paused";
   $("#relay-resume").hidden = relay.phase !== "paused";
-  $("#turn").textContent = `Turn ${relay.turn ?? "--"}`;
-  $("#next-role").textContent = relay.nextRole ? `Executor ${relay.nextRole}` : "--";
-  const resumeCount = Number(relay.resumeCount || 0);
-  const resumeThreshold = Number(relay.resumeThreshold || 3);
-  const resumeSuffix = resumeCount ? ` · resumes ${resumeCount}/${resumeThreshold}` : "";
-  $("#active-role").textContent = relay.activeRole ? `Active owner: ${relay.activeRole}${resumeSuffix}` : "No active owner";
+  $("#turn").textContent = overview.context;
+  $("#next-role").textContent = overview.nextGate;
+  $("#active-role").textContent = overview.gateDetail;
   $("#stable").textContent = relay.shortStable || "Missing";
   const topology = data.runtimeTopology || {};
   const topologyHealth = topology.health || {};
@@ -71,7 +70,7 @@ function render(data, audit) {
   const expected = topologyHealth.expectedCount ?? 1;
   $("#online").textContent = `${online} / ${expected}`;
   $("#runtime-note").textContent = topologyHealth.detail || topology.label || "Checking runtime topology";
-  $("#cycle-chip").textContent = relay.activeRole ? `${supervisorDisplay} · ${relay.activeRole}${resumeSuffix}` : `${supervisorDisplay} · next ${relay.nextRole || "--"}`;
+  $("#cycle-chip").textContent = overview.cycle;
   $("#gate-sha").textContent = relay.shortStable || "missing";
   $("#gate-copy").textContent = relay.candidateCommit ? `Candidate ${relay.shortCandidate} awaits ${relay.phase}` : "Passive-verified work advances";
   renderExecutor("a", data.runtimes.a, data.worktrees.b);

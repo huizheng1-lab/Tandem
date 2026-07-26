@@ -606,6 +606,7 @@ async function currentRevision() {
     path.join(here, "server.mjs"),
     path.join(here, "public", "index.html"),
     path.join(here, "public", "app.js"),
+    path.join(here, "public", "overview-state.js"),
     path.join(here, "public", "update-gate.css"),
     updateReviewPath,
     updateReviewIndexPath,
@@ -1953,6 +1954,7 @@ async function handle(request, response) {
     if (request.method === "GET" && url.pathname === "/update-gate.css") return serveFile(response, "update-gate.css", "text/css; charset=utf-8");
     if (request.method === "GET" && url.pathname === "/mobile.css") return serveFile(response, "mobile.css", "text/css; charset=utf-8");
     if (request.method === "GET" && url.pathname === "/app.js") return serveFile(response, "app.js", "text/javascript; charset=utf-8");
+    if (request.method === "GET" && url.pathname === "/overview-state.js") return serveFile(response, "overview-state.js", "text/javascript; charset=utf-8");
     if (request.method === "GET" && url.pathname === "/api/revision") return send(response, 200, await currentRevision());
     if (request.method === "GET" && url.pathname === "/api/status") return send(response, 200, await getStatus());
     if (request.method === "GET" && url.pathname === "/api/audit") return send(response, 200, await auditLog());

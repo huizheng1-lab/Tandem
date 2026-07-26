@@ -1,6 +1,6 @@
 {
     "schemaVersion":  1,
-    "generatedAtUtc":  "2026-07-26T15:18:30.0000000Z",
+    "generatedAtUtc":  "2026-07-26T16:09:34.4028433Z",
     "files":  [
                   {
                       "path":  "approval-flow.e2e.mjs",
@@ -29,8 +29,13 @@
                   },
                   {
                       "path":  "public/app.js",
-                      "sha256":  "68CF3A95F2E28F7ED2F5A95156038AC589C0F129D8D0B64DA7A58FB3E900EF47",
-                      "bytes":  44081
+                      "sha256":  "ECE91E5BFCE437CCDA10809D0F3D95D0638CE5C476E082B111FAEBF92F0F0808",
+                      "bytes":  43669
+                  },
+                  {
+                      "path":  "public/overview-state.js",
+                      "sha256":  "63BC6234C9E1352F2B5F772DE86EEDFCE5681E442344BC43019D3CDD2C929504",
+                      "bytes":  2431
                   },
                   {
                       "path":  "public/index.html",
@@ -64,8 +69,8 @@
                   },
                   {
                       "path":  "server.mjs",
-                      "sha256":  "44D28ADC87E4033C5FADDE31815C55F237448C09CCCB1159667B679E7A106078",
-                      "bytes":  128299
+                      "sha256":  "DB4EB349069FBF50A7FE6615395A8D989315F3F38FEB2E47F8C2BBD909D1A773",
+                      "bytes":  128509
                   },
                   {
                       "path":  "start-dashboard.ps1",
