@@ -325,8 +325,8 @@ test("D196 dashboard reports retired mutation paths truthfully", async (t) => {
       assert.equal(response.status, 410, endpoint);
       assert.equal(result.ok, false, endpoint);
       assert.match(result.error, /D196 replaced dashboard mutation paths/);
-      assert.match(result.orchestrator, /reciprocal-orchestrator\.ps1/);
-      assert.deepEqual(result.allowedMutations, ["/api/quit", "/api/relay/pause", "/api/update/dismiss-review", "/api/update/launch-candidate", "/api/update/reject", "/api/update/stop-candidate", "/api/wishlist/requeue"]);
+      assert.match(result.orchestrator, /reciprocal-orchestrator\.mjs/);
+      assert.deepEqual(result.allowedMutations, ["/api/implementation-model", "/api/quit", "/api/relay/pause", "/api/update/dismiss-review", "/api/update/launch-candidate", "/api/update/reject", "/api/update/stop-candidate", "/api/wishlist/requeue"]);
     }
   });
 });
@@ -359,8 +359,8 @@ test("D199 dashboard reports admin-repo orchestrator trigger freshness", async (
     exists: true,
     taskName: "TandemReciprocalOrchestrator",
     state: "Ready",
-    executable: "powershell.exe",
-    arguments: `-NoProfile -ExecutionPolicy Bypass -File "${path.join(fixture.repoRoot, "scripts", "reciprocal-orchestrator.ps1")}" -Repo "${fixture.repoRoot}" -RelayRoot "${fixture.relayRoot}"`,
+    executable: path.join("C:", "Windows", "System32", "wscript.exe"),
+    arguments: `"${path.join(fixture.repoRoot, "scripts", "reciprocal-orchestrator-hidden.vbs")}" "${process.execPath}" "${path.join(fixture.repoRoot, "scripts", "reciprocal-orchestrator.mjs")}" --repo "${fixture.repoRoot}" --relay-root "${fixture.relayRoot}"`,
     workingDirectory: fixture.repoRoot,
     lastRunTime: updatedAt,
     nextRunTime: new Date(Date.now() + 300_000).toISOString(),
@@ -372,6 +372,7 @@ test("D199 dashboard reports admin-repo orchestrator trigger freshness", async (
     assert.equal(result.orchestrator.trigger.configured, true);
     assert.equal(result.orchestrator.trigger.ok, true);
     assert.equal(result.orchestrator.trigger.scriptMatchesAdminRepo, true);
+    assert.equal(result.orchestrator.trigger.launcherWindowless, true);
     assert.equal(result.orchestrator.trigger.workingDirectoryMatchesAdminRepo, true);
     assert.equal(result.health.some((entry) => entry.label === "Orchestrator trigger" && entry.ok), true);
   }, { env: { TANDEM_ORCHESTRATOR_TRIGGER_JSON: JSON.stringify(trigger) } });
@@ -409,11 +410,48 @@ test("D199 dashboard warns when the orchestrator trigger points outside the admi
 
 test("D199 scheduler installer targets the admin repo orchestrator script", async () => {
   const source = await readFile(path.join(adminRepo, "scripts", "register-reciprocal-orchestrator-task.ps1"), "utf8");
-  assert.match(source, /reciprocal-orchestrator\.ps1/);
-  assert.match(source, /-Repo/);
-  assert.match(source, /-RelayRoot/);
+  assert.doesNotMatch(source, /New-ScheduledTaskAction -Execute "powershell\.exe"/);
+  assert.match(source, /Get-Command node\.exe/);
+  assert.match(source, /reciprocal-orchestrator-hidden\.vbs/);
+  assert.match(source, /reciprocal-orchestrator\.mjs/);
+  assert.match(source, /--repo/);
+  assert.match(source, /--relay-root/);
   assert.match(source, /-WorkingDirectory \$Repo/);
   assert.match(source, /MultipleInstances IgnoreNew/);
+});
+
+const windowsHiddenLauncherTest = process.platform === "win32" ? test : test.skip;
+
+async function runHiddenLauncher(fixture, extraEnv = {}, extraArgs = []) {
+  const launcher = path.join(adminRepo, "scripts", "reciprocal-orchestrator-hidden.vbs");
+  const script = path.join(adminRepo, "scripts", "reciprocal-orchestrator.mjs");
+  const child = spawn("wscript.exe", [launcher, process.execPath, script, "--repo", fixture.repoRoot, "--relay-root", fixture.relayRoot, ...extraArgs], {
+    cwd: fixture.repoRoot,
+    windowsHide: true,
+    env: { ...process.env, ...extraEnv },
+  });
+  const [code] = await once(child, "close");
+  return code;
+}
+
+windowsHiddenLauncherTest("D207 hidden orchestrator launcher preserves idle success logging and exit code", async (t) => {
+  const fixture = await makeFixture(t);
+  await fixture.setOrchestratorState({ phase: "idle", currentItem: null });
+  await writeFile(fixture.wishlistPath, "", "utf8");
+  const code = await runHiddenLauncher(fixture);
+  assert.equal(code, 0);
+  const operations = await readJsonl(path.join(fixture.relayRoot, "control", "orchestrator-operations.ndjson"));
+  assert.equal(operations.some((entry) => entry.action === "idle.no-work"), true);
+});
+
+windowsHiddenLauncherTest("D207 hidden orchestrator launcher propagates failing exit code with operations log evidence", async (t) => {
+  const fixture = await makeFixture(t);
+  await fixture.setOrchestratorState({ phase: "idle", currentItem: null });
+  const code = await runHiddenLauncher(fixture, {}, ["--cutover"]);
+  assert.equal(code, 3);
+  const operations = await readJsonl(path.join(fixture.relayRoot, "control", "orchestrator-operations.ndjson"));
+  assert.equal(operations.some((entry) => entry.action === "package-b.failed" && entry.exitCode !== 0), true);
+  assert.equal(operations.some((entry) => entry.action === "cutover.swap.failed-paused"), true);
 });
 
 test("D198 dashboard source has no legacy Kickstart supervisor implementation", async () => {

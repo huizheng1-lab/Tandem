@@ -1120,9 +1120,11 @@ async function lastOrchestratorOperation() {
 }
 
 async function getOrchestratorTriggerStatus(orchestratorState = null) {
-  const expectedScript = path.join(repoRoot, "scripts", "reciprocal-orchestrator.ps1");
+  const expectedScript = path.join(repoRoot, "scripts", "reciprocal-orchestrator.mjs");
+  const expectedLauncher = path.join(repoRoot, "scripts", "reciprocal-orchestrator-hidden.vbs");
   const expectedRepo = path.resolve(repoRoot);
   const expectedScriptKey = normalizeCommandText(expectedScript);
+  const expectedLauncherKey = normalizeCommandText(expectedLauncher);
   const expectedRepoKey = normalizeCommandText(expectedRepo);
   let raw = null;
   let queryError = null;
@@ -1156,9 +1158,10 @@ async function getOrchestratorTriggerStatus(orchestratorState = null) {
   const commandText = [raw?.executable, raw?.arguments].filter(Boolean).join(" ");
   const commandKey = normalizeCommandText(commandText);
   const workingDirectoryKey = normalizeCommandText(raw?.workingDirectory);
-  const scriptMatchesAdminRepo = exists && commandKey.includes(expectedScriptKey);
+  const scriptMatchesAdminRepo = exists && commandKey.includes(expectedScriptKey) && commandKey.includes(expectedLauncherKey);
+  const launcherWindowless = exists && normalizeCommandText(raw?.executable).endsWith("/wscript.exe");
   const workingDirectoryMatchesAdminRepo = exists && (!raw?.workingDirectory || workingDirectoryKey === expectedRepoKey);
-  const configured = exists && scriptMatchesAdminRepo && workingDirectoryMatchesAdminRepo;
+  const configured = exists && scriptMatchesAdminRepo && launcherWindowless && workingDirectoryMatchesAdminRepo;
   const stateUpdatedAt = orchestratorState?.updatedAt || null;
   const stateAgeMs = dateAgeMs(stateUpdatedAt);
   const stale = stateAgeMs === null ? true : stateAgeMs > orchestratorStaleAfterMs;
@@ -1166,7 +1169,9 @@ async function getOrchestratorTriggerStatus(orchestratorState = null) {
   const detail = !exists
     ? `No ${orchestratorTaskName} Scheduled Task registered`
     : !scriptMatchesAdminRepo
-      ? `Task command does not target ${expectedScript}`
+      ? `Task command does not target ${expectedLauncher} and ${expectedScript}`
+      : !launcherWindowless
+        ? "Task action is not using the windowless wscript launcher"
       : !workingDirectoryMatchesAdminRepo
         ? `Task working directory is ${raw?.workingDirectory || "unset"}, expected ${expectedRepo}`
         : stale
@@ -1189,8 +1194,10 @@ async function getOrchestratorTriggerStatus(orchestratorState = null) {
     command: commandText || null,
     workingDirectory: raw?.workingDirectory || null,
     expectedScript,
+    expectedLauncher,
     expectedWorkingDirectory: expectedRepo,
     scriptMatchesAdminRepo,
+    launcherWindowless,
     workingDirectoryMatchesAdminRepo,
     detail: queryError ? `${detail}; ${queryError}` : detail,
     queryError,
@@ -1977,7 +1984,7 @@ async function handle(request, response) {
       return send(response, 410, {
         ok: false,
         error: "D196 replaced dashboard mutation paths with the single reciprocal orchestrator.",
-        orchestrator: "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/reciprocal-orchestrator.ps1",
+        orchestrator: "node scripts/reciprocal-orchestrator.mjs --repo <admin-repo> --relay-root <relay-root>",
         allowedMutations: Array.from(d196AllowedMutations).sort(),
       });
     }

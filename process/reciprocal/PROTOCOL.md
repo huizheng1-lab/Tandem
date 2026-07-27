@@ -11,14 +11,18 @@ wishlist prompts, `/prompt` calls, claims, planning work, or review authority.
 Cron invokes:
 
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File "<admin-repo>\scripts\reciprocal-orchestrator.ps1"
+wscript.exe "<admin-repo>\scripts\reciprocal-orchestrator-hidden.vbs" "<absolute-node.exe>" "<admin-repo>\scripts\reciprocal-orchestrator.mjs" --repo "<admin-repo>" --relay-root "<relay-root>"
 ```
 
 Status-only inspection is:
 
-```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File "<admin-repo>\scripts\reciprocal-orchestrator.ps1" -Status
+```text
+node "<admin-repo>\scripts\reciprocal-orchestrator.mjs" --repo "<admin-repo>" --relay-root "<relay-root>" --status
 ```
+
+`scripts\reciprocal-orchestrator.ps1` remains only as a human-convenience wrapper
+for manual local use. Scheduled automation uses the windowless launcher above so
+the five-minute tick does not flash an interactive console window.
 
 Legacy relay actions, continuation-supervisor dispatch, dashboard mutation
 paths, promotion-operation journals, runtime-recovery journals,

@@ -75,8 +75,8 @@ function Initialize-ExecutorState([string]$Role, [string]$TargetWorktree) {
 }
 
 function Initialize-Schedule([string]$TargetWorktree, [string]$Role, [string]$Cron) {
-    $orchestratorScript = Join-Path $SourceRepo "scripts\reciprocal-orchestrator.ps1"
-    $prompt = "Run the D196 single reciprocal orchestrator tick from the admin repo: powershell -NoProfile -ExecutionPolicy Bypass -File `"$orchestratorScript`" -Repo `"$SourceRepo`" -RelayRoot `"$RelayRoot`". Do not run legacy relay Claim/PassiveTest/Complete actions."
+    $orchestratorScript = Join-Path $SourceRepo "scripts\reciprocal-orchestrator.mjs"
+    $prompt = "Run the D196 single reciprocal orchestrator tick from the admin repo: node `"$orchestratorScript`" --repo `"$SourceRepo`" --relay-root `"$RelayRoot`". Do not run legacy relay Claim/PassiveTest/Complete actions."
     $schedule = @([ordered]@{
         id = "relay-$($Role.ToLowerInvariant())"
         cron = $Cron
@@ -152,14 +152,14 @@ if (-not $SkipRuntimeCopy) {
 
 $relayStatePath = Join-Path $commonDir "tandem-relay\state.json"
 if ($ResetRelay -or -not (Test-Path -LiteralPath $relayStatePath)) {
-    Invoke-Checked powershell @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", (Join-Path $SourceRepo "scripts\reciprocal-orchestrator.ps1"), "-Repo", $SourceRepo, "-RelayRoot", $RelayRoot, "-Status")
+    Invoke-Checked node @((Join-Path $SourceRepo "scripts\reciprocal-orchestrator.mjs"), "--repo", $SourceRepo, "--relay-root", $RelayRoot, "--status")
 }
 
 [ordered]@{
     relayRoot = $RelayRoot
     executorA = [ordered]@{ runtime = (Join-Path $RelayRoot "runtimes\executor-a\Tandem.exe"); target = $worktreeB; branch = $branchB; cron = $null; role = "orchestrator-controlled-producer" }
     executorB = [ordered]@{ runtime = (Join-Path $RelayRoot "runtimes\executor-b\Tandem.exe"); target = $worktreeA; branch = $branchA; cron = $null; role = "mechanical-swap-runtime-only" }
-    orchestrator = [ordered]@{ command = "powershell -NoProfile -ExecutionPolicy Bypass -File `"$SourceRepo\scripts\reciprocal-orchestrator.ps1`" -Repo `"$SourceRepo`" -RelayRoot `"$RelayRoot`""; scheduler = "admin-repo only" }
+    orchestrator = [ordered]@{ command = "node `"$SourceRepo\scripts\reciprocal-orchestrator.mjs`" --repo `"$SourceRepo`" --relay-root `"$RelayRoot`""; scheduler = "admin-repo only, hidden via reciprocal-orchestrator-hidden.vbs" }
     sharedDirection = (Join-Path $RelayRoot "control\SHARED_DIRECTION.md")
     wishlist = (Join-Path $RelayRoot "control\WISHLIST.md")
     nextRole = "A"
