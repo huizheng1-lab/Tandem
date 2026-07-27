@@ -1,0 +1,56 @@
+Round: D207
+
+Commits:
+- 8e62d72 D207-1: run orchestrator task through hidden node launcher
+
+Files changed:
+- scripts/reciprocal-orchestrator-hidden.vbs
+- scripts/register-reciprocal-orchestrator-task.ps1
+- scripts/setup-reciprocal-tandem.ps1
+- dashboard-source/reciprocal-control-panel/server.mjs
+- dashboard-source/reciprocal-control-panel/approval-flow.e2e.mjs
+- process/reciprocal/PROTOCOL.md
+
+Wrapper decision:
+- Kept scripts/reciprocal-orchestrator.ps1 as a human-convenience wrapper.
+- Scheduled automation no longer uses PowerShell. The live task now uses wscript.exe -> reciprocal-orchestrator-hidden.vbs -> absolute node.exe -> reciprocal-orchestrator.mjs.
+
+Live task action after re-registration:
+- Execute: C:\Windows\System32\wscript.exe
+- Arguments: "C:\Users\huizh\Apps\HZ code\scripts\reciprocal-orchestrator-hidden.vbs" "C:\Program Files\nodejs\node.exe" "C:\Users\huizh\Apps\HZ code\scripts\reciprocal-orchestrator.mjs" --repo "C:\Users\huizh\Apps\HZ code" --relay-root "C:\Users\huizh\Apps\Tandem Reciprocal"
+- WorkingDirectory: C:\Users\huizh\Apps\HZ code
+
+Live proof:
+- Re-registered TandemReciprocalOrchestrator with scripts\register-reciprocal-orchestrator-task.ps1 -Repo "C:\Users\huizh\Apps\HZ code" -RelayRoot "C:\Users\huizh\Apps\Tandem Reciprocal" -RepeatMinutes 5.
+- First observed pair after re-registration: LastRunTime 2026-07-27 17:24:23 -0400 and 2026-07-27 17:29:24 -0400, LastTaskResult 0 for both.
+- Corrected visible-window watcher observed two more real scheduled firings: 2026-07-27 17:34:24 -0400 and 2026-07-27 17:39:24 -0400, LastTaskResult 0 for both.
+- Corrected visible-window watcher result: VisibleOrchestratorWindows = [].
+- Matching operations log entries:
+  - {"at":"2026-07-27T21:24:23.579Z","action":"idle.no-work","phase":"idle","item":null,"step":null}
+  - {"at":"2026-07-27T21:29:24.580Z","action":"idle.no-work","phase":"idle","item":null,"step":null}
+  - {"at":"2026-07-27T21:34:24.567Z","action":"idle.no-work","phase":"idle","item":null,"step":null}
+  - {"at":"2026-07-27T21:39:24.568Z","action":"idle.no-work","phase":"idle","item":null,"step":null}
+
+Adjacent watchdog check:
+- TandemReciprocalDashboardWatchdog-4782 is currently Running and still uses powershell.exe with dashboard-watchdog.ps1.
+- It is a long-running dashboard watchdog, not the five-minute orchestrator tick. I left it unchanged for a separate decision because it is not the same scheduled-task launcher path and not the periodic flashing source addressed by D207.
+
+Regression coverage:
+- node --test --test-name-pattern "D199|D207|D196 dashboard reports retired mutation paths" dashboard-source\reciprocal-control-panel\approval-flow.e2e.mjs
+  - Passed.
+  - D207 hidden orchestrator launcher preserves idle success logging and exit code.
+  - D207 hidden orchestrator launcher propagates failing exit code with operations log evidence.
+- node --check dashboard-source\reciprocal-control-panel\server.mjs: passed.
+- node --check dashboard-source\reciprocal-control-panel\approval-flow.e2e.mjs: passed.
+- PowerShell parser check for scripts\register-reciprocal-orchestrator-task.ps1: passed.
+
+Required verification:
+- npm run typecheck: passed.
+- npm test: passed. 57 files passed, 2 skipped; 605 tests passed, 41 skipped.
+- git diff --check: passed.
+- git diff --cached --check before D207-1 commit: passed.
+
+Notes:
+- No wishlist item was added or claimed.
+- TandemHandoffDoneReviewWatch and TandemHandoffTriggerWatch were not changed.
+- Existing unrelated untracked handoff docs and earlier uncommitted D206 dashboard work were left untouched.
