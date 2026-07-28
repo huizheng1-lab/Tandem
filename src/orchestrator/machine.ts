@@ -99,7 +99,7 @@ export class WorkerStepExhaustionError extends Error {
   readonly maxSteps: number;
 
   constructor(stepsUsed: number, maxSteps: number) {
-    super(`Worker step budget exhausted (${stepsUsed}/${maxSteps}) before submit_completion_report.`);
+    super(`Worker step budget exhausted (${stepsUsed}/${maxSteps}) before submit_completion_report. This limit is configured by maxStepsPerAgentTurn and can be adjusted in settings.`);
     this.name = "WorkerStepExhaustionError";
     this.stepsUsed = stepsUsed;
     this.maxSteps = maxSteps;

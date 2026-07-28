@@ -285,6 +285,14 @@ describe("orchestration", () => {
     expect(notices.some((message) => message.includes("increased budget (2x)"))).toBe(true);
   });
 
+  it("D209: worker step exhaustion names the configured setting and limit", () => {
+    const error = new WorkerStepExhaustionError(60, 60);
+
+    expect(error.message).toContain("Worker step budget exhausted (60/60)");
+    expect(error.message).toContain("maxStepsPerAgentTurn");
+    expect(error.message).toContain("adjusted in settings");
+  });
+
   it("D103: ordinary worker failures retry without budget escalation", async () => {
     const multipliers: (number | undefined)[] = [];
     let builds = 0;

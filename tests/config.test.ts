@@ -293,6 +293,75 @@ describe("config", () => {
     expect(defaultConfig.maxStepsPerAgentTurn).toBe(150);
   });
 
+  it("D209: migrates a persisted retired agent step budget default on load", async () => {
+    const home = await tempDir("d209-stale-step-home");
+    const cwd = await tempDir("d209-stale-step-cwd");
+    const configPath = path.join(home, ".tandem", "config.json");
+    const logs: string[] = [];
+    await mkdir(path.dirname(configPath), { recursive: true });
+    await writeFile(configPath, JSON.stringify({ maxStepsPerAgentTurn: 60, permissionMode: "yolo" }), "utf8");
+
+    const config = loadConfig({ cwd, homeDir: home, logger: (message) => logs.push(message) });
+    const persisted = JSON.parse(await readFile(configPath, "utf8")) as Record<string, unknown>;
+
+    expect(config.maxStepsPerAgentTurn).toBe(defaultConfig.maxStepsPerAgentTurn);
+    expect(persisted).toMatchObject({ maxStepsPerAgentTurn: defaultConfig.maxStepsPerAgentTurn, permissionMode: "yolo" });
+    expect(logs).toHaveLength(1);
+    expect(logs[0]).toContain("maxStepsPerAgentTurn 60 -> 150");
+    expect(logs[0]).toContain(configPath);
+  });
+
+  it("D209: migrates retired project defaults before project override tracking", async () => {
+    const home = await tempDir("d209-project-home");
+    const cwd = await tempDir("d209-project-cwd");
+    const projectPath = path.join(cwd, ".tandem", "config.json");
+    const logs: string[] = [];
+    await mkdir(path.dirname(projectPath), { recursive: true });
+    await writeFile(projectPath, JSON.stringify({ maxStepsPerAgentTurn: 60 }), "utf8");
+
+    const details = loadConfigDetails({ cwd, homeDir: home, logger: (message) => logs.push(message) });
+    const persisted = JSON.parse(await readFile(projectPath, "utf8")) as Record<string, unknown>;
+
+    expect(details.config.maxStepsPerAgentTurn).toBe(defaultConfig.maxStepsPerAgentTurn);
+    expect(details.projectConfig.maxStepsPerAgentTurn).toBe(defaultConfig.maxStepsPerAgentTurn);
+    expect(details.projectOverrides).not.toContain("maxStepsPerAgentTurn");
+    expect(persisted.maxStepsPerAgentTurn).toBe(defaultConfig.maxStepsPerAgentTurn);
+    expect(logs.some((message) => message.includes("maxStepsPerAgentTurn 60 -> 150"))).toBe(true);
+  });
+
+  it("D209: preserves non-retired explicit config values during default migration", async () => {
+    const home = await tempDir("d209-custom-home");
+    const cwd = await tempDir("d209-custom-cwd");
+    const configPath = path.join(home, ".tandem", "config.json");
+    const logs: string[] = [];
+    await mkdir(path.dirname(configPath), { recursive: true });
+    await writeFile(configPath, JSON.stringify({ maxStepsPerAgentTurn: 61, maxParallelWorkers: 3 }), "utf8");
+
+    const config = loadConfig({ cwd, homeDir: home, logger: (message) => logs.push(message) });
+    const persisted = JSON.parse(await readFile(configPath, "utf8")) as Record<string, unknown>;
+
+    expect(config.maxStepsPerAgentTurn).toBe(61);
+    expect(config.maxParallelWorkers).toBe(3);
+    expect(persisted).toMatchObject({ maxStepsPerAgentTurn: 61, maxParallelWorkers: 3 });
+    expect(logs).toEqual([]);
+  });
+
+  it("D209: migrates other documented retired defaults in the same narrow pass", async () => {
+    const home = await tempDir("d209-parallel-home");
+    const cwd = await tempDir("d209-parallel-cwd");
+    const configPath = path.join(home, ".tandem", "config.json");
+    const logs: string[] = [];
+    await mkdir(path.dirname(configPath), { recursive: true });
+    await writeFile(configPath, JSON.stringify({ maxParallelWorkers: 1 }), "utf8");
+
+    const config = loadConfig({ cwd, homeDir: home, logger: (message) => logs.push(message) });
+    const persisted = JSON.parse(await readFile(configPath, "utf8")) as Record<string, unknown>;
+
+    expect(config.maxParallelWorkers).toBe(defaultConfig.maxParallelWorkers);
+    expect(persisted.maxParallelWorkers).toBe(defaultConfig.maxParallelWorkers);
+    expect(logs.some((message) => message.includes("maxParallelWorkers 1 -> 2"))).toBe(true);
+  });
+
   it("allows custom models to override media capabilities", () => {
     const entry = resolveModel("compatible/vision", [
       {
