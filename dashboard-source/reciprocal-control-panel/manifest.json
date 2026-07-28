@@ -1,91 +1,96 @@
 {
-    "schemaVersion":  1,
-    "generatedAtUtc":  "2026-07-26T16:09:34.4028433Z",
-    "files":  [
-                  {
-                      "path":  "approval-flow.e2e.mjs",
-                      "sha256":  "E0A461439CBA177D2708A9F84EE7D96F159F8F6E0C271B9AD4BEBCE418C13643",
-                      "bytes":  42359
-                  },
-                  {
-                      "path":  "dashboard-watchdog.ps1",
-                      "sha256":  "B4CCD25EF4D1BE7F1B8C52C86AE842130C04B295F68B90525B1453CD1AAF2379",
-                      "bytes":  4962
-                  },
-                  {
-                      "path":  "Launch Reciprocal Control Panel.bat",
-                      "sha256":  "12985EB0FF34E418892C26D898C016CEFE9F63F722ED35505F0E6DC1EE3C3E00",
-                      "bytes":  399
-                  },
-                  {
-                      "path":  "lib.mjs",
-                      "sha256":  "A7DBF1895080F7377015136742ABD935A4FABC606ECFD9E0B87D5E41E1A084BB",
-                      "bytes":  28229
-                  },
-                  {
-                      "path":  "lib.nodecheck.mjs",
-                      "sha256":  "154853F2F11ADE4A5A21AFFF4AACA5E679B9198969A871CB734063753DD3D5A0",
-                      "bytes":  21852
-                  },
-                  {
-                      "path":  "public/app.js",
-                      "sha256":  "ECE91E5BFCE437CCDA10809D0F3D95D0638CE5C476E082B111FAEBF92F0F0808",
-                      "bytes":  43669
-                  },
-                  {
-                      "path":  "public/overview-state.js",
-                      "sha256":  "63BC6234C9E1352F2B5F772DE86EEDFCE5681E442344BC43019D3CDD2C929504",
-                      "bytes":  2431
-                  },
-                  {
-                      "path":  "public/index.html",
-                      "sha256":  "3070397A0379AADE251A20381CF29F570D5EAF799F665A4A74D7066C4B747414",
-                      "bytes":  15956
-                  },
-                  {
-                      "path":  "public/mobile.css",
-                      "sha256":  "D967063F82664BE3D5CF26FDECAEB294DE9CBC08878ABC676C051B97E687AAEF",
-                      "bytes":  2360
-                  },
-                  {
-                      "path":  "public/styles.css",
-                      "sha256":  "B8CE72F912176E90044FA2117BC2A36EE80B49F4FB58EC24CB2BF5B5EF55F522",
-                      "bytes":  14679
-                  },
-                  {
-                      "path":  "public/update-gate.css",
-                      "sha256":  "8D0CCD2AB9F3FEC6003DE0A291F93168B416F989B2928FF73597387E62C8F0A9",
-                      "bytes":  1916
-                  },
-                  {
-                      "path":  "README.md",
-                      "sha256":  "35570593DF565F12EA20B3F549B140008DE4D4BE55A2716AA179934499696391",
-                      "bytes":  4227
-                  },
-                  {
-                      "path":  "register-dashboard-watchdog-task.ps1",
-                      "sha256":  "3A6AF4E25703F7297289123407586FB26AA6B19D30F20C7C0CEF81C5301C683E",
-                      "bytes":  2295
-                  },
-                  {
-                      "path":  "server.mjs",
-                      "sha256":  "DB4EB349069FBF50A7FE6615395A8D989315F3F38FEB2E47F8C2BBD909D1A773",
-                      "bytes":  128509
-                  },
-                  {
-                      "path":  "start-dashboard.ps1",
-                      "sha256":  "A13B6387E821F60F7100B89505B411E938265DD6398821EDFE3DCCB11925E668",
-                      "bytes":  1889
-                  },
-                  {
-                      "path":  "stop-reciprocal-tandem.ps1",
-                      "sha256":  "D25C19CBDEF90E71D34DB68279FD47DFFC57403B4B805B5449E4CC168848BF71",
-                      "bytes":  1190
-                  },
-                  {
-                      "path":  "update-model-config.ps1",
-                      "sha256":  "F65C7D00A65A27519BEAD1402B7BB9049BDD2322D27D11DA036F6661FB2330F4",
-                      "bytes":  3147
-                  }
-              ]
+  "schemaVersion": 1,
+  "generatedAtUtc": "2026-07-28T02:49:09.781Z",
+  "files": [
+    {
+      "path": "approval-flow.e2e.mjs",
+      "sha256": "57B4F05E694FC4DDECB582683F8BD85414C00A874254289CE540D7ECA0116443",
+      "bytes": 44646
+    },
+    {
+      "path": "dashboard-hidden-launcher.vbs",
+      "sha256": "EB703E00F98939A2DB8C09BDC735FF879A861C842761A78BBE4CF7E9602F87BA",
+      "bytes": 979
+    },
+    {
+      "path": "dashboard-watchdog.ps1",
+      "sha256": "B4CCD25EF4D1BE7F1B8C52C86AE842130C04B295F68B90525B1453CD1AAF2379",
+      "bytes": 4962
+    },
+    {
+      "path": "Launch Reciprocal Control Panel.bat",
+      "sha256": "12985EB0FF34E418892C26D898C016CEFE9F63F722ED35505F0E6DC1EE3C3E00",
+      "bytes": 399
+    },
+    {
+      "path": "lib.mjs",
+      "sha256": "A7DBF1895080F7377015136742ABD935A4FABC606ECFD9E0B87D5E41E1A084BB",
+      "bytes": 28229
+    },
+    {
+      "path": "lib.nodecheck.mjs",
+      "sha256": "154853F2F11ADE4A5A21AFFF4AACA5E679B9198969A871CB734063753DD3D5A0",
+      "bytes": 21852
+    },
+    {
+      "path": "public/app.js",
+      "sha256": "ECE91E5BFCE437CCDA10809D0F3D95D0638CE5C476E082B111FAEBF92F0F0808",
+      "bytes": 43669
+    },
+    {
+      "path": "public/overview-state.js",
+      "sha256": "63BC6234C9E1352F2B5F772DE86EEDFCE5681E442344BC43019D3CDD2C929504",
+      "bytes": 2431
+    },
+    {
+      "path": "public/index.html",
+      "sha256": "3070397A0379AADE251A20381CF29F570D5EAF799F665A4A74D7066C4B747414",
+      "bytes": 15956
+    },
+    {
+      "path": "public/mobile.css",
+      "sha256": "D967063F82664BE3D5CF26FDECAEB294DE9CBC08878ABC676C051B97E687AAEF",
+      "bytes": 2360
+    },
+    {
+      "path": "public/styles.css",
+      "sha256": "B8CE72F912176E90044FA2117BC2A36EE80B49F4FB58EC24CB2BF5B5EF55F522",
+      "bytes": 14679
+    },
+    {
+      "path": "public/update-gate.css",
+      "sha256": "8D0CCD2AB9F3FEC6003DE0A291F93168B416F989B2928FF73597387E62C8F0A9",
+      "bytes": 1916
+    },
+    {
+      "path": "README.md",
+      "sha256": "1356CA63265F8C1B0FAA95D07F89E2F96011E8A2A66041B8AF9E029287B3C908",
+      "bytes": 4367
+    },
+    {
+      "path": "register-dashboard-watchdog-task.ps1",
+      "sha256": "F7088C968A27CE0FB3D83FF098F003F45DFC3DB09CD1D83C3CF9E47DF35F97F6",
+      "bytes": 2748
+    },
+    {
+      "path": "server.mjs",
+      "sha256": "9DF5E8648D1950751AE1423B0CE4BFB2B18EA04AB393EFDA505B591EB235D9E4",
+      "bytes": 129011
+    },
+    {
+      "path": "start-dashboard.ps1",
+      "sha256": "A13B6387E821F60F7100B89505B411E938265DD6398821EDFE3DCCB11925E668",
+      "bytes": 1889
+    },
+    {
+      "path": "stop-reciprocal-tandem.ps1",
+      "sha256": "D25C19CBDEF90E71D34DB68279FD47DFFC57403B4B805B5449E4CC168848BF71",
+      "bytes": 1190
+    },
+    {
+      "path": "update-model-config.ps1",
+      "sha256": "F65C7D00A65A27519BEAD1402B7BB9049BDD2322D27D11DA036F6661FB2330F4",
+      "bytes": 3147
+    }
+  ]
 }

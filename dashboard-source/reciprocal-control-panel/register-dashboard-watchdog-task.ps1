@@ -22,14 +22,23 @@ $controlRoot = Join-Path $DashboardRoot "..\control"
 $logPath = Join-Path $controlRoot "dashboard-server.log"
 $stopSignalPath = Join-Path $controlRoot "dashboard-stop-$Port.signal"
 $watchdog = Join-Path $DashboardRoot "dashboard-watchdog.ps1"
+$launcher = Join-Path $DashboardRoot "dashboard-hidden-launcher.vbs"
 New-Item -ItemType Directory -Path $controlRoot -Force | Out-Null
 
 if (-not (Test-Path -LiteralPath $watchdog)) {
     throw "Missing dashboard watchdog script: $watchdog"
 }
+if (-not (Test-Path -LiteralPath $launcher)) {
+    throw "Missing dashboard hidden launcher: $launcher"
+}
+$powershell = (Get-Command powershell.exe -CommandType Application -ErrorAction Stop).Source
+$wscript = Join-Path $env:WINDIR "System32\wscript.exe"
+if (-not (Test-Path -LiteralPath $wscript)) {
+    throw "Missing Windows Script Host launcher: $wscript"
+}
 
-$argument = "-NoProfile -ExecutionPolicy Bypass -File `"$watchdog`" -Port $Port -DashboardRoot `"$DashboardRoot`" -RepoRoot `"$RepoRoot`" -LogPath `"$logPath`" -StopSignalPath `"$stopSignalPath`""
-$action = New-ScheduledTaskAction -Execute "powershell.exe" -Argument $argument -WorkingDirectory $DashboardRoot
+$argument = "`"$launcher`" `"$powershell`" -NoProfile -ExecutionPolicy Bypass -File `"$watchdog`" -Port $Port -DashboardRoot `"$DashboardRoot`" -RepoRoot `"$RepoRoot`" -LogPath `"$logPath`" -StopSignalPath `"$stopSignalPath`""
+$action = New-ScheduledTaskAction -Execute $wscript -Argument $argument -WorkingDirectory $DashboardRoot
 $logonTrigger = New-ScheduledTaskTrigger -AtLogOn -User "$env:USERDOMAIN\$env:USERNAME"
 $repeatTrigger = New-ScheduledTaskTrigger -Once -At (Get-Date).AddMinutes(1) -RepetitionInterval (New-TimeSpan -Minutes $RepeatMinutes) -RepetitionDuration (New-TimeSpan -Days 365)
 $triggers = @($logonTrigger, $repeatTrigger)

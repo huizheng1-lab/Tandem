@@ -10,7 +10,7 @@ From the dashboard directory:
 powershell -NoProfile -ExecutionPolicy Bypass -File start-dashboard.ps1
 ```
 
-The launcher opens `http://127.0.0.1:4782`. It reuses an existing panel server on that port and registers one Windows Scheduled Task per port, named `TandemReciprocalDashboardWatchdog-<port>`. The task starts at logon and repeats every five minutes with "ignore new instance" semantics, so a killed watchdog/server pair is revived by the next task tick. The task runs the existing watchdog, which still restarts a missing listener after a two-second backoff. The dashboard Quit button writes an intentional-stop signal so both the watchdog and future scheduled-task ticks exit without restarting the panel. Pass `-NoBrowser` to start it without opening a browser, or `-Port <number>` to select another local port.
+The launcher opens `http://127.0.0.1:4782`. It reuses an existing panel server on that port and registers one Windows Scheduled Task per port, named `TandemReciprocalDashboardWatchdog-<port>`. The task starts at logon and repeats every five minutes, so a killed watchdog/server pair is revived by the next task tick. The scheduled task invokes a `wscript.exe` hidden-launcher shim, which starts the existing watchdog without flashing a console window and then exits. The watchdog still restarts a missing listener after a two-second backoff and uses a mutex to make overlapping task ticks harmless. The dashboard Quit button writes an intentional-stop signal so both the watchdog and future scheduled-task ticks exit without restarting the panel. Pass `-NoBrowser` to start it without opening a browser, or `-Port <number>` to select another local port.
 
 To refresh only the scheduled-task registration:
 
