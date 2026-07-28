@@ -1,0 +1,45 @@
+D208 completion
+Round: D208
+
+Commits:
+- 1332110 D208-1: hide dashboard watchdog scheduled launcher
+
+Conclusion:
+- `dashboard-watchdog.ps1` is intentionally self-healing. It owns a mutex, keeps the dashboard listener on port 4782 alive, and restarts the dashboard server after a missing-listener backoff.
+- The repeating scheduled trigger is intentional: it revives the watchdog/server pair if the prior watchdog process is gone. The repeat was kept.
+
+Implementation:
+- Added `dashboard-source/reciprocal-control-panel/dashboard-hidden-launcher.vbs`.
+- Updated `register-dashboard-watchdog-task.ps1` so `TandemReciprocalDashboardWatchdog-4782` directly schedules `C:\Windows\System32\wscript.exe`, not `powershell.exe`.
+- The launcher starts the watchdog hidden and exits by default, so repeat ticks complete successfully; `--wait` is available for explicit exit-code propagation tests.
+- Updated dashboard README and manifest. The manifest was generated from a clean `HEAD + D208` dashboard package so unrelated dirty dashboard files were not deployed or staged.
+
+Live task proof:
+- Deployed clean package from `tmp\d208-dashboard-source-clean-20260728024908\dashboard-source\reciprocal-control-panel`.
+- Deploy VerifyOnly after deploy: ok=true, managedFileCount=18, plannedUpdates=[].
+- Live task action:
+  - Execute: `C:\Windows\System32\wscript.exe`
+  - Arguments include `dashboard-hidden-launcher.vbs` and the resolved PowerShell path for `dashboard-watchdog.ps1`.
+  - Working directory: `C:\Users\huizh\Apps\Tandem Reciprocal\dashboard`
+  - Triggers: logon trigger plus `PT5M` repeating time trigger.
+- Replaced the stale pre-D208 wait-mode watchdog by holding `dashboard-stop-4782.signal`, then restarted through deployed `start-dashboard.ps1`.
+- Final live watchdog process after restart: hidden `powershell.exe ... dashboard-watchdog.ps1`, with the scheduled task already back to Ready and `LastTaskResult=0`.
+- Observed two consecutive real scheduled firings:
+  - 2026-07-27 22:51:39 local, LastTaskResult=0, next 22:56:39.
+  - 2026-07-27 22:56:40 local, LastTaskResult=0, next 23:01:39.
+- Visible watchdog/launcher windows observed during those firings: none.
+- Dashboard status after observation: phase=idle, stableCommit=ca812bfa7c706e314b2ea81e12635f52bf11153b, relayRoot=`C:\Users\huizh\Apps\Tandem Reciprocal`.
+
+Verification:
+- PowerShell parser check for `register-dashboard-watchdog-task.ps1`: passed.
+- `npx vitest run --configLoader runner tests\dashboard-watchdog-hidden-launcher.test.ts`: 3 tests passed.
+- `node dashboard-source\reciprocal-control-panel\lib.nodecheck.mjs`: 21 tests passed.
+- `node dashboard-source\reciprocal-control-panel\approval-flow.e2e.mjs`: 13 passed, 9 skipped, 0 failed.
+- `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\deploy-reciprocal-dashboard.ps1 -SourceRoot <clean D208 source> -VerifyOnly`: passed.
+- `npm run typecheck`: passed.
+- `npm test`: passed with USERPROFILE/HOME pointed at a temporary test home to avoid the live desktop Tandem session mutating the real `~\.tandem` guard during the suite; 58 files passed, 2 skipped, 608 tests passed, 41 skipped.
+- `git diff --check`: passed; only line-ending warnings were emitted for existing dashboard files.
+
+Unrelated work preserved:
+- Existing unstaged D206 dashboard edits in `approval-flow.e2e.mjs`, `public/app.js`, `public/index.html`, and `server.mjs` were left unstaged.
+- Untracked handoff/admin documents and temporary folders were left untouched.
