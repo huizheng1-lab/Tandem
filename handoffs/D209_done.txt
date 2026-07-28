@@ -1,0 +1,42 @@
+D209 completion
+Round: D209
+
+Commits:
+- 0bc44a0 D209-1: migrate retired config defaults
+
+Migration mechanism:
+- Added a one-time load-time migration pass in `src/config/load.ts`.
+- The pass runs for both global and project config files after JSON read and before schema parsing.
+- It persists only when a field exactly matches a documented retired shipped default, then logs the file path and field migration.
+- Covered fields:
+  - `maxStepsPerAgentTurn`: retired default `60` -> current default `150` (D102).
+  - `maxParallelWorkers`: retired default `1` -> current default `2` (D63).
+- No new required config fields were added, and current shipped defaults were not changed.
+
+Trade-off:
+- Persisted config files do not record whether an exact old default value was untouched or deliberately chosen later. D209 therefore treats exact documented retired defaults as stale shipped defaults. Non-retired explicit values, such as `maxStepsPerAgentTurn: 61` or `maxParallelWorkers: 3`, are preserved unchanged.
+
+Exhaustion diagnostics:
+- `WorkerStepExhaustionError` now includes the actual configured limit hit and says the limit is controlled by `maxStepsPerAgentTurn` in settings.
+
+Human local config:
+- `C:\Users\huizh\.tandem\config.json` was inspected and already contains `maxStepsPerAgentTurn: 150` and `maxParallelWorkers: 2`, so the new migration is a no-op for that file.
+
+Regression coverage:
+- `tests/config.test.ts`: `D209: migrates a persisted retired agent step budget default on load`.
+- `tests/config.test.ts`: `D209: migrates retired project defaults before project override tracking`.
+- `tests/config.test.ts`: `D209: preserves non-retired explicit config values during default migration`.
+- `tests/config.test.ts`: `D209: migrates other documented retired defaults in the same narrow pass`.
+- `tests/orchestrator.test.ts`: `D209: worker step exhaustion names the configured setting and limit`.
+- The fixture matching the original scenario, explicit persisted `maxStepsPerAgentTurn: 60`, loads as `150`, is written back to disk as `150`, and logs `maxStepsPerAgentTurn 60 -> 150`.
+
+Verification:
+- `npx vitest run --configLoader runner tests\config.test.ts`: passed, 25 tests.
+- `npx vitest run --configLoader runner tests\orchestrator.test.ts`: passed, 31 tests.
+- `npm run typecheck`: passed.
+- `git diff --check`: passed; only existing line-ending warnings were emitted.
+- `npm test` with USERPROFILE/HOME pointed at a temporary test home: passed, 58 files passed, 2 skipped; 613 tests passed, 41 skipped.
+
+Unrelated work preserved:
+- Existing unstaged D206 dashboard edits in `dashboard-source/reciprocal-control-panel/approval-flow.e2e.mjs`, `public/app.js`, `public/index.html`, and `server.mjs` were left unstaged.
+- Untracked handoff/admin documents and temporary folders were left untouched.
