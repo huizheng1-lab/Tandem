@@ -85,6 +85,17 @@ async function writeEvidence(name, value) {
   await appendFile(process.env.TANDEM_DASHBOARD_E2E_EVIDENCE, `${JSON.stringify({ name, ...value })}\n`, "utf8");
 }
 
+async function waitForAudit(file, predicate, timeoutMs = 8000) {
+  const deadline = Date.now() + timeoutMs;
+  let audit = [];
+  while (Date.now() < deadline) {
+    audit = await readJsonl(file);
+    if (audit.some(predicate)) return audit;
+    await new Promise((resolve) => setTimeout(resolve, 120));
+  }
+  return audit;
+}
+
 function commandActions(commands) {
   return commands
     .filter((entry) => entry.args.includes("-Action"))
@@ -190,6 +201,12 @@ async function makeFixture(t) {
 
   async function setRuntimeShas(sourceSha) {
     const candidateBuildInfo = await readJson(path.join(candidateRuntimeDir, "BUILD_INFO.json"));
+    const manifest = await integrity.packageManifest(candidateRuntimeDir);
+    const packageIdentity = integrity.packageIdentity(sourceSha, manifest, { candidatePreviewArtifactLifecycle: 1 });
+    const packagePath = path.join(repoRoot, "release", "runtime-packages", packageIdentity, "win-unpacked");
+    await mkdir(path.dirname(packagePath), { recursive: true });
+    await rm(packagePath, { recursive: true, force: true });
+    await cp(candidateRuntimeDir, packagePath, { recursive: true });
     for (const role of ["a", "b"]) {
       const runtimeDir = path.join(relayRoot, "runtimes", `executor-${role}`);
       await rm(runtimeDir, { recursive: true, force: true });
@@ -199,8 +216,9 @@ async function makeFixture(t) {
         ...candidateBuildInfo,
         sourceSha,
         sourceShortSha: sourceSha.slice(0, 7),
-        packageIdentity: fixturePackage,
-        immutablePackagePath,
+        packageIdentity,
+        packageManifest: manifest,
+        immutablePackagePath: packagePath,
         reciprocalCapabilities: { candidatePreviewArtifactLifecycle: 1 },
       });
     }
@@ -270,6 +288,36 @@ async function withServer(t, fixture, runTest, options = {}) {
   return runTest({ post, get, postWithoutToken });
 }
 
+async function createBareOrigin(fixture) {
+  const origin = path.join(fixture.root, "origin.git");
+  await git(fixture.repoRoot, "init", "--bare", origin);
+  await git(fixture.repoRoot, "remote", "add", "origin", origin);
+  await git(fixture.repoRoot, "push", "origin", `${fixture.fixtureSha}:refs/heads/master`);
+  return origin;
+}
+
+async function prepareVerifiedStable(fixture, fileName = "verified-stable.txt") {
+  await writeFile(path.join(fixture.repoRoot, fileName), `${fileName}\n`, "utf8");
+  await git(fixture.repoRoot, "add", fileName);
+  await git(fixture.repoRoot, "commit", "-m", `verified stable ${fileName}`);
+  const stableSha = await git(fixture.repoRoot, "rev-parse", "HEAD");
+  await fixture.setRuntimeShas(stableSha);
+  await fixture.setOrchestratorState({
+    phase: "idle",
+    currentItem: null,
+    stableCommit: stableSha,
+    acceptedSourceSha: stableSha,
+    updatedAt: "2026-07-22T00:00:02.000Z",
+  });
+  await git(fixture.repoRoot, "update-ref", "refs/tandem-relay/stable", stableSha);
+  await appendFile(path.join(fixture.relayRoot, "control", "orchestrator-operations.ndjson"), [
+    JSON.stringify({ at: "2026-07-22T00:00:01.000Z", action: "stable-ref.updated", sourceSha: stableSha }),
+    JSON.stringify({ at: "2026-07-22T00:00:02.000Z", action: "cycle.completed", completedItem: "WTEST" }),
+    "",
+  ].join("\n"), "utf8");
+  return stableSha;
+}
+
 test("D184 dashboard reports canonical package state without the test harness", async (t) => {
   const fixture = await makeFixture(t);
   await fixture.setState();
@@ -326,9 +374,90 @@ test("D196 dashboard reports retired mutation paths truthfully", async (t) => {
       assert.equal(result.ok, false, endpoint);
       assert.match(result.error, /D196 replaced dashboard mutation paths/);
       assert.match(result.orchestrator, /reciprocal-orchestrator\.mjs/);
-      assert.deepEqual(result.allowedMutations, ["/api/implementation-model", "/api/quit", "/api/relay/pause", "/api/update/dismiss-review", "/api/update/launch-candidate", "/api/update/reject", "/api/update/stop-candidate", "/api/wishlist/requeue"]);
+      assert.deepEqual(result.allowedMutations, ["/api/github-sync", "/api/implementation-model", "/api/quit", "/api/relay/pause", "/api/update/dismiss-review", "/api/update/launch-candidate", "/api/update/reject", "/api/update/stop-candidate", "/api/wishlist/requeue"]);
     }
   });
+});
+
+test("D206 GitHub sync fast-forwards only the verified stable commit and preserves dirty admin files", async (t) => {
+  const fixture = await makeFixture(t);
+  await createBareOrigin(fixture);
+  const stableSha = await prepareVerifiedStable(fixture);
+  await writeFile(path.join(fixture.repoRoot, "verified-stable.txt"), "dirty tracked edit\n", "utf8");
+  await writeFile(path.join(fixture.repoRoot, "staged-local.txt"), "staged local admin file\n", "utf8");
+  await git(fixture.repoRoot, "add", "staged-local.txt");
+  await writeFile(path.join(fixture.repoRoot, "untracked-local.txt"), "untracked local admin file\n", "utf8");
+  const dirtyBefore = await git(fixture.repoRoot, "status", "--porcelain=v1", "--untracked-files=all");
+
+  await withServer(t, fixture, async ({ get, post }) => {
+    const status = await get("/api/status");
+    assert.equal(status.response.status, 200, JSON.stringify(status.result));
+    assert.equal(status.result.githubSync.stableSha, stableSha);
+    assert.equal(status.result.githubSync.state, "fast-forward-ready");
+    assert.equal(status.result.githubSync.canPush, true);
+
+    const unconfirmed = await post("/api/github-sync", {});
+    assert.equal(unconfirmed.response.status, 400);
+    assert.match(unconfirmed.result.error, /explicit confirmation/);
+
+    const synced = await post("/api/github-sync", { confirmed: true });
+    assert.equal(synced.response.status, 200, JSON.stringify(synced.result));
+    assert.equal(synced.result.result.state, "succeeded");
+    assert.equal(synced.result.result.stableSha, stableSha);
+  });
+
+  const remote = await git(fixture.repoRoot, "ls-remote", "origin", "refs/heads/master");
+  assert.match(remote, new RegExp(`^${stableSha}\\s+refs/heads/master`));
+  const dirtyAfter = await git(fixture.repoRoot, "status", "--porcelain=v1", "--untracked-files=all");
+  assert.equal(dirtyAfter, dirtyBefore);
+});
+
+test("D206 GitHub sync refuses unsafe boundaries and reports dashboard hooks", async (t) => {
+  const fixture = await makeFixture(t);
+  await createBareOrigin(fixture);
+  const stableSha = await prepareVerifiedStable(fixture);
+  await fixture.setOrchestratorState({
+    phase: "failed-paused",
+    currentItem: { id: "W0023" },
+    stableCommit: stableSha,
+    acceptedSourceSha: stableSha,
+  });
+
+  await withServer(t, fixture, async ({ get, post }) => {
+    const status = await get("/api/status");
+    assert.equal(status.response.status, 200, JSON.stringify(status.result));
+    assert.equal(status.result.githubSync.ok, false);
+    assert.equal(status.result.githubSync.canPush, false);
+    assert.match(status.result.githubSync.message, /phase=failed-paused/);
+
+    const blocked = await post("/api/github-sync", { confirmed: true });
+    assert.equal(blocked.response.status, 400);
+    assert.match(blocked.result.error, /phase=failed-paused/);
+  });
+
+  const html = await readFile(path.join(here, "public", "index.html"), "utf8");
+  const app = await readFile(path.join(here, "public", "app.js"), "utf8");
+  assert.match(html, /github-sync-button/);
+  assert.match(html, /Sync verified version to GitHub/);
+  assert.match(app, /window\.confirm\(`Push verified stable/);
+  assert.match(app, /\/api\/github-sync/);
+});
+
+test("D206 GitHub sync deduplicates concurrent requests", async (t) => {
+  const fixture = await makeFixture(t);
+  await createBareOrigin(fixture);
+  await prepareVerifiedStable(fixture);
+
+  await withServer(t, fixture, async ({ post }) => {
+    const [first, second] = await Promise.all([
+      post("/api/github-sync", { confirmed: true }),
+      post("/api/github-sync", { confirmed: true }),
+    ]);
+    const statuses = [first.response.status, second.response.status].sort((a, b) => a - b);
+    assert.deepEqual(statuses, [200, 409]);
+    const busy = [first, second].find((item) => item.response.status === 409);
+    assert.match(busy.result.error, /already in progress/);
+  }, { env: { TANDEM_GITHUB_SYNC_HOLD_MS: "300" } });
 });
 
 test("D197 dashboard watchdog audits orchestrator status without retired supervisor calls", async (t) => {
@@ -339,8 +468,7 @@ test("D197 dashboard watchdog audits orchestrator status without retired supervi
     stableCommit: fixture.fixtureSha,
   });
   await withServer(t, fixture, async () => {
-    await new Promise((resolve) => setTimeout(resolve, 2200));
-    const audit = await readJsonl(fixture.auditPath);
+    const audit = await waitForAudit(fixture.auditPath, (entry) => entry.action === "orchestrator.status" && entry.source === "dashboard-startup");
     assert.equal(audit.some((entry) => entry.action === "orchestrator.status" && entry.source === "dashboard-startup"), true);
     assert.equal(audit.some((entry) => entry.action === "supervisor.tick"), false);
   }, { env: { TANDEM_DASHBOARD_ENABLE_TEST_ORCHESTRATOR_STATUS: "1" } });

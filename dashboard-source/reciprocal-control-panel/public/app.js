@@ -85,6 +85,7 @@ function render(data, audit) {
   renderModels(data.models);
   renderDrift(data);
   renderMainVersion(data.mainVersion, relay);
+  renderGithubSync(data.githubSync);
   renderReviewNote(data.candidateUpdate?.reviewNote);
   renderUpdateGate(data.candidateUpdate, data.runtimes);
   renderVersions(data);
@@ -291,6 +292,22 @@ function renderMainVersion(version, relay) {
   submit.title = blocked ? "Wait for the active reciprocal turn to finish" : "";
 }
 
+function renderGithubSync(sync) {
+  if (!sync) return;
+  const button = $("#github-sync-button");
+  const result = sync.last?.status || sync.state || "checking";
+  $("#github-sync-remote").textContent = sync.remoteShortSha || (sync.remoteSource === "missing" ? "missing" : "unknown");
+  $("#github-sync-result").textContent = result;
+  $("#github-sync-message").textContent = sync.message || sync.disabledReason || "Checking verified stable sync boundary...";
+  $("#main-update-state").textContent = sync.canPush ? "Sync ready" : sync.state === "already-synced" ? "Synced" : result;
+  $("#main-update-state").classList.toggle("warn", Boolean(sync.canPush));
+  $("#main-update-state").classList.toggle("bad", Boolean(!sync.ok || ["diverged", "github-ahead", "unavailable"].includes(sync.state)));
+  button.disabled = state.busy || !sync.canPush;
+  button.title = sync.canPush
+    ? `Push verified stable ${sync.stableShortSha} to origin/master`
+    : sync.disabledReason || sync.message || "Verified stable cannot be synced right now";
+}
+
 function renderVersions(data) {
   const cards = [
     { title: "Copy A", subtitle: "Passive B test target", value: data.worktrees.a },
@@ -461,12 +478,16 @@ async function updateAction(path, success) {
   } catch (error) { setAlert(error.message); } finally { state.busy = false; }
 }
 
-async function backupAction() {
+async function githubSyncAction() {
   if (state.busy) return;
+  const sync = state.data?.githubSync;
+  const stable = sync?.stableShortSha || "unknown";
+  const remote = sync?.remoteShortSha || "unknown";
+  if (!window.confirm(`Push verified stable ${stable} to GitHub master? Current GitHub master is ${remote}. This will only proceed if it is a fast-forward.`)) return;
   state.busy = true;
   try {
-    const payload = await api("/api/git/backup", { method: "POST", body: JSON.stringify({}) });
-    toast(payload.result?.stable?.ok ? "Reciprocal branches and stable ref backed up" : "Branches backed up; stable ref needs attention");
+    const payload = await api("/api/github-sync", { method: "POST", body: JSON.stringify({ confirmed: true }) });
+    toast(payload.result?.state === "already-synced" ? "GitHub master already synced" : "Verified stable synced to GitHub");
     $("#approve-backup").hidden = true;
     await refresh(true, true);
   } catch (error) { setAlert(error.message); } finally { state.busy = false; }
@@ -517,8 +538,8 @@ $("#review-note-dismiss").addEventListener("click", async () => {
   } catch (error) { setAlert(error.message); }
 });
 $("#stop-candidate").addEventListener("click", () => updateAction("/api/update/stop-candidate", "Candidate preview stopped"));
-$("#backup-github").addEventListener("click", backupAction);
-$("#approve-backup").addEventListener("click", backupAction);
+$("#github-sync-button").addEventListener("click", githubSyncAction);
+$("#approve-backup").addEventListener("click", githubSyncAction);
 $("#approval-cancel").addEventListener("click", async () => {
   try {
     await api("/api/update/approve/cancel", { method: "POST", body: JSON.stringify({}) });

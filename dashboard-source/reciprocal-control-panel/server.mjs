@@ -44,6 +44,9 @@ const auditPath = path.join(relayRoot, "control", "CONTROL_PANEL_AUDIT.jsonl");
 const supervisorStatePath = path.join(relayRoot, "control", "continuation-supervisor-state.json");
 const sourceReconciliationPendingPath = path.join(relayRoot, "control", "source-reconciliation-pending.json");
 const runtimeRecoveryJournalPath = path.join(relayRoot, "state", "runtime-recovery-flow.json");
+const githubSyncStatePath = path.join(relayRoot, "control", "GITHUB_SYNC_STATE.json");
+const orchestratorLockPath = path.join(relayRoot, "state", "orchestrator.lock");
+const orchestratorPausePath = path.join(relayRoot, "control", "PAUSE");
 const finalizationPaths = {
   A: path.join(relayRoot, "state", "finalization-a.json"),
   B: path.join(relayRoot, "state", "finalization-b.json"),
@@ -72,11 +75,13 @@ const automation = {
 };
 const activeRelayPhases = new Set(["working", "validating", "rollback-verification", "passive-testing", "a-upgrade-pending"]);
 const approvalWaitTimeoutMs = Number(process.env.TANDEM_APPROVAL_WAIT_TIMEOUT_MS || 18_000_000);
+const githubSyncHoldMs = Number(process.env.TANDEM_GITHUB_SYNC_HOLD_MS || 0);
 const testHarness = process.env.TANDEM_DASHBOARD_TEST_HARNESS === "1";
 const testCommandLogPath = process.env.TANDEM_DASHBOARD_COMMAND_LOG || "";
 const testHarnessStartedRoles = new Set();
 const packageIntegrityPromise = import(pathToFileURL(path.join(repoRoot, "scripts", "runtime-package-integrity.mjs")).href);
 let approvalFlow = null;
+let githubSyncInFlight = null;
 
 const durableRecoveryStages = [
   "package-ready",
@@ -1100,6 +1105,215 @@ async function getMainVersionStatus(masterHead, stableSha, candidate, runtimeA, 
   };
 }
 
+function exactSha(value) {
+  const normalized = String(value || "").trim();
+  return /^[0-9a-f]{40}$/i.test(normalized) ? normalized : "";
+}
+
+function sanitizedGitError(value) {
+  return String(value || "")
+    .replace(/https?:\/\/[^\s/@]+:[^\s/@]+@/gi, "https://<redacted>@")
+    .replace(/(token|password|secret)=([^&\s]+)/gi, "$1=<redacted>")
+    .slice(0, 1200);
+}
+
+async function readGithubSyncState() {
+  const state = await jsonFile(githubSyncStatePath, null, 64 * 1024);
+  return state && !state._readError ? state : null;
+}
+
+async function writeGithubSyncState(patch) {
+  const previous = await readGithubSyncState();
+  const next = {
+    schemaVersion: 1,
+    ...(previous || {}),
+    ...patch,
+    updatedAt: new Date().toISOString(),
+  };
+  await writeJsonAtomic(githubSyncStatePath, next);
+  return next;
+}
+
+async function latestStableEvidence(stableSha) {
+  try {
+    const text = await readFile(orchestratorOperationsPath, "utf8");
+    const entries = text.split(/\r?\n/).filter(Boolean).map((line) => JSON.parse(line));
+    const stableRef = entries.filter((entry) => entry.action === "stable-ref.updated").at(-1) || null;
+    const cycleCompleted = entries.filter((entry) => entry.action === "cycle.completed").at(-1) || null;
+    const stableAt = Date.parse(stableRef?.at || "");
+    const completedAt = Date.parse(cycleCompleted?.at || "");
+    const ok = stableRef?.sourceSha === stableSha
+      && cycleCompleted
+      && Number.isFinite(stableAt)
+      && Number.isFinite(completedAt)
+      && completedAt >= stableAt;
+    return {
+      ok,
+      stableRef,
+      cycleCompleted,
+      detail: ok
+        ? `stable-ref.updated and cycle.completed both support ${shortSha(stableSha)}`
+        : "latest stable-ref.updated and cycle.completed evidence do not identify the current stable version",
+    };
+  } catch (error) {
+    return { ok: false, stableRef: null, cycleCompleted: null, detail: `orchestrator operation evidence is unavailable: ${error.message}` };
+  }
+}
+
+async function originMasterKnownSha() {
+  const tracking = exactSha(await git(repoRoot, "rev-parse", "--verify", "refs/remotes/origin/master").catch(() => ""));
+  if (tracking) return { sha: tracking, source: "refs/remotes/origin/master" };
+  const direct = await runResult("git", ["ls-remote", "--heads", "origin", "master"], repoRoot);
+  if (!direct.ok) return { sha: "", source: "unavailable", error: sanitizedGitError(direct.output) };
+  const sha = exactSha(direct.stdout.split(/\s+/)[0]);
+  return sha ? { sha, source: "ls-remote" } : { sha: "", source: "missing" };
+}
+
+async function originMasterAfterFetch() {
+  const fetched = await runResult("git", ["fetch", "--quiet", "origin", "master"], repoRoot);
+  if (!fetched.ok) return { sha: "", source: "fetch", error: sanitizedGitError(fetched.output) };
+  const tracking = exactSha(await git(repoRoot, "rev-parse", "--verify", "refs/remotes/origin/master").catch(() => ""));
+  const fetchHead = exactSha(await git(repoRoot, "rev-parse", "--verify", "FETCH_HEAD").catch(() => ""));
+  return {
+    sha: tracking || fetchHead,
+    source: tracking ? "refs/remotes/origin/master" : "FETCH_HEAD",
+  };
+}
+
+async function commitRelationship(remoteSha, stableSha) {
+  if (!remoteSha) return { state: "unavailable", canPush: false, message: "origin/master is unavailable." };
+  if (remoteSha === stableSha) return { state: "already-synced", canPush: false, message: "GitHub master already points at the verified stable version." };
+  const remoteIsAncestor = await git(repoRoot, "merge-base", "--is-ancestor", remoteSha, stableSha).then(() => true).catch(() => false);
+  if (remoteIsAncestor) return { state: "fast-forward-ready", canPush: true, message: "origin/master can fast-forward to the verified stable version." };
+  const stableIsAncestor = await git(repoRoot, "merge-base", "--is-ancestor", stableSha, remoteSha).then(() => true).catch(() => false);
+  if (stableIsAncestor) return { state: "github-ahead", canPush: false, message: "origin/master is ahead of the verified stable version; refusing to rewind GitHub." };
+  return { state: "diverged", canPush: false, message: "origin/master diverges from the verified stable version; refusing to force push." };
+}
+
+async function githubSyncBoundary({ runtimeA = null, orchestratorState = null, fetchRemote = false } = {}) {
+  const checks = [];
+  const state = orchestratorState || await jsonFile(orchestratorStatePath, null);
+  const stableSha = exactSha(state?.stableCommit);
+  const acceptedSourceSha = exactSha(state?.acceptedSourceSha);
+  const runtime = runtimeA || await getRuntime("A");
+  const fail = (label, detail) => {
+    checks.push({ label, ok: false, detail });
+    return false;
+  };
+  const pass = (label, detail) => {
+    checks.push({ label, ok: true, detail });
+    return true;
+  };
+
+  if (!state || state._readError) fail("Orchestrator state", state?._readError?.message || "missing");
+  else if (state.phase !== "idle" || state.currentItem) fail("Orchestrator idle", `phase=${state.phase || "missing"} currentItem=${state.currentItem?.id || state.currentItem || "none"}`);
+  else pass("Orchestrator idle", "phase=idle currentItem=null");
+
+  if (!stableSha) fail("Stable commit", "orchestrator stableCommit is missing or not a full SHA");
+  else pass("Stable commit", stableSha);
+
+  if (!acceptedSourceSha || acceptedSourceSha !== stableSha) fail("Accepted source", `acceptedSourceSha=${acceptedSourceSha || "missing"} stableCommit=${stableSha || "missing"}`);
+  else pass("Accepted source", acceptedSourceSha);
+
+  if (existsSync(orchestratorLockPath)) fail("Orchestrator lock", orchestratorLockPath);
+  else pass("Orchestrator lock", "absent");
+
+  if (existsSync(orchestratorPausePath)) fail("Pause guard", orchestratorPausePath);
+  else pass("Pause guard", "absent");
+
+  const [sourceReconciliationPending, finalizationA, finalizationB, recoveryJournal] = await Promise.all([
+    jsonFile(sourceReconciliationPendingPath, null),
+    jsonFile(finalizationPaths.A, null),
+    jsonFile(finalizationPaths.B, null),
+    jsonFile(runtimeRecoveryJournalPath, null),
+  ]);
+  if (sourceReconciliationPending && !sourceReconciliationPending._readError) fail("Source reconciliation", `${sourceReconciliationPending.status || "pending"} ${sourceReconciliationPending.reasonCode || ""}`.trim());
+  else pass("Source reconciliation", "no pending transaction");
+  const finalization = finalizationA && !finalizationA._readError ? finalizationA : finalizationB && !finalizationB._readError ? finalizationB : null;
+  if (finalization) fail("Candidate finalization", `${finalization.wishlistId || "candidate"} ${finalization.stage || "pending"}`.trim());
+  else pass("Candidate finalization", "no pending transaction");
+  if (recoveryJournal && !recoveryJournal._readError && recoveryJournal.status !== "completed") fail("Runtime recovery", `${recoveryJournal.status || "running"} ${recoveryJournal.stage || ""}`.trim());
+  else pass("Runtime recovery", "no active recovery journal");
+
+  if (stableSha) {
+    const evidence = await latestStableEvidence(stableSha);
+    checks.push({ label: "Stable operation evidence", ok: evidence.ok, detail: evidence.detail });
+    const stableRef = exactSha(await git(repoRoot, "rev-parse", "--verify", "refs/tandem-relay/stable").catch(() => ""));
+    if (stableRef !== stableSha) fail("Stable ref", `refs/tandem-relay/stable=${stableRef || "missing"} stableCommit=${stableSha}`);
+    else pass("Stable ref", stableRef);
+  }
+
+  if (runtime?.buildInfo?.sourceSha !== stableSha) fail("Executor A build", `BUILD_INFO sourceSha=${runtime?.buildInfo?.sourceSha || "missing"} stableCommit=${stableSha || "missing"}`);
+  else pass("Executor A build", runtime.buildInfo.sourceSha);
+  try {
+    const { verifyPackage } = await packageIntegrityPromise;
+    const proof = await verifyPackage(path.join(relayRoot, "runtimes", "executor-a"), { sourceSha: stableSha });
+    pass("Executor A integrity", proof.packageIdentity);
+  } catch (error) {
+    fail("Executor A integrity", error.message);
+  }
+
+  const remote = fetchRemote ? await originMasterAfterFetch() : await originMasterKnownSha();
+  const relationship = remote.error ? { state: "unavailable", canPush: false, message: remote.error } : await commitRelationship(remote.sha, stableSha);
+  const blocker = checks.find((check) => !check.ok);
+  const ok = !blocker;
+  return {
+    ok,
+    canPush: ok && relationship.canPush,
+    disabledReason: blocker?.detail || (!relationship.canPush && relationship.state !== "already-synced" ? relationship.message : ""),
+    state: relationship.state,
+    message: ok ? relationship.message : `${blocker.label}: ${blocker.detail}`,
+    stableSha,
+    stableShortSha: shortSha(stableSha),
+    remoteSha: remote.sha || null,
+    remoteShortSha: shortSha(remote.sha),
+    remoteSource: remote.source,
+    checks,
+    last: await readGithubSyncState(),
+  };
+}
+
+async function runGithubSync(input) {
+  if (input.confirmed !== true) throw new Error("Sync verified version to GitHub requires explicit confirmation.");
+  if (githubSyncInFlight) {
+    const error = new Error("GitHub sync is already in progress.");
+    error.statusCode = 409;
+    throw error;
+  }
+  githubSyncInFlight = (async () => {
+    let stableSha = "";
+    try {
+      await writeGithubSyncState({ status: "validating", message: "Checking verified stable boundary before GitHub sync." });
+      const boundary = await githubSyncBoundary({ fetchRemote: true });
+      stableSha = boundary.stableSha;
+      if (!boundary.ok) throw new Error(boundary.message);
+      if (boundary.state === "already-synced") {
+        const last = await writeGithubSyncState({ status: "already-synced", stableSha, remoteSha: boundary.remoteSha, message: boundary.message });
+        await audit("github.sync", { ok: true, status: "already-synced", stableSha, remoteSha: boundary.remoteSha });
+        return { ...boundary, last };
+      }
+      if (!boundary.canPush) throw new Error(boundary.message);
+      await writeGithubSyncState({ status: "pushing", stableSha, remoteSha: boundary.remoteSha, message: `Pushing ${shortSha(stableSha)} to origin/master without force.` });
+      if (githubSyncHoldMs > 0) await delay(githubSyncHoldMs);
+      const pushed = await runResult("git", ["push", "origin", `${stableSha}:refs/heads/master`], repoRoot);
+      if (!pushed.ok) throw new Error(sanitizedGitError(pushed.output));
+      const after = await originMasterAfterFetch();
+      if (after.sha !== stableSha) throw new Error(`Post-push origin/master verification failed: ${after.sha || "missing"} != ${stableSha}.`);
+      const last = await writeGithubSyncState({ status: "succeeded", stableSha, remoteSha: after.sha, message: `GitHub master now points at verified stable ${shortSha(stableSha)}.` });
+      await audit("github.sync", { ok: true, status: "succeeded", stableSha, previousRemoteSha: boundary.remoteSha, remoteSha: after.sha });
+      return { ...boundary, state: "succeeded", remoteSha: after.sha, remoteShortSha: shortSha(after.sha), canPush: false, message: last.message, last };
+    } catch (error) {
+      const message = sanitizedGitError(error.message || String(error));
+      await writeGithubSyncState({ status: "failed", stableSha: stableSha || null, message });
+      await audit("github.sync", { ok: false, stableSha: stableSha || null, message });
+      throw new Error(message);
+    } finally {
+      githubSyncInFlight = null;
+    }
+  })();
+  return githubSyncInFlight;
+}
+
 function dateAgeMs(value) {
   const time = Date.parse(value || "");
   return Number.isFinite(time) ? Date.now() - time : null;
@@ -1252,6 +1466,7 @@ async function getStatus() {
     artifactCapability.message = `${artifactCapability.message} Next safe action: ${artifactCapability.activationPlan.nextSafeHumanAction} ${artifactCapability.activationPlan.warning}`;
   }
   const mainVersion = await getMainVersionStatus(masterHead, state.stableCommit, candidateUpdate, runtimeA, runtimeB);
+  const githubSync = await githubSyncBoundary({ runtimeA, orchestratorState });
   candidateUpdate.mainVersion = mainVersion.tag;
   candidateUpdate.candidateMainVersion = mainVersion.candidateTag;
   candidateUpdate.promoted = candidateUpdate.promoted.map((item) => ({ ...item, mainVersion: mainVersion.runtimeTags[item.role] }));
@@ -1303,6 +1518,7 @@ async function getStatus() {
     { label: "Branches vs master", ok: a.drift.upToDate && b.drift.upToDate, detail: `A ${a.drift.behindMaster}/${a.drift.aheadOfMaster}, B ${b.drift.behindMaster}/${b.drift.aheadOfMaster}` },
     { label: "Runtime builds vs master", ok: !runtimeA.lagsMaster && !runtimeB.lagsMaster, detail: `A ${runtimeA.buildShortSha}, B ${runtimeB.buildShortSha}` },
     { label: "Candidate update", ok: !candidateUpdate.unknownProvenance, detail: candidateUpdate.reviewNote?.visible ? `${candidateUpdate.reviewNote.shortSha} awaits review` : candidateUpdate.message },
+    { label: "GitHub stable sync", ok: githubSync.ok && ["already-synced", "fast-forward-ready"].includes(githubSync.state), detail: githubSync.message },
     { label: "Source reconciliation", ok: !sourceReconciliationPending, detail: sourceReconciliationPending ? `${sourceReconciliationPending.status}: ${sourceReconciliationPending.reasonCode}` : "No pending source reconciliation" },
     { label: "Candidate finalization", ok: true, detail: pendingFinalization ? `${pendingFinalization.wishlistId || "candidate"}: ${pendingFinalization.stage || "pending"}${pendingFinalization.commit ? ` ${shortSha(pendingFinalization.commit)}` : ""}` : "No pending finalization" },
   ];
@@ -1335,6 +1551,7 @@ async function getStatus() {
     runtimeTopology: { ...runtimeTopology, health: topologyHealth },
     candidateUpdate,
     mainVersion,
+    githubSync,
     sourceReconciliationPending,
     pendingFinalization,
     models: { a: modelsA, b: modelsB, implementation: implementationModel },
@@ -1977,6 +2194,7 @@ async function handle(request, response) {
       "/api/update/launch-candidate",
       "/api/update/reject",
       "/api/update/stop-candidate",
+      "/api/github-sync",
       "/api/relay/pause",
       "/api/quit",
     ]);
@@ -1987,6 +2205,11 @@ async function handle(request, response) {
         orchestrator: "node scripts/reciprocal-orchestrator.mjs --repo <admin-repo> --relay-root <relay-root>",
         allowedMutations: Array.from(d196AllowedMutations).sort(),
       });
+    }
+
+    if (url.pathname === "/api/github-sync") {
+      const result = await runGithubSync(input);
+      return send(response, 200, { ok: true, result });
     }
 
     if (url.pathname === "/api/wishlist") {

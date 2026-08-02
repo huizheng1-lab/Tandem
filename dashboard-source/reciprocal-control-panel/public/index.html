@@ -153,9 +153,11 @@
                 <div><dt>Master is at</dt><dd class="mono" id="main-version">--</dd></div>
                 <div><dt>Stable tip</dt><dd class="mono" id="main-stable">--</dd></div>
                 <div><dt>Pending stable commits</dt><dd id="main-pending">--</dd></div>
-                <div><dt>Remote backup</dt><dd>Reciprocal refs only</dd></div>
+                <div><dt>GitHub master</dt><dd class="mono" id="github-sync-remote">--</dd></div>
+                <div><dt>Sync result</dt><dd id="github-sync-result">--</dd></div>
               </dl>
-              <button class="button small" id="backup-github">Backup to GitHub</button>
+              <button class="button small" id="github-sync-button" type="button">Sync verified version to GitHub</button>
+              <p class="small-print" id="github-sync-message">Checking verified stable sync boundary...</p>
             </div>
             <form id="main-update-form">
               <label>Integration comment<textarea id="main-update-comment" rows="5" maxlength="1200" placeholder="Summarize the reviewed batch and why it is ready for master." required></textarea></label>
