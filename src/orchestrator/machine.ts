@@ -115,14 +115,14 @@ function takeoverAuthoritativeVerificationWarning(report: CompletionReport): str
   return `takeover claimed complete, but authoritative verification failed ${failed.length}/${report.verificationResults.length} command(s): ${commands}`;
 }
 
-function completeTakeoverWhenVerificationPasses(plan: BuildPlan, report: CompletionReport, authoritativeRan: boolean): CompletionReport {
-  if (!authoritativeRan || report.status === "complete") return report;
+function completeTakeoverWhenVerificationPasses(plan: BuildPlan, report: CompletionReport): CompletionReport {
+  if (report.status === "complete") return report;
   const completed: CompletionReport = { ...report, status: "complete" };
   try {
     // Use the existing verification enforcement so every plan command must be present and
-    // passing, and existing verification-script disclosure checks still apply. A takeover
-    // may have reported blocked solely because its tool policy prevented repair commands;
-    // authoritative passing evidence is stronger than that stale status.
+    // passing, and existing verification-script disclosure checks still apply. Passing
+    // takeover evidence (whether reported by the takeover or replaced by the authoritative
+    // runner) is stronger than a stale blocked status caused by earlier tool-policy warnings.
     validateCompletionReport(plan, completed, plan.verification);
     return completed;
   } catch {
@@ -467,7 +467,7 @@ export async function runOrchestration(options: RunOptions): Promise<RunResult> 
         });
         schemaReport = await applyPostBuildReport(schemaReport);
         const authoritative = await attachAuthoritativeVerification(schemaReport);
-        const report = completeTakeoverWhenVerificationPasses(plan, authoritative.report, authoritative.ran);
+        const report = completeTakeoverWhenVerificationPasses(plan, authoritative.report);
         validateCompletionReport(plan, report, plan.verification, {
           enforceCommandEcho: !authoritative.ran,
           enforceCompleteVerification: !authoritative.ran

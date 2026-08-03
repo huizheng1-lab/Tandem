@@ -141,6 +141,25 @@ describe("orchestration", () => {
     expect(result.summary).toBe("takeover repaired the build");
   });
 
+  it("marks a blocked takeover complete when its own results pass every plan verification", async () => {
+    const blockedAfterRepair: CompletionReport = {
+      ...report("blocked"),
+      verificationResults: [{ command: "npm test", passed: true, output: "repair verified" }]
+    };
+    const result = await runOrchestration({
+      request: "build",
+      config: { maxReviewRounds: 0, maxParallelWorkers: 1, permissionMode: "yolo" },
+      agents: agents({
+        takeover: async () => ({ report: blockedAfterRepair, userSummary: "takeover repaired and verified the build" })
+      })
+    });
+
+    expect(result.takeover).toBe(true);
+    expect(result.reports[0]?.status).toBe("complete");
+    expect(result.reports[0]?.verificationResults[0]?.passed).toBe(true);
+    expect(result.summary).toBe("takeover repaired and verified the build");
+  });
+
   it("completes a task that requires a justified secondary config edit without takeover", async () => {
     let reviewedReport: CompletionReport | undefined;
     const configPlan: BuildPlan = {
