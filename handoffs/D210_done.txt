@@ -1,0 +1,64 @@
+D210 done
+
+Round: D210
+Corrective commit:
+- 6c29268d246396fa134f3c6a13fcfb255a1611eb D210-1: complete guarded GitHub sync evidence
+
+Files changed:
+- dashboard-source/reciprocal-control-panel/server.mjs
+- dashboard-source/reciprocal-control-panel/public/app.js
+- dashboard-source/reciprocal-control-panel/public/index.html
+- dashboard-source/reciprocal-control-panel/approval-flow.e2e.mjs
+- dashboard-source/reciprocal-control-panel/manifest.json
+- scripts/deploy-reciprocal-dashboard.ps1
+
+Implementation summary:
+- Deployed dashboard GitHub sync from source through scripts/deploy-reciprocal-dashboard.ps1.
+- Replaced status-only origin/master tracking-ref reporting with a bounded live ls-remote probe and explicit remoteFreshness/remoteCheckedAt/source fields, falling back only as stale/unavailable.
+- Added durable GitHub sync lifecycle history for requested, validating, fetching, pushing, and terminal succeeded/already-synced/failed states with stable SHA, previous remote SHA, resulting remote SHA, timestamp, and sanitized error fields.
+- Updated the browser to render verified stable SHA, remote freshness, disabled reason/result, confirmation copy, and polling during an in-flight sync.
+- Kept explicit confirmation, fast-forward-only push target, duplicate-request locking, idle/lock/pause/finalization/recovery/stable-ref/BUILD_INFO/runtime-integrity boundaries.
+- Extended deploy restart health probing so the now-bounded live remote probe has enough time during startup.
+
+Focused regression results:
+- node --test dashboard-source\reciprocal-control-panel\approval-flow.e2e.mjs: PASS (17 passed, 9 skipped).
+- node dashboard-source\reciprocal-control-panel\lib.nodecheck.mjs: PASS (21 passed).
+
+New/expanded GitHub sync regression proof:
+- D206 GitHub sync fast-forwards only the verified stable commit and preserves dirty admin files: PASS; now also preserves dirty tracked content, staged content, staged deletion, staged rename, untracked file bytes, and the cached index diff.
+- D210 GitHub sync reports already-synced as a successful no-op: PASS.
+- D210 GitHub sync refuses GitHub-ahead and divergent remotes without mutating refs: PASS.
+- D210 GitHub sync rejects unsafe D196 phases, evidence mismatches, and runtime integrity failures: PASS for improving, swapping, stableCommit/acceptedSourceSha mismatch, stable ref mismatch, operation-log evidence mismatch, Executor A BUILD_INFO mismatch, and Executor A runtime integrity failure.
+- D210 GitHub sync sanitizes remote fetch failures and labels stale status: PASS; credential-shaped URL secrets were not exposed.
+- D206 GitHub sync deduplicates concurrent requests: PASS; only one successful github.sync audit entry was produced.
+- Every regression remote is asserted to be an isolated local bare repository under the fixture root before sync tests proceed. No automated test contacted or pushed real GitHub.
+
+Deployment and live proof:
+- scripts\deploy-reciprocal-dashboard.ps1: PASS; restarted dashboard and verified all 18 managed files.
+- scripts\deploy-reciprocal-dashboard.ps1 -VerifyOnly: PASS; plannedUpdates empty and target verification ok.
+- Source/deployed SHA-256 equality for changed dashboard files:
+  - server.mjs: B24656BE3B097B6E9AD894E8C80671E4FCBB231A3CEF188A3739FB5A0352DA21 == B24656BE3B097B6E9AD894E8C80671E4FCBB231A3CEF188A3739FB5A0352DA21
+  - public/app.js: FA65264F8CBC240F75D4AFC005BC30197470A3E4286F9EC90E13E48B88238E1E == FA65264F8CBC240F75D4AFC005BC30197470A3E4286F9EC90E13E48B88238E1E
+  - public/index.html: 7144ED2D237735564D53F11F3B505B6121A50EBE57248D7112B02FF9BF0DF156 == 7144ED2D237735564D53F11F3B505B6121A50EBE57248D7112B02FF9BF0DF156
+- Live http://127.0.0.1:4782/api/status includes githubSync:
+  - phase: failed-paused
+  - stable: ca812bfa7c706e314b2ea81e12635f52bf11153b
+  - remote: df1d012b378e109de20a2b866e84b6c99da779a1
+  - state: fast-forward-ready
+  - canPush: false
+  - freshness: fresh
+  - source: ls-remote
+  - disabledReason: phase=failed-paused currentItem=W0032
+- Live page/app proof:
+  - github-sync-button rendered: true
+  - github-sync-stable rendered: true
+  - github-sync-freshness rendered: true
+  - confirmation prompt code present: true
+  - in-flight polling code present: true
+  - terminal progress/success text present: true
+- No unauthorized real GitHub push was performed. Live proof stopped at the disabled failed-paused boundary.
+
+Required checks:
+- npm run typecheck: PASS.
+- npm test with isolated USERPROFILE/HOME: PASS (58 files passed, 2 skipped; 613 tests passed, 41 skipped).
+- git diff --check: PASS (line-ending warnings only).
