@@ -1,0 +1,55 @@
+D211 done
+
+Round: D211
+Corrective commit:
+- f1ed085 D211-1: serialize GitHub sync state writes
+
+Files changed:
+- dashboard-source/reciprocal-control-panel/server.mjs
+- dashboard-source/reciprocal-control-panel/approval-flow.e2e.mjs
+- dashboard-source/reciprocal-control-panel/manifest.json
+
+Implementation summary:
+- Serialized all dashboard-process GitHub sync state writes through a single promise queue.
+- Each queued write reads the latest committed GITHUB_SYNC_STATE.json before merging and atomically replacing it, so lifecycle writes and remote-probe cache writes cannot lose each other.
+- Preserved atomic file replacement, bounded lifecycle history, sanitized errors, duplicate-request locking, read-only status polling, and all D196/D210 sync boundaries.
+- Added a test-only TANDEM_GITHUB_SYNC_STATE_WRITE_HOLD_MS delay to make state-write overlap deterministic in isolated tests.
+
+Focused overlap regression results:
+- node --test dashboard-source\reciprocal-control-panel\approval-flow.e2e.mjs: PASS (19 passed, 9 skipped).
+- D211 GitHub sync keeps success lifecycle history while status polling refreshes remote probes: PASS.
+  - Status polling overlapped the active sync operation.
+  - Durable lifecycle path retained exactly: requested, validating, fetching, pushing, succeeded.
+  - Durable SHA evidence retained: previousRemoteSha=fixture baseline, resultingRemoteSha=stable SHA, remoteProbe.sha=stable SHA.
+  - API-visible state retained the same lifecycle path and remote probe after polling.
+- D211 GitHub sync keeps failed lifecycle history and sanitized error while status polling refreshes remote probes: PASS.
+  - Status polling overlapped the failed sync operation.
+  - Durable lifecycle path retained exactly: requested, validating, fetching, failed.
+  - Durable failed status and stable SHA retained.
+  - Secret-shaped URL values super-secret/top-secret were not present in durable state or API-visible state.
+- All sync tests assert remotes are isolated local bare repositories under the fixture root before push tests proceed. No automated test contacted or pushed real GitHub.
+
+Additional checks:
+- node dashboard-source\reciprocal-control-panel\lib.nodecheck.mjs: PASS (21 passed).
+- npm run typecheck: PASS.
+- npm test with isolated USERPROFILE/HOME: PASS (58 files passed, 2 skipped; 613 tests passed, 41 skipped).
+- git diff --check: PASS (line-ending warnings only).
+
+Deployment and live read-only proof:
+- scripts\deploy-reciprocal-dashboard.ps1: PASS; deployed and restarted dashboard through the approved script.
+- scripts\deploy-reciprocal-dashboard.ps1 -VerifyOnly: PASS; ok=true, managedFileCount=18, plannedUpdates=0.
+- Source/deployed SHA-256 equality for changed dashboard files:
+  - server.mjs: 9695562153F3BDA47451B55BBB1D26E0EAC397B804893DBC30AEFB6DED658E0B == 9695562153F3BDA47451B55BBB1D26E0EAC397B804893DBC30AEFB6DED658E0B
+  - approval-flow.e2e.mjs: 530EF465C4ADD705D6EECF66357A8D06B4665A5AB00DFF673AF3C1582CE567CA == 530EF465C4ADD705D6EECF66357A8D06B4665A5AB00DFF673AF3C1582CE567CA
+- Live http://127.0.0.1:4782/api/status read-only proof:
+  - hasGithubSync: true
+  - phase: failed-paused
+  - stable: ca812bfa7c706e314b2ea81e12635f52bf11153b
+  - remote: df1d012b378e109de20a2b866e84b6c99da779a1
+  - state: fast-forward-ready
+  - canPush: false
+  - freshness: fresh
+  - source: ls-remote
+  - disabledReason: phase=failed-paused currentItem=W0032
+
+No live sync or real GitHub push was invoked for verification.
