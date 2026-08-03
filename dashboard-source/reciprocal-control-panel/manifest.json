@@ -1,11 +1,11 @@
 {
   "schemaVersion": 1,
-  "generatedAtUtc": "2026-07-28T02:49:09.781Z",
+  "generatedAtUtc": "2026-08-03T00:19:16.475Z",
   "files": [
     {
       "path": "approval-flow.e2e.mjs",
-      "sha256": "57B4F05E694FC4DDECB582683F8BD85414C00A874254289CE540D7ECA0116443",
-      "bytes": 44646
+      "sha256": "97B96473F52D9D64AF67DC6A5CA9EA146AA744A742B5880E7102074C68B4CB2F",
+      "bytes": 60613
     },
     {
       "path": "dashboard-hidden-launcher.vbs",
@@ -34,8 +34,8 @@
     },
     {
       "path": "public/app.js",
-      "sha256": "ECE91E5BFCE437CCDA10809D0F3D95D0638CE5C476E082B111FAEBF92F0F0808",
-      "bytes": 43669
+      "sha256": "FA65264F8CBC240F75D4AFC005BC30197470A3E4286F9EC90E13E48B88238E1E",
+      "bytes": 45671
     },
     {
       "path": "public/overview-state.js",
@@ -44,8 +44,8 @@
     },
     {
       "path": "public/index.html",
-      "sha256": "3070397A0379AADE251A20381CF29F570D5EAF799F665A4A74D7066C4B747414",
-      "bytes": 15956
+      "sha256": "7144ED2D237735564D53F11F3B505B6121A50EBE57248D7112B02FF9BF0DF156",
+      "bytes": 16391
     },
     {
       "path": "public/mobile.css",
@@ -74,8 +74,8 @@
     },
     {
       "path": "server.mjs",
-      "sha256": "9DF5E8648D1950751AE1423B0CE4BFB2B18EA04AB393EFDA505B591EB235D9E4",
-      "bytes": 129011
+      "sha256": "B24656BE3B097B6E9AD894E8C80671E4FCBB231A3CEF188A3739FB5A0352DA21",
+      "bytes": 144033
     },
     {
       "path": "start-dashboard.ps1",

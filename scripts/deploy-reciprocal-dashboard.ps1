@@ -126,10 +126,10 @@ function Restart-Dashboard([string]$TargetRoot, [int]$Port) {
     Start-Sleep -Seconds 2
     $startScript = Join-Path $TargetRoot "start-dashboard.ps1"
     & $startScript -Port $Port -NoBrowser | Out-Null
-    $deadline = (Get-Date).AddSeconds(15)
+    $deadline = (Get-Date).AddSeconds(30)
     do {
         try {
-            $status = Invoke-RestMethod -Uri "http://127.0.0.1:$Port/api/status" -Method Get -TimeoutSec 3
+            $status = Invoke-RestMethod -Uri "http://127.0.0.1:$Port/api/status" -Method Get -TimeoutSec 10
             if ($status.relayRoot) { return $status }
         } catch {}
         Start-Sleep -Milliseconds 250

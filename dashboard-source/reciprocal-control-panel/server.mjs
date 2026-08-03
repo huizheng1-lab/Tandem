@@ -76,6 +76,7 @@ const automation = {
 const activeRelayPhases = new Set(["working", "validating", "rollback-verification", "passive-testing", "a-upgrade-pending"]);
 const approvalWaitTimeoutMs = Number(process.env.TANDEM_APPROVAL_WAIT_TIMEOUT_MS || 18_000_000);
 const githubSyncHoldMs = Number(process.env.TANDEM_GITHUB_SYNC_HOLD_MS || 0);
+const githubRemoteStatusTimeoutMs = Number(process.env.TANDEM_GITHUB_REMOTE_STATUS_TIMEOUT_MS || 2500);
 const testHarness = process.env.TANDEM_DASHBOARD_TEST_HARNESS === "1";
 const testCommandLogPath = process.env.TANDEM_DASHBOARD_COMMAND_LOG || "";
 const testHarnessStartedRoles = new Set();
@@ -152,15 +153,26 @@ function run(command, args, cwd = repoRoot, env = process.env) {
   });
 }
 
-function runResult(command, args, cwd = repoRoot, env = process.env) {
+function runResult(command, args, cwd = repoRoot, env = process.env, options = {}) {
   return new Promise((resolve) => {
     const child = spawn(command, args, { cwd, windowsHide: true, env });
+    let settled = false;
     let stdout = "";
     let stderr = "";
+    const finish = (value) => {
+      if (settled) return;
+      settled = true;
+      if (timer) clearTimeout(timer);
+      resolve(value);
+    };
+    const timer = options.timeoutMs > 0 ? setTimeout(() => {
+      child.kill();
+      finish({ ok: false, code: null, stdout: stdout.trim(), stderr: `Timed out after ${options.timeoutMs}ms`, output: [stdout.trim(), stderr.trim(), `Timed out after ${options.timeoutMs}ms`].filter(Boolean).join("\n") });
+    }, options.timeoutMs) : null;
     child.stdout.on("data", (chunk) => { stdout += chunk; });
     child.stderr.on("data", (chunk) => { stderr += chunk; });
-    child.on("error", (error) => resolve({ ok: false, code: null, stdout: "", stderr: error.message, output: error.message }));
-    child.on("close", (code) => resolve({
+    child.on("error", (error) => finish({ ok: false, code: null, stdout: "", stderr: error.message, output: error.message }));
+    child.on("close", (code) => finish({
       ok: code === 0,
       code,
       stdout: stdout.trim(),
@@ -1124,14 +1136,34 @@ async function readGithubSyncState() {
 
 async function writeGithubSyncState(patch) {
   const previous = await readGithubSyncState();
+  const updatedAt = new Date().toISOString();
+  const history = patch.status ? [
+    ...((previous?.history || []).slice(-24)),
+    {
+      status: patch.status,
+      at: updatedAt,
+      message: patch.message || "",
+      stableSha: patch.stableSha || null,
+      previousRemoteSha: patch.previousRemoteSha || null,
+      remoteSha: patch.remoteSha || null,
+      resultingRemoteSha: patch.resultingRemoteSha || null,
+      error: patch.error || null,
+    },
+  ] : previous?.history;
   const next = {
     schemaVersion: 1,
     ...(previous || {}),
     ...patch,
-    updatedAt: new Date().toISOString(),
+    ...(history ? { history } : {}),
+    updatedAt,
   };
   await writeJsonAtomic(githubSyncStatePath, next);
   return next;
+}
+
+async function rememberRemoteProbe(probe) {
+  await writeGithubSyncState({ remoteProbe: probe }).catch(() => {});
+  return probe;
 }
 
 async function latestStableEvidence(stableSha) {
@@ -1161,23 +1193,41 @@ async function latestStableEvidence(stableSha) {
 }
 
 async function originMasterKnownSha() {
-  const tracking = exactSha(await git(repoRoot, "rev-parse", "--verify", "refs/remotes/origin/master").catch(() => ""));
-  if (tracking) return { sha: tracking, source: "refs/remotes/origin/master" };
-  const direct = await runResult("git", ["ls-remote", "--heads", "origin", "master"], repoRoot);
-  if (!direct.ok) return { sha: "", source: "unavailable", error: sanitizedGitError(direct.output) };
+  const checkedAt = new Date().toISOString();
+  const direct = await runResult("git", ["ls-remote", "--heads", "origin", "master"], repoRoot, process.env, { timeoutMs: githubRemoteStatusTimeoutMs });
+  if (!direct.ok) {
+    const last = (await readGithubSyncState())?.remoteProbe;
+    if (last?.sha) {
+      return {
+        sha: last.sha,
+        source: last.source || "cached",
+        freshness: "stale",
+        checkedAt: last.checkedAt || null,
+        error: sanitizedGitError(direct.output),
+      };
+    }
+    const tracking = exactSha(await git(repoRoot, "rev-parse", "--verify", "refs/remotes/origin/master").catch(() => ""));
+    if (tracking) return { sha: tracking, source: "refs/remotes/origin/master", freshness: "stale", checkedAt: null, error: sanitizedGitError(direct.output) };
+    return { sha: "", source: "unavailable", freshness: "unavailable", checkedAt, error: sanitizedGitError(direct.output) };
+  }
   const sha = exactSha(direct.stdout.split(/\s+/)[0]);
-  return sha ? { sha, source: "ls-remote" } : { sha: "", source: "missing" };
+  return rememberRemoteProbe(sha
+    ? { sha, source: "ls-remote", freshness: "fresh", checkedAt }
+    : { sha: "", source: "missing", freshness: "fresh", checkedAt });
 }
 
 async function originMasterAfterFetch() {
-  const fetched = await runResult("git", ["fetch", "--quiet", "origin", "master"], repoRoot);
-  if (!fetched.ok) return { sha: "", source: "fetch", error: sanitizedGitError(fetched.output) };
+  const checkedAt = new Date().toISOString();
+  const fetched = await runResult("git", ["fetch", "--quiet", "origin", "master"], repoRoot, process.env, { timeoutMs: githubRemoteStatusTimeoutMs });
+  if (!fetched.ok) return { sha: "", source: "fetch", freshness: "unavailable", checkedAt, error: sanitizedGitError(fetched.output) };
   const tracking = exactSha(await git(repoRoot, "rev-parse", "--verify", "refs/remotes/origin/master").catch(() => ""));
   const fetchHead = exactSha(await git(repoRoot, "rev-parse", "--verify", "FETCH_HEAD").catch(() => ""));
-  return {
+  return rememberRemoteProbe({
     sha: tracking || fetchHead,
     source: tracking ? "refs/remotes/origin/master" : "FETCH_HEAD",
-  };
+    freshness: "fresh",
+    checkedAt,
+  });
 }
 
 async function commitRelationship(remoteSha, stableSha) {
@@ -1268,6 +1318,9 @@ async function githubSyncBoundary({ runtimeA = null, orchestratorState = null, f
     remoteSha: remote.sha || null,
     remoteShortSha: shortSha(remote.sha),
     remoteSource: remote.source,
+    remoteFreshness: remote.freshness || "unknown",
+    remoteCheckedAt: remote.checkedAt || null,
+    remoteError: remote.error || null,
     checks,
     last: await readGithubSyncState(),
   };
@@ -1282,30 +1335,34 @@ async function runGithubSync(input) {
   }
   githubSyncInFlight = (async () => {
     let stableSha = "";
+    let previousRemoteSha = null;
     try {
+      await writeGithubSyncState({ status: "requested", message: "GitHub sync requested; waiting to validate the stable boundary." });
       await writeGithubSyncState({ status: "validating", message: "Checking verified stable boundary before GitHub sync." });
+      await writeGithubSyncState({ status: "fetching", message: "Refreshing origin/master before deciding whether a fast-forward is safe." });
       const boundary = await githubSyncBoundary({ fetchRemote: true });
       stableSha = boundary.stableSha;
+      previousRemoteSha = boundary.remoteSha || null;
       if (!boundary.ok) throw new Error(boundary.message);
       if (boundary.state === "already-synced") {
-        const last = await writeGithubSyncState({ status: "already-synced", stableSha, remoteSha: boundary.remoteSha, message: boundary.message });
+        const last = await writeGithubSyncState({ status: "already-synced", stableSha, previousRemoteSha, resultingRemoteSha: boundary.remoteSha, remoteSha: boundary.remoteSha, message: boundary.message });
         await audit("github.sync", { ok: true, status: "already-synced", stableSha, remoteSha: boundary.remoteSha });
         return { ...boundary, last };
       }
       if (!boundary.canPush) throw new Error(boundary.message);
-      await writeGithubSyncState({ status: "pushing", stableSha, remoteSha: boundary.remoteSha, message: `Pushing ${shortSha(stableSha)} to origin/master without force.` });
+      await writeGithubSyncState({ status: "pushing", stableSha, previousRemoteSha, remoteSha: boundary.remoteSha, message: `Pushing ${shortSha(stableSha)} to origin/master without force.` });
       if (githubSyncHoldMs > 0) await delay(githubSyncHoldMs);
       const pushed = await runResult("git", ["push", "origin", `${stableSha}:refs/heads/master`], repoRoot);
       if (!pushed.ok) throw new Error(sanitizedGitError(pushed.output));
       const after = await originMasterAfterFetch();
       if (after.sha !== stableSha) throw new Error(`Post-push origin/master verification failed: ${after.sha || "missing"} != ${stableSha}.`);
-      const last = await writeGithubSyncState({ status: "succeeded", stableSha, remoteSha: after.sha, message: `GitHub master now points at verified stable ${shortSha(stableSha)}.` });
+      const last = await writeGithubSyncState({ status: "succeeded", stableSha, previousRemoteSha, resultingRemoteSha: after.sha, remoteSha: after.sha, message: `GitHub master now points at verified stable ${shortSha(stableSha)}.` });
       await audit("github.sync", { ok: true, status: "succeeded", stableSha, previousRemoteSha: boundary.remoteSha, remoteSha: after.sha });
       return { ...boundary, state: "succeeded", remoteSha: after.sha, remoteShortSha: shortSha(after.sha), canPush: false, message: last.message, last };
     } catch (error) {
       const message = sanitizedGitError(error.message || String(error));
-      await writeGithubSyncState({ status: "failed", stableSha: stableSha || null, message });
-      await audit("github.sync", { ok: false, stableSha: stableSha || null, message });
+      await writeGithubSyncState({ status: "failed", stableSha: stableSha || null, previousRemoteSha, error: message, message });
+      await audit("github.sync", { ok: false, stableSha: stableSha || null, previousRemoteSha, message });
       throw new Error(message);
     } finally {
       githubSyncInFlight = null;

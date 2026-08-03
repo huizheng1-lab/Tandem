@@ -2,6 +2,7 @@ import { buildOverview } from "./overview-state.js";
 
 const token = document.querySelector('meta[name="control-token"]').content;
 const state = { data: null, filter: "open", busy: false, revision: "", dirtyModelRoles: new Set() };
+let githubSyncPollTimer = null;
 const $ = (selector) => document.querySelector(selector);
 const $$ = (selector) => [...document.querySelectorAll(selector)];
 const escapeHtml = (value = "") => String(value).replace(/[&<>'"]/g, (char) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", "'": "&#39;", '"': "&quot;" })[char]);
@@ -296,13 +297,16 @@ function renderGithubSync(sync) {
   if (!sync) return;
   const button = $("#github-sync-button");
   const result = sync.last?.status || sync.state || "checking";
+  const running = ["requested", "validating", "fetching", "pushing"].includes(sync.last?.status);
   $("#github-sync-remote").textContent = sync.remoteShortSha || (sync.remoteSource === "missing" ? "missing" : "unknown");
+  $("#github-sync-freshness").textContent = sync.remoteFreshness ? `${sync.remoteFreshness}${sync.remoteCheckedAt ? ` ${relative(sync.remoteCheckedAt)}` : ""}` : "unknown";
+  $("#github-sync-stable").textContent = sync.stableShortSha || "missing";
   $("#github-sync-result").textContent = result;
-  $("#github-sync-message").textContent = sync.message || sync.disabledReason || "Checking verified stable sync boundary...";
+  $("#github-sync-message").textContent = sync.last?.message || sync.message || sync.disabledReason || "Checking verified stable sync boundary...";
   $("#main-update-state").textContent = sync.canPush ? "Sync ready" : sync.state === "already-synced" ? "Synced" : result;
   $("#main-update-state").classList.toggle("warn", Boolean(sync.canPush));
   $("#main-update-state").classList.toggle("bad", Boolean(!sync.ok || ["diverged", "github-ahead", "unavailable"].includes(sync.state)));
-  button.disabled = state.busy || !sync.canPush;
+  button.disabled = state.busy || running || !sync.canPush;
   button.title = sync.canPush
     ? `Push verified stable ${sync.stableShortSha} to origin/master`
     : sync.disabledReason || sync.message || "Verified stable cannot be synced right now";
@@ -485,12 +489,18 @@ async function githubSyncAction() {
   const remote = sync?.remoteShortSha || "unknown";
   if (!window.confirm(`Push verified stable ${stable} to GitHub master? Current GitHub master is ${remote}. This will only proceed if it is a fast-forward.`)) return;
   state.busy = true;
+  clearInterval(githubSyncPollTimer);
+  githubSyncPollTimer = setInterval(() => refresh(true, true), 700);
   try {
     const payload = await api("/api/github-sync", { method: "POST", body: JSON.stringify({ confirmed: true }) });
     toast(payload.result?.state === "already-synced" ? "GitHub master already synced" : "Verified stable synced to GitHub");
     $("#approve-backup").hidden = true;
     await refresh(true, true);
-  } catch (error) { setAlert(error.message); } finally { state.busy = false; }
+  } catch (error) { setAlert(error.message); } finally {
+    state.busy = false;
+    clearInterval(githubSyncPollTimer);
+    githubSyncPollTimer = null;
+  }
 }
 
 function renderApprovalFlow(flow) {

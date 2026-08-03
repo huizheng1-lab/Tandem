@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { once } from "node:events";
-import { appendFile, cp, mkdtemp, mkdir, readFile, writeFile, copyFile, rm } from "node:fs/promises";
+import { appendFile, cp, mkdtemp, mkdir, readFile, writeFile, copyFile, rename, rm } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -296,6 +296,18 @@ async function createBareOrigin(fixture) {
   return origin;
 }
 
+async function assertLocalBareOrigin(fixture) {
+  const remoteUrl = await git(fixture.repoRoot, "remote", "get-url", "origin");
+  assert.equal(path.isAbsolute(remoteUrl), true, `origin must be a local path, got ${remoteUrl}`);
+  assert.equal(remoteUrl.startsWith(fixture.root), true, `origin must stay inside fixture root, got ${remoteUrl}`);
+  assert.equal(await git(remoteUrl, "rev-parse", "--is-bare-repository"), "true");
+}
+
+async function remoteMaster(fixture) {
+  const output = await git(fixture.repoRoot, "ls-remote", "origin", "refs/heads/master");
+  return output.split(/\s+/)[0] || "";
+}
+
 async function prepareVerifiedStable(fixture, fileName = "verified-stable.txt") {
   await writeFile(path.join(fixture.repoRoot, fileName), `${fileName}\n`, "utf8");
   await git(fixture.repoRoot, "add", fileName);
@@ -382,12 +394,21 @@ test("D196 dashboard reports retired mutation paths truthfully", async (t) => {
 test("D206 GitHub sync fast-forwards only the verified stable commit and preserves dirty admin files", async (t) => {
   const fixture = await makeFixture(t);
   await createBareOrigin(fixture);
+  await assertLocalBareOrigin(fixture);
   const stableSha = await prepareVerifiedStable(fixture);
   await writeFile(path.join(fixture.repoRoot, "verified-stable.txt"), "dirty tracked edit\n", "utf8");
   await writeFile(path.join(fixture.repoRoot, "staged-local.txt"), "staged local admin file\n", "utf8");
   await git(fixture.repoRoot, "add", "staged-local.txt");
+  await writeFile(path.join(fixture.repoRoot, "delete-me.txt"), "tracked deletion sentinel\n", "utf8");
+  await writeFile(path.join(fixture.repoRoot, "rename-me.txt"), "tracked rename sentinel\n", "utf8");
+  await git(fixture.repoRoot, "add", "delete-me.txt", "rename-me.txt");
+  await git(fixture.repoRoot, "commit", "-m", "admin dirty baseline");
+  await rm(path.join(fixture.repoRoot, "delete-me.txt"), { force: true });
+  await rename(path.join(fixture.repoRoot, "rename-me.txt"), path.join(fixture.repoRoot, "renamed-local.txt"));
+  await git(fixture.repoRoot, "add", "-A", "delete-me.txt", "rename-me.txt", "renamed-local.txt");
   await writeFile(path.join(fixture.repoRoot, "untracked-local.txt"), "untracked local admin file\n", "utf8");
   const dirtyBefore = await git(fixture.repoRoot, "status", "--porcelain=v1", "--untracked-files=all");
+  const cachedBefore = await git(fixture.repoRoot, "diff", "--cached", "--binary");
 
   await withServer(t, fixture, async ({ get, post }) => {
     const status = await get("/api/status");
@@ -404,12 +425,84 @@ test("D206 GitHub sync fast-forwards only the verified stable commit and preserv
     assert.equal(synced.response.status, 200, JSON.stringify(synced.result));
     assert.equal(synced.result.result.state, "succeeded");
     assert.equal(synced.result.result.stableSha, stableSha);
+    assert.deepEqual(synced.result.result.last.history.map((entry) => entry.status).slice(-5), ["requested", "validating", "fetching", "pushing", "succeeded"]);
+    assert.equal(synced.result.result.last.previousRemoteSha, fixture.fixtureSha);
+    assert.equal(synced.result.result.last.resultingRemoteSha, stableSha);
   });
 
   const remote = await git(fixture.repoRoot, "ls-remote", "origin", "refs/heads/master");
   assert.match(remote, new RegExp(`^${stableSha}\\s+refs/heads/master`));
   const dirtyAfter = await git(fixture.repoRoot, "status", "--porcelain=v1", "--untracked-files=all");
   assert.equal(dirtyAfter, dirtyBefore);
+  assert.equal(await git(fixture.repoRoot, "diff", "--cached", "--binary"), cachedBefore);
+  assert.equal(await readFile(path.join(fixture.repoRoot, "verified-stable.txt"), "utf8"), "dirty tracked edit\n");
+  assert.equal(await readFile(path.join(fixture.repoRoot, "staged-local.txt"), "utf8"), "staged local admin file\n");
+  assert.equal(await readFile(path.join(fixture.repoRoot, "renamed-local.txt"), "utf8"), "tracked rename sentinel\n");
+  assert.equal(await readFile(path.join(fixture.repoRoot, "untracked-local.txt"), "utf8"), "untracked local admin file\n");
+});
+
+test("D210 GitHub sync reports already-synced as a successful no-op", async (t) => {
+  const fixture = await makeFixture(t);
+  await createBareOrigin(fixture);
+  await assertLocalBareOrigin(fixture);
+  const stableSha = await prepareVerifiedStable(fixture);
+  await git(fixture.repoRoot, "push", "origin", `${stableSha}:refs/heads/master`);
+
+  await withServer(t, fixture, async ({ get, post }) => {
+    const status = await get("/api/status");
+    assert.equal(status.response.status, 200, JSON.stringify(status.result));
+    assert.equal(status.result.githubSync.state, "already-synced");
+    assert.equal(status.result.githubSync.canPush, false);
+    assert.equal(status.result.githubSync.remoteFreshness, "fresh");
+
+    const synced = await post("/api/github-sync", { confirmed: true });
+    assert.equal(synced.response.status, 200, JSON.stringify(synced.result));
+    assert.equal(synced.result.result.state, "already-synced");
+    assert.equal(synced.result.result.last.previousRemoteSha, stableSha);
+    assert.equal(await remoteMaster(fixture), stableSha);
+  });
+});
+
+test("D210 GitHub sync refuses GitHub-ahead and divergent remotes without mutating refs", async (t) => {
+  const ahead = await makeFixture(t);
+  await createBareOrigin(ahead);
+  await assertLocalBareOrigin(ahead);
+  const stableSha = await prepareVerifiedStable(ahead);
+  await writeFile(path.join(ahead.repoRoot, "remote-ahead.txt"), "ahead\n", "utf8");
+  await git(ahead.repoRoot, "add", "remote-ahead.txt");
+  await git(ahead.repoRoot, "commit", "-m", "remote ahead");
+  const aheadSha = await git(ahead.repoRoot, "rev-parse", "HEAD");
+  await git(ahead.repoRoot, "push", "origin", `${aheadSha}:refs/heads/master`);
+  await git(ahead.repoRoot, "reset", "--soft", stableSha);
+  await withServer(t, ahead, async ({ get, post }) => {
+    const status = await get("/api/status");
+    assert.equal(status.result.githubSync.state, "github-ahead");
+    const blocked = await post("/api/github-sync", { confirmed: true });
+    assert.equal(blocked.response.status, 400);
+    assert.match(blocked.result.error, /ahead/);
+    assert.equal(await remoteMaster(ahead), aheadSha);
+  });
+
+  const divergent = await makeFixture(t);
+  await createBareOrigin(divergent);
+  await assertLocalBareOrigin(divergent);
+  const divergentStableSha = await prepareVerifiedStable(divergent);
+  await git(divergent.repoRoot, "checkout", "--detach", divergent.fixtureSha);
+  await writeFile(path.join(divergent.repoRoot, "remote-diverged.txt"), "diverged\n", "utf8");
+  await git(divergent.repoRoot, "add", "remote-diverged.txt");
+  await git(divergent.repoRoot, "commit", "-m", "remote diverged");
+  const divergedSha = await git(divergent.repoRoot, "rev-parse", "HEAD");
+  await git(divergent.repoRoot, "push", "origin", `${divergedSha}:refs/heads/master`);
+  await git(divergent.repoRoot, "checkout", "master");
+  await withServer(t, divergent, async ({ get, post }) => {
+    const status = await get("/api/status");
+    assert.equal(status.result.githubSync.state, "diverged");
+    const blocked = await post("/api/github-sync", { confirmed: true });
+    assert.equal(blocked.response.status, 400);
+    assert.match(blocked.result.error, /diverges/);
+    assert.equal(await remoteMaster(divergent), divergedSha);
+    assert.notEqual(divergedSha, divergentStableSha);
+  });
 });
 
 test("D206 GitHub sync refuses unsafe boundaries and reports dashboard hooks", async (t) => {
@@ -443,9 +536,94 @@ test("D206 GitHub sync refuses unsafe boundaries and reports dashboard hooks", a
   assert.match(app, /\/api\/github-sync/);
 });
 
+test("D210 GitHub sync rejects unsafe D196 phases, evidence mismatches, and runtime integrity failures", async (t) => {
+  for (const phase of ["improving", "swapping"]) {
+    const fixture = await makeFixture(t);
+    await createBareOrigin(fixture);
+    await assertLocalBareOrigin(fixture);
+    const stableSha = await prepareVerifiedStable(fixture);
+    await fixture.setOrchestratorState({ phase, stableCommit: stableSha, acceptedSourceSha: stableSha });
+    await withServer(t, fixture, async ({ get, post }) => {
+      const status = await get("/api/status");
+      assert.equal(status.result.githubSync.ok, false);
+      assert.match(status.result.githubSync.message, new RegExp(`phase=${phase}`));
+      const blocked = await post("/api/github-sync", { confirmed: true });
+      assert.equal(blocked.response.status, 400);
+    });
+  }
+
+  const cases = [
+    {
+      name: "accepted source",
+      setup: async (fixture, stableSha) => fixture.setOrchestratorState({ stableCommit: stableSha, acceptedSourceSha: fixture.fixtureSha }),
+      pattern: /Accepted source/,
+    },
+    {
+      name: "stable ref",
+      setup: async (fixture) => git(fixture.repoRoot, "update-ref", "refs/tandem-relay/stable", fixture.fixtureSha),
+      pattern: /Stable ref/,
+    },
+    {
+      name: "operation evidence",
+      setup: async (fixture) => writeFile(path.join(fixture.relayRoot, "control", "orchestrator-operations.ndjson"), "", "utf8"),
+      pattern: /Stable operation evidence/,
+    },
+    {
+      name: "executor build",
+      setup: async (fixture) => writeJson(path.join(fixture.relayRoot, "runtimes", "executor-a", "BUILD_INFO.json"), { sourceSha: fixture.fixtureSha }),
+      pattern: /Executor A build/,
+    },
+    {
+      name: "runtime integrity",
+      setup: async (fixture) => writeFile(path.join(fixture.relayRoot, "runtimes", "executor-a", "Tandem.exe"), "tampered runtime\n", "utf8"),
+      pattern: /Executor A integrity/,
+    },
+  ];
+
+  for (const item of cases) {
+    const fixture = await makeFixture(t);
+    await createBareOrigin(fixture);
+    await assertLocalBareOrigin(fixture);
+    const stableSha = await prepareVerifiedStable(fixture);
+    await item.setup(fixture, stableSha);
+    await withServer(t, fixture, async ({ get, post }) => {
+      const status = await get("/api/status");
+      assert.equal(status.result.githubSync.ok, false, item.name);
+      assert.match(status.result.githubSync.message, item.pattern, item.name);
+      const blocked = await post("/api/github-sync", { confirmed: true });
+      assert.equal(blocked.response.status, 400, item.name);
+      assert.match(blocked.result.error, item.pattern, item.name);
+      assert.equal(await remoteMaster(fixture), fixture.fixtureSha, item.name);
+    });
+  }
+});
+
+test("D210 GitHub sync sanitizes remote fetch failures and labels stale status", async (t) => {
+  const fixture = await makeFixture(t);
+  const origin = await createBareOrigin(fixture);
+  await assertLocalBareOrigin(fixture);
+  const stableSha = await prepareVerifiedStable(fixture);
+  await git(fixture.repoRoot, "push", "origin", `${stableSha}:refs/heads/master`);
+  await git(fixture.repoRoot, "remote", "set-url", "origin", "https://user:super-secret@example.invalid/repo.git?token=top-secret");
+
+  await withServer(t, fixture, async ({ get, post }) => {
+    const status = await get("/api/status");
+    assert.equal(status.response.status, 200, JSON.stringify(status.result));
+    assert.doesNotMatch(JSON.stringify(status.result.githubSync), /super-secret|top-secret/);
+    assert.ok(["stale", "unavailable"].includes(status.result.githubSync.remoteFreshness));
+
+    const blocked = await post("/api/github-sync", { confirmed: true });
+    assert.equal(blocked.response.status, 400);
+    assert.doesNotMatch(blocked.result.error, /super-secret|top-secret/);
+  }, { env: { TANDEM_GITHUB_REMOTE_STATUS_TIMEOUT_MS: "1" } });
+
+  await git(fixture.repoRoot, "remote", "set-url", "origin", origin);
+});
+
 test("D206 GitHub sync deduplicates concurrent requests", async (t) => {
   const fixture = await makeFixture(t);
   await createBareOrigin(fixture);
+  await assertLocalBareOrigin(fixture);
   await prepareVerifiedStable(fixture);
 
   await withServer(t, fixture, async ({ post }) => {
@@ -458,6 +636,8 @@ test("D206 GitHub sync deduplicates concurrent requests", async (t) => {
     const busy = [first, second].find((item) => item.response.status === 409);
     assert.match(busy.result.error, /already in progress/);
   }, { env: { TANDEM_GITHUB_SYNC_HOLD_MS: "300" } });
+  const audit = await readJsonl(fixture.auditPath);
+  assert.equal(audit.filter((entry) => entry.action === "github.sync" && entry.ok).length, 1);
 });
 
 test("D197 dashboard watchdog audits orchestrator status without retired supervisor calls", async (t) => {
