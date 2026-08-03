@@ -495,7 +495,7 @@ describe("codex cli mixed roles", () => {
       report: { status: "complete" }
     });
     const args = JSON.parse(await readFile(capturePath, "utf8")) as string[];
-    expect(args.slice(args.indexOf("--sandbox"), args.indexOf("--sandbox") + 2)).toEqual(["--sandbox", "workspace-write"]);
+    expect(args.slice(args.indexOf("-s"), args.indexOf("-s") + 2)).toEqual(["-s", "workspace-write"]);
   });
 
   it("D148: allows read-only Codex CLI leader reviews from a protected source checkout", async () => {
