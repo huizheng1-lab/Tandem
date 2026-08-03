@@ -77,12 +77,14 @@ const activeRelayPhases = new Set(["working", "validating", "rollback-verificati
 const approvalWaitTimeoutMs = Number(process.env.TANDEM_APPROVAL_WAIT_TIMEOUT_MS || 18_000_000);
 const githubSyncHoldMs = Number(process.env.TANDEM_GITHUB_SYNC_HOLD_MS || 0);
 const githubRemoteStatusTimeoutMs = Number(process.env.TANDEM_GITHUB_REMOTE_STATUS_TIMEOUT_MS || 2500);
+const githubSyncStateWriteHoldMs = Number(process.env.TANDEM_GITHUB_SYNC_STATE_WRITE_HOLD_MS || 0);
 const testHarness = process.env.TANDEM_DASHBOARD_TEST_HARNESS === "1";
 const testCommandLogPath = process.env.TANDEM_DASHBOARD_COMMAND_LOG || "";
 const testHarnessStartedRoles = new Set();
 const packageIntegrityPromise = import(pathToFileURL(path.join(repoRoot, "scripts", "runtime-package-integrity.mjs")).href);
 let approvalFlow = null;
 let githubSyncInFlight = null;
+let githubSyncStateWriteQueue = Promise.resolve();
 
 const durableRecoveryStages = [
   "package-ready",
@@ -1135,30 +1137,35 @@ async function readGithubSyncState() {
 }
 
 async function writeGithubSyncState(patch) {
-  const previous = await readGithubSyncState();
-  const updatedAt = new Date().toISOString();
-  const history = patch.status ? [
-    ...((previous?.history || []).slice(-24)),
-    {
-      status: patch.status,
-      at: updatedAt,
-      message: patch.message || "",
-      stableSha: patch.stableSha || null,
-      previousRemoteSha: patch.previousRemoteSha || null,
-      remoteSha: patch.remoteSha || null,
-      resultingRemoteSha: patch.resultingRemoteSha || null,
-      error: patch.error || null,
-    },
-  ] : previous?.history;
-  const next = {
-    schemaVersion: 1,
-    ...(previous || {}),
-    ...patch,
-    ...(history ? { history } : {}),
-    updatedAt,
-  };
-  await writeJsonAtomic(githubSyncStatePath, next);
-  return next;
+  const write = githubSyncStateWriteQueue.then(async () => {
+    const previous = await readGithubSyncState();
+    const updatedAt = new Date().toISOString();
+    const history = patch.status ? [
+      ...((previous?.history || []).slice(-24)),
+      {
+        status: patch.status,
+        at: updatedAt,
+        message: patch.message || "",
+        stableSha: patch.stableSha || null,
+        previousRemoteSha: patch.previousRemoteSha || null,
+        remoteSha: patch.remoteSha || null,
+        resultingRemoteSha: patch.resultingRemoteSha || null,
+        error: patch.error || null,
+      },
+    ] : previous?.history;
+    const next = {
+      schemaVersion: 1,
+      ...(previous || {}),
+      ...patch,
+      ...(history ? { history } : {}),
+      updatedAt,
+    };
+    if (githubSyncStateWriteHoldMs > 0) await delay(githubSyncStateWriteHoldMs);
+    await writeJsonAtomic(githubSyncStatePath, next);
+    return next;
+  });
+  githubSyncStateWriteQueue = write.catch(() => {});
+  return write;
 }
 
 async function rememberRemoteProbe(probe) {

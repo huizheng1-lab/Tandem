@@ -308,6 +308,27 @@ async function remoteMaster(fixture) {
   return output.split(/\s+/)[0] || "";
 }
 
+function lifecycleStatuses(state) {
+  return (state?.history || []).map((entry) => entry.status);
+}
+
+function lastLifecyclePath(state) {
+  const statuses = lifecycleStatuses(state);
+  const start = statuses.lastIndexOf("requested");
+  return start >= 0 ? statuses.slice(start) : statuses;
+}
+
+async function pollStatusDuring(promise, get) {
+  let settled = false;
+  promise.finally(() => { settled = true; });
+  const polls = [];
+  while (!settled) {
+    polls.push(await get("/api/status"));
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
+  return polls;
+}
+
 async function prepareVerifiedStable(fixture, fileName = "verified-stable.txt") {
   await writeFile(path.join(fixture.repoRoot, fileName), `${fileName}\n`, "utf8");
   await git(fixture.repoRoot, "add", fileName);
@@ -638,6 +659,65 @@ test("D206 GitHub sync deduplicates concurrent requests", async (t) => {
   }, { env: { TANDEM_GITHUB_SYNC_HOLD_MS: "300" } });
   const audit = await readJsonl(fixture.auditPath);
   assert.equal(audit.filter((entry) => entry.action === "github.sync" && entry.ok).length, 1);
+});
+
+test("D211 GitHub sync keeps success lifecycle history while status polling refreshes remote probes", async (t) => {
+  const fixture = await makeFixture(t);
+  await createBareOrigin(fixture);
+  await assertLocalBareOrigin(fixture);
+  const stableSha = await prepareVerifiedStable(fixture);
+
+  await withServer(t, fixture, async ({ get, post }) => {
+    const syncPromise = post("/api/github-sync", { confirmed: true });
+    const polls = await pollStatusDuring(syncPromise, get);
+    const synced = await syncPromise;
+    assert.equal(synced.response.status, 200, JSON.stringify(synced.result));
+    assert.ok(polls.length > 0, "status polling overlapped the active sync operation");
+
+    const durable = await readJson(path.join(fixture.relayRoot, "control", "GITHUB_SYNC_STATE.json"));
+    assert.deepEqual(lastLifecyclePath(durable), ["requested", "validating", "fetching", "pushing", "succeeded"]);
+    assert.equal(durable.stableSha, stableSha);
+    assert.equal(durable.previousRemoteSha, fixture.fixtureSha);
+    assert.equal(durable.resultingRemoteSha, stableSha);
+    assert.equal(durable.remoteProbe.sha, stableSha);
+
+    const status = await get("/api/status");
+    assert.deepEqual(lastLifecyclePath(status.result.githubSync.last), ["requested", "validating", "fetching", "pushing", "succeeded"]);
+    assert.equal(status.result.githubSync.last.remoteProbe.sha, stableSha);
+    assert.equal(await remoteMaster(fixture), stableSha);
+  }, { env: { TANDEM_GITHUB_SYNC_HOLD_MS: "200", TANDEM_GITHUB_SYNC_STATE_WRITE_HOLD_MS: "30" } });
+});
+
+test("D211 GitHub sync keeps failed lifecycle history and sanitized error while status polling refreshes remote probes", async (t) => {
+  const fixture = await makeFixture(t);
+  const origin = await createBareOrigin(fixture);
+  await assertLocalBareOrigin(fixture);
+  const stableSha = await prepareVerifiedStable(fixture);
+  await git(fixture.repoRoot, "push", "origin", `${stableSha}:refs/heads/master`);
+  await git(fixture.repoRoot, "remote", "set-url", "origin", "https://user:super-secret@example.invalid/repo.git?token=top-secret");
+
+  await withServer(t, fixture, async ({ get, post }) => {
+    const syncPromise = post("/api/github-sync", { confirmed: true });
+    const polls = await pollStatusDuring(syncPromise, get);
+    const failed = await syncPromise;
+    assert.equal(failed.response.status, 400, JSON.stringify(failed.result));
+    assert.ok(polls.length > 0, "status polling overlapped the failed sync operation");
+
+    const durable = await readJson(path.join(fixture.relayRoot, "control", "GITHUB_SYNC_STATE.json"));
+    assert.deepEqual(lastLifecyclePath(durable), ["requested", "validating", "fetching", "failed"]);
+    assert.equal(durable.stableSha, stableSha);
+    assert.equal(durable.status, "failed");
+    assert.doesNotMatch(durable.error, /super-secret|top-secret/);
+    assert.doesNotMatch(JSON.stringify(durable), /super-secret|top-secret/);
+    assert.ok(durable.remoteProbe || durable.updatedAt);
+
+    const status = await get("/api/status");
+    assert.equal(status.result.githubSync.last.status, "failed");
+    assert.deepEqual(lastLifecyclePath(status.result.githubSync.last), ["requested", "validating", "fetching", "failed"]);
+    assert.doesNotMatch(JSON.stringify(status.result.githubSync.last), /super-secret|top-secret/);
+  }, { env: { TANDEM_GITHUB_REMOTE_STATUS_TIMEOUT_MS: "1", TANDEM_GITHUB_SYNC_STATE_WRITE_HOLD_MS: "30" } });
+
+  await git(fixture.repoRoot, "remote", "set-url", "origin", origin);
 });
 
 test("D197 dashboard watchdog audits orchestrator status without retired supervisor calls", async (t) => {

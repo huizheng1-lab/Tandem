@@ -1,11 +1,11 @@
 {
   "schemaVersion": 1,
-  "generatedAtUtc": "2026-08-03T00:19:16.475Z",
+  "generatedAtUtc": "2026-08-03T01:18:36.656Z",
   "files": [
     {
       "path": "approval-flow.e2e.mjs",
-      "sha256": "97B96473F52D9D64AF67DC6A5CA9EA146AA744A742B5880E7102074C68B4CB2F",
-      "bytes": 60613
+      "sha256": "530EF465C4ADD705D6EECF66357A8D06B4665A5AB00DFF673AF3C1582CE567CA",
+      "bytes": 64690
     },
     {
       "path": "dashboard-hidden-launcher.vbs",
@@ -74,8 +74,8 @@
     },
     {
       "path": "server.mjs",
-      "sha256": "B24656BE3B097B6E9AD894E8C80671E4FCBB231A3CEF188A3739FB5A0352DA21",
-      "bytes": 144033
+      "sha256": "9695562153F3BDA47451B55BBB1D26E0EAC397B804893DBC30AEFB6DED658E0B",
+      "bytes": 144449
     },
     {
       "path": "start-dashboard.ps1",
