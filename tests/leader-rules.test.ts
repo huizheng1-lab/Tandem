@@ -100,6 +100,11 @@ describe("shared leader rules (D60 + D61)", () => {
     it("forbids half-finished extras", () => {
       expect(securityAndScopeRule).toMatch(/no half-finished extras/i);
     });
+    it("sanctions necessary out-of-plan edits only through deviationsFromPlan disclosure", () => {
+      expect(securityAndScopeRule).toMatch(/operationally necessary edit/i);
+      expect(securityAndScopeRule).toMatch(/make that edit.*disclose it in deviationsFromPlan/i);
+      expect(securityAndScopeRule).toMatch(/not optional scope expansion/i);
+    });
   });
 
   describe("scopeExpansionReviewRule (D61-2 reviewer portion)", () => {
@@ -107,8 +112,17 @@ describe("shared leader rules (D60 + D61)", () => {
       expect(scopeExpansionReviewRule.length).toBeGreaterThan(20);
     });
     it("instructs the reviewer to flag scope expansion as revise-worthy", () => {
-      expect(scopeExpansionReviewRule).toMatch(/flag unrequested scope expansion/i);
+      expect(scopeExpansionReviewRule).toMatch(/flag undisclosed out-of-plan files/i);
       expect(scopeExpansionReviewRule).toMatch(/revise-worthy/i);
+    });
+    it("does not auto-reject an operationally required file justified in deviationsFromPlan", () => {
+      expect(scopeExpansionReviewRule).toMatch(/deviationsFromPlan/);
+      expect(scopeExpansionReviewRule).toMatch(/not automatically a scope violation/i);
+      expect(scopeExpansionReviewRule).toMatch(/evaluate.*on their merits/i);
+    });
+    it("still rejects unjustified or unnecessary out-of-plan changes", () => {
+      expect(scopeExpansionReviewRule).toMatch(/undisclosed out-of-plan files/i);
+      expect(scopeExpansionReviewRule).toMatch(/not genuinely necessary/i);
     });
   });
 

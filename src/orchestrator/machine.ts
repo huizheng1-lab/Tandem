@@ -1,4 +1,5 @@
 import { TandemConfig } from "../config/schema.js";
+import type { PermissionMode } from "../config/schema.js";
 import type { AttachmentRef } from "../session/attachments.js";
 import {
   BuildPlan,
@@ -55,7 +56,7 @@ export interface AgentFns {
   plan(input: { request: string; goals: string[]; history?: string; attachments?: AttachmentRef[]; previousAttemptError?: string }): Promise<PlanResult>;
   build(input: BuildStreamInput): Promise<unknown>;
   review(input: { plan: BuildPlan; report: CompletionReport; round: number; diff: string; previousAttemptError?: string }): Promise<unknown>;
-  takeover(input: { plan: BuildPlan; reports: CompletionReport[]; feedback: ReviewVerdict["feedback"][]; previousAttemptError?: string }): Promise<{ report: CompletionReport; userSummary: string }>;
+  takeover(input: { plan: BuildPlan; reports: CompletionReport[]; feedback: ReviewVerdict["feedback"][]; permissionMode: PermissionMode; previousAttemptError?: string }): Promise<{ report: CompletionReport; userSummary: string }>;
 }
 
 export interface RunOptions {
@@ -112,6 +113,21 @@ function takeoverAuthoritativeVerificationWarning(report: CompletionReport): str
   if (failed.length === 0) return undefined;
   const commands = failed.map((result) => result.command).join("; ");
   return `takeover claimed complete, but authoritative verification failed ${failed.length}/${report.verificationResults.length} command(s): ${commands}`;
+}
+
+function completeTakeoverWhenVerificationPasses(plan: BuildPlan, report: CompletionReport, authoritativeRan: boolean): CompletionReport {
+  if (!authoritativeRan || report.status === "complete") return report;
+  const completed: CompletionReport = { ...report, status: "complete" };
+  try {
+    // Use the existing verification enforcement so every plan command must be present and
+    // passing, and existing verification-script disclosure checks still apply. A takeover
+    // may have reported blocked solely because its tool policy prevented repair commands;
+    // authoritative passing evidence is stronger than that stale status.
+    validateCompletionReport(plan, completed, plan.verification);
+    return completed;
+  } catch {
+    return report;
+  }
 }
 
 async function retryArtifact<T>(name: string, emit: (event: MachineEvent) => void, producer: (previousError?: unknown, attempt?: number) => Promise<unknown>, parse: (value: unknown) => T): Promise<T> {
@@ -437,7 +453,13 @@ export async function runOrchestration(options: RunOptions): Promise<RunResult> 
     for (let attempt = 1; attempt <= 3; attempt += 1) {
       try {
         await waitIfPaused();
-        const takeover = await options.agents.takeover({ plan, reports, feedback: allFeedback, previousAttemptError: lastError === undefined ? undefined : previousAttemptMessage(lastError) });
+        const takeover = await options.agents.takeover({
+          plan,
+          reports,
+          feedback: allFeedback,
+          permissionMode: options.config.permissionMode ?? "ask",
+          previousAttemptError: lastError === undefined ? undefined : previousAttemptMessage(lastError)
+        });
         lastTakeover = takeover;
         let schemaReport = validateCompletionReport(plan, takeover.report, plan.verification, {
           enforceCommandEcho: !options.verificationRunner,
@@ -445,7 +467,7 @@ export async function runOrchestration(options: RunOptions): Promise<RunResult> 
         });
         schemaReport = await applyPostBuildReport(schemaReport);
         const authoritative = await attachAuthoritativeVerification(schemaReport);
-        const report = authoritative.report;
+        const report = completeTakeoverWhenVerificationPasses(plan, authoritative.report, authoritative.ran);
         validateCompletionReport(plan, report, plan.verification, {
           enforceCommandEcho: !authoritative.ran,
           enforceCompleteVerification: !authoritative.ran

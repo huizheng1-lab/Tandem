@@ -122,6 +122,55 @@ describe("orchestration", () => {
     expect(result.takeover).toBe(true);
   });
 
+  it("passes the session's active write permission mode into takeover and completes on passing verification", async () => {
+    let takeoverPermissionMode: string | undefined;
+    const result = await runOrchestration({
+      request: "build",
+      config: { maxReviewRounds: 0, maxParallelWorkers: 1, permissionMode: "yolo" },
+      verificationRunner: async () => [{ command: "npm test", passed: true, output: "real ok" }],
+      agents: agents({
+        takeover: async ({ permissionMode }) => {
+          takeoverPermissionMode = permissionMode;
+          return { report: report("blocked"), userSummary: "takeover repaired the build" };
+        }
+      })
+    });
+
+    expect(takeoverPermissionMode).toBe("yolo");
+    expect(result.reports[0]?.status).toBe("complete");
+    expect(result.summary).toBe("takeover repaired the build");
+  });
+
+  it("completes a task that requires a justified secondary config edit without takeover", async () => {
+    let reviewedReport: CompletionReport | undefined;
+    const configPlan: BuildPlan = {
+      ...plan,
+      tasks: [{ id: "T1", description: "Update the default model config", files: ["config.yaml"] }]
+    };
+    const result = await runOrchestration({
+      request: "update both active config locations",
+      config: { maxReviewRounds: 1, maxParallelWorkers: 1 },
+      agents: agents({
+        plan: async () => ({ kind: "plan", plan: configPlan }),
+        build: async () => ({
+          ...report(),
+          filesChanged: ["config.yaml", "runtime/config.yaml"],
+          deviationsFromPlan: ["runtime/config.yaml was operationally required because the runtime reads the secondary config location."]
+        }),
+        review: async ({ report }) => {
+          reviewedReport = report;
+          return report.deviationsFromPlan.some((entry) => entry.includes("runtime/config.yaml"))
+            ? verdict("approve")
+            : verdict("revise", [{ issue: "Undisclosed out-of-plan file", requiredChange: "Justify the secondary config edit" }]);
+        }
+      })
+    });
+
+    expect(reviewedReport?.deviationsFromPlan).toHaveLength(1);
+    expect(result.takeover).toBe(false);
+    expect(result.summary).toBe("approve");
+  });
+
   it("D150: runs post-build report hook for completed takeover reports before authoritative verification", async () => {
     const events: string[] = [];
     let postBuildContext: { plan: BuildPlan; round: number } | undefined;

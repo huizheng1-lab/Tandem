@@ -27,6 +27,7 @@ async function fakeCodexScript(): Promise<string> {
     `
 const fs = require("fs");
 const args = process.argv.slice(2);
+if (process.env.TANDEM_FAKE_CODEX_CAPTURE) fs.writeFileSync(process.env.TANDEM_FAKE_CODEX_CAPTURE, JSON.stringify(args));
 if (args.includes("--version")) { console.log("codex-cli 0.142.5"); process.exit(0); }
 const output = args[args.indexOf("--output-last-message") + 1];
 const schema = args[args.indexOf("--output-schema") + 1] || "";
@@ -477,6 +478,24 @@ describe("codex cli mixed roles", () => {
 
     await expect(agents.plan({ request: "What is 2+2?", goals: [] })).resolves.toEqual({ kind: "answer", answer: "4" });
     await expect(agents.plan({ request: "Create hello35.txt with hi", goals: [] })).resolves.toMatchObject({ kind: "plan" });
+  });
+
+  it("runs Codex leader takeover with workspace-write inherited from the active session", async () => {
+    const cwd = await tempDir("takeover-project");
+    const capturePath = path.join(cwd, "takeover-args.json");
+    const codexCliPath = await fakeCodexScript();
+    const agents = await createLiveAgents({
+      config: { ...defaultConfig, leader: "codex/cli", worker: "openai/gpt-5-mini", permissionMode: "yolo", codexCliPath, codexCliModel: "gpt-5-mini" },
+      cwd,
+      env: { OPENAI_API_KEY: "test-key", TANDEM_FAKE_CODEX_CAPTURE: capturePath },
+      ledger: new CostLedger()
+    });
+
+    await expect(agents.takeover({ plan, reports: [], feedback: [], permissionMode: "yolo" })).resolves.toMatchObject({
+      report: { status: "complete" }
+    });
+    const args = JSON.parse(await readFile(capturePath, "utf8")) as string[];
+    expect(args.slice(args.indexOf("--sandbox"), args.indexOf("--sandbox") + 2)).toEqual(["--sandbox", "workspace-write"]);
   });
 
   it("D148: allows read-only Codex CLI leader reviews from a protected source checkout", async () => {

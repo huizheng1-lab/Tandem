@@ -784,11 +784,14 @@ Standing goals are context only; do not redirect unrelated requests toward them.
       return extracted;
     },
 
-    takeover: async ({ plan, reports, feedback, previousAttemptError }) => {
+    takeover: async ({ plan, reports, feedback, permissionMode, previousAttemptError }) => {
+      // Takeover is an implementation round. Bind it to the session's active permission mode
+      // explicitly instead of relying on the mode captured when these agents were created.
+      const takeoverOptions = { ...options, config: { ...options.config, permissionMode } };
       if (leader.entry.provider === "codex-cli") {
         return codexLeaderTakeover(
           {
-            config: options.config,
+            config: takeoverOptions.config,
             cwd: options.cwd,
             env: options.env,
             entry: leader.entry,
@@ -805,7 +808,7 @@ Standing goals are context only; do not redirect unrelated requests toward them.
       if (leader.entry.provider === "claude-code-cli") {
         return claudeLeaderTakeover(
           {
-            config: options.config,
+            config: takeoverOptions.config,
             cwd: options.cwd,
             env: options.env,
             entry: leader.entry,
@@ -845,7 +848,7 @@ Standing goals are context only; do not redirect unrelated requests toward them.
         providerOptions: openAiPromptCacheProviderOptions(leader.entry, options.cwd, "leader"),
         systemProviderOptions: leaderSystemProviderOptions(leader.entry),
         messages: leaderThread,
-        tools: mergeTools(makeToolSet({ ...toolContext, media: leader.entry.media }, "takeover"), submitTools),
+        tools: mergeTools(makeToolSet({ ...toolContext, permissionMode, media: leader.entry.media }, "takeover"), submitTools),
         maxSteps: Math.max(options.config.maxStepsPerAgentTurn, TAKEOVER_MIN_STEPS),
         stopToolName: "submit_takeover",
         abortSignal: options.abortSignal,
