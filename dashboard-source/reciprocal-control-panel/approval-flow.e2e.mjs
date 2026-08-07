@@ -318,6 +318,15 @@ function lastLifecyclePath(state) {
   return start >= 0 ? statuses.slice(start) : statuses;
 }
 
+function extractFunction(source, name, nextName) {
+  const starts = [source.indexOf(`function ${name}`), source.indexOf(`async function ${name}`)].filter((index) => index >= 0);
+  const start = starts.length ? Math.min(...starts) : -1;
+  assert.notEqual(start, -1, `missing function ${name}`);
+  const end = source.indexOf(`function ${nextName}`, start);
+  assert.notEqual(end, -1, `missing next function ${nextName}`);
+  return source.slice(start, end);
+}
+
 async function pollStatusDuring(promise, get) {
   let settled = false;
   promise.finally(() => { settled = true; });
@@ -552,9 +561,83 @@ test("D206 GitHub sync refuses unsafe boundaries and reports dashboard hooks", a
   const html = await readFile(path.join(here, "public", "index.html"), "utf8");
   const app = await readFile(path.join(here, "public", "app.js"), "utf8");
   assert.match(html, /github-sync-button/);
-  assert.match(html, /Sync verified version to GitHub/);
+  assert.match(html, /Push verified stable to origin\/master \(fast-forward only\)/);
   assert.match(app, /window\.confirm\(`Push verified stable/);
   assert.match(app, /\/api\/github-sync/);
+});
+
+test("D212 dashboard removes dead main-update client path and keeps server endpoint retired", async (t) => {
+  const fixture = await makeFixture(t);
+  await createBareOrigin(fixture);
+  await prepareVerifiedStable(fixture);
+  await withServer(t, fixture, async ({ post }) => {
+    const retired = await post("/api/main/update", { comment: "must remain retired", confirmed: true });
+    assert.equal(retired.response.status, 410);
+    assert.match(retired.result.error, /D196 replaced dashboard mutation paths/);
+  });
+
+  const html = await readFile(path.join(here, "public", "index.html"), "utf8");
+  const app = await readFile(path.join(here, "public", "app.js"), "utf8");
+  const publicText = `${html}\n${app}`;
+  assert.doesNotMatch(publicText, /main\/update/);
+  assert.doesNotMatch(publicText, /main-update-form/);
+  assert.doesNotMatch(publicText, /main-update-comment/);
+  assert.doesNotMatch(publicText, /Update main branch/);
+});
+
+test("D212 Versions tab renders one explicit GitHub sync push control", async () => {
+  const html = await readFile(path.join(here, "public", "index.html"), "utf8");
+  const panel = html.match(/<section class="panel update-panel github-sync-panel"[\s\S]*?<\/section>/)?.[0] || "";
+  assert.ok(panel, "missing GitHub sync panel");
+  assert.equal([...panel.matchAll(/<button\b/g)].length, 1);
+  assert.match(panel, /id="github-sync-button"/);
+  assert.match(panel, /Push verified stable to origin\/master \(fast-forward only\)/);
+  assert.doesNotMatch(panel, /<form\b/);
+  assert.doesNotMatch(panel, /Update main branch|Integration comment/);
+});
+
+test("D212 GitHub sync panel renders disabled reason as visible text", async () => {
+  const app = await readFile(path.join(here, "public", "app.js"), "utf8");
+  const elements = new Map();
+  const get = (selector) => {
+    if (!elements.has(selector)) elements.set(selector, { textContent: "", disabled: false, title: "", classList: { toggle() {} } });
+    return elements.get(selector);
+  };
+  const renderGithubSync = new Function("state", "$", "relative", `${extractFunction(app, "renderGithubSync", "renderVersions")}; return renderGithubSync;`)({}, get, () => "now");
+  renderGithubSync({
+    ok: false,
+    canPush: false,
+    state: "fast-forward-ready",
+    disabledReason: "phase=failed-paused currentItem=W0032",
+    message: "origin/master can fast-forward to the verified stable version.",
+    stableShortSha: "abcdef0",
+    remoteShortSha: "1234567",
+    remoteFreshness: "fresh",
+    remoteCheckedAt: "2026-08-07T00:00:00.000Z",
+    last: { status: "succeeded", message: "Old success must not hide the current disabled reason." },
+  });
+  assert.equal(elements.get("#github-sync-message").textContent, "phase=failed-paused currentItem=W0032");
+  assert.equal(elements.get("#github-sync-button").disabled, true);
+});
+
+test("D212 GitHub sync cancellation is visible instead of a silent no-op", async () => {
+  const app = await readFile(path.join(here, "public", "app.js"), "utf8");
+  const elements = new Map([["#github-sync-message", { textContent: "" }], ["#approve-backup", { hidden: false }]]);
+  const toasts = [];
+  const githubSyncAction = new Function("state", "$", "window", "toast", "clearInterval", "setInterval", "refresh", "api", "setAlert", `let githubSyncPollTimer = null; ${extractFunction(app, "githubSyncAction", "renderApprovalFlow")}; return githubSyncAction;`)(
+    { busy: false, data: { githubSync: { stableShortSha: "abcdef0", remoteShortSha: "1234567" } } },
+    (selector) => elements.get(selector) || { textContent: "", hidden: false },
+    { confirm: () => false },
+    (message) => toasts.push(message),
+    () => {},
+    () => 1,
+    async () => {},
+    async () => { throw new Error("api must not run when confirmation is cancelled"); },
+    () => {},
+  );
+  await githubSyncAction();
+  assert.equal(elements.get("#github-sync-message").textContent, "GitHub sync cancelled before any remote change.");
+  assert.deepEqual(toasts, ["GitHub sync cancelled"]);
 });
 
 test("D210 GitHub sync rejects unsafe D196 phases, evidence mismatches, and runtime integrity failures", async (t) => {

@@ -42,11 +42,11 @@
   flex-shrink: 0;
 }
 
-.main-update-panel {
+.github-sync-panel {
   border-top: 4px solid var(--green);
 }
 
-.main-update-panel .small-print {
+.github-sync-panel .small-print {
   margin-bottom: 14px;
 }
 

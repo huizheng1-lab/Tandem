@@ -1,11 +1,11 @@
 {
   "schemaVersion": 1,
-  "generatedAtUtc": "2026-08-03T01:18:36.656Z",
+  "generatedAtUtc": "2026-08-07T15:06:50.836Z",
   "files": [
     {
       "path": "approval-flow.e2e.mjs",
-      "sha256": "530EF465C4ADD705D6EECF66357A8D06B4665A5AB00DFF673AF3C1582CE567CA",
-      "bytes": 64690
+      "sha256": "2D1C24ACEB2B2DD0986A62123B0216E77675C72FE7D1AB3EEB70F6B01E10EEE7",
+      "bytes": 69170
     },
     {
       "path": "dashboard-hidden-launcher.vbs",
@@ -34,8 +34,8 @@
     },
     {
       "path": "public/app.js",
-      "sha256": "FA65264F8CBC240F75D4AFC005BC30197470A3E4286F9EC90E13E48B88238E1E",
-      "bytes": 45671
+      "sha256": "5A6B775E6682720D95A47F6B7CAFA6F1B86C64202B193779884645F6208D08E9",
+      "bytes": 44819
     },
     {
       "path": "public/overview-state.js",
@@ -44,8 +44,8 @@
     },
     {
       "path": "public/index.html",
-      "sha256": "7144ED2D237735564D53F11F3B505B6121A50EBE57248D7112B02FF9BF0DF156",
-      "bytes": 16391
+      "sha256": "E5C56266C8C7522EC0AFBB4D261326C8B113A254E45BB0AC724A9D7E2FF927E2",
+      "bytes": 15881
     },
     {
       "path": "public/mobile.css",
@@ -59,7 +59,7 @@
     },
     {
       "path": "public/update-gate.css",
-      "sha256": "8D0CCD2AB9F3FEC6003DE0A291F93168B416F989B2928FF73597387E62C8F0A9",
+      "sha256": "BA361897E9F51E584A2F76BFEBA7329569DFD4A5BBF0D674E39C8DFBD5E3A88E",
       "bytes": 1916
     },
     {

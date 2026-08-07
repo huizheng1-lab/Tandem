@@ -144,11 +144,11 @@
 
       <section class="view" id="versions-view">
         <div class="section-heading"><div><p class="eyebrow">Build and branch inventory</p><h2>Version comparison</h2></div><span class="status-chip" id="drift-chip">Live from disk</span></div>
-        <section class="panel update-panel main-update-panel" id="main-update-panel">
-          <div class="panel-head"><div><p class="eyebrow">Stable to trunk</p><h2>Main branch update</h2></div><span class="status-chip" id="main-update-state">Checking</span></div>
+        <section class="panel update-panel github-sync-panel" id="github-sync-panel">
+          <div class="panel-head"><div><p class="eyebrow">Stable to GitHub</p><h2>GitHub stable sync</h2></div><span class="status-chip" id="github-sync-state">Checking</span></div>
           <div class="update-grid">
             <div>
-              <p id="main-update-message">Reading annotated update tags...</p>
+              <p id="github-sync-summary">Reading verified stable and GitHub master state...</p>
               <dl class="update-facts">
                 <div><dt>Master is at</dt><dd class="mono" id="main-version">--</dd></div>
                 <div><dt>Stable tip</dt><dd class="mono" id="main-stable">--</dd></div>
@@ -158,14 +158,9 @@
                 <div><dt>Verified stable</dt><dd class="mono" id="github-sync-stable">--</dd></div>
                 <div><dt>Sync result</dt><dd id="github-sync-result">--</dd></div>
               </dl>
-              <button class="button small" id="github-sync-button" type="button">Sync verified version to GitHub</button>
+              <button class="button small" id="github-sync-button" type="button">Push verified stable to origin/master (fast-forward only)</button>
               <p class="small-print" id="github-sync-message">Checking verified stable sync boundary...</p>
             </div>
-            <form id="main-update-form">
-              <label>Integration comment<textarea id="main-update-comment" rows="5" maxlength="1200" placeholder="Summarize the reviewed batch and why it is ready for master." required></textarea></label>
-              <p class="small-print">Runs typecheck and tests on stable, updates and tags master, pushes without force, then re-synchronizes both reciprocal branches.</p>
-              <div class="row-actions"><button class="button primary" type="submit">Update main branch</button></div>
-            </form>
           </div>
         </section>
         <section class="panel update-panel" id="update-panel">

@@ -26,8 +26,7 @@ function hasDirtyInputs() {
   return state.dirtyModelRoles.size > 0
     || !$("#direction-form").hidden
     || Boolean($("#item-text").value.trim())
-    || Boolean($("#update-comment").value.trim())
-    || Boolean($("#main-update-comment").value.trim());
+    || Boolean($("#update-comment").value.trim());
 }
 
 function toast(message) {
@@ -280,17 +279,14 @@ function renderMainVersion(version, relay) {
   $("#main-version").textContent = version.label;
   $("#main-stable").textContent = version.stableShortSha || "missing";
   $("#main-pending").textContent = pending == null ? "Stable is not based on the latest tag" : String(pending);
-  $("#main-update-message").textContent = version.tag
+  $("#github-sync-summary").textContent = version.tag
     ? `${pending || 0} verified stable commit${pending === 1 ? "" : "s"} waiting for the next main update.`
     : "Master has no main-update tag yet. The first approved integration will create main-update-001.";
-  const chip = $("#main-update-state");
+  const chip = $("#github-sync-state");
   const blocked = Boolean(relay.activeRole || !["idle", "paused"].includes(relay.phase));
   chip.classList.toggle("warn", Boolean(pending));
   chip.classList.toggle("bad", blocked);
   chip.textContent = blocked ? "Active turn" : pending ? `${pending} pending` : "Ready";
-  const submit = $("#main-update-form button[type=submit]");
-  submit.disabled = blocked;
-  submit.title = blocked ? "Wait for the active reciprocal turn to finish" : "";
 }
 
 function renderGithubSync(sync) {
@@ -302,10 +298,12 @@ function renderGithubSync(sync) {
   $("#github-sync-freshness").textContent = sync.remoteFreshness ? `${sync.remoteFreshness}${sync.remoteCheckedAt ? ` ${relative(sync.remoteCheckedAt)}` : ""}` : "unknown";
   $("#github-sync-stable").textContent = sync.stableShortSha || "missing";
   $("#github-sync-result").textContent = result;
-  $("#github-sync-message").textContent = sync.last?.message || sync.message || sync.disabledReason || "Checking verified stable sync boundary...";
-  $("#main-update-state").textContent = sync.canPush ? "Sync ready" : sync.state === "already-synced" ? "Synced" : result;
-  $("#main-update-state").classList.toggle("warn", Boolean(sync.canPush));
-  $("#main-update-state").classList.toggle("bad", Boolean(!sync.ok || ["diverged", "github-ahead", "unavailable"].includes(sync.state)));
+  $("#github-sync-message").textContent = !sync.canPush && sync.disabledReason
+    ? sync.disabledReason
+    : sync.last?.message || sync.message || "Checking verified stable sync boundary...";
+  $("#github-sync-state").textContent = sync.canPush ? "Sync ready" : sync.state === "already-synced" ? "Synced" : result;
+  $("#github-sync-state").classList.toggle("warn", Boolean(sync.canPush));
+  $("#github-sync-state").classList.toggle("bad", Boolean(!sync.ok || ["diverged", "github-ahead", "unavailable"].includes(sync.state)));
   button.disabled = state.busy || running || !sync.canPush;
   button.title = sync.canPush
     ? `Push verified stable ${sync.stableShortSha} to origin/master`
@@ -487,7 +485,11 @@ async function githubSyncAction() {
   const sync = state.data?.githubSync;
   const stable = sync?.stableShortSha || "unknown";
   const remote = sync?.remoteShortSha || "unknown";
-  if (!window.confirm(`Push verified stable ${stable} to GitHub master? Current GitHub master is ${remote}. This will only proceed if it is a fast-forward.`)) return;
+  if (!window.confirm(`Push verified stable ${stable} to GitHub master? Current GitHub master is ${remote}. This will only proceed if it is a fast-forward.`)) {
+    $("#github-sync-message").textContent = "GitHub sync cancelled before any remote change.";
+    toast("GitHub sync cancelled");
+    return;
+  }
   state.busy = true;
   clearInterval(githubSyncPollTimer);
   githubSyncPollTimer = setInterval(() => refresh(true, true), 700);
@@ -589,22 +591,6 @@ $("#update-review-form").addEventListener("submit", async (event) => {
       if (status) renderApprovalFlow(status.flow);
     }
   } finally { event.submitter.disabled = false; }
-});
-$("#main-update-form").addEventListener("submit", async (event) => {
-  event.preventDefault();
-  const comment = $("#main-update-comment").value.trim();
-  if (!comment) return;
-  const confirmed = window.confirm("Update master from the verified stable ref, create and push an annotated tag, then re-synchronize both reciprocal branches?");
-  if (!confirmed) return;
-  const submit = event.submitter;
-  submit.disabled = true;
-  state.busy = true;
-  try {
-    const payload = await api("/api/main/update", { method: "POST", body: JSON.stringify({ comment, confirmed: true }) });
-    $("#main-update-comment").value = "";
-    toast(`Master updated as ${payload.result.tag}`);
-    await refresh(true, true);
-  } catch (error) { setAlert(error.message); } finally { submit.disabled = false; state.busy = false; }
 });
 $("#wishlist-form").addEventListener("submit", async (event) => {
   event.preventDefault();
