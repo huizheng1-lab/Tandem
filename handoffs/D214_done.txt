@@ -1,0 +1,70 @@
+D214 completion
+===============
+
+Round: D214
+Implementation commit: 877b27e D214-1: cover background shell lifecycle
+
+Files changed:
+- tests/tools.test.ts
+- dashboard-source/reciprocal-control-panel/approval-flow.e2e.mjs
+- dashboard-source/reciprocal-control-panel/manifest.json
+
+W0034 tools acceptance coverage:
+1. Background bash lives past the originating bashTool call while foreground bash still settles:
+   tests/tools.test.ts: "keeps background shell processes alive after the originating call while foreground calls settle"
+2. Background stdout/stderr is readable after start and consecutive reads drain buffered output:
+   tests/tools.test.ts: "reads background output produced after start and drains consecutive reads"
+3. Stopping a background command removes it from the registry and kills descendants:
+   tests/tools.test.ts: "stops a background process and its descendants"
+4. cleanupBackgroundProcesses() kills unstopped background trees:
+   tests/tools.test.ts: "cleanupBackgroundProcesses sweeps unstopped background process trees"
+5. Owning-process exit cleanup does not leave detached orphans:
+   tests/tools.test.ts: "does not leave background orphans after the owning Node process exits"
+   This test launches a separate Node owner that starts a background process tree, lets the owner exit, then verifies the root, child, and grandchild PIDs are gone.
+6. Background process listing reflects real lifecycle outcomes:
+   tests/tools.test.ts: "lists real background status transitions for exited and stopped commands"
+   It verifies an exited command reports status "exited" and exitCode 7. Explicit stop removes the stopped id from the registry, matching the shipped stop contract and requirement 3.
+7. Safety gates apply to background bash:
+   tests/tools.test.ts: "keeps destructive and self-protection gates in force for background bash"
+   This explicitly verifies both destructive-command blocking and Tandem self-protection blocking when runInBackground is true.
+8. Bad background read/stop ids produce actionable errors:
+   tests/tools.test.ts: "reports background read and stop id errors"
+
+Dashboard E2E leak fix:
+- approval-flow.e2e.mjs now tracks fixture dashboard servers by PID, fixture root, and port.
+- Fixture cleanup kills any server attached to that fixture before removing the temp repo.
+- Temp repo removal uses a short retry/backoff to avoid Windows EBUSY races after process shutdown.
+- Server teardown kills the process tree, waits for process exit, and verifies the fixture port closes.
+- A final file-level guard kills and reports any leaked fixture dashboard server instead of letting the suite hang.
+- The intermittent hang was not reproduced as a hang after the fix; before the final fix, the new guard caught a real leaked fixture server from the D184 test while rm(root) hit EBUSY. After the final teardown ordering fix, the unfiltered dashboard E2E exited on its own.
+
+Dashboard manifest/deploy:
+- Updated manifest hash for approval-flow.e2e.mjs:
+  369BC3248BA380394547BAE9B9281376D2D41E5CF956CE78596D32DB069203F9
+- Deployed managed dashboard files with scripts/deploy-reciprocal-dashboard.ps1 -NoRestart.
+- Verified target with scripts/deploy-reciprocal-dashboard.ps1 -VerifyOnly.
+- No live dashboard restart was performed because only the manifest-tracked E2E harness changed.
+
+Verification:
+- npx vitest run tests/tools.test.ts --configLoader runner
+  Result: pass, 30 tests passed, duration 19.44s.
+- node --test dashboard-source/reciprocal-control-panel/approval-flow.e2e.mjs
+  Result: exit code 0, duration 80.9s, 26 passed, 9 skipped.
+- Post-run process check for approval-flow.e2e.mjs and dashboard-source reciprocal-control-panel server.mjs fixture processes:
+  Result: no matching node.exe processes.
+- node dashboard-source/reciprocal-control-panel/lib.nodecheck.mjs
+  Result: pass, 21 tests passed.
+- scripts/deploy-reciprocal-dashboard.ps1 -NoRestart
+  Result: ok true; approval-flow.e2e.mjs target hash matched 369BC3248BA380394547BAE9B9281376D2D41E5CF956CE78596D32DB069203F9.
+- scripts/deploy-reciprocal-dashboard.ps1 -VerifyOnly
+  Result: ok true; no planned updates.
+- npm run typecheck
+  Result: pass.
+- npm test
+  Result: pass, 58 test files passed, 2 skipped; 628 tests passed, 41 skipped; duration 140.05s.
+- git diff --check
+  Result: pass; only CRLF normalization warnings for touched files.
+
+Defects found:
+- No W0034 implementation defect was exposed by the new tests; existing background lifecycle behavior passed once tests were added.
+- approval-flow.e2e.mjs had a teardown defect: fixture directory cleanup could race an active fixture dashboard server on Windows, producing EBUSY and allowing a server process to outlive the test. The fix is deterministic teardown plus a final leak guard.
