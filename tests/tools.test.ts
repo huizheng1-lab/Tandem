@@ -1,11 +1,13 @@
+import { spawn } from "node:child_process";
 import { mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 import { editFileTool, readFileTool, writeFileTool } from "../src/tools/fs.js";
 import type { ToolActivityEvent } from "../src/tools/fs.js";
 import { makeToolSet } from "../src/tools/index.js";
-import { BASH_SETTLE_GRACE_MS, bashTool, effectiveBashTimeout, MAX_BASH_TIMEOUT_MS, tailOutput } from "../src/tools/shell.js";
+import { backgroundProcessTool, BASH_SETTLE_GRACE_MS, bashTool, cleanupBackgroundProcesses, effectiveBashTimeout, listBackgroundProcesses, MAX_BASH_TIMEOUT_MS, tailOutput } from "../src/tools/shell.js";
 import { isDestructiveCommand } from "../src/tools/permissions.js";
 
 async function tempDir(): Promise<string> {
@@ -40,6 +42,42 @@ async function expectProcessGone(pid: number): Promise<void> {
     }
   }
   throw new Error(`Process ${pid} is still alive`);
+}
+
+async function expectProcessAlive(pid: number): Promise<void> {
+  const deadline = Date.now() + 3000;
+  while (Date.now() < deadline) {
+    try {
+      process.kill(pid, 0);
+      return;
+    } catch {
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+  }
+  throw new Error(`Process ${pid} is not alive`);
+}
+
+async function waitForProcessGone(pid: number, timeoutMs = 5000): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    try {
+      process.kill(pid, 0);
+      await new Promise((resolve) => setTimeout(resolve, 75));
+    } catch {
+      return;
+    }
+  }
+  throw new Error(`Process ${pid} is still alive`);
+}
+
+function parseBackgroundId(output: string): string {
+  const id = output.match(/Started background process (\S+)/)?.[1];
+  if (!id) throw new Error(`Missing background id in output: ${output}`);
+  return id;
+}
+
+async function readNumberFile(filePath: string, timeoutMs = 3000): Promise<number> {
+  return Number((await waitForFile(filePath, timeoutMs)).trim());
 }
 
 function killPidIfAlive(pid: number): void {
@@ -86,6 +124,7 @@ async function rmWithRetry(cwd: string, attempts = 5): Promise<void> {
 }
 
 afterEach(async () => {
+  await cleanupBackgroundProcesses();
   const dirs = [...fixtureDirs];
   fixtureDirs.clear();
   await Promise.all(dirs.map((dir) => cleanupFixtureDir(dir)));
@@ -305,6 +344,165 @@ describe("tools", () => {
   it("clamps model-provided bash timeouts to the hard cap", () => {
     expect(effectiveBashTimeout(MAX_BASH_TIMEOUT_MS + 1)).toBe(MAX_BASH_TIMEOUT_MS);
     expect(effectiveBashTimeout(500)).toBe(500);
+  });
+
+  it("keeps background shell processes alive after the originating call while foreground calls settle", async () => {
+    const cwd = await tempDir();
+    const ctx = { cwd, permissionMode: "yolo" as const };
+    await writeFile(
+      path.join(cwd, "pid-wait.cjs"),
+      [
+        'const fs = require("node:fs");',
+        'fs.writeFileSync(process.argv[2], String(process.pid));',
+        "setTimeout(() => process.exit(0), Number(process.argv[3] || 1200));"
+      ].join("\n"),
+      "utf8"
+    );
+
+    const background = await bashTool(ctx, "node pid-wait.cjs bg.pid 2500", 120000, true);
+    const id = parseBackgroundId(background.output);
+    const bgPid = await readNumberFile(path.join(cwd, "bg.pid"));
+    try {
+      await expectProcessAlive(bgPid);
+      expect(listBackgroundProcesses().some((entry) => entry.id === id && entry.status === "running")).toBe(true);
+    } finally {
+      await backgroundProcessTool("stop", id).catch(() => "");
+    }
+    await waitForProcessGone(bgPid);
+
+    const foreground = await bashTool(ctx, "node pid-wait.cjs fg.pid 50", 5000);
+    const fgPid = await readNumberFile(path.join(cwd, "fg.pid"));
+    expect(foreground.passed).toBe(true);
+    await expectProcessGone(fgPid);
+  }, 15000);
+
+  it("reads background output produced after start and drains consecutive reads", async () => {
+    const cwd = await tempDir();
+    const ctx = { cwd, permissionMode: "yolo" as const };
+    const result = await bashTool(ctx, "node -e \"setTimeout(()=>console.log('late-output'),150); setTimeout(()=>{},1500)\"", 120000, true);
+    const id = parseBackgroundId(result.output);
+    try {
+      const deadline = Date.now() + 3000;
+      let output = "";
+      while (Date.now() < deadline) {
+        output = await backgroundProcessTool("read", id);
+        if (output.includes("late-output")) break;
+        await new Promise((resolve) => setTimeout(resolve, 50));
+      }
+      expect(output).toContain("late-output");
+      expect(await backgroundProcessTool("read", id)).not.toContain("late-output");
+    } finally {
+      await backgroundProcessTool("stop", id).catch(() => "");
+    }
+  }, 10000);
+
+  it.runIf(process.platform === "win32")("stops a background process and its descendants", async () => {
+    const cwd = await tempDir();
+    await writeNestedProcessFixture(cwd);
+    const result = await bashTool({ cwd, permissionMode: "yolo" }, "node launcher.cjs", 120000, true);
+    const id = parseBackgroundId(result.output);
+    const rootPid = listBackgroundProcesses().find((entry) => entry.id === id)?.pid;
+    const childPid = await readNumberFile(path.join(cwd, "child.pid"));
+    const grandchildPid = await readNumberFile(path.join(cwd, "grandchild.pid"));
+
+    await backgroundProcessTool("stop", id);
+
+    if (rootPid) await waitForProcessGone(rootPid);
+    await expectProcessGone(childPid);
+    await expectProcessGone(grandchildPid);
+    expect(listBackgroundProcesses().some((entry) => entry.id === id)).toBe(false);
+  }, 15000);
+
+  it.runIf(process.platform === "win32")("cleanupBackgroundProcesses sweeps unstopped background process trees", async () => {
+    const cwd = await tempDir();
+    await writeNestedProcessFixture(cwd);
+    const result = await bashTool({ cwd, permissionMode: "yolo" }, "node launcher.cjs", 120000, true);
+    const id = parseBackgroundId(result.output);
+    const rootPid = listBackgroundProcesses().find((entry) => entry.id === id)?.pid;
+    const childPid = await readNumberFile(path.join(cwd, "child.pid"));
+    const grandchildPid = await readNumberFile(path.join(cwd, "grandchild.pid"));
+
+    await cleanupBackgroundProcesses();
+
+    if (rootPid) await waitForProcessGone(rootPid);
+    await expectProcessGone(childPid);
+    await expectProcessGone(grandchildPid);
+    expect(listBackgroundProcesses()).toEqual([]);
+  }, 15000);
+
+  it.runIf(process.platform === "win32")("does not leave background orphans after the owning Node process exits", async () => {
+    const cwd = await tempDir();
+    await writeNestedProcessFixture(cwd);
+    const runner = path.join(cwd, "owner-exits.mts");
+    const shellModule = pathToFileURL(path.resolve(process.cwd(), "src", "tools", "shell.ts")).href;
+    await writeFile(
+      runner,
+      [
+        `import { bashTool, listBackgroundProcesses } from "${shellModule}";`,
+        'import { writeFileSync } from "node:fs";',
+        "async function main() {",
+        '  const cwd = process.argv[2];',
+        '  const result = await bashTool({ cwd, permissionMode: "yolo" }, "node launcher.cjs", 120000, true);',
+        '  const id = result.output.match(/Started background process (\\S+)/)?.[1] || "";',
+        '  const pid = listBackgroundProcesses().find((entry) => entry.id === id)?.pid;',
+        '  writeFileSync(`${cwd}/owner-bg.json`, JSON.stringify({ id, pid }));',
+        "}",
+        "main().then(() => process.exit(0), (error) => { console.error(error); process.exit(1); });"
+      ].join("\n"),
+      "utf8"
+    );
+
+    const owner = spawn(process.execPath, ["--import", "tsx", runner, cwd], { cwd: process.cwd(), windowsHide: true });
+    await new Promise<void>((resolve, reject) => {
+      let stderr = "";
+      owner.stderr.on("data", (chunk) => { stderr += chunk; });
+      owner.on("error", reject);
+      owner.on("exit", (code) => code === 0 ? resolve() : reject(new Error(`owner exited ${code}: ${stderr}`)));
+    });
+    const { pid } = JSON.parse(await readFile(path.join(cwd, "owner-bg.json"), "utf8")) as { id: string; pid?: number };
+    const childPid = await readNumberFile(path.join(cwd, "child.pid"), 5000);
+    const grandchildPid = await readNumberFile(path.join(cwd, "grandchild.pid"), 5000);
+
+    if (pid) await waitForProcessGone(pid);
+    await expectProcessGone(childPid);
+    await expectProcessGone(grandchildPid);
+  }, 20000);
+
+  it("lists real background status transitions for exited and stopped commands", async () => {
+    const cwd = await tempDir();
+    const ctx = { cwd, permissionMode: "yolo" as const };
+    const short = await bashTool(ctx, "node -e \"setTimeout(()=>process.exit(7),50)\"", 120000, true);
+    const shortId = parseBackgroundId(short.output);
+    const stop = await bashTool(ctx, "node -e \"setTimeout(()=>{},3000)\"", 120000, true);
+    const stopId = parseBackgroundId(stop.output);
+    try {
+      const deadline = Date.now() + 3000;
+      while (Date.now() < deadline) {
+        const exited = listBackgroundProcesses().find((entry) => entry.id === shortId);
+        if (exited?.status === "exited") break;
+        await new Promise((resolve) => setTimeout(resolve, 50));
+      }
+      expect(listBackgroundProcesses().find((entry) => entry.id === shortId)).toMatchObject({ status: "exited", exitCode: 7 });
+      await backgroundProcessTool("stop", stopId);
+      expect(listBackgroundProcesses().some((entry) => entry.id === stopId)).toBe(false);
+    } finally {
+      await backgroundProcessTool("stop", shortId).catch(() => "");
+      await backgroundProcessTool("stop", stopId).catch(() => "");
+    }
+  }, 10000);
+
+  it("keeps destructive and self-protection gates in force for background bash", async () => {
+    const cwd = await tempDir();
+    await expect(bashTool({ cwd, permissionMode: "yolo" }, "rm -rf /", 120000, true)).rejects.toThrow(/Blocked destructive command/);
+    await expect(bashTool({ cwd: process.cwd(), permissionMode: "yolo" }, "echo nope", 120000, true)).rejects.toThrow(/Tandem will not modify its own installation/);
+    expect(listBackgroundProcesses()).toEqual([]);
+  });
+
+  it("reports background read and stop id errors", async () => {
+    await expect(backgroundProcessTool("read")).rejects.toThrow(/A background process id is required/);
+    await expect(backgroundProcessTool("stop")).rejects.toThrow(/A background process id is required/);
+    await expect(backgroundProcessTool("read", "missing-bg-id")).rejects.toThrow(/Unknown background process id/);
+    await expect(backgroundProcessTool("stop", "missing-bg-id")).rejects.toThrow(/Unknown background process id/);
   });
 
   it.runIf(process.platform === "win32")("cleans up shell child processes that outlive their parent", async () => {

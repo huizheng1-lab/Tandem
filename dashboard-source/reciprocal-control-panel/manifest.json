@@ -4,8 +4,8 @@
   "files": [
     {
       "path": "approval-flow.e2e.mjs",
-      "sha256": "2A1B91B745A1E98421A2F84C753558A46324D7827CC65E3D8A6996310886CB91",
-      "bytes": 73781
+      "sha256": "369BC3248BA380394547BAE9B9281376D2D41E5CF956CE78596D32DB069203F9",
+      "bytes": 76280
     },
     {
       "path": "dashboard-hidden-launcher.vbs",

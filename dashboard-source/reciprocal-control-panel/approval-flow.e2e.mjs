@@ -1,8 +1,10 @@
 import test from "node:test";
+import { after } from "node:test";
 import assert from "node:assert/strict";
-import { spawn } from "node:child_process";
+import { execFile as nodeExecFile, spawn } from "node:child_process";
 import { once } from "node:events";
 import { appendFile, cp, mkdtemp, mkdir, readFile, writeFile, copyFile, rename, rm } from "node:fs/promises";
+import net from "node:net";
 import { existsSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -25,6 +27,7 @@ const adminRepo = findAdminRepo(here);
 const relayScript = path.join(adminRepo, "scripts", "reciprocal-relay.ps1");
 const serverScript = path.join(here, "server.mjs");
 const legacyDashboardMutationTest = process.env.TANDEM_RUN_LEGACY_DASHBOARD_MUTATION_E2E === "1" ? test : test.skip;
+const fixtureServers = new Map();
 
 function execFile(command, args, cwd) {
   return new Promise((resolve, reject) => {
@@ -39,6 +42,75 @@ function execFile(command, args, cwd) {
       else reject(new Error(`${command} ${args.join(" ")} failed: ${stderr || stdout}`));
     });
   });
+}
+
+function execFileRaw(command, args) {
+  return new Promise((resolve) => {
+    nodeExecFile(command, args, { windowsHide: true }, () => resolve());
+  });
+}
+
+async function killProcessTree(pid) {
+  if (!pid) return;
+  if (process.platform === "win32") {
+    await execFileRaw("taskkill.exe", ["/T", "/F", "/PID", String(pid)]);
+    return;
+  }
+  try {
+    process.kill(-pid, "SIGKILL");
+  } catch {
+    try {
+      process.kill(pid, "SIGKILL");
+    } catch {
+      // Already gone.
+    }
+  }
+}
+
+async function waitForPortClosed(port, timeoutMs = 5000) {
+  const deadline = Date.now() + timeoutMs;
+  let lastOpen = false;
+  while (Date.now() < deadline) {
+    lastOpen = await new Promise((resolve) => {
+      const socket = net.connect({ host: "127.0.0.1", port });
+      socket.once("connect", () => {
+        socket.destroy();
+        resolve(true);
+      });
+      socket.once("error", () => resolve(false));
+      socket.setTimeout(500, () => {
+        socket.destroy();
+        resolve(false);
+      });
+    });
+    if (!lastOpen) return;
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+  throw new Error(`fixture dashboard port ${port} is still listening`);
+}
+
+async function cleanupFixtureServers(root) {
+  const servers = [...fixtureServers.values()].filter((server) => !root || server.root === root);
+  for (const server of servers) {
+    fixtureServers.delete(server.pid);
+    await killProcessTree(server.pid);
+  }
+  for (const server of servers) await waitForPortClosed(server.port);
+  return servers;
+}
+
+async function rmWithRetry(target, attempts = 5) {
+  let lastError;
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    try {
+      await rm(target, { recursive: true, force: true });
+      return;
+    } catch (error) {
+      lastError = error;
+      await new Promise((resolve) => setTimeout(resolve, attempt * 100));
+    }
+  }
+  throw lastError;
 }
 
 async function git(cwd, ...args) {
@@ -108,7 +180,8 @@ function commandActions(commands) {
 async function makeFixture(t) {
   const root = await mkdtemp(path.join(os.tmpdir(), "dashboard-approval-"));
   t.after(async () => {
-    await rm(root, { recursive: true, force: true });
+    await cleanupFixtureServers(root);
+    await rmWithRetry(root);
   });
   const relayRoot = path.join(root, "relay");
   const repoRoot = path.join(root, "repo");
@@ -246,13 +319,15 @@ async function withServer(t, fixture, runTest, options = {}) {
     windowsHide: true,
     env,
   });
+  if (server.pid) fixtureServers.set(server.pid, { port, pid: server.pid, root: fixture.root });
+  const serverExit = once(server, "exit").catch(() => {});
   let stderr = "";
   server.stderr.on("data", (chunk) => { stderr += chunk; });
   t.after(async () => {
-    if (server.exitCode === null) {
-      server.kill();
-      await once(server, "exit").catch(() => {});
-    }
+    if (server.pid) fixtureServers.delete(server.pid);
+    if (server.exitCode === null) await killProcessTree(server.pid);
+    if (server.exitCode === null) await serverExit;
+    await waitForPortClosed(port);
   });
   const page = await waitForServer(port, server);
   const html = await page.text();
@@ -317,6 +392,11 @@ function lastLifecyclePath(state) {
   const start = statuses.lastIndexOf("requested");
   return start >= 0 ? statuses.slice(start) : statuses;
 }
+
+after(async () => {
+  const leaked = await cleanupFixtureServers();
+  assert.deepEqual(leaked, [], `fixture dashboard servers leaked: ${leaked.map((server) => `${server.pid}:${server.port}`).join(", ")}`);
+});
 
 function extractFunction(source, name, nextName) {
   const starts = [source.indexOf(`function ${name}`), source.indexOf(`async function ${name}`)].filter((index) => index >= 0);
