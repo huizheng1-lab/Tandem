@@ -1,0 +1,70 @@
+Round: D213
+
+Corrective commit:
+- 1da9793 D213-1: fix GitHub sync dashboard truthfulness
+
+Files changed:
+- dashboard-source/reciprocal-control-panel/approval-flow.e2e.mjs
+- dashboard-source/reciprocal-control-panel/manifest.json
+- dashboard-source/reciprocal-control-panel/public/app.js
+- dashboard-source/reciprocal-control-panel/public/index.html
+- dashboard-source/reciprocal-control-panel/public/update-gate.css
+
+Fix summary:
+- The GitHub sync panel now prefers the current boundary assessment over stale last-operation messages. Historical last-operation text is only used as an explicitly labelled fallback.
+- The sync summary is owned by renderGithubSync and describes the current relationship between verified stable and origin/master.
+- The relay/turn signal now has its own #github-sync-turn-state chip, leaving #github-sync-state owned by renderGithubSync.
+- Visible deleted-flow wording was removed from the sync panel and the candidate update fallback.
+
+New regression tests:
+- D213 GitHub sync message prefers current boundary over stale last operation
+  Proves an already-synced fixture with stale last.message naming 1471762 renders the current message and summary for e585e77, without surfacing the stale SHA.
+  Result: PASS in approval-flow.e2e.mjs.
+- D213 GitHub sync panel renders surviving flow text without deleted main-update wording
+  Proves both tag-present and tag-absent rendered branches contain no "main update", "main-update", or "main-update-001" visible text.
+  Result: PASS in approval-flow.e2e.mjs.
+- D213 GitHub sync and relay-turn chips have separate visible owners
+  Proves a full render order where relay is active and sync is already-synced leaves #github-sync-state as "Synced" while #github-sync-turn-state visibly shows "Active turn".
+  Result: PASS in approval-flow.e2e.mjs.
+
+Regression preservation:
+- D212 GitHub sync panel renders disabled reason as visible text remains PASS, preserving the non-empty disabledReason behavior.
+- Existing D206/D210/D211/D212 GitHub sync tests in approval-flow.e2e.mjs all pass in the focused run.
+
+Verification:
+- node --test dashboard-source/reciprocal-control-panel/approval-flow.e2e.mjs
+  Result: PASS, 26 passed, 0 failed, 9 skipped.
+- npm run typecheck
+  Result: PASS.
+- node dashboard-source/reciprocal-control-panel/lib.nodecheck.mjs
+  Result: PASS, 21 passed.
+- npm test
+  Result: PASS, 58 files passed, 2 skipped; 620 tests passed, 41 skipped.
+- git diff --check
+  Result: PASS.
+
+Deployment:
+- Deployed with scripts/deploy-reciprocal-dashboard.ps1.
+- scripts/deploy-reciprocal-dashboard.ps1 -VerifyOnly
+  Result: PASS; ok=true, plannedUpdates=[].
+- Source/deployed SHA-256 equality for changed dashboard files:
+  - approval-flow.e2e.mjs: 2A1B91B745A1E98421A2F84C753558A46324D7827CC65E3D8A6996310886CB91 matches.
+  - public/app.js: 671759B646A79BEC65904B32208EF6B27616C9E491DFD95BB7EE28CEABB51CCF matches.
+  - public/index.html: 51022B8E26DF7252A26D7F52EA837E13401B0288A3F022B26A7E083EB70DF8DD matches.
+  - public/update-gate.css: E8410AEFFC4ABF09F1D1AF64247D5D797D7B2232C17FF16A0FF13A6D089493F1 matches.
+
+Live rendered proof from http://127.0.0.1:4782/:
+- Live /api/status githubSync.state: already-synced.
+- Live /api/status remoteShortSha: e585e77.
+- Live stale last.message still exists as historical data: "GitHub master now points at verified stable 1471762."
+- Rendered #github-sync-summary: "origin/master is in sync with verified stable e585e77."
+- Rendered #github-sync-message: "GitHub master already points at the verified stable version."
+- Rendered #github-sync-state: "Synced."
+- Rendered #github-sync-turn-state: "105 stable ahead" for the current idle relay state.
+- Rendered summary/message stale SHA 1471762 visible: false.
+- Rendered deleted-flow wording occurrences in the sync panel: 0.
+- Live HTML contains both #github-sync-turn-state and #github-sync-state.
+
+Remote safety:
+- No automated test contacted or pushed the real GitHub remote; dashboard tests used isolated fixture remotes.
+- No real GitHub push was performed during D213 verification or deployment.
