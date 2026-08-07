@@ -1,0 +1,65 @@
+D212 done
+
+Round: D212
+Corrective commit:
+- cd708f858539689210bd8b7bc000f13c6ae1b7ca D212-1: remove dead main update dashboard control
+
+Files changed:
+- dashboard-source/reciprocal-control-panel/public/index.html
+- dashboard-source/reciprocal-control-panel/public/app.js
+- dashboard-source/reciprocal-control-panel/public/update-gate.css
+- dashboard-source/reciprocal-control-panel/approval-flow.e2e.mjs
+- dashboard-source/reciprocal-control-panel/manifest.json
+
+Implementation summary:
+- Removed the dead #main-update-form, #main-update-comment, "Update main branch" button, and client /api/main/update call.
+- Renamed the retained status/panel IDs to GitHub sync names (#github-sync-panel, #github-sync-state, #github-sync-summary).
+- Made the surviving button explicit: "Push verified stable to origin/master (fast-forward only)".
+- Rendered disabledReason directly in #github-sync-message when the sync button is disabled.
+- Made confirmation cancellation visible with a panel message and toast instead of a silent no-op.
+- Left /api/github-sync as the only sanctioned dashboard remote-mutation route and did not add /api/main/update back to the D196 allowlist.
+
+Dead-control proof:
+- rg -n "main/update|main-update-form|main-update-comment|Update main branch" dashboard-source\reciprocal-control-panel\public: NO_MATCH.
+
+Focused regression results:
+- node --test dashboard-source\reciprocal-control-panel\approval-flow.e2e.mjs: PASS (23 passed, 9 skipped).
+- D212 dashboard removes dead main-update client path and keeps server endpoint retired: PASS.
+- D212 Versions tab renders one explicit GitHub sync push control: PASS.
+- D212 GitHub sync panel renders disabled reason as visible text: PASS.
+- D212 GitHub sync cancellation is visible instead of a silent no-op: PASS.
+- Existing D206/D210/D211 GitHub sync safety tests continued to pass; test remotes remain isolated local bare repositories and no real GitHub remote is contacted.
+
+Required checks:
+- node dashboard-source\reciprocal-control-panel\lib.nodecheck.mjs: PASS (21 passed).
+- npm run typecheck: PASS.
+- npm test with isolated USERPROFILE/HOME: PASS (58 files passed, 2 skipped; 620 tests passed, 41 skipped).
+- git diff --check: PASS (line-ending warnings only).
+
+Deployment and live read-only proof:
+- scripts\deploy-reciprocal-dashboard.ps1: PASS; deployed and restarted dashboard through the approved script.
+- scripts\deploy-reciprocal-dashboard.ps1 -VerifyOnly: PASS; ok=true, managedFileCount=18, plannedUpdates=0.
+- Source/deployed SHA-256 equality for changed dashboard files:
+  - approval-flow.e2e.mjs: 2D1C24ACEB2B2DD0986A62123B0216E77675C72FE7D1AB3EEB70F6B01E10EEE7 == 2D1C24ACEB2B2DD0986A62123B0216E77675C72FE7D1AB3EEB70F6B01E10EEE7
+  - public/app.js: 5A6B775E6682720D95A47F6B7CAFA6F1B86C64202B193779884645F6208D08E9 == 5A6B775E6682720D95A47F6B7CAFA6F1B86C64202B193779884645F6208D08E9
+  - public/index.html: E5C56266C8C7522EC0AFBB4D261326C8B113A254E45BB0AC724A9D7E2FF927E2 == E5C56266C8C7522EC0AFBB4D261326C8B113A254E45BB0AC724A9D7E2FF927E2
+  - public/update-gate.css: BA361897E9F51E584A2F76BFEBA7329569DFD4A5BBF0D674E39C8DFBD5E3A88E == BA361897E9F51E584A2F76BFEBA7329569DFD4A5BBF0D674E39C8DFBD5E3A88E
+- Live http://127.0.0.1:4782/ proof:
+  - GitHub sync panel rendered: true
+  - sync button count in panel: 1
+  - explicit fast-forward label present: true
+  - main-update form present: false
+  - "Update main branch" text present: false
+  - github-sync-state and github-sync-message present: true
+- Live http://127.0.0.1:4782/api/status read-only proof:
+  - phase: idle
+  - hasGithubSync: true
+  - stable: e585e77b2f1bf20581e8e45efff20fb72633c1dc
+  - remote: e585e77b2f1bf20581e8e45efff20fb72633c1dc
+  - state: already-synced
+  - canPush: false
+  - freshness: fresh
+  - source: ls-remote
+  - message: GitHub master already points at the verified stable version.
+
+No real GitHub push was performed during D212 verification.
