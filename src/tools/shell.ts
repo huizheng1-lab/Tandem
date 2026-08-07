@@ -1,4 +1,5 @@
 import { execa } from "execa";
+import { spawnSync } from "node:child_process";
 import { ToolContext, resolveInside } from "./fs.js";
 import { ensurePermission } from "./permissions.js";
 import { assertSafeBash } from "./protection.js";
@@ -9,6 +10,17 @@ export interface ShellResult {
   passed: boolean;
   output: string;
 }
+
+export interface BackgroundProcessInfo {
+  id: string;
+  command: string;
+  pid?: number;
+  status: "running" | "exited" | "stopped";
+  startedAt: string;
+  exitCode?: number | null;
+}
+
+export type BackgroundProcessAction = "list" | "read" | "stop";
 
 export const DEFAULT_BASH_TIMEOUT_MS = 120000;
 export const MAX_BASH_TIMEOUT_MS = 300000;
@@ -29,6 +41,45 @@ export function tailOutput(output: string, maxChars = 2000): string {
 interface DescendantTracker {
   seen: Set<number>;
   stop: () => void;
+}
+
+interface BackgroundProcess {
+  info: BackgroundProcessInfo;
+  subprocess: ReturnType<typeof execa>;
+  tracker?: DescendantTracker;
+  stdout: string;
+  stderr: string;
+}
+
+const backgroundProcesses = new Map<string, BackgroundProcess>();
+let backgroundSequence = 0;
+let backgroundSweepRegistered = false;
+
+function appendBackgroundOutput(current: string, chunk: Buffer | string): string {
+  const next = current + chunk.toString();
+  return next.length > 1_000_000 ? next.slice(-1_000_000) : next;
+}
+
+function registerBackgroundSweep(): void {
+  if (backgroundSweepRegistered) return;
+  backgroundSweepRegistered = true;
+  process.once("beforeExit", () => {
+    void cleanupBackgroundProcesses();
+  });
+  process.once("exit", () => {
+    if (process.platform !== "win32") return;
+    for (const entry of backgroundProcesses.values()) {
+      const pids = new Set([entry.info.pid, ...(entry.tracker?.seen ?? [])]);
+      for (const pid of pids) {
+        if (pid === undefined) continue;
+        spawnSync("taskkill.exe", ["/T", "/F", "/PID", String(pid)], {
+          windowsHide: true,
+          stdio: "ignore",
+          timeout: INTERNAL_PROCESS_TIMEOUT_MS
+        });
+      }
+    }
+  });
 }
 
 type BoundedResult<T> = { status: "settled"; value: T } | { status: "rejected"; error: unknown } | { status: "deadline" };
@@ -127,10 +178,88 @@ async function cleanupWindowsProcessTree(rootPid: number | undefined, seenDescen
   return [...killed].sort((left, right) => left - right);
 }
 
-export async function bashTool(ctx: ToolContext, command: string, timeoutMs = DEFAULT_BASH_TIMEOUT_MS): Promise<ShellResult> {
+function backgroundId(): string {
+  backgroundSequence += 1;
+  return `bg-${Date.now().toString(36)}-${backgroundSequence.toString(36)}`;
+}
+
+async function startBackgroundProcess(ctx: ToolContext, command: string): Promise<ShellResult> {
+  const subprocess = execa(command, {
+    cwd: ctx.cwd,
+    shell: true,
+    reject: false,
+    all: true,
+    cleanup: true,
+    windowsHide: true
+  });
+  const id = backgroundId();
+  const entry: BackgroundProcess = {
+    info: { id, command, pid: subprocess.pid, status: "running", startedAt: new Date().toISOString() },
+    subprocess,
+    tracker: startDescendantTracker(subprocess.pid),
+    stdout: "",
+    stderr: ""
+  };
+  subprocess.stdout?.on("data", (chunk: Buffer | string) => {
+    entry.stdout = appendBackgroundOutput(entry.stdout, chunk);
+  });
+  subprocess.stderr?.on("data", (chunk: Buffer | string) => {
+    entry.stderr = appendBackgroundOutput(entry.stderr, chunk);
+  });
+  backgroundProcesses.set(id, entry);
+  registerBackgroundSweep();
+  void Promise.resolve(subprocess).then((result) => {
+    entry.info.status = "exited";
+    entry.info.exitCode = result.exitCode;
+    entry.tracker?.stop();
+  }, () => {
+    entry.info.status = "exited";
+    entry.info.exitCode = null;
+    entry.tracker?.stop();
+  });
+  return {
+    command,
+    passed: true,
+    output: `Started background process ${id} (pid ${subprocess.pid ?? "unknown"}).`
+  };
+}
+
+export function listBackgroundProcesses(): BackgroundProcessInfo[] {
+  return [...backgroundProcesses.values()].map(({ info }) => ({ ...info }));
+}
+
+export async function backgroundProcessTool(action: BackgroundProcessAction, id?: string): Promise<string> {
+  if (action === "list") return JSON.stringify(listBackgroundProcesses());
+  if (!id) throw new Error(`A background process id is required for ${action}.`);
+  const entry = backgroundProcesses.get(id);
+  if (!entry) throw new Error(`Unknown background process id: ${id}`);
+  if (action === "read") {
+    const output = sanitizePromptText(`${entry.stdout}${entry.stderr}`);
+    entry.stdout = "";
+    entry.stderr = "";
+    return output;
+  }
+  entry.info.status = "stopped";
+  entry.tracker?.stop();
+  try {
+    entry.subprocess.kill("SIGKILL");
+  } catch {
+    // The root may already have exited; the Windows tree sweep below is still useful.
+  }
+  await cleanupWindowsProcessTree(entry.info.pid, entry.tracker?.seen ?? []);
+  backgroundProcesses.delete(id);
+  return `Stopped background process ${id}.`;
+}
+
+export async function cleanupBackgroundProcesses(): Promise<void> {
+  await Promise.all([...backgroundProcesses.keys()].map((id) => backgroundProcessTool("stop", id).catch(() => undefined)));
+}
+
+export async function bashTool(ctx: ToolContext, command: string, timeoutMs = DEFAULT_BASH_TIMEOUT_MS, runInBackground = false): Promise<ShellResult> {
   resolveInside(ctx.cwd, ".");
   assertSafeBash(ctx.cwd, command);
   await ensurePermission(ctx.permissionMode, { action: "bash", target: command }, ctx.permissionBridge);
+  if (runInBackground) return startBackgroundProcess(ctx, command);
   let tracker: DescendantTracker | undefined;
   let rootPid: number | undefined;
   let aborted = false;

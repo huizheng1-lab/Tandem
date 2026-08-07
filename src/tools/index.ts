@@ -3,7 +3,7 @@ import type { ToolSet } from "ai";
 import { z } from "zod";
 import { editFileTool, listDirTool, readFileTool, ToolActivityRole, ToolContext, writeFileTool } from "./fs.js";
 import { globTool, grepTool } from "./search.js";
-import { bashTool } from "./shell.js";
+import { backgroundProcessTool, bashTool } from "./shell.js";
 
 export type ToolRole = "leader-readonly" | "worker" | "reviewer" | "takeover";
 
@@ -67,12 +67,18 @@ export function makeToolSet(ctx: ToolContext, role: ToolRole, allowedBashCommand
     })
   };
 
-  const bashExecute = async ({ command, timeoutMs }: { command: string; timeoutMs?: number }) => {
+  const bashExecute = async ({ command, timeoutMs, runInBackground }: { command: string; timeoutMs?: number; runInBackground?: boolean }) => {
     if (role === "reviewer" && !allowedBashCommands.includes(command)) {
       throw new Error(`Reviewer bash is restricted to plan verification commands: ${allowedBashCommands.join(", ")}`);
     }
-    return bashTool(ctx, command, timeoutMs);
+    return bashTool(ctx, command, timeoutMs, runInBackground);
   };
+
+  const backgroundTool = tool({
+    description: "List, read output from, or stop a background shell process.",
+    inputSchema: z.object({ action: z.enum(["list", "read", "stop"]), id: z.string().optional() }),
+    execute: wrapExecute(ctx, role, "bash_background", ({ action, id }) => id ?? action, ({ action, id }) => backgroundProcessTool(action, id))
+  });
 
   const sharedTools = memoryTools(ctx, role);
 
@@ -81,10 +87,11 @@ export function makeToolSet(ctx: ToolContext, role: ToolRole, allowedBashCommand
   if (role === "reviewer") {
     return {
       ...readonlyTools,
-      ...sharedTools,
-      bash: tool({
+        ...sharedTools,
+        bash_background: backgroundTool,
+        bash: tool({
         description: "Run one of the plan verification commands in the project root.",
-        inputSchema: z.object({ command: z.string(), timeoutMs: z.number().int().positive().optional() }),
+        inputSchema: z.object({ command: z.string(), timeoutMs: z.number().int().positive().optional(), runInBackground: z.boolean().optional() }),
         execute: wrapExecute(ctx, role, "bash", ({ command }) => command, bashExecute)
       })
     };
@@ -93,6 +100,7 @@ export function makeToolSet(ctx: ToolContext, role: ToolRole, allowedBashCommand
   return {
     ...readonlyTools,
     ...sharedTools,
+    bash_background: backgroundTool,
     write_file: tool({
       description: "Write a file.",
       inputSchema: z.object({ path: z.string(), content: z.string() }),
@@ -105,7 +113,7 @@ export function makeToolSet(ctx: ToolContext, role: ToolRole, allowedBashCommand
     }),
     bash: tool({
       description: "Run a shell command in the project root.",
-      inputSchema: z.object({ command: z.string(), timeoutMs: z.number().int().positive().optional() }),
+      inputSchema: z.object({ command: z.string(), timeoutMs: z.number().int().positive().optional(), runInBackground: z.boolean().optional() }),
       execute: wrapExecute(ctx, role, "bash", ({ command }) => command, bashExecute)
     })
   };
