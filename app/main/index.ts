@@ -8,6 +8,7 @@ import { startupErrorInfo } from "./startup-error.js";
 import type { StartupErrorInfo } from "../shared/ipc.js";
 import { parseDesktopLaunchOptions } from "./launch-options.js";
 import { startAutomationServer, type AutomationServerHandle } from "./automation-server.js";
+import { cleanupBackgroundProcesses } from "../../src/tools/shell.js";
 import type {
   AttachmentAddDataRequest,
   AttachmentAddFilesRequest,
@@ -44,6 +45,7 @@ let mainWindow: BrowserWindow | undefined;
 let service: TandemService | undefined;
 let startupError: StartupErrorInfo | undefined;
 let automationServer: AutomationServerHandle | undefined;
+let quitting = false;
 const rendererSearches = new Map<number, Map<string, symbol>>();
 const gotSingleInstanceLock = app.requestSingleInstanceLock();
 
@@ -202,9 +204,13 @@ if (!gotSingleInstanceLock) {
     if (process.platform !== "darwin") app.quit();
   });
 
-  app.on("before-quit", () => {
+  app.on("before-quit", (event) => {
+    if (quitting) return;
+    quitting = true;
+    event.preventDefault();
     void automationServer?.close();
     automationServer = undefined;
+    void cleanupBackgroundProcesses().finally(() => app.quit());
   });
 }
 

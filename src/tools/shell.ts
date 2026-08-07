@@ -63,21 +63,12 @@ function appendBackgroundOutput(current: string, chunk: Buffer | string): string
 function registerBackgroundSweep(): void {
   if (backgroundSweepRegistered) return;
   backgroundSweepRegistered = true;
-  process.once("beforeExit", () => {
-    void cleanupBackgroundProcesses();
+  process.once("beforeExit", async () => {
+    await cleanupBackgroundProcesses();
   });
   process.once("exit", () => {
-    if (process.platform !== "win32") return;
     for (const entry of backgroundProcesses.values()) {
-      const pids = new Set([entry.info.pid, ...(entry.tracker?.seen ?? [])]);
-      for (const pid of pids) {
-        if (pid === undefined) continue;
-        spawnSync("taskkill.exe", ["/T", "/F", "/PID", String(pid)], {
-          windowsHide: true,
-          stdio: "ignore",
-          timeout: INTERNAL_PROCESS_TIMEOUT_MS
-        });
-      }
+      killBackgroundProcessSync(entry);
     }
   });
 }
@@ -187,6 +178,7 @@ async function startBackgroundProcess(ctx: ToolContext, command: string): Promis
   const subprocess = execa(command, {
     cwd: ctx.cwd,
     shell: true,
+    detached: process.platform !== "win32",
     reject: false,
     all: true,
     cleanup: true,
@@ -224,6 +216,59 @@ async function startBackgroundProcess(ctx: ToolContext, command: string): Promis
   };
 }
 
+function killBackgroundProcessSync(entry: BackgroundProcess): void {
+  entry.tracker?.stop();
+  const pid = entry.info.pid;
+  if (pid === undefined) return;
+  if (process.platform === "win32") {
+    const pids = new Set([pid, ...(entry.tracker?.seen ?? [])]);
+    for (const candidate of pids) {
+      spawnSync("taskkill.exe", ["/T", "/F", "/PID", String(candidate)], {
+        windowsHide: true,
+        stdio: "ignore",
+        timeout: INTERNAL_PROCESS_TIMEOUT_MS
+      });
+    }
+    return;
+  }
+  try {
+    process.kill(-pid, "SIGKILL");
+  } catch {
+    try {
+      process.kill(pid, "SIGKILL");
+    } catch {
+      // The process already exited.
+    }
+  }
+}
+
+async function stopBackgroundProcess(entry: BackgroundProcess): Promise<void> {
+  entry.info.status = "stopped";
+  entry.tracker?.stop();
+  const pid = entry.info.pid;
+  if (process.platform === "win32") {
+    // Kill the live root with /T first so taskkill can traverse descendants that
+    // were not observed by the polling tracker yet.
+    await cleanupWindowsProcessTree(pid, entry.tracker?.seen ?? []);
+    try {
+      entry.subprocess.kill("SIGKILL");
+    } catch {
+      // The root may already have exited.
+    }
+  } else if (pid !== undefined) {
+    try {
+      process.kill(-pid, "SIGKILL");
+    } catch {
+      try {
+        entry.subprocess.kill("SIGKILL");
+      } catch {
+        // The root may already have exited.
+      }
+    }
+  }
+  await cleanupWindowsProcessTree(pid, entry.tracker?.seen ?? []);
+}
+
 export function listBackgroundProcesses(): BackgroundProcessInfo[] {
   return [...backgroundProcesses.values()].map(({ info }) => ({ ...info }));
 }
@@ -239,14 +284,7 @@ export async function backgroundProcessTool(action: BackgroundProcessAction, id?
     entry.stderr = "";
     return output;
   }
-  entry.info.status = "stopped";
-  entry.tracker?.stop();
-  try {
-    entry.subprocess.kill("SIGKILL");
-  } catch {
-    // The root may already have exited; the Windows tree sweep below is still useful.
-  }
-  await cleanupWindowsProcessTree(entry.info.pid, entry.tracker?.seen ?? []);
+  await stopBackgroundProcess(entry);
   backgroundProcesses.delete(id);
   return `Stopped background process ${id}.`;
 }
