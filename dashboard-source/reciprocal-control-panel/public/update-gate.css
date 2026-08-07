@@ -46,6 +46,14 @@
   border-top: 4px solid var(--green);
 }
 
+.chip-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
 .github-sync-panel .small-print {
   margin-bottom: 14px;
 }

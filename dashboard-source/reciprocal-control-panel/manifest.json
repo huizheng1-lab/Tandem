@@ -4,8 +4,8 @@
   "files": [
     {
       "path": "approval-flow.e2e.mjs",
-      "sha256": "2D1C24ACEB2B2DD0986A62123B0216E77675C72FE7D1AB3EEB70F6B01E10EEE7",
-      "bytes": 69170
+      "sha256": "2A1B91B745A1E98421A2F84C753558A46324D7827CC65E3D8A6996310886CB91",
+      "bytes": 73781
     },
     {
       "path": "dashboard-hidden-launcher.vbs",
@@ -34,8 +34,8 @@
     },
     {
       "path": "public/app.js",
-      "sha256": "5A6B775E6682720D95A47F6B7CAFA6F1B86C64202B193779884645F6208D08E9",
-      "bytes": 44819
+      "sha256": "671759B646A79BEC65904B32208EF6B27616C9E491DFD95BB7EE28CEABB51CCF",
+      "bytes": 45983
     },
     {
       "path": "public/overview-state.js",
@@ -44,8 +44,8 @@
     },
     {
       "path": "public/index.html",
-      "sha256": "E5C56266C8C7522EC0AFBB4D261326C8B113A254E45BB0AC724A9D7E2FF927E2",
-      "bytes": 15881
+      "sha256": "51022B8E26DF7252A26D7F52EA837E13401B0288A3F022B26A7E083EB70DF8DD",
+      "bytes": 15983
     },
     {
       "path": "public/mobile.css",
@@ -59,8 +59,8 @@
     },
     {
       "path": "public/update-gate.css",
-      "sha256": "BA361897E9F51E584A2F76BFEBA7329569DFD4A5BBF0D674E39C8DFBD5E3A88E",
-      "bytes": 1916
+      "sha256": "E8410AEFFC4ABF09F1D1AF64247D5D797D7B2232C17FF16A0FF13A6D089493F1",
+      "bytes": 2031
     },
     {
       "path": "README.md",

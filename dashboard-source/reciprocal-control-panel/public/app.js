@@ -246,7 +246,7 @@ function renderUpdateGate(update, runtimes) {
   $("#update-built").textContent = update.builtAt ? new Date(update.builtAt).toLocaleString() : "--";
   $("#update-ahead").textContent = update.pending ? `A +${update.aheadCounts?.A ?? "?"}, B +${update.aheadCounts?.B ?? "?"}` : update.reviewed ? `Reviewed ${update.reviewed.decision}` : "--";
   $("#update-preview").textContent = update.preview?.running ? `Running · PID ${update.preview.pid}` : "Stopped";
-  $("#update-main-version").textContent = update.mainVersion || "No main-update tag";
+  $("#update-main-version").textContent = update.mainVersion || "No tagged baseline";
   $("#update-runtime-versions").textContent = update.promoted?.map((item) => `${item.role}: ${item.mainVersion || "untagged"}`).join(" / ") || "--";
   $("#launch-candidate").disabled = !update.exists || update.preview?.running || Boolean(reviewNote?.ready && !reviewNote.previewReady) || Boolean(update.reviewed);
   $("#stop-candidate").disabled = !update.preview?.running;
@@ -276,17 +276,35 @@ function renderReviewNote(note) {
 function renderMainVersion(version, relay) {
   if (!version) return;
   const pending = version.pendingStableCommits;
-  $("#main-version").textContent = version.label;
+  $("#main-version").textContent = version.tag ? "Tagged baseline present" : "No tagged baseline";
   $("#main-stable").textContent = version.stableShortSha || "missing";
   $("#main-pending").textContent = pending == null ? "Stable is not based on the latest tag" : String(pending);
-  $("#github-sync-summary").textContent = version.tag
-    ? `${pending || 0} verified stable commit${pending === 1 ? "" : "s"} waiting for the next main update.`
-    : "Master has no main-update tag yet. The first approved integration will create main-update-001.";
-  const chip = $("#github-sync-state");
   const blocked = Boolean(relay.activeRole || !["idle", "paused"].includes(relay.phase));
-  chip.classList.toggle("warn", Boolean(pending));
-  chip.classList.toggle("bad", blocked);
-  chip.textContent = blocked ? "Active turn" : pending ? `${pending} pending` : "Ready";
+  const turnChip = $("#github-sync-turn-state");
+  turnChip.classList.toggle("warn", Boolean(pending || blocked));
+  turnChip.classList.toggle("bad", blocked);
+  turnChip.textContent = blocked ? "Active turn" : pending ? `${pending} stable ahead` : "Relay idle";
+}
+
+function githubSyncSummary(sync) {
+  const stable = sync.stableShortSha || "verified stable";
+  const remote = sync.remoteShortSha || (sync.remoteSource === "missing" ? "missing" : "unknown");
+  if (sync.state === "already-synced") return `origin/master is in sync with verified stable ${sync.remoteShortSha || stable}.`;
+  if (sync.state === "fast-forward-ready") return `Verified stable ${stable} is ahead of origin/master ${remote} and can be pushed by fast-forward.`;
+  if (sync.state === "github-ahead") return `origin/master ${remote} is ahead of verified stable ${stable}; no dashboard push is allowed.`;
+  if (sync.state === "diverged") return `origin/master ${remote} and verified stable ${stable} have diverged; resolve outside the dashboard.`;
+  if (sync.state === "unavailable") return "GitHub master state is unavailable; retry after remote status refreshes.";
+  return sync.message || "Checking the verified stable and origin/master boundary.";
+}
+
+function githubSyncMessage(sync) {
+  if (!sync.canPush && sync.disabledReason) return sync.disabledReason;
+  if (sync.message) return sync.message;
+  if (sync.last?.message) {
+    const when = sync.last.at || sync.last.completedAt || sync.last.updatedAt || sync.last.startedAt;
+    return `Last GitHub sync operation${when ? ` ${relative(when)}` : ""}: ${sync.last.message}`;
+  }
+  return "Checking verified stable sync boundary...";
 }
 
 function renderGithubSync(sync) {
@@ -294,13 +312,12 @@ function renderGithubSync(sync) {
   const button = $("#github-sync-button");
   const result = sync.last?.status || sync.state || "checking";
   const running = ["requested", "validating", "fetching", "pushing"].includes(sync.last?.status);
+  $("#github-sync-summary").textContent = githubSyncSummary(sync);
   $("#github-sync-remote").textContent = sync.remoteShortSha || (sync.remoteSource === "missing" ? "missing" : "unknown");
   $("#github-sync-freshness").textContent = sync.remoteFreshness ? `${sync.remoteFreshness}${sync.remoteCheckedAt ? ` ${relative(sync.remoteCheckedAt)}` : ""}` : "unknown";
   $("#github-sync-stable").textContent = sync.stableShortSha || "missing";
   $("#github-sync-result").textContent = result;
-  $("#github-sync-message").textContent = !sync.canPush && sync.disabledReason
-    ? sync.disabledReason
-    : sync.last?.message || sync.message || "Checking verified stable sync boundary...";
+  $("#github-sync-message").textContent = githubSyncMessage(sync);
   $("#github-sync-state").textContent = sync.canPush ? "Sync ready" : sync.state === "already-synced" ? "Synced" : result;
   $("#github-sync-state").classList.toggle("warn", Boolean(sync.canPush));
   $("#github-sync-state").classList.toggle("bad", Boolean(!sync.ok || ["diverged", "github-ahead", "unavailable"].includes(sync.state)));

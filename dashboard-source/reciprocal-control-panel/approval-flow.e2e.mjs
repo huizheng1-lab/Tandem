@@ -603,7 +603,7 @@ test("D212 GitHub sync panel renders disabled reason as visible text", async () 
     if (!elements.has(selector)) elements.set(selector, { textContent: "", disabled: false, title: "", classList: { toggle() {} } });
     return elements.get(selector);
   };
-  const renderGithubSync = new Function("state", "$", "relative", `${extractFunction(app, "renderGithubSync", "renderVersions")}; return renderGithubSync;`)({}, get, () => "now");
+  const renderGithubSync = new Function("state", "$", "relative", `${extractFunction(app, "githubSyncSummary", "renderVersions")}; return renderGithubSync;`)({}, get, () => "now");
   renderGithubSync({
     ok: false,
     canPush: false,
@@ -618,6 +618,100 @@ test("D212 GitHub sync panel renders disabled reason as visible text", async () 
   });
   assert.equal(elements.get("#github-sync-message").textContent, "phase=failed-paused currentItem=W0032");
   assert.equal(elements.get("#github-sync-button").disabled, true);
+});
+
+test("D213 GitHub sync message prefers current boundary over stale last operation", async () => {
+  const app = await readFile(path.join(here, "public", "app.js"), "utf8");
+  const elements = new Map();
+  const get = (selector) => {
+    if (!elements.has(selector)) elements.set(selector, { textContent: "", disabled: false, title: "", classList: { toggle() {} } });
+    return elements.get(selector);
+  };
+  const renderGithubSync = new Function("state", "$", "relative", `${extractFunction(app, "githubSyncSummary", "renderVersions")}; return renderGithubSync;`)({}, get, () => "now");
+  renderGithubSync({
+    ok: true,
+    canPush: false,
+    state: "already-synced",
+    disabledReason: "",
+    message: "GitHub master already points at the verified stable version.",
+    stableShortSha: "e585e77",
+    remoteShortSha: "e585e77",
+    remoteFreshness: "fresh",
+    remoteCheckedAt: "2026-08-07T00:00:00.000Z",
+    last: { status: "succeeded", message: "GitHub master now points at verified stable 1471762.", at: "2026-08-03T00:00:00.000Z" },
+  });
+  assert.equal(elements.get("#github-sync-message").textContent, "GitHub master already points at the verified stable version.");
+  assert.doesNotMatch(elements.get("#github-sync-message").textContent, /1471762/);
+  assert.equal(elements.get("#github-sync-summary").textContent, "origin/master is in sync with verified stable e585e77.");
+  assert.doesNotMatch(elements.get("#github-sync-summary").textContent, /1471762/);
+});
+
+test("D213 GitHub sync panel renders surviving flow text without deleted main-update wording", async () => {
+  const html = await readFile(path.join(here, "public", "index.html"), "utf8");
+  const app = await readFile(path.join(here, "public", "app.js"), "utf8");
+  const elements = new Map();
+  const visibleValues = [];
+  const get = (selector) => {
+    if (!elements.has(selector)) {
+      const element = {
+        disabled: false,
+        title: "",
+        classList: { toggle() {} },
+        get textContent() { return this._textContent || ""; },
+        set textContent(value) {
+          this._textContent = value;
+          visibleValues.push(String(value));
+        },
+      };
+      elements.set(selector, element);
+    }
+    return elements.get(selector);
+  };
+  const renderers = new Function("state", "$", "relative", `${extractFunction(app, "renderMainVersion", "renderVersions")}; return { renderMainVersion, renderGithubSync };`)({}, get, () => "now");
+  for (const version of [
+    { tag: "main-update-099", label: "main-update-099", stableShortSha: "abc0001", pendingStableCommits: 105 },
+    { tag: null, label: "No tagged baseline", stableShortSha: "abc0001", pendingStableCommits: null },
+  ]) {
+    visibleValues.length = 0;
+    renderers.renderMainVersion(version, { phase: "idle", activeRole: null });
+    renderers.renderGithubSync({
+      ok: true,
+      canPush: true,
+      state: "fast-forward-ready",
+      message: "origin/master can fast-forward to the verified stable version.",
+      stableShortSha: "abc0001",
+      remoteShortSha: "abc0000",
+      remoteFreshness: "fresh",
+    });
+    assert.doesNotMatch(visibleValues.join("\n"), /main update|main-update|main-update-001/i);
+  }
+  const panel = html.match(/<section class="panel update-panel github-sync-panel"[\s\S]*?<\/section>/)?.[0] || "";
+  assert.doesNotMatch(panel, /main update|main-update|main-update-001/i);
+});
+
+test("D213 GitHub sync and relay-turn chips have separate visible owners", async () => {
+  const app = await readFile(path.join(here, "public", "app.js"), "utf8");
+  const elements = new Map();
+  const get = (selector) => {
+    if (!elements.has(selector)) elements.set(selector, { textContent: "", disabled: false, title: "", classList: { toggle() {} } });
+    return elements.get(selector);
+  };
+  const renderers = new Function("state", "$", "relative", `${extractFunction(app, "renderMainVersion", "renderVersions")}; return { renderMainVersion, renderGithubSync };`)({}, get, () => "now");
+  renderers.renderMainVersion(
+    { tag: "main-update-099", label: "main-update-099", stableShortSha: "e585e77", pendingStableCommits: 105 },
+    { phase: "working", activeRole: "A" },
+  );
+  renderers.renderGithubSync({
+    ok: true,
+    canPush: false,
+    state: "already-synced",
+    message: "GitHub master already points at the verified stable version.",
+    stableShortSha: "e585e77",
+    remoteShortSha: "e585e77",
+    remoteFreshness: "fresh",
+  });
+  assert.equal(elements.get("#github-sync-state").textContent, "Synced");
+  assert.equal(elements.get("#github-sync-turn-state").textContent, "Active turn");
 });
 
 test("D212 GitHub sync cancellation is visible instead of a silent no-op", async () => {
