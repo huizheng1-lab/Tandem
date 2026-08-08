@@ -7,7 +7,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { editFileTool, readFileTool, writeFileTool } from "../src/tools/fs.js";
 import type { ToolActivityEvent } from "../src/tools/fs.js";
 import { makeToolSet } from "../src/tools/index.js";
-import { backgroundProcessTool, BASH_SETTLE_GRACE_MS, bashTool, cleanupBackgroundProcesses, effectiveBashTimeout, listBackgroundProcesses, MAX_BASH_TIMEOUT_MS, tailOutput } from "../src/tools/shell.js";
+import { backgroundProcessTool, BASH_SETTLE_GRACE_MS, backgroundBridgeEnvironment, bashTool, cleanupBackgroundProcesses, effectiveBashTimeout, listBackgroundProcesses, MAX_BASH_TIMEOUT_MS, startBackgroundProcessBridge, tailOutput } from "../src/tools/shell.js";
 import { isDestructiveCommand } from "../src/tools/permissions.js";
 
 async function tempDir(): Promise<string> {
@@ -503,6 +503,33 @@ describe("tools", () => {
     await expect(backgroundProcessTool("stop")).rejects.toThrow(/A background process id is required/);
     await expect(backgroundProcessTool("read", "missing-bg-id")).rejects.toThrow(/Unknown background process id/);
     await expect(backgroundProcessTool("stop", "missing-bg-id")).rejects.toThrow(/Unknown background process id/);
+  });
+
+  it("exposes the same registry to a CLI bridge across separate command calls", async () => {
+    const cwd = await tempDir();
+    const bridge = await startBackgroundProcessBridge();
+    const env = backgroundBridgeEnvironment(process.env, bridge);
+    const request = async (action: "start" | "read" | "stop", id?: string, command?: string) => {
+      const response = await fetch(`http://127.0.0.1:${bridge.port}/background`, {
+        method: "POST",
+        headers: { authorization: `Bearer ${bridge.token}`, "content-type": "application/json" },
+        body: JSON.stringify({ action, id, command, cwd })
+      });
+      const body = await response.json() as { result?: unknown; error?: string };
+      if (!response.ok) throw new Error(body.error);
+      return body.result;
+    };
+    const result = await request("start", undefined, "node -e \"setTimeout(()=>console.log('cli-bridge-output'),120); setTimeout(()=>{},1500)\"") as { output: string };
+    const id = String(result.output.match(/Started background process (\S+)/)?.[1]);
+    try {
+      await new Promise((resolve) => setTimeout(resolve, 250));
+      await expect.poll(async () => String(await request("read", id))).toContain("cli-bridge-output");
+      await request("stop", id);
+      expect(listBackgroundProcesses().some((entry) => entry.id === id)).toBe(false);
+      expect(env.TANDEM_BACKGROUND_PORT).toBe(String(bridge.port));
+    } finally {
+      await cleanupBackgroundProcesses();
+    }
   });
 
   it.runIf(process.platform === "win32")("cleans up shell child processes that outlive their parent", async () => {

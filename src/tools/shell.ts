@@ -1,5 +1,7 @@
 import { execa } from "execa";
+import { createServer } from "node:http";
 import { spawnSync } from "node:child_process";
+import { randomBytes } from "node:crypto";
 import { ToolContext, resolveInside } from "./fs.js";
 import { ensurePermission } from "./permissions.js";
 import { assertSafeBash } from "./protection.js";
@@ -54,6 +56,7 @@ interface BackgroundProcess {
 const backgroundProcesses = new Map<string, BackgroundProcess>();
 let backgroundSequence = 0;
 let backgroundSweepRegistered = false;
+let backgroundBridge: { port: number; token: string; server: ReturnType<typeof createServer> } | undefined;
 
 function appendBackgroundOutput(current: string, chunk: Buffer | string): string {
   const next = current + chunk.toString();
@@ -289,8 +292,60 @@ export async function backgroundProcessTool(action: BackgroundProcessAction, id?
   return `Stopped background process ${id}.`;
 }
 
+export async function startBackgroundProcessBridge(): Promise<{ port: number; token: string }> {
+  if (backgroundBridge) return { port: backgroundBridge.port, token: backgroundBridge.token };
+  const token = randomBytes(24).toString("hex");
+  const server = createServer((request, response) => {
+    if (request.method !== "POST" || request.url !== "/background" || request.headers.authorization !== `Bearer ${token}`) {
+      response.writeHead(404).end();
+      return;
+    }
+    let body = "";
+    request.setEncoding("utf8");
+    request.on("data", (chunk) => { body += chunk; });
+    request.on("end", async () => {
+      try {
+        const input = JSON.parse(body) as { action: BackgroundProcessAction; id?: string; command?: string; cwd?: string };
+        const result = input.action === "start"
+          ? await bashTool({ cwd: input.cwd ?? process.cwd(), permissionMode: "yolo" }, input.command ?? "", DEFAULT_BASH_TIMEOUT_MS, true)
+          : await backgroundProcessTool(input.action, input.id);
+        response.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify({ ok: true, result }));
+      } catch (error) {
+        response.writeHead(400, { "content-type": "application/json" }).end(JSON.stringify({ ok: false, error: String(error) }));
+      }
+    });
+  });
+  await new Promise<void>((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", () => resolve());
+  });
+  const address = server.address();
+  if (!address || typeof address === "string") throw new Error("Could not determine background bridge port.");
+  backgroundBridge = { port: address.port, token, server };
+  registerBackgroundSweep();
+  return { port: address.port, token };
+}
+
+export function backgroundBridgeEnvironment(env: NodeJS.ProcessEnv, bridge: { port: number; token: string }): NodeJS.ProcessEnv {
+  return {
+    ...env,
+    TANDEM_BACKGROUND_PORT: String(bridge.port),
+    TANDEM_BACKGROUND_TOKEN: bridge.token,
+    TANDEM_BACKGROUND_COMMAND: "tandem /background"
+  };
+}
+
+export const CLI_BACKGROUND_INSTRUCTIONS = `
+Tandem-managed long-lived processes are available even in this CLI-backed turn. To start one, base64-encode the shell command and run:
+  tandem /background start <base64-command>
+It returns a process id. In later calls use \\"tandem /background list\\", \\"tandem /background read <id>\\", and \\"tandem /background stop <id>\\". Use this for local servers or jobs that must outlive one command call; do not use shell-only &, Start-Process, or detached-process workarounds. The process is automatically swept when the Tandem session/app exits.`;
+
 export async function cleanupBackgroundProcesses(): Promise<void> {
   await Promise.all([...backgroundProcesses.keys()].map((id) => backgroundProcessTool("stop", id).catch(() => undefined)));
+  if (backgroundBridge) {
+    await new Promise<void>((resolve) => backgroundBridge?.server.close(() => resolve()));
+    backgroundBridge = undefined;
+  }
 }
 
 export async function bashTool(ctx: ToolContext, command: string, timeoutMs = DEFAULT_BASH_TIMEOUT_MS, runInBackground = false): Promise<ShellResult> {

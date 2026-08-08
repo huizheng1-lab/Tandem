@@ -7,6 +7,30 @@ import { listModels, setCliModelConfig, setModel } from "./model.js";
 import { costText, helpText, statusText } from "./misc.js";
 import { addSchedule, listSchedules, removeSchedule } from "./schedule.js";
 
+async function backgroundCommand(args: string[], env: NodeJS.ProcessEnv, cwd: string): Promise<string> {
+  const port = env.TANDEM_BACKGROUND_PORT;
+  const token = env.TANDEM_BACKGROUND_TOKEN;
+  const action = args[0] as "start" | "list" | "read" | "stop" | undefined;
+  if (!port || !token) return "Tandem background execution is unavailable outside a live agent session.";
+  if (!action || !["start", "list", "read", "stop"].includes(action)) return "Usage: tandem /background start <base64-command> | list | read <id> | stop <id>";
+  const body: { action: typeof action; id?: string; command?: string; cwd: string } = { action, cwd };
+  if (action === "start") {
+    if (!args[1]) return "Usage: tandem /background start <base64-command>";
+    body.command = Buffer.from(args[1], "base64").toString("utf8");
+  } else if (action !== "list") {
+    if (!args[1]) return `Usage: tandem /background ${action} <id>`;
+    body.id = args[1];
+  }
+  const response = await fetch(`http://127.0.0.1:${port}/background`, {
+    method: "POST",
+    headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
+    body: JSON.stringify(body)
+  });
+  const result = await response.json() as { ok?: boolean; result?: unknown; error?: string };
+  if (!response.ok || !result.ok) throw new Error(result.error ?? `Background bridge request failed (${response.status}).`);
+  return typeof result.result === "string" ? result.result : JSON.stringify(result.result);
+}
+
 function formatSessionList(sessions: Awaited<ReturnType<typeof listSessions>>): string {
   return sessions.map((session) => `${session.id} ${session.archived ? "[archived] " : ""}${session.title}`).join("\n") || "No sessions yet.";
 }
@@ -29,6 +53,8 @@ export async function dispatchCommand(input: string, ctx: CommandContext): Promi
   if (!input.startsWith("/")) return undefined;
   const [command, ...args] = splitCommand(input);
   switch (command) {
+    case "/background":
+      return backgroundCommand(args, ctx.env, ctx.cwd);
     case "/help":
       return helpText;
     case "/models":

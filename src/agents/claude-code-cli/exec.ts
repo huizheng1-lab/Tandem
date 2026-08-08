@@ -7,6 +7,7 @@ import { assertSafeProjectDir } from "../../tools/protection.js";
 import { locateClaudeCli } from "./locate.js";
 import { jsonSchemaFor, stripNulls, type CodexSchemaKind } from "../codex-cli/schema-json.js";
 import { CLAUDE_CLI_OPUS_5_MODEL } from "../../providers/cli-models.js";
+import { backgroundBridgeEnvironment, CLI_BACKGROUND_INSTRUCTIONS, startBackgroundProcessBridge } from "../../tools/shell.js";
 
 export type ClaudeSchemaKind = CodexSchemaKind;
 export type ClaudePermissionMode = "acceptEdits" | "auto" | "bypassPermissions" | "default" | "dontAsk" | "plan";
@@ -210,12 +211,13 @@ export async function runClaudeExec(options: ClaudeExecOptions): Promise<unknown
     readOnly: options.readOnly,
     maxBudgetUsd: options.maxBudgetUsd
   });
+  const bridge = await startBackgroundProcessBridge();
   options.onToolEvent?.({ role: options.role, tool: "claude_code_cli", target: options.readOnly ? "read-only prompt" : "write prompt", phase: "start" });
   const started = Date.now();
   const result = await execa(claudePath, args, {
     cwd: options.cwd,
-    env: options.env,
-    input: options.prompt,
+    env: backgroundBridgeEnvironment({ ...(options.env ?? process.env), TANDEM_BACKGROUND_CWD: options.cwd }, bridge),
+    input: `${options.prompt}\n${CLI_BACKGROUND_INSTRUCTIONS}`,
     windowsHide: true,
     reject: false,
     cancelSignal: options.abortSignal

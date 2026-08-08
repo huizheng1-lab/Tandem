@@ -8,6 +8,7 @@ import { CostLedger, CostRole } from "../../session/cost.js";
 import type { ToolActivityEvent } from "../../tools/fs.js";
 import { locateCodexCli } from "./locate.js";
 import { stripNulls, withCodexSchemaFiles, type CodexSchemaKind } from "./schema-json.js";
+import { backgroundBridgeEnvironment, CLI_BACKGROUND_INSTRUCTIONS, startBackgroundProcessBridge } from "../../tools/shell.js";
 export { stripNulls } from "./schema-json.js";
 
 export interface CodexExecOptions {
@@ -157,15 +158,16 @@ export async function runCodexExec(options: CodexExecOptions & { readOnly?: bool
       modelReasoningEffort: options.modelReasoningEffort,
       writableRoots: codexWritableRoots(options.env ?? process.env)
     });
+    const bridge = await startBackgroundProcessBridge();
     const child = spawn(codexPath, args, {
       cwd: options.cwd,
-      env: options.env,
+      env: backgroundBridgeEnvironment({ ...(options.env ?? process.env), TANDEM_BACKGROUND_CWD: options.cwd }, bridge),
       stdio: ["pipe", "pipe", "pipe"],
       windowsHide: true,
       shell: process.platform === "win32" && /\.(?:cmd|bat)$/i.test(codexPath)
     });
     child.stdin.on("error", () => undefined);
-    child.stdin.end(options.prompt);
+    child.stdin.end(`${options.prompt}\n${CLI_BACKGROUND_INSTRUCTIONS}`);
     const active = new Map<string, number>();
     const diagnostics: CodexJsonDiagnostics = { errors: [] };
     let stdoutBuffer = "";
