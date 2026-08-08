@@ -623,8 +623,8 @@ describe("tools", () => {
       if (!response.ok) throw new Error(body.error);
       return body.result;
     };
-    const result = await request("start", undefined, "node -e \"setTimeout(()=>console.log('cli-bridge-output'),120); setTimeout(()=>{},1500)\"") as { output: string };
-    const id = String(result.output.match(/Started background process (\S+)/)?.[1]);
+    const result = String(await request("start", undefined, "node -e \"setTimeout(()=>console.log('cli-bridge-output'),120); setTimeout(()=>{},1500)\""));
+    const id = String(result.match(/Started background process (\S+)/)?.[1]);
     try {
       await new Promise((resolve) => setTimeout(resolve, 250));
       await expect.poll(async () => String(await request("read", id))).toContain("cli-bridge-output");
@@ -637,13 +637,16 @@ describe("tools", () => {
   });
 
   it("applies the active Tandem permission bridge before a CLI background start", async () => {
+    // Must run outside the Tandem repo itself: assertSafeBash rejects self-modification
+    // before ensurePermission is ever consulted, which would mask the permission check.
+    const cwd = await tempDir();
     const bridge = await startBackgroundProcessBridge(undefined, "ask", {
       approve: async () => false
     });
     const response = await fetch(`http://127.0.0.1:${bridge.port}/background`, {
       method: "POST",
       headers: { authorization: `Bearer ${bridge.token}`, "content-type": "application/json" },
-      body: JSON.stringify({ action: "start", command: "node -e \"setInterval(()=>{},1000)\"", cwd: process.cwd() })
+      body: JSON.stringify({ action: "start", command: "node -e \"setInterval(()=>{},1000)\"", cwd })
     });
     const body = await response.json() as { error?: string };
     expect(response.ok).toBe(false);
@@ -652,6 +655,7 @@ describe("tools", () => {
   });
 
   it("keeps the admitted CLI authorization context for an in-flight start", async () => {
+    const cwd = await tempDir();
     let approveRequest: (() => void) | undefined;
     let approvalSeen: (() => void) | undefined;
     const approvalObserved = new Promise<void>((resolve) => { approvalSeen = resolve; });
@@ -666,19 +670,19 @@ describe("tools", () => {
       const request = fetch(`http://127.0.0.1:${bridge.port}/background`, {
         method: "POST",
         headers: { authorization: `Bearer ${bridge.token}`, "content-type": "application/json" },
-        body: JSON.stringify({ action: "start", command: "node -e \"setTimeout(()=>{},3000)\"", cwd: process.cwd() })
+        body: JSON.stringify({ action: "start", command: "node -e \"setTimeout(()=>{},3000)\"", cwd })
       });
       await approvalObserved;
 
       // Refreshing the shared bridge for a read-only CLI turn must not mutate
       // the authorization decision already in progress for the writable turn.
-      await startBackgroundProcessBridge(process.cwd(), "ask", undefined, true);
+      await startBackgroundProcessBridge(cwd, "ask", undefined, true);
       approveRequest?.();
       const response = await request;
-      const body = await response.json() as { ok?: boolean; result?: { output?: string }; error?: string };
+      const body = await response.json() as { ok?: boolean; result?: string; error?: string };
       expect(response.ok).toBe(true);
       expect(body.ok).toBe(true);
-      const id = body.result?.output?.match(/Started background process (\S+)/)?.[1];
+      const id = body.result?.match(/Started background process (\S+)/)?.[1];
       expect(id).toBeTruthy();
       await backgroundProcessTool("stop", id);
     } finally {
