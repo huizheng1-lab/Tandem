@@ -532,7 +532,15 @@ export async function runOrchestration(options: RunOptions): Promise<RunResult> 
     return { phase: "DONE", summary, plan, reports, verdicts, takeover: true };
   };
 
-  if (options.config.maxReviewRounds === 0) return runTakeover("maxReviewRounds is 0; leader takeover");
+  if (options.config.maxReviewRounds === 0) {
+    // Even when no worker round is configured, prepare the environment through
+    // the same worker-facing path before handing the plan to the leader. The
+    // takeover call below deliberately prepares it again so it cannot inherit
+    // a stale or unusable snapshot from planning.
+    const environmentFailure = await prepareEnvironment(planEnvironmentCommands());
+    if (environmentFailure) return environmentFailure;
+    return runTakeover("maxReviewRounds is 0; leader takeover");
+  }
 
   let feedback: ReviewVerdict["feedback"] = allFeedback.at(-1) ?? [];
   let nextRound = phase === "REVIEWING" ? Math.max(1, reports.length) : Math.max(1, reports.length + 1);
