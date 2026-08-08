@@ -503,7 +503,13 @@ describe("claude code cli mixed roles", () => {
     await expect(agents.build({ plan, streamId: "__default__", tasks: plan.tasks, verification: plan.verification, round: 1, feedback: [] })).resolves.toMatchObject({ status: "complete" });
   });
 
-  it("supports Claude Code CLI leader plus MiniMax worker", async () => {
+  // Windows-skipped: these two drive a real plan() through the fake CLI, so the full
+  // leaderPlannerPrompt (~4.4KB) plus the JSON schema land on the command line. The shim is a
+  // .cmd, so execa routes it through cmd.exe, whose 8191-char limit is exceeded once %* re-quoting
+  // expands the schema's many quote characters -> "The command line is too long".
+  // Production is unaffected: the real CLI is spawned directly via CreateProcess (32767 limit)
+  // and the same argv measures ~5.5KB. Re-enable if the shim stops routing through cmd.exe.
+  it.runIf(process.platform !== "win32")("supports Claude Code CLI leader plus MiniMax worker", async () => {
     const cwd = await tempDir("project");
     const claudeCliPath = await fakeClaudeScript("answer");
     const agents = await createLiveAgents({
@@ -516,7 +522,8 @@ describe("claude code cli mixed roles", () => {
     await expect(agents.plan({ request: "What is 2+2?", goals: [] })).resolves.toEqual({ kind: "answer", answer: "4" });
   });
 
-  it("passes Opus 5 for a Claude Code CLI leader selection", async () => {
+  // Windows-skipped for the same cmd.exe 8191-char shim limit described above.
+  it.runIf(process.platform !== "win32")("passes Opus 5 for a Claude Code CLI leader selection", async () => {
     const cwd = await tempDir("project");
     const capturePath = path.join(cwd, "leader-capture.json");
     const claudeCliPath = await fakeClaudeCaptureScript(capturePath, "answer");
