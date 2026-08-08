@@ -27,6 +27,7 @@ import { createDiffTracker } from "../orchestrator/diff.js";
 import { createVerificationRunner } from "../orchestrator/verification.js";
 import { PermissionBridge, PermissionRequest } from "../tools/permissions.js";
 import type { ToolActivityEvent } from "../tools/fs.js";
+import { cleanupBackgroundProcesses } from "../tools/shell.js";
 import { Transcript, TranscriptMessage } from "./Transcript.js";
 import { InputBar } from "./InputBar.js";
 import { StatusLine } from "./StatusLine.js";
@@ -140,6 +141,7 @@ export function App({ config: initialConfig, env, cwd, initialError }: { config:
     return () => {
       loopTimerRef.current && clearInterval(loopTimerRef.current);
       for (const task of cronJobsRef.current.values()) task.stop();
+      void cleanupBackgroundProcesses();
     };
   }, []);
 

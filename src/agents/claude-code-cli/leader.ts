@@ -7,6 +7,7 @@ import { CostLedger } from "../../session/cost.js";
 import type { AttachmentRef } from "../../session/attachments.js";
 import { formatAttachmentBlock } from "../../session/attachments.js";
 import type { ToolActivityEvent } from "../../tools/fs.js";
+import type { PermissionBridge } from "../../tools/permissions.js";
 import { hostPlatformPrompt } from "../platform.js";
 import { leaderPlannerPrompt, leaderReviewerPrompt, leaderTakeoverPrompt } from "../leader.js";
 import { runClaudeExec } from "./exec.js";
@@ -36,6 +37,7 @@ export interface ClaudeLeaderOptions {
   projectInstructions?: () => string | Promise<string>;
   onTriage?: (kind: "question" | "implementation") => void | Promise<void>;
   confirmCodexWrite?: (role: "leader" | "worker", message: string) => Promise<boolean>;
+  permissionBridge?: PermissionBridge;
 }
 
 function jsonBlock(value: unknown): string {
@@ -77,6 +79,7 @@ async function claudeLeaderExec(options: ClaudeLeaderOptions, input: { schema: "
     ledger: options.ledger,
     onText: options.onLeaderText,
     onToolEvent: options.onToolEvent,
+    permissionBridge: options.permissionBridge,
     maxBudgetUsd: options.config.claudeMaxBudgetUsdPerCall
   });
 }

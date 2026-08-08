@@ -4,6 +4,7 @@ import { CompletionReportSchema } from "../../orchestrator/artifacts.js";
 import type { ModelEntry } from "../../providers/registry.js";
 import { CostLedger } from "../../session/cost.js";
 import type { ToolActivityEvent } from "../../tools/fs.js";
+import type { PermissionBridge } from "../../tools/permissions.js";
 import { assertSafeProjectDir } from "../../tools/protection.js";
 import { buildWorkerContext } from "../live.js";
 import { hostPlatformPrompt } from "../platform.js";
@@ -21,6 +22,7 @@ export interface CodexWorkerOptions {
   onToolEvent?: (event: ToolActivityEvent) => void;
   confirmCodexWrite?: (role: "leader" | "worker", message: string) => Promise<boolean>;
   projectInstructions?: () => string | Promise<string>;
+  permissionBridge?: PermissionBridge;
 }
 
 async function projectInstructions(options: Pick<CodexWorkerOptions, "projectInstructions">): Promise<string> {
@@ -63,7 +65,8 @@ export async function runCodexWorkerBuild(
     entry: options.entry,
     ledger: options.ledger,
     onText: options.onWorkerText,
-    onToolEvent: options.onToolEvent
+    onToolEvent: options.onToolEvent,
+    permissionBridge: options.permissionBridge
   });
   return CompletionReportSchema.parse(output);
 }

@@ -4,6 +4,7 @@ import { CompletionReportSchema } from "../../orchestrator/artifacts.js";
 import type { ModelEntry } from "../../providers/registry.js";
 import { CostLedger } from "../../session/cost.js";
 import type { ToolActivityEvent } from "../../tools/fs.js";
+import type { PermissionBridge } from "../../tools/permissions.js";
 import { buildWorkerContext } from "../live.js";
 import { hostPlatformPrompt } from "../platform.js";
 import { workerPrompt } from "../worker.js";
@@ -20,6 +21,7 @@ export interface ClaudeWorkerOptions {
   onToolEvent?: (event: ToolActivityEvent) => void;
   confirmCodexWrite?: (role: "leader" | "worker", message: string) => Promise<boolean>;
   projectInstructions?: () => string | Promise<string>;
+  permissionBridge?: PermissionBridge;
 }
 
 async function projectInstructions(options: Pick<ClaudeWorkerOptions, "projectInstructions">): Promise<string> {
@@ -64,6 +66,7 @@ export async function runClaudeWorkerBuild(
     ledger: options.ledger,
     onText: options.onWorkerText,
     onToolEvent: options.onToolEvent,
+    permissionBridge: options.permissionBridge,
     maxBudgetUsd: options.config.claudeMaxBudgetUsdPerCall
   });
   return CompletionReportSchema.parse(output);

@@ -3,6 +3,7 @@ import type { PermissionMode } from "../../config/schema.js";
 import type { ModelEntry } from "../../providers/registry.js";
 import { CostLedger, CostRole } from "../../session/cost.js";
 import type { ToolActivityEvent } from "../../tools/fs.js";
+import type { PermissionBridge } from "../../tools/permissions.js";
 import { assertSafeProjectDir } from "../../tools/protection.js";
 import { locateClaudeCli } from "./locate.js";
 import { jsonSchemaFor, stripNulls, type CodexSchemaKind } from "../codex-cli/schema-json.js";
@@ -32,6 +33,7 @@ export interface ClaudeExecOptions {
   readOnly?: boolean;
   onText?: (text: string) => void;
   onToolEvent?: (event: ToolActivityEvent) => void;
+  permissionBridge?: PermissionBridge;
 }
 
 interface ClaudeEnvelope {
@@ -211,7 +213,7 @@ export async function runClaudeExec(options: ClaudeExecOptions): Promise<unknown
     readOnly: options.readOnly,
     maxBudgetUsd: options.maxBudgetUsd
   });
-  const bridge = await startBackgroundProcessBridge(options.cwd);
+  const bridge = await startBackgroundProcessBridge(options.cwd, options.permissionMode, options.permissionBridge);
   options.onToolEvent?.({ role: options.role, tool: "claude_code_cli", target: options.readOnly ? "read-only prompt" : "write prompt", phase: "start" });
   const started = Date.now();
   const result = await execa(claudePath, args, {

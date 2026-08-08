@@ -6,6 +6,7 @@ import type { CodexCliReasoningEffort, PermissionMode } from "../../config/schem
 import type { ModelEntry } from "../../providers/registry.js";
 import { CostLedger, CostRole } from "../../session/cost.js";
 import type { ToolActivityEvent } from "../../tools/fs.js";
+import type { PermissionBridge } from "../../tools/permissions.js";
 import { locateCodexCli } from "./locate.js";
 import { stripNulls, withCodexSchemaFiles, type CodexSchemaKind } from "./schema-json.js";
 import { backgroundBridgeEnvironment, CLI_BACKGROUND_INSTRUCTIONS, startBackgroundProcessBridge } from "../../tools/shell.js";
@@ -26,6 +27,7 @@ export interface CodexExecOptions {
   ledger: CostLedger;
   onText?: (text: string) => void;
   onToolEvent?: (event: ToolActivityEvent) => void;
+  permissionBridge?: PermissionBridge;
 }
 
 interface CodexJsonDiagnostics {
@@ -158,7 +160,7 @@ export async function runCodexExec(options: CodexExecOptions & { readOnly?: bool
       modelReasoningEffort: options.modelReasoningEffort,
       writableRoots: codexWritableRoots(options.env ?? process.env)
     });
-    const bridge = await startBackgroundProcessBridge(options.cwd);
+    const bridge = await startBackgroundProcessBridge(options.cwd, options.permissionMode, options.permissionBridge);
     const child = spawn(codexPath, args, {
       cwd: options.cwd,
       env: backgroundBridgeEnvironment({ ...(options.env ?? process.env), TANDEM_BACKGROUND_CWD: options.cwd }, bridge),

@@ -532,6 +532,21 @@ describe("tools", () => {
     }
   });
 
+  it("applies the active Tandem permission bridge before a CLI background start", async () => {
+    const bridge = await startBackgroundProcessBridge(undefined, "ask", {
+      approve: async () => false
+    });
+    const response = await fetch(`http://127.0.0.1:${bridge.port}/background`, {
+      method: "POST",
+      headers: { authorization: `Bearer ${bridge.token}`, "content-type": "application/json" },
+      body: JSON.stringify({ action: "start", command: "node -e \"setInterval(()=>{},1000)\"", cwd: process.cwd() })
+    });
+    const body = await response.json() as { error?: string };
+    expect(response.ok).toBe(false);
+    expect(body.error).toMatch(/Permission denied|required/i);
+    expect(listBackgroundProcesses()).toEqual([]);
+  });
+
   it.runIf(process.platform === "win32")("cleans up shell child processes that outlive their parent", async () => {
     const cwd = await tempDir();
     await writeFile(

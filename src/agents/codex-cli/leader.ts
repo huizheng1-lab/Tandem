@@ -7,6 +7,7 @@ import { CostLedger } from "../../session/cost.js";
 import type { AttachmentRef } from "../../session/attachments.js";
 import { formatAttachmentBlock } from "../../session/attachments.js";
 import type { ToolActivityEvent } from "../../tools/fs.js";
+import type { PermissionBridge } from "../../tools/permissions.js";
 import { assertSafeProjectDir } from "../../tools/protection.js";
 import { hostPlatformPrompt } from "../platform.js";
 import { leaderPlannerPrompt, leaderReviewerPrompt, leaderTakeoverPrompt } from "../leader.js";
@@ -37,6 +38,7 @@ export interface CodexLeaderOptions {
   projectInstructions?: () => string | Promise<string>;
   onTriage?: (kind: "question" | "implementation") => void | Promise<void>;
   confirmCodexWrite?: (role: "leader" | "worker", message: string) => Promise<boolean>;
+  permissionBridge?: PermissionBridge;
 }
 
 function jsonBlock(value: unknown): string {
@@ -77,7 +79,8 @@ async function codexLeaderExec(options: CodexLeaderOptions, input: { schema: "pl
     entry: options.entry,
     ledger: options.ledger,
     onText: options.onLeaderText,
-    onToolEvent: options.onToolEvent
+    onToolEvent: options.onToolEvent,
+    permissionBridge: options.permissionBridge
   });
 }
 

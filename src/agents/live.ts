@@ -483,7 +483,8 @@ export async function createLiveAgents(options: LiveAgentOptions): Promise<Agent
             onToolEvent: options.onToolEvent,
             projectInstructions: options.projectInstructions,
             onTriage: options.onTriage,
-            confirmCodexWrite: options.confirmCodexWrite
+            confirmCodexWrite: options.confirmCodexWrite,
+            permissionBridge: options.permissionBridge
           },
           { request, goals, history, attachments, previousAttemptError }
         );
@@ -501,7 +502,8 @@ export async function createLiveAgents(options: LiveAgentOptions): Promise<Agent
             onToolEvent: options.onToolEvent,
             projectInstructions: options.projectInstructions,
             onTriage: options.onTriage,
-            confirmCodexWrite: options.confirmCodexWrite
+            confirmCodexWrite: options.confirmCodexWrite,
+            permissionBridge: options.permissionBridge
           },
           { request, goals, history, attachments, previousAttemptError }
         );
@@ -632,7 +634,8 @@ Standing goals are context only; do not redirect unrelated requests toward them.
             onWorkerText: options.onWorkerText,
             onToolEvent: options.onToolEvent,
             projectInstructions: options.projectInstructions,
-            confirmCodexWrite: options.confirmCodexWrite
+            confirmCodexWrite: options.confirmCodexWrite,
+            permissionBridge: options.permissionBridge
           },
           { plan, streamId, tasks, verification, round, feedback, previousReport, previousAttemptError }
         );
@@ -649,7 +652,8 @@ Standing goals are context only; do not redirect unrelated requests toward them.
             onWorkerText: options.onWorkerText,
             onToolEvent: options.onToolEvent,
             projectInstructions: options.projectInstructions,
-            confirmCodexWrite: options.confirmCodexWrite
+            confirmCodexWrite: options.confirmCodexWrite,
+            permissionBridge: options.permissionBridge
           },
           { plan, streamId, tasks, verification, round, feedback, previousReport, previousAttemptError }
         );
@@ -708,7 +712,8 @@ Standing goals are context only; do not redirect unrelated requests toward them.
             onLeaderText: options.onLeaderText,
             onToolEvent: options.onToolEvent,
             projectInstructions: options.projectInstructions,
-            confirmCodexWrite: options.confirmCodexWrite
+            confirmCodexWrite: options.confirmCodexWrite,
+            permissionBridge: options.permissionBridge
           },
           { plan, report, round, diff, previousAttemptError }
         );
@@ -725,7 +730,8 @@ Standing goals are context only; do not redirect unrelated requests toward them.
             onLeaderText: options.onLeaderText,
             onToolEvent: options.onToolEvent,
             projectInstructions: options.projectInstructions,
-            confirmCodexWrite: options.confirmCodexWrite
+            confirmCodexWrite: options.confirmCodexWrite,
+            permissionBridge: options.permissionBridge
           },
           { plan, report, round, diff, previousAttemptError }
         );
@@ -800,7 +806,8 @@ Standing goals are context only; do not redirect unrelated requests toward them.
             onLeaderText: options.onLeaderText,
             onToolEvent: options.onToolEvent,
             projectInstructions: options.projectInstructions,
-            confirmCodexWrite: options.confirmCodexWrite
+            confirmCodexWrite: options.confirmCodexWrite,
+            permissionBridge: options.permissionBridge
           },
           { plan, reports, feedback, previousAttemptError }
         );
@@ -817,7 +824,8 @@ Standing goals are context only; do not redirect unrelated requests toward them.
             onLeaderText: options.onLeaderText,
             onToolEvent: options.onToolEvent,
             projectInstructions: options.projectInstructions,
-            confirmCodexWrite: options.confirmCodexWrite
+            confirmCodexWrite: options.confirmCodexWrite,
+            permissionBridge: options.permissionBridge
           },
           { plan, reports, feedback, previousAttemptError }
         );

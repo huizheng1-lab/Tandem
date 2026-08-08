@@ -3,7 +3,7 @@ import { createServer } from "node:http";
 import { spawnSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { ToolContext, resolveInside } from "./fs.js";
-import { ensurePermission } from "./permissions.js";
+import { ensurePermission, PermissionBridge } from "./permissions.js";
 import { assertSafeBash } from "./protection.js";
 import { sanitizePromptText } from "./sanitize.js";
 
@@ -56,7 +56,14 @@ interface BackgroundProcess {
 const backgroundProcesses = new Map<string, BackgroundProcess>();
 let backgroundSequence = 0;
 let backgroundSweepRegistered = false;
-let backgroundBridge: { port: number; token: string; server: ReturnType<typeof createServer> } | undefined;
+let backgroundBridge: {
+  port: number;
+  token: string;
+  server: ReturnType<typeof createServer>;
+  cwd?: string;
+  permissionMode: ToolContext["permissionMode"];
+  permissionBridge?: PermissionBridge;
+} | undefined;
 
 function appendBackgroundOutput(current: string, chunk: Buffer | string): string {
   const next = current + chunk.toString();
@@ -292,8 +299,20 @@ export async function backgroundProcessTool(action: BackgroundProcessAction, id?
   return `Stopped background process ${id}.`;
 }
 
-export async function startBackgroundProcessBridge(cwd?: string): Promise<{ port: number; token: string }> {
-  if (backgroundBridge) return { port: backgroundBridge.port, token: backgroundBridge.token };
+export async function startBackgroundProcessBridge(
+  cwd?: string,
+  permissionMode: ToolContext["permissionMode"] = "yolo",
+  permissionBridge?: PermissionBridge
+): Promise<{ port: number; token: string }> {
+  if (backgroundBridge) {
+    // CLI calls are sequential within a Tandem session. Refresh the request
+    // context on each call so a bridge first opened by a yolo turn cannot
+    // accidentally weaken a later ask-mode turn.
+    backgroundBridge.cwd = cwd ?? backgroundBridge.cwd;
+    backgroundBridge.permissionMode = permissionMode;
+    backgroundBridge.permissionBridge = permissionBridge;
+    return { port: backgroundBridge.port, token: backgroundBridge.token };
+  }
   const token = randomBytes(24).toString("hex");
   const server = createServer((request, response) => {
     if (request.method !== "POST" || request.url !== "/background" || request.headers.authorization !== `Bearer ${token}`) {
@@ -307,7 +326,11 @@ export async function startBackgroundProcessBridge(cwd?: string): Promise<{ port
       try {
         const input = JSON.parse(body) as { action: BackgroundProcessAction; id?: string; command?: string; cwd?: string };
         const result = input.action === "start"
-          ? await bashTool({ cwd: cwd ?? input.cwd ?? process.cwd(), permissionMode: "yolo" }, input.command ?? "", DEFAULT_BASH_TIMEOUT_MS, true)
+          ? await bashTool({
+            cwd: backgroundBridge?.cwd ?? input.cwd ?? process.cwd(),
+            permissionMode: backgroundBridge?.permissionMode ?? "yolo",
+            permissionBridge: backgroundBridge?.permissionBridge
+          }, input.command ?? "", DEFAULT_BASH_TIMEOUT_MS, true)
           : await backgroundProcessTool(input.action, input.id);
         response.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify({ ok: true, result }));
       } catch (error) {
@@ -321,7 +344,7 @@ export async function startBackgroundProcessBridge(cwd?: string): Promise<{ port
   });
   const address = server.address();
   if (!address || typeof address === "string") throw new Error("Could not determine background bridge port.");
-  backgroundBridge = { port: address.port, token, server };
+  backgroundBridge = { port: address.port, token, server, cwd, permissionMode, permissionBridge };
   registerBackgroundSweep();
   return { port: address.port, token };
 }
