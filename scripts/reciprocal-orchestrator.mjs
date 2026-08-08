@@ -92,6 +92,24 @@ function runCommand(command, cwd) {
   };
 }
 
+function isCommitAncestor(repo, maybeSha) {
+  if (!/^[0-9a-f]{40}$/i.test(String(maybeSha || ""))) return true;
+  return runCommand(`git merge-base --is-ancestor ${maybeSha} HEAD`, repo).ok;
+}
+
+function resumeFailureHistoryDecision(repo, state, discardFailures) {
+  const failures = Array.isArray(state.failures) ? state.failures : [];
+  if (failures.length === 0) return { preserve: true, failures, count: 0, reason: "empty-history" };
+  if (discardFailures) return { preserve: false, failures: [], count: failures.length, reason: "discard-failures-requested" };
+  const currentItemId = state.currentItem?.id || null;
+  if (!currentItemId) return { preserve: false, failures: [], count: failures.length, reason: "no-current-item" };
+  const mismatchedFailure = failures.find((failure) => failure?.item && failure.item !== currentItemId);
+  if (mismatchedFailure) return { preserve: false, failures: [], count: failures.length, reason: `failure-item-mismatch:${mismatchedFailure.item}` };
+  const staleFailure = failures.find((failure) => failure?.attemptCommit && !isCommitAncestor(repo, failure.attemptCommit));
+  if (staleFailure) return { preserve: false, failures: [], count: failures.length, reason: `stale-attempt-commit:${staleFailure.attemptCommit}` };
+  return { preserve: true, failures, count: failures.length, reason: "same-item-history" };
+}
+
 function sha(text) {
   return createHash("sha256").update(text).digest("hex");
 }
@@ -310,13 +328,14 @@ function main() {
       console.log(JSON.stringify({ ok: true, finalized: true, reason, previousPhase, sourceSha, state }, null, 2));
       return;
     }
+    const failureHistory = resumeFailureHistoryDecision(repo, state, boolArg("discard-failures"));
     state.phase = "idle";
     state.step = null;
     state.consecutiveFailures = 0;
-    state.failures = [];
+    state.failures = failureHistory.failures;
     state.failureReport = undefined;
-    state.lastSummary = `Resumed from ${previousPhase}: ${reason}`;
-    save(statePath, logPath, state, "failed-paused.resumed", { reason, previousPhase, resumedItem });
+    state.lastSummary = `Resumed from ${previousPhase}: ${reason} (${failureHistory.preserve ? "preserved" : "discarded"} ${failureHistory.count} failure record(s): ${failureHistory.reason})`;
+    save(statePath, logPath, state, "failed-paused.resumed", { reason, previousPhase, resumedItem, failureHistory });
     console.log(JSON.stringify({ ok: true, resumed: true, reason, previousPhase, state }, null, 2));
     return;
   }
@@ -408,6 +427,7 @@ function main() {
     if (test.ok) break;
     state.consecutiveFailures += 1;
     const failure = {
+      item: state.currentItem?.id || null,
       command: test.command,
       exitCode: test.exitCode,
       output: test.output.slice(0, 12000),

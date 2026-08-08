@@ -211,7 +211,7 @@ describe("single reciprocal orchestrator", () => {
           phase: "failed-paused",
           currentItem: { id: "W0001", priority: "P0", text: "Build the thing", line: 4 },
           consecutiveFailures: 2,
-          failures: [{ command: "old", exitCode: 1, output: "old failure" }],
+          failures: [{ item: "W0001", command: "old", exitCode: 1, output: "old failure" }],
           failureReport: path.join(f.relayRoot, "control", "failure-reports", "W0001.md"),
           step: "failed-paused",
           updatedAt: new Date().toISOString()
@@ -229,11 +229,105 @@ describe("single reciprocal orchestrator", () => {
         consecutiveFailures: 0,
         step: null
       });
-      expect(state.failures).toEqual([]);
+      expect(state.failures).toEqual([{ item: "W0001", command: "old", exitCode: 1, output: "old failure" }]);
       expect(state.failureReport).toBeUndefined();
       const log = await readFile(path.join(f.relayRoot, "control", "orchestrator-operations.ndjson"), "utf8");
       expect(log).toMatch(/failed-paused\.resumed/);
+      expect(log).toMatch(/same-item-history/);
+      expect(log).toMatch(/"preserve":true/);
       expect(log).toMatch(/reviewed and fixed/);
+    } finally {
+      await rm(f.root, { recursive: true, force: true });
+    }
+  });
+
+  windowsIt("resumes failed-paused state with an explicit failure-history discard", async () => {
+    const f = await fixture("resume-discard-failures");
+    try {
+      await mkdir(path.join(f.relayRoot, "state"), { recursive: true });
+      await writeFile(
+        path.join(f.relayRoot, "state", "orchestrator-state.json"),
+        JSON.stringify({
+          phase: "failed-paused",
+          currentItem: { id: "W0001", priority: "P0", text: "Build the thing", line: 4 },
+          consecutiveFailures: 2,
+          failures: [{ item: "W0001", command: "old", exitCode: 1, output: "old failure" }],
+          failureReport: path.join(f.relayRoot, "control", "failure-reports", "W0001.md"),
+          step: "failed-paused",
+          updatedAt: new Date().toISOString()
+        }, null, 2),
+        "utf8",
+      );
+      const result = await run(f.root, f.relayRoot, commands(f.root), ["--resume", "--discard-failures"]);
+      expect(result.exitCode).toBe(0);
+      const state = JSON.parse(await readFile(path.join(f.relayRoot, "state", "orchestrator-state.json"), "utf8"));
+      expect(state).toMatchObject({ phase: "idle", currentItem: { id: "W0001" }, consecutiveFailures: 0, step: null });
+      expect(state.failures).toEqual([]);
+      const log = await readFile(path.join(f.relayRoot, "control", "orchestrator-operations.ndjson"), "utf8");
+      expect(log).toMatch(/discard-failures-requested/);
+    } finally {
+      await rm(f.root, { recursive: true, force: true });
+    }
+  });
+
+  windowsIt("clears stale failure history when resume has no current item", async () => {
+    const f = await fixture("resume-no-current-item");
+    try {
+      await mkdir(path.join(f.relayRoot, "state"), { recursive: true });
+      await writeFile(
+        path.join(f.relayRoot, "state", "orchestrator-state.json"),
+        JSON.stringify({
+          phase: "failed-paused",
+          currentItem: null,
+          consecutiveFailures: 2,
+          failures: [{ item: "W0001", command: "old", exitCode: 1, output: "old failure" }],
+          failureReport: path.join(f.relayRoot, "control", "failure-reports", "W0001.md"),
+          step: "failed-paused",
+          updatedAt: new Date().toISOString()
+        }, null, 2),
+        "utf8",
+      );
+      const result = await run(f.root, f.relayRoot, commands(f.root), ["--resume"]);
+      expect(result.exitCode).toBe(0);
+      const state = JSON.parse(await readFile(path.join(f.relayRoot, "state", "orchestrator-state.json"), "utf8"));
+      expect(state).toMatchObject({ phase: "idle", currentItem: null, consecutiveFailures: 0, step: null });
+      expect(state.failures).toEqual([]);
+      const log = await readFile(path.join(f.relayRoot, "control", "orchestrator-operations.ndjson"), "utf8");
+      expect(log).toMatch(/no-current-item/);
+
+      const retry = await run(f.root, f.relayRoot, commands(f.root));
+      expect(retry.exitCode).toBe(0);
+      expect(await labels(f.root)).toEqual(["implement", "test", "packageB", "startB", "verifyRuntime", "rebuildA", "verifyA", "stopB"]);
+      const completedState = JSON.parse(await readFile(path.join(f.relayRoot, "state", "orchestrator-state.json"), "utf8"));
+      expect(completedState.failures).toEqual([]);
+    } finally {
+      await rm(f.root, { recursive: true, force: true });
+    }
+  });
+
+  windowsIt("clears stale failure history when resume item differs from recorded failures", async () => {
+    const f = await fixture("resume-item-mismatch");
+    try {
+      await mkdir(path.join(f.relayRoot, "state"), { recursive: true });
+      await writeFile(
+        path.join(f.relayRoot, "state", "orchestrator-state.json"),
+        JSON.stringify({
+          phase: "failed-paused",
+          currentItem: { id: "W0001", priority: "P0", text: "Build the thing", line: 4 },
+          consecutiveFailures: 2,
+          failures: [{ item: "W9999", command: "old", exitCode: 1, output: "old failure" }],
+          failureReport: path.join(f.relayRoot, "control", "failure-reports", "W9999.md"),
+          step: "failed-paused",
+          updatedAt: new Date().toISOString()
+        }, null, 2),
+        "utf8",
+      );
+      const result = await run(f.root, f.relayRoot, commands(f.root), ["--resume"]);
+      expect(result.exitCode).toBe(0);
+      const state = JSON.parse(await readFile(path.join(f.relayRoot, "state", "orchestrator-state.json"), "utf8"));
+      expect(state.failures).toEqual([]);
+      const log = await readFile(path.join(f.relayRoot, "control", "orchestrator-operations.ndjson"), "utf8");
+      expect(log).toMatch(/failure-item-mismatch:W9999/);
     } finally {
       await rm(f.root, { recursive: true, force: true });
     }
@@ -266,6 +360,7 @@ describe("single reciprocal orchestrator", () => {
       expect(await readFile(path.join(f.relayRoot, "control", "WISHLIST.md"), "utf8")).toMatch(/- \[x\] W0001 .* DONE .*stable=/);
       const state = JSON.parse(await readFile(path.join(f.relayRoot, "state", "orchestrator-state.json"), "utf8"));
       expect(state).toMatchObject({ phase: "idle", currentItem: null, stableCommit: head, consecutiveFailures: 0 });
+      expect(state.failures).toEqual([]);
       const log = await readFile(path.join(f.relayRoot, "control", "orchestrator-operations.ndjson"), "utf8");
       expect(log).toMatch(/failed-paused\.accepted-finalized/);
     } finally {

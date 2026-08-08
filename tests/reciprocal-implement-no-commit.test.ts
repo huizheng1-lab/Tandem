@@ -771,6 +771,44 @@ describe("D200 reciprocal implement script", () => {
     }
   });
 
+  windowsIt("renders failure history preserved by a same-item resume in the next prompt", async () => {
+    const f = await claimedImplementFixture("d217-preserved-resume-prompt");
+    try {
+      const promptLog = path.join(f.helperRoot, "d217-preserved-prompt.txt");
+      const previousCommit = "36b173136b173136b173136b173136b173136b1731";
+      await writeFile(f.statePath, JSON.stringify({
+        phase: "improving",
+        currentItem: { id: "W9202", priority: "P0", text: "Create isolated evidence" },
+        consecutiveFailures: 0,
+        lastImplementCommit: previousCommit,
+        failures: [{
+          item: "W9202",
+          command: "npm test -- tests/tools.test.ts",
+          exitCode: 1,
+          output: "D217 preserved failure from reviewed failed-paused resume",
+          attemptCommit: previousCommit,
+        }],
+      }, null, 2), "utf8");
+      await execa("git", ["-C", f.root, "add", "state/orchestrator-state.json"]);
+      await execa("git", ["-C", f.root, "commit", "-m", "add D217 preserved retry state"]);
+      const agent = await promptCapturingAgentStub(f.helperRoot, "d217-preserved-agent", promptLog);
+      const result = spawnSync("node", [implementScript, "--repo", f.root, "--state-path", f.statePath, "--claimed-item-id", "W9202", "--agent-bin", agent], {
+        cwd: f.root,
+        encoding: "utf8",
+      });
+      expect(result.status).toBe(0);
+      const prompt = await readFile(promptLog, "utf8");
+      expect(prompt).toContain("=== RETRY FAILURE FEEDBACK - FIX THIS FIRST ===");
+      expect(prompt).toContain("Retry round: 2");
+      expect(prompt).toContain("Failed command: npm test -- tests/tools.test.ts");
+      expect(prompt).toContain("D217 preserved failure from reviewed failed-paused resume");
+      expect(prompt).toContain("The item text is:\nCreate isolated evidence");
+    } finally {
+      await rm(f.root, { recursive: true, force: true });
+      await rm(f.helperRoot, { recursive: true, force: true });
+    }
+  });
+
   windowsIt("truncates oversized retry output to the documented tail while preserving the item text", async () => {
     const f = await claimedImplementFixture("d215-retry-truncate");
     try {
