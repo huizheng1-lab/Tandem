@@ -324,12 +324,13 @@ export async function startBackgroundProcessBridge(
       return;
     }
     let body = "";
-    // Capture the session context when the authenticated request arrives. The
-    // bridge is shared by sequential CLI calls, but cleanup or a subsequent
-    // call may refresh the mutable bridge record while this request body is
-    // still being received. A background start must be authorized against the
-    // context that admitted this request, never a later one.
-    const requestContext = backgroundBridge;
+    // Snapshot the session context when the authenticated request arrives. The
+    // bridge is shared by sequential CLI calls, but a subsequent call may
+    // refresh permissionMode/readOnly while this request body is still being
+    // received. Authorization must use the context that admitted this request.
+    const requestContext = backgroundBridge
+      ? { cwd: backgroundBridge.cwd, permissionMode: backgroundBridge.permissionMode, permissionBridge: backgroundBridge.permissionBridge, readOnly: backgroundBridge.readOnly }
+      : undefined;
     request.setEncoding("utf8");
     request.on("data", (chunk) => { body += chunk; });
     request.on("end", async () => {

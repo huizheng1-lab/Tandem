@@ -547,6 +547,42 @@ describe("tools", () => {
     expect(listBackgroundProcesses()).toEqual([]);
   });
 
+  it("keeps the admitted CLI authorization context for an in-flight start", async () => {
+    let approveRequest: (() => void) | undefined;
+    let approvalSeen: (() => void) | undefined;
+    const approvalObserved = new Promise<void>((resolve) => { approvalSeen = resolve; });
+    const bridge = await startBackgroundProcessBridge(undefined, "ask", {
+      approve: async () => {
+        approvalSeen?.();
+        await new Promise<void>((resolve) => { approveRequest = resolve; });
+        return true;
+      }
+    });
+    try {
+      const request = fetch(`http://127.0.0.1:${bridge.port}/background`, {
+        method: "POST",
+        headers: { authorization: `Bearer ${bridge.token}`, "content-type": "application/json" },
+        body: JSON.stringify({ action: "start", command: "node -e \"setTimeout(()=>{},3000)\"", cwd: process.cwd() })
+      });
+      await approvalObserved;
+
+      // Refreshing the shared bridge for a read-only CLI turn must not mutate
+      // the authorization decision already in progress for the writable turn.
+      await startBackgroundProcessBridge(process.cwd(), "ask", undefined, true);
+      approveRequest?.();
+      const response = await request;
+      const body = await response.json() as { ok?: boolean; result?: { output?: string }; error?: string };
+      expect(response.ok).toBe(true);
+      expect(body.ok).toBe(true);
+      const id = body.result?.output?.match(/Started background process (\S+)/)?.[1];
+      expect(id).toBeTruthy();
+      await backgroundProcessTool("stop", id);
+    } finally {
+      approveRequest?.();
+      await cleanupBackgroundProcesses();
+    }
+  });
+
   it.runIf(process.platform === "win32")("cleans up shell child processes that outlive their parent", async () => {
     const cwd = await tempDir();
     await writeFile(
