@@ -339,6 +339,9 @@ export function validateStreamFileOwnership(plan: BuildPlan): string[] {
 // before a worker is dispatched.
 export function validateExecutionContextClaims(plan: BuildPlan): string[] {
   const errors: string[] = [];
+  // Models often wrap these claims across lines or vary the spelling of read-only.
+  // Normalize whitespace once so validation is about the claim, not its formatting.
+  const normalizeClaim = (value: string): string => value.replace(/\s+/g, " ").trim();
   // Keep this semantic check deliberately independent of the exact wording used by a
   // provider. A planner may say "the environment is read-only", "the workspace cannot be
   // written", or "execution is impossible from this turn"; all of those incorrectly promote
@@ -357,12 +360,13 @@ export function validateExecutionContextClaims(plan: BuildPlan): string[] {
   const readOnlyEnvironment =
     /\b(?:environment|workspace|filesystem|file system)\b[\s\S]{0,80}\b(?:read[ -]?only|not writable|cannot be written|can't be written|no write)\b/i;
   for (const constraint of plan.constraints) {
-    if (readOnlyClaim.test(constraint) || planningContextImpossibility.test(constraint) || readOnlyEnvironment.test(constraint)) {
+    const normalized = normalizeClaim(constraint);
+    if (readOnlyClaim.test(normalized) || planningContextImpossibility.test(normalized) || readOnlyEnvironment.test(normalized)) {
       errors.push(`constraint incorrectly treats the leader's planning-time read-only tools as a job limitation: "${constraint}"`);
     }
   }
   for (const task of plan.tasks) {
-    if (/^\s*blocked\b/i.test(task.description)) {
+    if (/^\s*blocked\b/i.test(normalizeClaim(task.description))) {
       errors.push(`task "${task.id}" is pre-declared blocked; blocked tasks must be corrected before execution`);
     }
   }
