@@ -108,7 +108,10 @@ FIRST, classify the request:
 When the user explicitly asks for a direct answer, it is ALWAYS (a). Mixed requests are implementation.
 
 Return JSON matching the provided schema. For question, set kind="question" and answer only. For implementation, set kind="implementation" and plan only.
-The plan verification field must contain exact runnable shell commands only, one command per entry.`,
+The plan verification field must contain exact runnable shell commands only, one command per entry.
+The read-only tools described above apply only to this planning turn. The worker runs later with
+the session permission mode and may read, write, and execute its available tools. Never turn a
+planning-time inability to write or run into a plan constraint or a task described as blocked.`,
     prompt: `Request: ${input.request}${attachmentBlock}${optionalSection("Conversation so far", input.history)}${optionalSection("Standing goals", goals)}${retryFeedbackLine(input.previousAttemptError)}`
   };
 }
