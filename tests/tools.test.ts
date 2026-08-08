@@ -1,9 +1,9 @@
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, describe, expect, it } from "vitest";
 import { editFileTool, readFileTool, writeFileTool } from "../src/tools/fs.js";
 import type { ToolActivityEvent } from "../src/tools/fs.js";
 import { makeToolSet } from "../src/tools/index.js";
@@ -18,6 +18,8 @@ async function tempDir(): Promise<string> {
 }
 
 const fixtureDirs = new Set<string>();
+const fixturePids = new Map<number, string>();
+const fixtureSurvivors: Array<{ context: string; label: string; pid: number }> = [];
 
 async function waitForFile(filePath: string, timeoutMs = 3000): Promise<string> {
   const deadline = Date.now() + timeoutMs;
@@ -89,6 +91,68 @@ function killPidIfAlive(pid: number): void {
   }
 }
 
+function isProcessAlive(pid: number): boolean {
+  if (!Number.isInteger(pid) || pid <= 0 || pid === process.pid) return false;
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function killFixturePid(pid: number): void {
+  if (!Number.isInteger(pid) || pid <= 0 || pid === process.pid) return;
+  if (process.platform === "win32") {
+    spawnSync("taskkill.exe", ["/T", "/F", "/PID", String(pid)], { encoding: "utf8", windowsHide: true });
+    return;
+  }
+  killPidIfAlive(pid);
+}
+
+function recordFixturePid(pid: number | undefined, label: string): void {
+  if (Number.isInteger(pid) && pid! > 0 && pid !== process.pid) fixturePids.set(pid!, label);
+}
+
+async function recordFixturePidFile(cwd: string, filename: string, label: string, timeoutMs = 3000): Promise<number> {
+  const pid = await readNumberFile(path.join(cwd, filename), timeoutMs);
+  recordFixturePid(pid, label);
+  return pid;
+}
+
+async function recordNestedFixturePids(cwd: string, timeoutMs = 3000): Promise<{ launcherPid: number; childPid: number; grandchildPid: number }> {
+  const pids: { launcherPid: number; childPid: number; grandchildPid: number } = {
+    launcherPid: 0,
+    childPid: 0,
+    grandchildPid: 0,
+  };
+  pids.launcherPid = await recordFixturePidFile(cwd, "launcher.pid", "launcher.cjs", timeoutMs);
+  pids.childPid = await recordFixturePidFile(cwd, "child.pid", "child.cjs", timeoutMs);
+  pids.grandchildPid = await recordFixturePidFile(cwd, "grandchild.pid", "grandchild", timeoutMs);
+  return pids;
+}
+
+async function killRecordedFixtureProcesses(pids: Array<number | undefined>): Promise<void> {
+  for (const pid of pids) {
+    if (!Number.isInteger(pid)) continue;
+    killFixturePid(pid!);
+    await waitForProcessGone(pid!).catch(() => {});
+  }
+}
+
+async function sweepRecordedFixtureProcesses(context: string): Promise<void> {
+  for (const [pid, label] of fixturePids) {
+    if (!isProcessAlive(pid)) {
+      fixturePids.delete(pid);
+      continue;
+    }
+    fixtureSurvivors.push({ context, label, pid });
+    killFixturePid(pid);
+    await waitForProcessGone(pid).catch(() => {});
+    fixturePids.delete(pid);
+  }
+}
+
 async function cleanupFixtureDir(cwd: string): Promise<void> {
   let entries: string[] = [];
   try {
@@ -125,9 +189,20 @@ async function rmWithRetry(cwd: string, attempts = 5): Promise<void> {
 
 afterEach(async () => {
   await cleanupBackgroundProcesses();
+  await sweepRecordedFixtureProcesses("afterEach");
   const dirs = [...fixtureDirs];
   fixtureDirs.clear();
   await Promise.all(dirs.map((dir) => cleanupFixtureDir(dir)));
+});
+
+afterAll(async () => {
+  await sweepRecordedFixtureProcesses("afterAll");
+  if (fixtureSurvivors.length > 0) {
+    const details = fixtureSurvivors
+      .map(({ context, label, pid }) => `${context}: ${label} pid ${pid}`)
+      .join("; ");
+    throw new Error(`Nested process fixture survivors were reaped after tests: ${details}`);
+  }
 });
 
 async function writeNestedProcessFixture(cwd: string): Promise<void> {
@@ -136,6 +211,7 @@ async function writeNestedProcessFixture(cwd: string): Promise<void> {
     [
       'const { spawn } = require("node:child_process");',
       'const fs = require("node:fs");',
+      'fs.writeFileSync("launcher.pid", String(process.pid));',
       'const child = spawn(process.execPath, ["child.cjs"], { stdio: "ignore" });',
       'fs.writeFileSync("child.pid", String(child.pid));',
       "setInterval(() => {}, 1000);"
@@ -399,35 +475,54 @@ describe("tools", () => {
   it.runIf(process.platform === "win32")("stops a background process and its descendants", async () => {
     const cwd = await tempDir();
     await writeNestedProcessFixture(cwd);
-    const result = await bashTool({ cwd, permissionMode: "yolo" }, "node launcher.cjs", 120000, true);
-    const id = parseBackgroundId(result.output);
-    const rootPid = listBackgroundProcesses().find((entry) => entry.id === id)?.pid;
-    const childPid = await readNumberFile(path.join(cwd, "child.pid"));
-    const grandchildPid = await readNumberFile(path.join(cwd, "grandchild.pid"));
+    let id = "";
+    let rootPid: number | undefined;
+    let launcherPid: number | undefined;
+    let childPid: number | undefined;
+    let grandchildPid: number | undefined;
+    try {
+      const result = await bashTool({ cwd, permissionMode: "yolo" }, "node launcher.cjs", 120000, true);
+      id = parseBackgroundId(result.output);
+      rootPid = listBackgroundProcesses().find((entry) => entry.id === id)?.pid;
+      recordFixturePid(rootPid, "background launcher root");
+      ({ launcherPid, childPid, grandchildPid } = await recordNestedFixturePids(cwd));
 
-    await backgroundProcessTool("stop", id);
+      await backgroundProcessTool("stop", id);
 
-    if (rootPid) await waitForProcessGone(rootPid);
-    await expectProcessGone(childPid);
-    await expectProcessGone(grandchildPid);
-    expect(listBackgroundProcesses().some((entry) => entry.id === id)).toBe(false);
+      if (rootPid) await waitForProcessGone(rootPid);
+      await expectProcessGone(childPid);
+      await expectProcessGone(grandchildPid);
+      expect(listBackgroundProcesses().some((entry) => entry.id === id)).toBe(false);
+    } finally {
+      if (id) await backgroundProcessTool("stop", id).catch(() => "");
+      await killRecordedFixtureProcesses([rootPid, launcherPid, childPid, grandchildPid]);
+    }
   }, 15000);
 
   it.runIf(process.platform === "win32")("cleanupBackgroundProcesses sweeps unstopped background process trees", async () => {
     const cwd = await tempDir();
     await writeNestedProcessFixture(cwd);
-    const result = await bashTool({ cwd, permissionMode: "yolo" }, "node launcher.cjs", 120000, true);
-    const id = parseBackgroundId(result.output);
-    const rootPid = listBackgroundProcesses().find((entry) => entry.id === id)?.pid;
-    const childPid = await readNumberFile(path.join(cwd, "child.pid"));
-    const grandchildPid = await readNumberFile(path.join(cwd, "grandchild.pid"));
+    let rootPid: number | undefined;
+    let launcherPid: number | undefined;
+    let childPid: number | undefined;
+    let grandchildPid: number | undefined;
+    try {
+      const result = await bashTool({ cwd, permissionMode: "yolo" }, "node launcher.cjs", 120000, true);
+      const id = parseBackgroundId(result.output);
+      rootPid = listBackgroundProcesses().find((entry) => entry.id === id)?.pid;
+      recordFixturePid(rootPid, "background cleanup root");
+      ({ launcherPid, childPid, grandchildPid } = await recordNestedFixturePids(cwd));
 
-    await cleanupBackgroundProcesses();
+      await cleanupBackgroundProcesses();
 
-    if (rootPid) await waitForProcessGone(rootPid);
-    await expectProcessGone(childPid);
-    await expectProcessGone(grandchildPid);
-    expect(listBackgroundProcesses()).toEqual([]);
+      if (rootPid) await waitForProcessGone(rootPid);
+      await expectProcessGone(childPid);
+      await expectProcessGone(grandchildPid);
+      expect(listBackgroundProcesses()).toEqual([]);
+    } finally {
+      await cleanupBackgroundProcesses();
+      await killRecordedFixtureProcesses([rootPid, launcherPid, childPid, grandchildPid]);
+    }
   }, 15000);
 
   it.runIf(process.platform === "win32")("does not leave background orphans after the owning Node process exits", async () => {
@@ -452,20 +547,29 @@ describe("tools", () => {
       "utf8"
     );
 
-    const owner = spawn(process.execPath, ["--import", "tsx", runner, cwd], { cwd: process.cwd(), windowsHide: true });
-    await new Promise<void>((resolve, reject) => {
-      let stderr = "";
-      owner.stderr.on("data", (chunk) => { stderr += chunk; });
-      owner.on("error", reject);
-      owner.on("exit", (code) => code === 0 ? resolve() : reject(new Error(`owner exited ${code}: ${stderr}`)));
-    });
-    const { pid } = JSON.parse(await readFile(path.join(cwd, "owner-bg.json"), "utf8")) as { id: string; pid?: number };
-    const childPid = await readNumberFile(path.join(cwd, "child.pid"), 5000);
-    const grandchildPid = await readNumberFile(path.join(cwd, "grandchild.pid"), 5000);
+    let pid: number | undefined;
+    let launcherPid: number | undefined;
+    let childPid: number | undefined;
+    let grandchildPid: number | undefined;
+    try {
+      const owner = spawn(process.execPath, ["--import", "tsx", runner, cwd], { cwd: process.cwd(), windowsHide: true });
+      recordFixturePid(owner.pid, "owner-exits runner");
+      await new Promise<void>((resolve, reject) => {
+        let stderr = "";
+        owner.stderr.on("data", (chunk) => { stderr += chunk; });
+        owner.on("error", reject);
+        owner.on("exit", (code) => code === 0 ? resolve() : reject(new Error(`owner exited ${code}: ${stderr}`)));
+      });
+      ({ pid } = JSON.parse(await readFile(path.join(cwd, "owner-bg.json"), "utf8")) as { id: string; pid?: number });
+      recordFixturePid(pid, "owner background root");
+      ({ launcherPid, childPid, grandchildPid } = await recordNestedFixturePids(cwd, 5000));
 
-    if (pid) await waitForProcessGone(pid);
-    await expectProcessGone(childPid);
-    await expectProcessGone(grandchildPid);
+      if (pid) await waitForProcessGone(pid);
+      await expectProcessGone(childPid);
+      await expectProcessGone(grandchildPid);
+    } finally {
+      await killRecordedFixtureProcesses([pid, launcherPid, childPid, grandchildPid]);
+    }
   }, 20000);
 
   it("lists real background status transitions for exited and stopped commands", async () => {
@@ -610,14 +714,21 @@ describe("tools", () => {
     const cwd = await tempDir();
     await writeNestedProcessFixture(cwd);
 
-    const result = await bashTool({ cwd, permissionMode: "yolo" }, "node launcher.cjs", 1500);
-    const childPid = Number(await readFile(path.join(cwd, "child.pid"), "utf8"));
-    const grandchildPid = Number(await readFile(path.join(cwd, "grandchild.pid"), "utf8"));
+    let launcherPid: number | undefined;
+    let childPid: number | undefined;
+    let grandchildPid: number | undefined;
+    try {
+      const result = await bashTool({ cwd, permissionMode: "yolo" }, "node launcher.cjs", 1500);
+      ({ launcherPid, childPid, grandchildPid } = await recordNestedFixturePids(cwd));
 
-    expect(result.passed).toBe(false);
-    expect(result.output).toContain("timed out");
-    await expectProcessGone(childPid);
-    await expectProcessGone(grandchildPid);
+      expect(result.passed).toBe(false);
+      expect(result.output).toContain("timed out");
+      await expectProcessGone(launcherPid);
+      await expectProcessGone(childPid);
+      await expectProcessGone(grandchildPid);
+    } finally {
+      await killRecordedFixtureProcesses([launcherPid, childPid, grandchildPid]);
+    }
   }, 15000);
 
   it.runIf(process.platform === "win32")("returns by the hard deadline when a detached descendant holds the output pipe open", async () => {
@@ -637,13 +748,19 @@ describe("tools", () => {
     const toolTimeoutMs = 500;
     const startedAt = Date.now();
 
-    const result = await bashTool({ cwd, permissionMode: "yolo" }, "node pipe-parent.cjs", toolTimeoutMs);
-    const elapsedMs = Date.now() - startedAt;
+    let childPid: number | undefined;
+    try {
+      const result = await bashTool({ cwd, permissionMode: "yolo" }, "node pipe-parent.cjs", toolTimeoutMs);
+      const elapsedMs = Date.now() - startedAt;
+      childPid = await recordFixturePidFile(cwd, "child.pid", "pipe-parent child");
 
-    expect(result.passed).toBe(false);
-    expect(result.output).toContain(`Command timed out after ${toolTimeoutMs}ms`);
-    expect(elapsedMs).toBeGreaterThanOrEqual(toolTimeoutMs);
-    expect(elapsedMs).toBeLessThan(toolTimeoutMs + BASH_SETTLE_GRACE_MS + 2000);
+      expect(result.passed).toBe(false);
+      expect(result.output).toContain(`Command timed out after ${toolTimeoutMs}ms`);
+      expect(elapsedMs).toBeGreaterThanOrEqual(toolTimeoutMs);
+      expect(elapsedMs).toBeLessThan(toolTimeoutMs + BASH_SETTLE_GRACE_MS + 2000);
+    } finally {
+      await killRecordedFixtureProcesses([childPid]);
+    }
   }, 10000);
 
   it.runIf(process.platform === "win32")("aborts running shell commands and kills descendants promptly", async () => {
@@ -651,17 +768,26 @@ describe("tools", () => {
     await writeNestedProcessFixture(cwd);
     const controller = new AbortController();
     const startedAt = Date.now();
+    let launcherPid: number | undefined;
+    let childPid: number | undefined;
+    let grandchildPid: number | undefined;
     const run = bashTool({ cwd, permissionMode: "yolo", abortSignal: controller.signal }, "node launcher.cjs", 60000);
-    const childPid = Number(await waitForFile(path.join(cwd, "child.pid")));
-    const grandchildPid = Number(await waitForFile(path.join(cwd, "grandchild.pid")));
+    try {
+      ({ launcherPid, childPid, grandchildPid } = await recordNestedFixturePids(cwd));
 
-    controller.abort();
-    const result = await run;
+      controller.abort();
+      const result = await run;
 
-    expect(Date.now() - startedAt).toBeLessThan(5000);
-    expect(result.passed).toBe(false);
-    expect(result.output).toContain("Command aborted");
-    await expectProcessGone(childPid);
-    await expectProcessGone(grandchildPid);
+      expect(Date.now() - startedAt).toBeLessThan(5000);
+      expect(result.passed).toBe(false);
+      expect(result.output).toContain("Command aborted");
+      await expectProcessGone(launcherPid);
+      await expectProcessGone(childPid);
+      await expectProcessGone(grandchildPid);
+    } finally {
+      controller.abort();
+      await run.catch(() => undefined);
+      await killRecordedFixtureProcesses([launcherPid, childPid, grandchildPid]);
+    }
   }, 15000);
 });
