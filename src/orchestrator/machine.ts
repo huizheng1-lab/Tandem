@@ -639,12 +639,6 @@ export async function runOrchestration(options: RunOptions): Promise<RunResult> 
             return { phase: "DONE", summary: message, plan, reports, verdicts, takeover: false };
           }
           emit(errorEvent(`worker could not produce a valid CompletionReport: ${String(error)}`, error));
-          if (currentRound === 1 && reports.length === 0) {
-            const message = `Worker dispatch produced no CompletionReport before takeover could be considered: ${String(error)}`;
-            emit({ type: "notice", message });
-            transition("DONE", message, currentRound);
-            return { phase: "DONE", summary: message, plan, reports, verdicts, takeover: false };
-          }
           return runTakeover("worker artifact failure; leader takeover");
         }
       }
