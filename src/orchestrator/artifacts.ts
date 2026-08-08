@@ -339,9 +339,20 @@ export function validateStreamFileOwnership(plan: BuildPlan): string[] {
 // before a worker is dispatched.
 export function validateExecutionContextClaims(plan: BuildPlan): string[] {
   const errors: string[] = [];
-  const readOnlyClaim = /(?:read[ -]?only|cannot|can't|unable|not able|no)\b[\s\S]{0,80}\b(?:write|writ(?:e|ing)|modify|create|run|start|execute|output|filesystem|file system)/i;
+  // Keep this semantic check deliberately independent of the exact wording used by a
+  // provider. A planner may say "the environment is read-only", "the workspace cannot be
+  // written", or "execution is impossible from this turn"; all of those incorrectly promote
+  // the planner's temporary tool policy into a worker/job limitation. Do not reject ordinary
+  // implementation constraints such as "do not modify package-lock.json" unless they make an
+  // execution-context impossibility claim.
+  const readOnlyClaim =
+    /\b(?:read[ -]?only|inspection[ -]?only)\b[\s\S]{0,120}\b(?:cannot|can't|unable|not able|impossible|blocked|no)\b[\s\S]{0,80}\b(?:write|writ(?:e|ing)|modify|create|run|start|execute|output|filesystem|file system|workspace)/i;
+  const directWriteImpossibility =
+    /\b(?:cannot|can't|unable|not able|impossible|blocked|no)\b[\s\S]{0,80}\b(?:write|writ(?:e|ing)|modify|create|run|start|execute|output)\b/i;
+  const readOnlyEnvironment =
+    /\b(?:environment|workspace|filesystem|file system)\b[\s\S]{0,80}\b(?:read[ -]?only|not writable|cannot be written|can't be written|no write)\b/i;
   for (const constraint of plan.constraints) {
-    if (readOnlyClaim.test(constraint)) {
+    if (readOnlyClaim.test(constraint) || directWriteImpossibility.test(constraint) || readOnlyEnvironment.test(constraint)) {
       errors.push(`constraint incorrectly treats the leader's planning-time read-only tools as a job limitation: "${constraint}"`);
     }
   }
