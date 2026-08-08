@@ -6,6 +6,7 @@ import { ToolContext, resolveInside } from "./fs.js";
 import { ensurePermission, PermissionBridge } from "./permissions.js";
 import { assertSafeBash } from "./protection.js";
 import { sanitizePromptText } from "./sanitize.js";
+import { applyResolvedEnvironment } from "../environment/preflight.js";
 
 export interface ShellResult {
   command: string;
@@ -187,9 +188,11 @@ function backgroundId(): string {
 }
 
 async function startBackgroundProcess(ctx: ToolContext, command: string): Promise<ShellResult> {
+  const executionEnv = ctx.env ?? process.env;
+  if (ctx.environment) applyResolvedEnvironment(executionEnv, ctx.environment);
   const subprocess = execa(command, {
     cwd: ctx.cwd,
-    env: ctx.env,
+    env: executionEnv,
     shell: true,
     detached: process.platform !== "win32",
     reject: false,
@@ -411,6 +414,8 @@ export async function bashTool(ctx: ToolContext, command: string, timeoutMs = DE
   assertSafeBash(ctx.cwd, command);
   await ensurePermission(ctx.permissionMode, { action: "bash", target: command }, ctx.permissionBridge);
   if (runInBackground) return startBackgroundProcess(ctx, command);
+  const executionEnv = ctx.env ?? process.env;
+  if (ctx.environment) applyResolvedEnvironment(executionEnv, ctx.environment);
   let tracker: DescendantTracker | undefined;
   let rootPid: number | undefined;
   let aborted = false;
@@ -422,7 +427,7 @@ export async function bashTool(ctx: ToolContext, command: string, timeoutMs = DE
   try {
     if (ctx.abortSignal?.aborted) throw new Error("Command aborted.");
     const effectiveTimeout = effectiveBashTimeout(timeoutMs);
-    const subprocess = execa(command, { cwd: ctx.cwd, env: ctx.env, shell: true, timeout: effectiveTimeout, reject: false, all: true, cleanup: true, windowsHide: true });
+    const subprocess = execa(command, { cwd: ctx.cwd, env: executionEnv, shell: true, timeout: effectiveTimeout, reject: false, all: true, cleanup: true, windowsHide: true });
     rootPid = subprocess.pid;
     tracker = startDescendantTracker(rootPid);
     let forceSettle: (() => void) | undefined;

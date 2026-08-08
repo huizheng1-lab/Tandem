@@ -7,10 +7,13 @@ import { mediaContentForFile } from "../session/attachments.js";
 import type { ContentPart } from "../session/attachments.js";
 import type { ModelEntry } from "../providers/registry.js";
 import { sanitizePromptText } from "./sanitize.js";
+import type { ResolvedEnvironment } from "../environment/types.js";
 
 export interface ToolContext {
   cwd: string;
   env?: NodeJS.ProcessEnv;
+  /** The preflight snapshot shared by worker, takeover, and verification. */
+  environment?: ResolvedEnvironment;
   permissionMode: PermissionMode;
   permissionBridge?: PermissionBridge;
   recordTouchedPath?: (filePath: string) => void;

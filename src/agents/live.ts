@@ -439,6 +439,7 @@ export async function createLiveAgents(options: LiveAgentOptions): Promise<Agent
   const toolContext = {
     cwd: options.cwd,
     env: options.env,
+    environment: undefined as ResolvedEnvironment | undefined,
     permissionMode: options.config.permissionMode,
     permissionBridge: options.permissionBridge,
     recordTouchedPath: options.recordTouchedPath,
@@ -477,6 +478,10 @@ export async function createLiveAgents(options: LiveAgentOptions): Promise<Agent
       try {
         const result = await preflightEnvironment({ commands, env: options.env });
         resolvedEnvironment = result.environment;
+        // Keep the same snapshot on the context used by every in-process leader
+        // and worker shell tool. The env PATH update remains important for CLI
+        // workers, while this explicit object prevents later PATH drift in tools.
+        toolContext.environment = result.environment;
         const selected = Object.values(result.environment.tools)
           .map((tool) => tool?.executablePath)
           .filter((value): value is string => Boolean(value));
