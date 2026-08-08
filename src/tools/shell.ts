@@ -321,6 +321,12 @@ export async function startBackgroundProcessBridge(
       return;
     }
     let body = "";
+    // Capture the session context when the authenticated request arrives. The
+    // bridge is shared by sequential CLI calls, but cleanup or a subsequent
+    // call may refresh the mutable bridge record while this request body is
+    // still being received. A background start must be authorized against the
+    // context that admitted this request, never a later one.
+    const requestContext = backgroundBridge;
     request.setEncoding("utf8");
     request.on("data", (chunk) => { body += chunk; });
     request.on("end", async () => {
@@ -328,9 +334,9 @@ export async function startBackgroundProcessBridge(
         const input = JSON.parse(body) as { action: BackgroundBridgeAction; id?: string; command?: string; cwd?: string };
         const result = input.action === "start"
           ? await bashTool({
-            cwd: backgroundBridge?.cwd ?? input.cwd ?? process.cwd(),
-            permissionMode: backgroundBridge?.permissionMode ?? "yolo",
-            permissionBridge: backgroundBridge?.permissionBridge
+            cwd: requestContext?.cwd ?? input.cwd ?? process.cwd(),
+            permissionMode: requestContext?.permissionMode ?? "yolo",
+            permissionBridge: requestContext?.permissionBridge
           }, input.command ?? "", DEFAULT_BASH_TIMEOUT_MS, true)
           : await backgroundProcessTool(input.action, input.id);
         response.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify({ ok: true, result }));
