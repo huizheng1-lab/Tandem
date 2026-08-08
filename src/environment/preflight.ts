@@ -7,6 +7,8 @@ import type { RequestedCapability, ResolvedEnvironment } from "./types.js";
 export interface EnvironmentPreflightResult {
   environment: ResolvedEnvironment;
   env: NodeJS.ProcessEnv;
+  /** The bounded installed-runtime scan used by this preflight. */
+  installed: InstalledRuntimeCandidates;
   /** Capabilities named by the plan/command and therefore strict. */
   requiredCapabilities: RequestedCapability[];
   /** Every capability attempted, including best-effort standard toolchain probes. */
@@ -58,7 +60,7 @@ export function commandCapabilities(commands: string[], platform: NodeJS.Platfor
   return capabilities;
 }
 
-function installedDirectories(env: NodeJS.ProcessEnv, platform: NodeJS.Platform): { ffmpegDirectories: string[]; codexDirectories: string[] } {
+export function installedRuntimeCandidates(env: NodeJS.ProcessEnv, platform: NodeJS.Platform): InstalledRuntimeCandidates {
   if (platform !== "win32") return { ffmpegDirectories: [], codexDirectories: [] };
   const roots = [env.LOCALAPPDATA, env.ProgramFiles, env["ProgramW6432"], env["ProgramFiles(x86)"]]
     .filter((value): value is string => Boolean(value))
@@ -90,12 +92,16 @@ export async function preflightEnvironment(options: {
   platform?: NodeJS.Platform;
   resolve?: typeof resolveEnvironment;
   installed?: InstalledRuntimeCandidates;
+  /** Set when the caller has already memoized the bounded installed scan. */
+  skipInstalledDirectoryDiscovery?: boolean;
   /** Best-effort command discovery must not turn an optional miss into a blocker. */
   strict?: boolean;
 }): Promise<EnvironmentPreflightResult> {
   const platform = options.platform ?? process.platform;
   const requestedCapabilities = commandCapabilities(options.commands, platform);
-  const discovered = installedDirectories(options.env, platform);
+  const discovered = options.skipInstalledDirectoryDiscovery
+    ? { ffmpegDirectories: [], codexDirectories: [] }
+    : installedRuntimeCandidates(options.env, platform);
   const installed: InstalledRuntimeCandidates = {
     ...discovered,
     ...options.installed,
@@ -126,6 +132,7 @@ export async function preflightEnvironment(options: {
   return {
     environment,
     env: options.env,
+    installed,
     requiredCapabilities: requestedCapabilities,
     attemptedCapabilities: environment.requestedCapabilities,
     notFoundCapabilities: environment.unresolvedCapabilities
