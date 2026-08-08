@@ -15,6 +15,7 @@ import {
 } from "./artifacts.js";
 import { sanitizePromptValue } from "../tools/sanitize.js";
 import { VerificationRunner, VerificationResult } from "./verification.js";
+import { EnvironmentPreflightError } from "../environment/preflight.js";
 
 export type MachinePhase = "IDLE" | "PLANNING" | "BUILDING" | "REVIEWING" | "FEEDBACK" | "TAKEOVER" | "DONE";
 export interface OrchestrationCheckpoint {
@@ -53,6 +54,7 @@ export interface BuildStreamInput {
 }
 
 export interface AgentFns {
+  prepareEnvironment?: (commands: string[]) => Promise<void>;
   plan(input: { request: string; goals: string[]; history?: string; attachments?: AttachmentRef[]; previousAttemptError?: string }): Promise<PlanResult>;
   build(input: BuildStreamInput): Promise<unknown>;
   review(input: { plan: BuildPlan; report: CompletionReport; round: number; diff: string; previousAttemptError?: string }): Promise<unknown>;
@@ -381,6 +383,24 @@ export async function runOrchestration(options: RunOptions): Promise<RunResult> 
     }
   };
 
+  const prepareEnvironment = async (commands: string[]): Promise<RunResult | undefined> => {
+    if (!options.agents.prepareEnvironment) return undefined;
+    try {
+      await options.agents.prepareEnvironment(commands);
+      return undefined;
+    } catch (error) {
+      if (!(error instanceof EnvironmentPreflightError)) throw error;
+      const message = error.message;
+      emit({ type: "error", message });
+      transition("DONE", message, round);
+      return { phase: "DONE", summary: message, plan, reports, verdicts, takeover: false };
+    }
+  };
+  const planEnvironmentCommands = (): string[] => [
+    ...(plan?.verification ?? []),
+    ...(plan?.tasks.map((task) => task.description) ?? [])
+  ];
+
   let plan = options.initialState?.plan;
 
   if (!plan) {
@@ -442,6 +462,8 @@ export async function runOrchestration(options: RunOptions): Promise<RunResult> 
 
   const runTakeover = async (message: string): Promise<RunResult> => {
     transition("TAKEOVER", message, round);
+    const environmentFailure = await prepareEnvironment(planEnvironmentCommands());
+    if (environmentFailure) return environmentFailure;
     let lastTakeover: { report: unknown; userSummary: string } | undefined;
     let lastError: unknown;
     const applyPostBuildReport = async (report: CompletionReport): Promise<CompletionReport> => {
@@ -545,9 +567,11 @@ export async function runOrchestration(options: RunOptions): Promise<RunResult> 
         // Defensive: revise with no targets - skip build, reuse previous merged report.
         report = reports.at(-1) as CompletionReport;
       } else {
-        try {
-          await waitIfPaused();
-          const cap = options.config.maxParallelWorkers;
+      try {
+        await waitIfPaused();
+        const environmentFailure = await prepareEnvironment(planEnvironmentCommands());
+        if (environmentFailure) return environmentFailure;
+        const cap = options.config.maxParallelWorkers;
           const newReports = await dispatchStreams(
             options.agents,
             targetStreams,

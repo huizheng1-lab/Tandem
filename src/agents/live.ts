@@ -26,6 +26,7 @@ import { runCodexWorkerBuild } from "./codex-cli/worker.js";
 import { codexLeaderPlan, codexLeaderReview, codexLeaderTakeover } from "./codex-cli/leader.js";
 import { runClaudeWorkerBuild } from "./claude-code-cli/worker.js";
 import { claudeLeaderPlan, claudeLeaderReview, claudeLeaderTakeover } from "./claude-code-cli/leader.js";
+import { preflightEnvironment } from "../environment/preflight.js";
 
 export interface LiveAgentOptions {
   config: TandemConfig;
@@ -436,6 +437,7 @@ export async function createLiveAgents(options: LiveAgentOptions): Promise<Agent
   const hostPrompt = hostPlatformPrompt(process.platform, options.env);
   const toolContext = {
     cwd: options.cwd,
+    env: options.env,
     permissionMode: options.config.permissionMode,
     permissionBridge: options.permissionBridge,
     recordTouchedPath: options.recordTouchedPath,
@@ -469,6 +471,13 @@ export async function createLiveAgents(options: LiveAgentOptions): Promise<Agent
   };
 
   return {
+    prepareEnvironment: async (commands: string[]) => {
+      const result = await preflightEnvironment({ commands, env: options.env });
+      const selected = Object.values(result.environment.tools)
+        .map((tool) => tool?.executablePath)
+        .filter((value): value is string => Boolean(value));
+      if (selected.length > 0) options.onToolEvent?.({ role: "worker", tool: "environment-preflight", target: selected.join(", "), phase: "end", ok: true });
+    },
     plan: async ({ request, goals, history, attachments = [], previousAttemptError }): Promise<PlanResult> => {
       if (leader.entry.provider === "codex-cli") {
         return codexLeaderPlan(

@@ -177,7 +177,7 @@ function installedFor(tool: ExecutableCapability, installed: InstalledRuntimeCan
 
 function directoryCandidates(tool: ExecutableCapability, installed: InstalledRuntimeCandidates, names: string[], platform: NodeJS.Platform): string[] {
   const pathApi = platform === "win32" ? path.win32 : path.posix;
-  const directories = tool === "ffprobe" ? installed.ffmpegDirectories ?? [] : tool === "codex-sandbox-helper" ? installed.codexDirectories ?? [] : [];
+  const directories = tool === "ffmpeg" || tool === "ffprobe" ? installed.ffmpegDirectories ?? [] : tool === "codex-sandbox-helper" ? installed.codexDirectories ?? [] : [];
   return directories.flatMap((directory) => names.map((name) => pathApi.join(directory, name)));
 }
 

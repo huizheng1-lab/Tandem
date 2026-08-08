@@ -189,6 +189,7 @@ function backgroundId(): string {
 async function startBackgroundProcess(ctx: ToolContext, command: string): Promise<ShellResult> {
   const subprocess = execa(command, {
     cwd: ctx.cwd,
+    env: ctx.env,
     shell: true,
     detached: process.platform !== "win32",
     reject: false,
@@ -421,7 +422,7 @@ export async function bashTool(ctx: ToolContext, command: string, timeoutMs = DE
   try {
     if (ctx.abortSignal?.aborted) throw new Error("Command aborted.");
     const effectiveTimeout = effectiveBashTimeout(timeoutMs);
-    const subprocess = execa(command, { cwd: ctx.cwd, shell: true, timeout: effectiveTimeout, reject: false, all: true, cleanup: true, windowsHide: true });
+    const subprocess = execa(command, { cwd: ctx.cwd, env: ctx.env, shell: true, timeout: effectiveTimeout, reject: false, all: true, cleanup: true, windowsHide: true });
     rootPid = subprocess.pid;
     tracker = startDescendantTracker(rootPid);
     let forceSettle: (() => void) | undefined;

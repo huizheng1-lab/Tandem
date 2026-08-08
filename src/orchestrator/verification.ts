@@ -12,6 +12,7 @@ export function createVerificationRunner(options: {
   permissionMode: "ask" | "auto-edit" | "yolo";
   permissionBridge?: PermissionBridge;
   abortSignal?: AbortSignal;
+  env?: NodeJS.ProcessEnv;
   timeoutMs?: number;
 }): VerificationRunner {
   return async (commands) => {
@@ -31,6 +32,7 @@ export function createVerificationRunner(options: {
       const result = await bashTool(
         {
           cwd: options.cwd,
+          env: options.env,
           permissionMode: "yolo",
           abortSignal: options.abortSignal
         },

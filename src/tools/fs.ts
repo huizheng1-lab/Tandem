@@ -10,6 +10,7 @@ import { sanitizePromptText } from "./sanitize.js";
 
 export interface ToolContext {
   cwd: string;
+  env?: NodeJS.ProcessEnv;
   permissionMode: PermissionMode;
   permissionBridge?: PermissionBridge;
   recordTouchedPath?: (filePath: string) => void;

@@ -296,7 +296,8 @@ export function App({ config: initialConfig, env, cwd, initialError }: { config:
           cwd,
           permissionMode: config.permissionMode,
           permissionBridge,
-          abortSignal: controller.signal
+          abortSignal: controller.signal,
+          env
         }),
         confirmPlan,
         initialState,
