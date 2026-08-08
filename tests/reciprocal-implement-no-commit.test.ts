@@ -1,5 +1,5 @@
-import { mkdir, mkdtemp, readFile, writeFile, rm } from "node:fs/promises";
-import { writeFileSync } from "node:fs";
+import { mkdir, mkdtemp, readFile, readdir, writeFile, rm, symlink, unlink } from "node:fs/promises";
+import { existsSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
@@ -170,6 +170,26 @@ async function failingSelfCheckAgentStub(root: string, label: string, promptLog:
   return `node "${stub}"`;
 }
 
+async function typecheckAgentStub(root: string, label: string, checkLog: string) {
+  const stub = path.join(root, `${label}.agent.cjs`);
+  const lines = [
+    "const cp = require('child_process');",
+    "const fs = require('fs');",
+    "const path = require('path');",
+    "const command = process.execPath;",
+    "const args = [path.join(process.cwd(), 'node_modules', 'typescript', 'bin', 'tsc'), '--noEmit'];",
+    "const check = cp.spawnSync(command, args, { cwd: process.cwd(), encoding: 'utf8', windowsHide: true });",
+    `fs.writeFileSync(${JSON.stringify(checkLog)}, JSON.stringify({ command, args, exitCode: check.status ?? 1, stdout: check.stdout || '', stderr: check.stderr || '' }, null, 2));`,
+    "if ((check.status ?? 1) !== 0) process.exit(check.status ?? 1);",
+    "const target = path.join(process.cwd(), 'evidence', 'D218-typecheck.txt');",
+    "fs.mkdirSync(path.dirname(target), { recursive: true });",
+    "fs.writeFileSync(target, 'typecheck ran in isolated worktree\\n');",
+    "process.stdout.write('SUMMARY: isolated typecheck ran\\n');",
+  ];
+  await writeFile(stub, lines.join("\n"), "utf8");
+  return `node "${stub}"`;
+}
+
 async function codexAgentStub(root: string, label: string, relativePath = "evidence/D204-codex.txt") {
   const stub = path.join(root, `${label}.codex.cjs`);
   const launcher = path.join(root, `${label}.codex.cmd`);
@@ -204,12 +224,24 @@ async function claimedImplementFixture(name: string) {
     currentItem: { id: "W9202", priority: "P0", text: "Create isolated evidence" },
     consecutiveFailures: 0,
   }), "utf8");
+  await writeFile(path.join(root, ".gitignore"), "node_modules/\n", "utf8");
   await execa("git", ["init", "--initial-branch=master", root]);
   await execa("git", ["-C", root, "config", "user.email", "test@tandem"]);
   await execa("git", ["-C", root, "config", "user.name", "test"]);
-  await execa("git", ["-C", root, "add", "state/orchestrator-state.json"]);
+  await execa("git", ["-C", root, "add", ".gitignore", "state/orchestrator-state.json"]);
   await execa("git", ["-C", root, "commit", "-m", "fixture base"]);
   return { root, helperRoot, statePath: path.join(stateDir, "orchestrator-state.json") };
+}
+
+async function linkRealNodeModules(root: string) {
+  const realNodeModules = path.resolve("node_modules");
+  const fixtureNodeModules = path.join(root, "node_modules");
+  await symlink(realNodeModules, fixtureNodeModules, process.platform === "win32" ? "junction" : "dir");
+  return async () => {
+    await unlink(fixtureNodeModules).catch(async () => {
+      await rm(fixtureNodeModules, { force: true }).catch(() => {});
+    });
+  };
 }
 
 function swapStubs(root: string) {
@@ -458,6 +490,95 @@ describe("D200 reciprocal implement script", () => {
       const changed = (await execa("git", ["-C", f.root, "diff-tree", "--no-commit-id", "--name-only", "-r", "HEAD"])).stdout.split(/\r?\n/).filter(Boolean);
       expect(changed).toEqual(["evidence/D202-isolated.txt"]);
       expect((await readFile(path.join(f.root, "evidence", "D202-isolated.txt"), "utf8")).replace(/\r\n/g, "\n")).toBe("isolated implementation\n");
+    } finally {
+      await rm(f.root, { recursive: true, force: true });
+      await rm(f.helperRoot, { recursive: true, force: true });
+    }
+  });
+
+  windowsIt("provisions node_modules into the isolated worktree so the TypeScript self-check really runs", async () => {
+    const f = await claimedImplementFixture("d218-typecheck");
+    let unlinkFixtureNodeModules: (() => Promise<void>) | null = null;
+    try {
+      await writeFile(path.join(f.root, "package.json"), JSON.stringify({
+        name: "d218-typecheck-fixture",
+        type: "module",
+        scripts: { typecheck: "tsc --noEmit" },
+        devDependencies: { typescript: "*" },
+      }, null, 2), "utf8");
+      await writeFile(path.join(f.root, "tsconfig.json"), JSON.stringify({
+        compilerOptions: { strict: true, target: "ES2022", module: "ESNext", moduleResolution: "Bundler" },
+        include: ["src/**/*.ts"],
+      }, null, 2), "utf8");
+      await mkdir(path.join(f.root, "src"), { recursive: true });
+      await writeFile(path.join(f.root, "src", "index.ts"), "export const value: string = 'ok';\n", "utf8");
+      await execa("git", ["-C", f.root, "add", "package.json", "tsconfig.json", "src/index.ts"]);
+      await execa("git", ["-C", f.root, "commit", "-m", "add typecheck fixture"]);
+      unlinkFixtureNodeModules = await linkRealNodeModules(f.root);
+      const realNodeModulesEntriesBefore = await readdir(path.resolve("node_modules"));
+      const checkLog = path.join(f.helperRoot, "typecheck.json");
+      const agent = await typecheckAgentStub(f.helperRoot, "typecheck-agent", checkLog);
+      const result = spawnSync("node", [implementScript, "--repo", f.root, "--state-path", f.statePath, "--claimed-item-id", "W9202", "--agent-bin", agent], {
+        cwd: f.root,
+        encoding: "utf8",
+      });
+      expect(result.status).toBe(0);
+      const out = JSON.parse(String(result.stdout));
+      expect(out).toMatchObject({ ok: true, item: "W9202", isolated: true, dependencyProvisioning: { status: "linked" } });
+      const check = JSON.parse(await readFile(checkLog, "utf8"));
+      expect(check.args).toEqual(expect.arrayContaining(["--noEmit"]));
+      expect(check.args.join(" ")).toContain(path.join("node_modules", "typescript", "bin", "tsc"));
+      expect(check.exitCode).toBe(0);
+      expect(check.stderr).toBe("");
+      expect(await readFile(path.join(f.root, "evidence", "D218-typecheck.txt"), "utf8")).toContain("typecheck ran in isolated worktree");
+      expect(existsSync(path.resolve("node_modules"))).toBe(true);
+      expect((await readdir(path.resolve("node_modules"))).length).toBeGreaterThan(0);
+      expect((await readdir(path.resolve("node_modules"))).length).toBe(realNodeModulesEntriesBefore.length);
+    } finally {
+      if (unlinkFixtureNodeModules) await unlinkFixtureNodeModules();
+      await rm(f.root, { recursive: true, force: true });
+      await rm(f.helperRoot, { recursive: true, force: true });
+    }
+  }, 30000);
+
+  windowsIt("cleans up the isolated node_modules junction without deleting the real dependencies", async () => {
+    const f = await claimedImplementFixture("d218-cleanup");
+    let unlinkFixtureNodeModules: (() => Promise<void>) | null = null;
+    try {
+      unlinkFixtureNodeModules = await linkRealNodeModules(f.root);
+      const realNodeModules = path.resolve("node_modules");
+      const before = await readdir(realNodeModules);
+      const agent = isolatedAgentStub(f.helperRoot, "cleanup-agent", "evidence/D218-cleanup.txt");
+      const result = spawnSync("node", [implementScript, "--repo", f.root, "--state-path", f.statePath, "--claimed-item-id", "W9202", "--agent-bin", agent], {
+        cwd: f.root,
+        encoding: "utf8",
+      });
+      expect(result.status).toBe(0);
+      const out = JSON.parse(String(result.stdout));
+      expect(out.dependencyProvisioning).toMatchObject({ status: "linked" });
+      expect(existsSync(realNodeModules)).toBe(true);
+      const after = await readdir(realNodeModules);
+      expect(after.length).toBeGreaterThan(0);
+      expect(after.length).toBe(before.length);
+    } finally {
+      if (unlinkFixtureNodeModules) await unlinkFixtureNodeModules();
+      await rm(f.root, { recursive: true, force: true });
+      await rm(f.helperRoot, { recursive: true, force: true });
+    }
+  });
+
+  windowsIt("continues the isolated implementation when dependency provisioning is unavailable", async () => {
+    const f = await claimedImplementFixture("d218-degraded");
+    try {
+      const agent = isolatedAgentStub(f.helperRoot, "degraded-agent", "evidence/D218-degraded.txt");
+      const result = spawnSync("node", [implementScript, "--repo", f.root, "--state-path", f.statePath, "--claimed-item-id", "W9202", "--agent-bin", agent], {
+        cwd: f.root,
+        encoding: "utf8",
+      });
+      expect(result.status).toBe(0);
+      const out = JSON.parse(String(result.stdout));
+      expect(out).toMatchObject({ ok: true, dependencyProvisioning: { status: "missing", strategy: "none" } });
+      expect(await readFile(path.join(f.root, "evidence", "D218-degraded.txt"), "utf8")).toContain("isolated implementation");
     } finally {
       await rm(f.root, { recursive: true, force: true });
       await rm(f.helperRoot, { recursive: true, force: true });

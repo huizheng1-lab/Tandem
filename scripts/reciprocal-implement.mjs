@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync } from "node:fs";
+import { existsSync, lstatSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, statSync, symlinkSync, unlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
@@ -107,10 +107,16 @@ function retryFailureFeedbackSection(state, itemId, tailLimit = FAILURE_OUTPUT_T
   ].join("\n");
 }
 
-function buildImplementationPrompt({ item, worktree, state }) {
+function buildImplementationPrompt({ item, worktree, state, dependencyProvisioning }) {
   const retrySection = retryFailureFeedbackSection(state, item.id);
+  const dependencyLine = dependencyProvisioning?.status === "linked"
+    ? `Dependency self-check support: node_modules is available in this isolated worktree via ${dependencyProvisioning.strategy}.`
+    : `Dependency self-check support: node_modules could not be provisioned (${dependencyProvisioning?.reason || "unknown"}), so type self-checks may be unavailable. Continue with implementation; the orchestrator remains authoritative.`;
   return [
     `You are implementing wishlist item ${item.id} in an isolated repository worktree (cwd: ${worktree}).`,
+    "",
+    dependencyLine,
+    "Do not run npm install, npm ci, pnpm install, yarn install, or any package-manager command that mutates dependencies.",
     "",
     ...(retrySection ? [retrySection, ""] : []),
     `The item text is:`,
@@ -263,7 +269,7 @@ function agentArgs(agent, cwd) {
     "--no-session-persistence",
     "--permission-mode", "acceptEdits",
     "--allowedTools", "Read,Edit,Write,Glob,Grep,Bash",
-    "--system-prompt", "Implement the wishlist item by editing files. Be terse. This is a headless, unattended run: never ask questions or wait for confirmation; decide autonomously. Do not use git. Bash is allowed only for non-authoritative syntax/type self-checks such as npm run typecheck or tsc --noEmit; do not run the full test suite. A wrapper commits your changes afterward.",
+    "--system-prompt", "Implement the wishlist item by editing files. Be terse. This is a headless, unattended run: never ask questions or wait for confirmation; decide autonomously. Do not use git. Bash is allowed only for non-authoritative syntax/type self-checks such as npm run typecheck or tsc --noEmit; do not run package-manager install commands or the full test suite. A wrapper commits your changes afterward.",
   ];
 }
 
@@ -297,10 +303,60 @@ function makeIsolatedWorktree(baseSha) {
     rmSync(parent, { recursive: true, force: true });
     throw new Error(`git worktree add failed: ${add.stderr}`);
   }
-  return { parent, worktree };
+  const dependencyProvisioning = provisionIsolatedDependencies(worktree);
+  return { parent, worktree, dependencyProvisioning };
+}
+
+function provisionIsolatedDependencies(worktree) {
+  const source = path.join(repo, "node_modules");
+  const target = path.join(worktree, "node_modules");
+  if (!existsSync(source)) {
+    return { status: "missing", strategy: "none", source, target, reason: "source node_modules not found" };
+  }
+  if (existsSync(target)) {
+    return { status: "present", strategy: "existing", source, target };
+  }
+  const strategy = process.platform === "win32" ? "junction" : "symlink";
+  try {
+    symlinkSync(source, target, process.platform === "win32" ? "junction" : "dir");
+    return { status: "linked", strategy, source, target };
+  } catch (error) {
+    return { status: "degraded", strategy, source, target, reason: error.message };
+  }
+}
+
+function removeIsolatedDependencyLink(worktree) {
+  if (!worktree) return;
+  const target = path.join(worktree, "node_modules");
+  if (!existsSync(target)) return;
+  const unlinkDependency = () => {
+    try {
+      unlinkSync(target);
+      return;
+    } catch (error) {
+      try {
+        rmSync(target, { force: true });
+        return;
+      } catch {
+        throw new Error(`refusing to delete isolated worktree parent because dependency junction could not be unlinked first: ${error.message}`);
+      }
+    }
+  };
+  try {
+    const stat = lstatSync(target);
+    if (stat.isSymbolicLink()) {
+      unlinkDependency();
+      return;
+    }
+  } catch {}
+  try {
+    const source = path.join(repo, "node_modules");
+    if (existsSync(source) && realpathSync(target) === realpathSync(source)) unlinkDependency();
+  } catch {}
 }
 
 function cleanupIsolatedWorktree(parent, worktree) {
+  removeIsolatedDependencyLink(worktree);
   if (worktree) git(repo, ["worktree", "remove", "--force", worktree]);
   if (parent) rmSync(parent, { recursive: true, force: true });
 }
@@ -352,7 +408,7 @@ function main() {
     cleanupIsolatedWorktree(isolated.parent, isolated.worktree);
     die(2, { step: "resolve-agent", message: error.message, item: claimed.id, headBefore });
   }
-  const prompt = buildImplementationPrompt({ item: claimed, worktree: isolated.worktree, state });
+  const prompt = buildImplementationPrompt({ item: claimed, worktree: isolated.worktree, state, dependencyProvisioning: isolated.dependencyProvisioning });
   const args = agentArgs(agent, isolated.worktree);
   const result = runAgent(isolated.worktree, agent, args, maxDurationMs, prompt);
   if (result.error) {
@@ -475,6 +531,7 @@ function main() {
     newSha,
     isolated: true,
     paths,
+    dependencyProvisioning: isolated.dependencyProvisioning,
     agent: agent.bin,
     provider: agent.provider,
     configSource: agent.configSource,
