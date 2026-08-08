@@ -374,21 +374,12 @@ export async function runOrchestration(options: RunOptions): Promise<RunResult> 
 
   const attachAuthoritativeVerification = async (report: CompletionReport): Promise<{ report: CompletionReport; ran: boolean }> => {
     if (!options.verificationRunner) return { report, ran: false };
-    // Re-resolve immediately before the authoritative subprocesses start. A
-    // worker or a takeover can outlive a PATH change, and verification must
-    // use the same canonical runtime selection as the execution it is judging.
-    if (options.agents.prepareEnvironment) {
-      try {
-        await options.agents.prepareEnvironment(plan?.verification ?? []);
-      } catch (error) {
-        if (error instanceof EnvironmentPreflightError) {
-          emit({ type: "error", message: error.message });
-          const results: VerificationResult[] = (plan?.verification ?? []).map((command) => ({ command, passed: false, output: error.message }));
-          return { report: { ...report, verificationResults: results }, ran: true };
-        }
-        throw error;
-      }
-    }
+    // Verification deliberately consumes the snapshot prepared for the worker
+    // (or for takeover). Re-resolving here would let PATH/install changes make
+    // the evidence judge a different environment than the one that produced
+    // the artifact. Takeover has its own prepareEnvironment call immediately
+    // before it starts, so this remains fresh without breaking snapshot
+    // agreement between execution and authoritative verification.
     try {
       const results: VerificationResult[] = await options.verificationRunner(plan?.verification ?? [], options.agents.getEnvironment?.());
       const passed = results.filter((result) => result.passed).length;
