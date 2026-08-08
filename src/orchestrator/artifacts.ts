@@ -333,6 +333,26 @@ export function validateStreamFileOwnership(plan: BuildPlan): string[] {
   return errors;
 }
 
+// Planning uses a deliberately read-only tool set, but the worker receives the session's
+// execution permissions. A plan must not turn that temporary planner limitation into a job
+// constraint or a pre-blocked task. Reject these plans so the leader gets a correction retry
+// before a worker is dispatched.
+export function validateExecutionContextClaims(plan: BuildPlan): string[] {
+  const errors: string[] = [];
+  const readOnlyClaim = /(?:read[ -]?only|cannot|can't|unable|not able|no)\b[\s\S]{0,80}\b(?:write|writ(?:e|ing)|modify|create|run|start|execute|output|filesystem|file system)/i;
+  for (const constraint of plan.constraints) {
+    if (readOnlyClaim.test(constraint)) {
+      errors.push(`constraint incorrectly treats the leader's planning-time read-only tools as a job limitation: "${constraint}"`);
+    }
+  }
+  for (const task of plan.tasks) {
+    if (/^\s*blocked\b/i.test(task.description)) {
+      errors.push(`task "${task.id}" is pre-declared blocked; blocked tasks must be corrected before execution`);
+    }
+  }
+  return errors;
+}
+
 export async function validateBuildPlan(
   value: unknown,
   platform: NodeJS.Platform = process.platform,
@@ -346,6 +366,7 @@ export async function validateBuildPlan(
   );
   errors.push(...verifResults.flat());
   errors.push(...validateStreamFileOwnership(plan));
+  errors.push(...validateExecutionContextClaims(plan));
   if (errors.length > 0) throw new Error(`Invalid BuildPlan:\n${errors.join("\n")}`);
   return plan;
 }

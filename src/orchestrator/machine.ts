@@ -134,12 +134,12 @@ function completeTakeoverWhenVerificationPasses(plan: BuildPlan, report: Complet
   }
 }
 
-async function retryArtifact<T>(name: string, emit: (event: MachineEvent) => void, producer: (previousError?: unknown, attempt?: number) => Promise<unknown>, parse: (value: unknown) => T): Promise<T> {
+async function retryArtifact<T>(name: string, emit: (event: MachineEvent) => void, producer: (previousError?: unknown, attempt?: number) => Promise<unknown>, parse: (value: unknown) => T | Promise<T>): Promise<T> {
   let lastError: unknown;
   for (let attempt = 1; attempt <= 3; attempt += 1) {
     try {
       const value = await producer(lastError, attempt);
-      const parsed = sanitizePromptValue(parse(value));
+      const parsed = sanitizePromptValue(await parse(value));
       emit({ type: "artifact", name, value: parsed });
       return parsed;
     } catch (error) {
@@ -431,7 +431,12 @@ export async function runOrchestration(options: RunOptions): Promise<RunResult> 
             attachments: options.attachments,
             previousAttemptError: previousError === undefined ? undefined : previousAttemptMessage(previousError)
           }),
-        (value) => value as PlanResult
+        (value) => {
+          const result = value as PlanResult;
+          return result.kind === "plan"
+            ? validateBuildPlan(result.plan).then((plan) => ({ ...result, plan }))
+            : result;
+        }
       );
     } catch (error) {
       // D64-1: if all 3 attempts fail (the retryArtifact envelope throws its lastError),
@@ -447,7 +452,9 @@ export async function runOrchestration(options: RunOptions): Promise<RunResult> 
       return { phase: "DONE", summary: planResult.answer, reports, verdicts, takeover: false };
     }
 
-    plan = await validateBuildPlan(planResult.plan);
+    // Build plans are validated inside the retry envelope above so semantic validation failures
+    // (including planning-time read-only claims) are returned to the leader for correction.
+    plan = planResult.plan;
     emit({ type: "artifact", name: "BuildPlan", value: plan });
     emitCheckpoint();
     if (options.confirmPlan) {
@@ -632,6 +639,12 @@ export async function runOrchestration(options: RunOptions): Promise<RunResult> 
             return { phase: "DONE", summary: message, plan, reports, verdicts, takeover: false };
           }
           emit(errorEvent(`worker could not produce a valid CompletionReport: ${String(error)}`, error));
+          if (currentRound === 1 && reports.length === 0) {
+            const message = `Worker dispatch produced no CompletionReport before takeover could be considered: ${String(error)}`;
+            emit({ type: "notice", message });
+            transition("DONE", message, currentRound);
+            return { phase: "DONE", summary: message, plan, reports, verdicts, takeover: false };
+          }
           return runTakeover("worker artifact failure; leader takeover");
         }
       }
