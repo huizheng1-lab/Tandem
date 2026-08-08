@@ -1,0 +1,55 @@
+Round: D219
+
+Implementation commit:
+- 956f467 D219-1: require implementer type self-check
+
+Files changed:
+- scripts/reciprocal-implement.mjs
+- tests/reciprocal-implement-no-commit.test.ts
+
+Literal prompt wording:
+
+Mandatory branch when dependency provisioning status is linked or present:
+
+After making your changes and before printing the final `SUMMARY:` line, run `npm run typecheck`
+or `tsc --noEmit` as a mandatory non-authoritative syntax/type self-check. Fix every error
+reported by that self-check and re-run it until it is clean. Finishing with a known-failing
+compile is not acceptable; if you genuinely cannot reach a clean compile, say so explicitly
+in the `SUMMARY:` line or print `ABORT <short reason>` and exit non-zero.
+
+Waived branch when dependency provisioning is missing/degraded:
+
+Because dependency provisioning did not make node_modules available in this isolated worktree,
+the mandatory type self-check is waived for this round. Do not pretend it ran. If you cannot
+run `npm run typecheck` or `tsc --noEmit`, say that explicitly in the `SUMMARY:` line while
+still making the best implementation change you can. The orchestrator remains authoritative.
+
+Updated Claude system prompt:
+
+Implement the wishlist item by editing files. Be terse. This is a headless, unattended run: never ask questions or wait for confirmation; decide autonomously. Do not use git. Use Bash only for the mandatory non-authoritative syntax/type self-check, npm run typecheck or tsc --noEmit, when dependencies are available; do not run package-manager install commands or the full test suite. A wrapper commits your changes afterward.
+
+Regression tests:
+- "requires a mandatory type self-check in the implementer prompt when dependencies are available": captures the implementer prompt with node_modules linked, asserts mandatory typecheck wording, fix-and-rerun wording, explicit failure-summary/ABORT handling, existing prohibitions, and absence of permissive "may run" phrasing.
+- "waives the mandatory type self-check in the implementer prompt when dependencies are missing": captures the implementer prompt with missing node_modules, asserts the requirement is waived honestly, asserts "Do not pretend it ran", asserts existing prohibitions, and asserts permissive "may run" phrasing is gone.
+- "uses a mandatory but still restricted Claude system prompt": runs a fake Claude CLI, captures --system-prompt, asserts mandatory self-check wording, no old "Bash is allowed only..." phrasing, no "may run" phrasing, and retained prohibitions against git, package-manager installs, and the full suite.
+
+Verification:
+- PASS: npx vitest run tests/reciprocal-implement-no-commit.test.ts --configLoader runner -t "mandatory type self-check|waives the mandatory type self-check|mandatory but still restricted Claude system prompt"
+  Result: 3 passed, 25 skipped.
+- PASS: npx vitest run tests/reciprocal-implement-no-commit.test.ts --configLoader runner
+  Result: 28 passed.
+- PASS: npm run typecheck
+- PASS: git diff --check
+- FULL SUITE HAS PRE-EXISTING W0036 FAILURES: npm test
+  Result: 58 passed, 2 skipped test files; 647 passed, 41 skipped tests; tests/tools.test.ts still has 3 known CLI-bridge failures.
+- ISOLATED FAILING FILE: npx vitest run tests/tools.test.ts --configLoader runner
+  Result: 30 passed, 3 failed. Failing tests are:
+  - exposes the same registry to a CLI bridge across separate command calls
+  - applies the active Tandem permission bridge before a CLI background start
+  - keeps the admitted CLI authorization context for an in-flight start
+
+Boundary confirmation:
+- Did not modify Tandem application code under src/.
+- Did not touch live orchestrator state.
+- Did not touch the wishlist board or queued W0037/W0038 items.
+- Did not weaken D200 no-commit abort, two-strike pause, dirty-worktree pre-flight, D218 junction cleanup safety, or authoritative verification.
