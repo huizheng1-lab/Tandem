@@ -453,6 +453,11 @@ export async function createLiveAgents(options: LiveAgentOptions): Promise<Agent
     message.role === "user" && typeof message.content === "string" ? { ...message, content: stripEmbeddedHistoryDigest(message.content) } : message
   );
   let resolvedEnvironment: ResolvedEnvironment | undefined;
+  // Environment discovery is session-scoped. The worker may issue many ad-hoc
+  // shell commands and takeover may prepare the same session again; walking the
+  // installed-runtime roots for each of those calls is both expensive and can
+  // produce inconsistent PATH snapshots.
+  let environmentPreparation: Promise<Awaited<ReturnType<typeof preflightEnvironment>>> | undefined;
   const compactLeaderThread = async (system: string): Promise<void> => {
     const budgetChars = leaderContextBudgetChars(options.config);
     if (estimatePromptSize(system, leaderThread).chars <= budgetChars || leaderThread.length <= 12) return;
@@ -476,7 +481,8 @@ export async function createLiveAgents(options: LiveAgentOptions): Promise<Agent
   return {
     prepareEnvironment: async (commands: string[]) => {
       try {
-        const result = await preflightEnvironment({ commands, env: options.env });
+        environmentPreparation ??= preflightEnvironment({ commands, env: options.env });
+        const result = await environmentPreparation;
         resolvedEnvironment = result.environment;
         // Keep the same snapshot on the context used by every in-process leader
         // and worker shell tool. The env PATH update remains important for CLI
@@ -485,7 +491,16 @@ export async function createLiveAgents(options: LiveAgentOptions): Promise<Agent
         const selected = Object.values(result.environment.tools)
           .map((tool) => tool?.executablePath)
           .filter((value): value is string => Boolean(value));
-        if (selected.length > 0) options.onToolEvent?.({ role: "worker", tool: "environment-preflight", target: selected.join(", "), phase: "end", ok: true });
+        const requested = result.requiredCapabilities.map((capability) => capability.kind);
+        const attempted = result.environment.requestedCapabilities.map((capability) => capability.kind);
+        const missing = result.environment.unresolvedCapabilities.map((capability) => capability.name);
+        options.onToolEvent?.({
+          role: "worker",
+          tool: "environment-preflight",
+          target: `requested=${[...new Set(requested)].join(",") || "none"}; attempted=${[...new Set(attempted)].join(",") || "none"}; resolved=${selected.join(",") || "none"}; not-found=${missing.join(",") || "none"}`,
+          phase: "end",
+          ok: missing.length === 0
+        });
       } catch (error) {
         const missing = (error as { environment?: { unresolvedCapabilities?: Array<{ name: string }> } }).environment?.unresolvedCapabilities?.map((item) => item.name).join(", ");
         options.onToolEvent?.({ role: "worker", tool: "environment-preflight", target: `missing ${missing ?? "required capability"}`, phase: "end", ok: false });

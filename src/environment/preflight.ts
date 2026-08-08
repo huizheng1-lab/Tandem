@@ -7,6 +7,8 @@ import type { RequestedCapability, ResolvedEnvironment } from "./types.js";
 export interface EnvironmentPreflightResult {
   environment: ResolvedEnvironment;
   env: NodeJS.ProcessEnv;
+  /** Capabilities named by the plan/command; opportunistic probes are not included. */
+  requiredCapabilities: RequestedCapability[];
 }
 
 /** Put the resolver's canonical executable directories first for every caller. */
@@ -101,7 +103,7 @@ export async function preflightEnvironment(options: {
   // when installed. These extras are best effort: discovered ones get their
   // directory prepended, absent ones must never fail a run that did not need them.
   const requiredKinds = new Set(requestedCapabilities.map((capability) => capability.kind));
-  const opportunistic: RequestedCapability[] = (["node", "ffmpeg", "ffprobe"] as const)
+  const opportunistic: RequestedCapability[] = (["node", "ffmpeg", "ffprobe", "python"] as const)
     .filter((kind) => !requiredKinds.has(kind))
     .map((kind) => ({ kind }));
   const environment = await (options.resolve ?? resolveEnvironment)({
@@ -115,5 +117,5 @@ export async function preflightEnvironment(options: {
   if (requiredUnresolved.length > 0) throw new EnvironmentPreflightError({ ...environment, unresolvedCapabilities: requiredUnresolved });
 
   applyResolvedEnvironment(options.env, environment, platform);
-  return { environment, env: options.env };
+  return { environment, env: options.env, requiredCapabilities: requestedCapabilities };
 }
