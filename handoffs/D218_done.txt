@@ -1,0 +1,70 @@
+D218 completion
+===============
+
+Round: D218
+Implementation commit: 9377bd5 D218-1: provision isolated dependencies
+
+Files changed:
+- scripts/reciprocal-implement.mjs
+- tests/reciprocal-implement-no-commit.test.ts
+
+Provisioning strategy:
+- Chosen default: link the main repo's node_modules into the isolated implementer worktree.
+- On Windows the link is a directory junction via fs.symlinkSync(source, target, "junction").
+- On non-Windows the link is a directory symlink via fs.symlinkSync(source, target, "dir").
+- Reason: junction/symlink provisioning is effectively instant and avoids a per-round npm ci or a 568 MB node_modules copy. That matters because reciprocal rounds run unattended on a short cadence.
+- Fallback behavior: if the source node_modules is missing, already present, or the link cannot be created, the implementer round does not abort. reciprocal-implement.mjs records dependencyProvisioning as missing/present/degraded and the prompt tells the implementer that self-checks may be unavailable while the orchestrator remains authoritative.
+
+Cleanup safety:
+- cleanupIsolatedWorktree now calls removeIsolatedDependencyLink(worktree) before git worktree remove and before rmSync(parent, { recursive: true, force: true }).
+- removeIsolatedDependencyLink only unlinks worktree/node_modules when lstat reports a symlink/reparse link, or when realpath(worktree/node_modules) equals realpath(repo/node_modules).
+- If that unlink cannot be performed, cleanup throws before recursive parent deletion with: "refusing to delete isolated worktree parent because dependency junction could not be unlinked first".
+- This fail-closed behavior leaves a temp worktree behind rather than risking recursive deletion through the junction into the real repo dependencies.
+- Test proof: "cleans up the isolated node_modules junction without deleting the real dependencies" links fixture node_modules to the real repo node_modules, runs a real implementer round, lets cleanup execute, then asserts the real node_modules still exists and remains non-empty with the same top-level entry count.
+
+Shared dependency mutation risk:
+- A junction means writes under worktree/node_modules would write into the real repo node_modules.
+- I did not copy node_modules because that is slow and wasteful for the unattended loop, and Windows directory read-only attributes are not a reliable protection for package contents.
+- Mitigation implemented: the implementer prompt and Claude system prompt now explicitly forbid npm install, npm ci, pnpm install, yarn install, and package-manager commands that mutate dependencies. The D215 full-test/git prohibitions remain.
+- Residual risk: a malicious or badly behaving implementer with Bash could still intentionally mutate files under node_modules. The current risk is accepted because the implementer is instructed narrowly and the junction keeps the loop usable; the orchestrator's real-repo verification remains authoritative.
+
+Self-check proof:
+- Test "provisions node_modules into the isolated worktree so the TypeScript self-check really runs" creates a tiny tracked TypeScript fixture project, links fixture node_modules to the real repo node_modules, then invokes reciprocal-implement.mjs.
+- The custom implementer agent runs from inside the isolated worktree:
+  command: node
+  args: [<isolated worktree>/node_modules/typescript/bin/tsc, --noEmit]
+  result asserted by test: exitCode 0, stderr "", and an implementation evidence file is committed.
+- The reciprocal-implement.mjs stdout for that run includes dependencyProvisioning.status = "linked".
+
+Tests:
+- tests/reciprocal-implement-no-commit.test.ts: "provisions node_modules into the isolated worktree so the TypeScript self-check really runs"
+  Asserts linked dependency provisioning, executes the real TypeScript compiler in the isolated worktree, and verifies exit code 0.
+- tests/reciprocal-implement-no-commit.test.ts: "cleans up the isolated node_modules junction without deleting the real dependencies"
+  Asserts the real repo node_modules survives cleanup and remains non-empty after the isolated worktree is removed.
+- tests/reciprocal-implement-no-commit.test.ts: "continues the isolated implementation when dependency provisioning is unavailable"
+  Asserts a fixture repo without node_modules still completes an implementation round with dependencyProvisioning.status = "missing".
+- Existing isolated-worktree tests in the same file still pass, covering detached implementation, no-commit abort behavior, dirty shared-worktree abort, untracked collision handling, and commit integration.
+
+Verification:
+- npx vitest run tests/reciprocal-implement-no-commit.test.ts --configLoader runner
+  Result: pass, 24 tests passed, duration 22.48s on the final run.
+- node --check scripts/reciprocal-implement.mjs
+  Result: pass.
+- git diff --check
+  Result: pass; only CRLF normalization warnings for touched files.
+- npm run typecheck
+  Result: failed on the current W0036 application-code error that D218 explicitly forbids fixing:
+  src/agents/codex-cli/exec.ts(172,24): error TS2554: Expected 2 arguments, but got 1.
+- npm test
+  Result: failed outside D218 scope. Full run: 55 passed, 2 skipped, 3 failed files; 629 passed, 41 skipped, 10 failed tests.
+  The failures are in tests/tools.test.ts, tests/codex-cli.test.ts, and tests/claude-code-cli.test.ts and point at the current W0036 Codex CLI/background bridge regression.
+- Failed files rerun in isolation:
+  - npx vitest run tests/tools.test.ts --configLoader runner: failed, 30 passed / 3 failed. Failures: CLI background bridge registry/permission context tests.
+  - npx vitest run tests/codex-cli.test.ts --configLoader runner: failed, 16 passed / 6 failed. Failures all throw "Cannot read properties of undefined (reading 'port')" from src/tools/shell.ts:370 via src/agents/codex-cli/exec.ts:172.
+  - npx vitest run tests/claude-code-cli.test.ts --configLoader runner: failed, 32 passed / 1 failed. Failure is the same undefined bridge.port path via Codex CLI leader.
+
+Scope confirmation:
+- Tandem application code under src/ was not modified.
+- Live orchestrator state was not touched.
+- Wishlist board was not touched.
+- Paused W0036 and its commits were not touched.
