@@ -1,0 +1,32 @@
+Round: D216
+
+Implementation commit:
+- 88c6c1c D216-1: harden shell fixture lifecycle guards
+
+Files changed:
+- tests/tools.test.ts
+
+Summary:
+- Added a file-level nested-process survivor ledger for launcher.cjs, child.cjs, and grandchild fixture PIDs.
+- launcher.cjs now records launcher.pid; the harness records the launcher/root, child.pid, and grandchild.pid for every nested fixture launch.
+- Added afterEach/afterAll survivor sweeps. Any reaped survivor is reported at suite end with context, fixture label, and PID.
+- Hardened launcher-based background tests, owner-exit coverage, foreground timeout coverage, hard-deadline pipe coverage, and abort coverage with local try/finally cleanup.
+- Kept the existing rmWithRetry helper for Windows EBUSY teardown races; the hard-deadline detached descendant case now also records and kills its child before fixture directory removal.
+
+Foreground path verdict:
+- No src/tools/shell.ts product change was made for D216. The focused foreground timeout/abort/hard-deadline checks pass with deterministic test fixture cleanup. The remaining full-suite failures are the pre-existing W0036 Codex CLI/background bridge failures already present before D216.
+
+Guard-fire demonstration:
+- Temporarily added a local-only test that raw-spawned launcher.cjs without teardown, ran:
+  npx vitest run tests/tools.test.ts --configLoader runner -t "D216 temporary survivor guard demonstration"
+- The suite failed as intended with:
+  Nested process fixture survivors were reaped after tests: afterEach: launcher.cjs pid 156396
+- The temporary test was removed before commit, and a post-demo process check found no launcher.cjs/child.cjs/grandchild survivors.
+
+Verification:
+- PASS: npx vitest run tests/tools.test.ts --configLoader runner -t "stops a background process and its descendants|cleanupBackgroundProcesses sweeps unstopped background process trees|does not leave background orphans after the owning Node process exits|kills shell child and grandchild processes on timeout|returns by the hard deadline|aborts running shell commands"
+  Result: 6 passed, 27 skipped.
+- PASS: immediate Windows process check after focused tests and after full suite found zero matching node.exe fixture survivors for launcher.cjs/child.cjs/grandchild.
+- PASS: git diff --check
+- BLOCKED BY PRE-EXISTING W0036: npm run typecheck still fails at src/agents/codex-cli/exec.ts(172,24): Expected 2 arguments, but got 1.
+- BLOCKED BY PRE-EXISTING W0036: npm test still fails 10 tests across tests/tools.test.ts, tests/codex-cli.test.ts, and tests/claude-code-cli.test.ts due the Codex CLI/background bridge regression; D216 lifecycle-focused tests pass.

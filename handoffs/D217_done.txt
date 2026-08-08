@@ -1,0 +1,35 @@
+Round: D217
+
+Implementation commit:
+- faa34ba D217-1: preserve same-item resume failures
+
+Files changed:
+- scripts/reciprocal-orchestrator.mjs
+- tests/reciprocal-orchestrator.test.ts
+- tests/reciprocal-implement-no-commit.test.ts
+
+Summary:
+- Plain --resume now resets phase/step/consecutiveFailures but preserves same-current-item failure history by default.
+- Added --discard-failures as an explicit opt-out when a human wants to retry without preserved failure context.
+- Resume clears failure history when there is no currentItem, when recorded failure.item differs from the current item, or when a recorded attemptCommit is no longer an ancestor of HEAD.
+- Resume logs failed-paused.resumed with failureHistory metadata: preserve/discard decision, count, and reason.
+- New retry failure records now include item so future resume attempts can distinguish stale history.
+- The existing --resume --finalize-accepted path still clears failures unchanged.
+
+Regression coverage:
+- Plain same-item resume preserves failures and resets consecutiveFailures to 0.
+- --discard-failures clears preserved history.
+- Resume with no current item clears stale history, then a new claimed item does not inherit it.
+- Resume with mismatched failure.item clears stale history.
+- finalize-accepted still clears failures.
+- Prompt-capturing implement coverage confirms preserved same-item failure history appears in the next retry prompt.
+
+Verification:
+- PASS: npx vitest run tests/reciprocal-orchestrator.test.ts --configLoader runner
+  Result: 15 passed.
+- PASS: npx vitest run tests/reciprocal-implement-no-commit.test.ts --configLoader runner
+  Result: 25 passed.
+- PASS: focused D217 resume/prompt checks.
+- PASS: git diff --check
+- BLOCKED BY PRE-EXISTING W0036: npm run typecheck still fails at src/agents/codex-cli/exec.ts(172,24): Expected 2 arguments, but got 1.
+- BLOCKED BY PRE-EXISTING W0036: npm test still fails 10 tests across tests/tools.test.ts, tests/codex-cli.test.ts, and tests/claude-code-cli.test.ts due the Codex CLI/background bridge regression; D217 focused and full touched-file tests pass.
