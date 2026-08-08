@@ -1,0 +1,82 @@
+D215 completion
+===============
+
+Round: D215
+Implementation commit: 1c3b079 D215-1: deliver retry failure feedback
+
+Files changed:
+- scripts/reciprocal-implement.mjs
+- scripts/reciprocal-orchestrator.mjs
+- tests/reciprocal-implement-no-commit.test.ts
+- tests/reciprocal-orchestrator.test.ts
+
+Transport chosen:
+- The retry feedback is transported through the existing orchestrator state file passed as --state-path.
+- Reason: reciprocal-implement.mjs already receives and parses that file to recover currentItem, and reciprocal-orchestrator.mjs already persists bounded failures there. Reading state.failures avoids adding another state file or side channel.
+- reciprocal-orchestrator.mjs now stores attemptCommit on each failure when an implementation commit existed, and logs feedbackDeliveredVia: "state.failures" with feedbackBytes.
+
+Literal retry-prompt section:
+
+=== RETRY FAILURE FEEDBACK - FIX THIS FIRST ===
+Wishlist item: <item id>
+Retry round: <failures.length + 1>
+Previous attempt commit: <failure.attemptCommit or state.lastImplementCommit or state.acceptedSourceSha or unknown>
+Failed command: <failure.command>
+Exit code: <failure.exitCode>
+Output shown below is the tail, truncated to 6000 bytes so the item text remains visible.
+
+The previous attempt failed verification. Your first priority is to fix the reported failure below.
+Do not restart the item from scratch unless the failure proves the previous approach is unusable.
+
+Captured failure output:
+```text
+<captured failure output tail>
+```
+=== END RETRY FAILURE FEEDBACK ===
+
+If the captured output is within the 6000-byte bound, the prompt instead says:
+"Output shown below is the complete captured output."
+
+Item 2 status:
+- Implemented.
+- The prompt now permits only non-authoritative syntax/type self-checks, specifically examples such as npm run typecheck or tsc --noEmit.
+- The prompt still forbids the full test suite, git, wishlist edits, orchestrator/relay state edits, marking DONE, and swap/promotion machinery changes.
+- The prompt states the orchestrator's npm run typecheck && npm test && git diff --check remains the only authoritative verification, and that a self-check pass is not round success.
+- Claude invocation now includes Bash only for the narrow self-check allowance; the system prompt explicitly forbids git and full tests.
+
+New/updated tests:
+- tests/reciprocal-implement-no-commit.test.ts: "omits retry failure feedback from the first-attempt prompt"
+  Asserts the first-attempt prompt has item text and no retry failure section or failed-command text.
+- tests/reciprocal-implement-no-commit.test.ts: "renders retry failure command, exit code, output tail, round, and previous commit in the prompt"
+  Asserts retry prompt includes failed command, exit code, TS2367-style output, retry round 2, previous attempt commit, and fix-this-first wording.
+- tests/reciprocal-implement-no-commit.test.ts: "truncates oversized retry output to the documented tail while preserving the item text"
+  Asserts oversized output is bounded to the documented 6000-byte tail, truncation is disclosed, final error survives, and item text remains present.
+- tests/reciprocal-implement-no-commit.test.ts: "makes the retry prompt differ from the first-attempt prompt for the same item"
+  Asserts the retry prompt is not byte-identical to the first-attempt prompt and contains the retry failure section.
+- tests/reciprocal-implement-no-commit.test.ts: "treats a non-authoritative self-check failure as agent failure, not round success"
+  Asserts an agent that exits non-zero after a simulated typecheck self-check is reported as agent-exit and does not create an implementation commit.
+- tests/reciprocal-orchestrator.test.ts: "feeds first failure output to round two and succeeds"
+  Extended to assert the retry-feedback log includes feedbackDeliveredVia, state.failures, and attemptCommit.
+
+Verification:
+- npx vitest run tests/reciprocal-implement-no-commit.test.ts --configLoader runner
+  Result: pass, 21 tests passed.
+- npx vitest run tests/reciprocal-orchestrator.test.ts --configLoader runner
+  Result: pass, 12 tests passed.
+- node --check scripts/reciprocal-implement.mjs
+  Result: pass.
+- node --check scripts/reciprocal-orchestrator.mjs
+  Result: pass.
+- git diff --check
+  Result: pass; only CRLF normalization warnings for touched files.
+- npm run typecheck
+  Result: failed on the known W0036 error that D215 explicitly forbids fixing:
+  src/tools/shell.ts(309,24): error TS2367: This comparison appears to be unintentional because the types 'BackgroundProcessAction' and '"start"' have no overlap.
+- npm test
+  Result: failed outside D215 scope. D215 focused tests passed, but the full suite reported unrelated failures in tests/tools.test.ts, tests/reciprocal-main-update.test.ts, tests/candidate-preview-smoke.test.ts, and tests/dashboard-watchdog-hidden-launcher.test.ts. The run also includes the existing W0036 typecheck blocker above.
+
+Scope confirmation:
+- Live orchestrator state was not touched.
+- The wishlist board was not touched.
+- Paused W0036 was not touched.
+- Tandem application code under src/ was not modified.
