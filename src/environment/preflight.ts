@@ -2,7 +2,7 @@ import { readdirSync } from "node:fs";
 import path from "node:path";
 import { resolveEnvironment } from "./resolve.js";
 import type { InstalledRuntimeCandidates } from "./resolve.js";
-import type { ResolvedEnvironment } from "./types.js";
+import type { RequestedCapability, ResolvedEnvironment } from "./types.js";
 
 export interface EnvironmentPreflightResult {
   environment: ResolvedEnvironment;
