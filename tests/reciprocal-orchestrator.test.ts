@@ -178,6 +178,9 @@ describe("single reciprocal orchestrator", () => {
       const log = await readFile(path.join(f.relayRoot, "control", "orchestrator-operations.ndjson"), "utf8");
       expect(log).toMatch(/cycle.retry-feedback/);
       expect(log).toMatch(/feedbackBytes/);
+      expect(log).toMatch(/feedbackDeliveredVia/);
+      expect(log).toMatch(/state\.failures/);
+      expect(log).toMatch(/attemptCommit/);
     } finally {
       await rm(f.root, { recursive: true, force: true });
     }

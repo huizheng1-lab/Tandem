@@ -25,25 +25,30 @@ const maxDurationMs = Number(arg("max-duration-ms", process.env.TANDEM_RECIPROCA
 const explicitAgentBin = arg("agent-bin", process.env.TANDEM_RECIPROCAL_IMPLEMENT_BIN || "");
 const explicitProvider = arg("agent-provider", process.env.TANDEM_RECIPROCAL_IMPLEMENT_PROVIDER || "");
 const dryRun = boolArg("dry-run") || process.env.TANDEM_RECIPROCAL_DRY_RUN === "1";
+const FAILURE_OUTPUT_TAIL_LIMIT = 6000;
 
 function die(code, payload) {
   process.stdout.write(`${JSON.stringify({ ok: false, ...payload })}\n`);
   process.exit(code);
 }
 
-function readClaimedItem() {
+function readState() {
+  if (!statePath || !existsSync(statePath)) return null;
+  try {
+    return JSON.parse(readFileSync(statePath, "utf8"));
+  } catch {
+    return null;
+  }
+}
+
+function readClaimedItem(state = readState()) {
   if (!claimedItemId) throw new Error("claimed-item-id is required");
   const id = claimedItemId;
   let line = "";
   let text = "";
-  if (statePath && existsSync(statePath)) {
-    try {
-      const state = JSON.parse(readFileSync(statePath, "utf8"));
-      if (state.currentItem && state.currentItem.id === id) {
-        line = `${id} | ${state.currentItem.priority || "P?"} | ${state.currentItem.text || ""}`;
-        text = state.currentItem.text || "";
-      }
-    } catch {}
+  if (state?.currentItem && state.currentItem.id === id) {
+    line = `${id} | ${state.currentItem.priority || "P?"} | ${state.currentItem.text || ""}`;
+    text = state.currentItem.text || "";
   }
   if (!text && controlPath && existsSync(controlPath)) {
     const lines = readFileSync(controlPath, "utf8").split(/\r?\n/);
@@ -58,6 +63,80 @@ function readClaimedItem() {
   }
   if (!text) throw new Error(`Claimed wishlist item ${id} not found in state or control file.`);
   return { id, text, line };
+}
+
+function tailBounded(text, limit = FAILURE_OUTPUT_TAIL_LIMIT) {
+  const value = String(text || "");
+  if (Buffer.byteLength(value, "utf8") <= limit) return { text: value, truncated: false };
+  let start = Math.max(0, value.length - limit);
+  let tail = value.slice(start);
+  while (Buffer.byteLength(tail, "utf8") > limit && start < value.length) {
+    start += 1;
+    tail = value.slice(start);
+  }
+  return { text: tail, truncated: true };
+}
+
+function retryFailureFeedbackSection(state, itemId, tailLimit = FAILURE_OUTPUT_TAIL_LIMIT) {
+  const failures = Array.isArray(state?.failures) ? state.failures : [];
+  if (!failures.length) return "";
+  const failure = failures[failures.length - 1] || {};
+  const round = failures.length + 1;
+  const previousAttemptCommit = failure.attemptCommit || state?.lastImplementCommit || state?.acceptedSourceSha || "unknown";
+  const output = tailBounded(failure.output || "", tailLimit);
+  const truncation = output.truncated
+    ? `Output shown below is the tail, truncated to ${tailLimit} bytes so the item text remains visible.`
+    : "Output shown below is the complete captured output.";
+  return [
+    "=== RETRY FAILURE FEEDBACK - FIX THIS FIRST ===",
+    `Wishlist item: ${itemId}`,
+    `Retry round: ${round}`,
+    `Previous attempt commit: ${previousAttemptCommit}`,
+    `Failed command: ${failure.command || "unknown"}`,
+    `Exit code: ${Number.isInteger(failure.exitCode) ? failure.exitCode : "unknown"}`,
+    truncation,
+    "",
+    "The previous attempt failed verification. Your first priority is to fix the reported failure below.",
+    "Do not restart the item from scratch unless the failure proves the previous approach is unusable.",
+    "",
+    "Captured failure output:",
+    "```text",
+    output.text,
+    "```",
+    "=== END RETRY FAILURE FEEDBACK ===",
+  ].join("\n");
+}
+
+function buildImplementationPrompt({ item, worktree, state }) {
+  const retrySection = retryFailureFeedbackSection(state, item.id);
+  return [
+    `You are implementing wishlist item ${item.id} in an isolated repository worktree (cwd: ${worktree}).`,
+    "",
+    ...(retrySection ? [retrySection, ""] : []),
+    `The item text is:`,
+    item.text,
+    "",
+    "Inspect the repository (use file reads and directory listing) to find the existing code this item",
+    "relates to. If no existing code applies, propose a minimal, isolated change in a new file that",
+    "addresses the item without touching unrelated areas.",
+    "",
+    "Make a real code change that addresses the item. Do NOT run git yourself - a wrapper script commits",
+    "your file changes after you finish. You may run only a non-authoritative syntax/type self-check such",
+    "as `npm run typecheck` or `tsc --noEmit` to catch your own mistakes before finishing.",
+    "",
+    "Do NOT modify the wishlist file, the orchestrator state file, the relay state, or any swap/promotion",
+    "machinery; the orchestrator owns those. Do NOT mark the item DONE. Do NOT run the test suite; the",
+    "orchestrator runs `npm run typecheck && npm test && git diff --check` itself as the only authoritative",
+    "verification after your change is committed. A self-check pass is not round success.",
+    "",
+    "This is a fully unattended, non-interactive run: there is no human available to answer questions.",
+    "Never ask for confirmation, never present options for a human to choose between, and never pause",
+    "waiting on input. Decide autonomously and proceed. If you are genuinely blocked, print `ABORT <short",
+    "reason>` and exit non-zero instead of asking anything.",
+    "",
+    "When you finish, print exactly one line on the last stdout line: `SUMMARY: <short one-line summary of",
+    "the change>`. If you cannot make a real change, print `ABORT <short reason>` and exit non-zero.",
+  ].join("\n");
 }
 
 function git(cwd, args) {
@@ -183,8 +262,8 @@ function agentArgs(agent, cwd) {
     "--output-format", "json",
     "--no-session-persistence",
     "--permission-mode", "acceptEdits",
-    "--allowedTools", "Read,Edit,Write,Glob,Grep",
-    "--system-prompt", "Implement the wishlist item by editing files. Be terse. This is a headless, unattended run: never ask questions or wait for confirmation; decide autonomously. Do not use Bash or git - a wrapper commits your changes afterward.",
+    "--allowedTools", "Read,Edit,Write,Glob,Grep,Bash",
+    "--system-prompt", "Implement the wishlist item by editing files. Be terse. This is a headless, unattended run: never ask questions or wait for confirmation; decide autonomously. Do not use git. Bash is allowed only for non-authoritative syntax/type self-checks such as npm run typecheck or tsc --noEmit; do not run the full test suite. A wrapper commits your changes afterward.",
   ];
 }
 
@@ -227,9 +306,10 @@ function cleanupIsolatedWorktree(parent, worktree) {
 }
 
 function main() {
+  const state = readState();
   let claimed;
   try {
-    claimed = readClaimedItem();
+    claimed = readClaimedItem(state);
   } catch (error) {
     die(2, { step: "read-claimed-item", message: error.message });
   }
@@ -272,31 +352,7 @@ function main() {
     cleanupIsolatedWorktree(isolated.parent, isolated.worktree);
     die(2, { step: "resolve-agent", message: error.message, item: claimed.id, headBefore });
   }
-  const prompt = [
-    `You are implementing wishlist item ${claimed.id} in an isolated repository worktree (cwd: ${isolated.worktree}).`,
-    "",
-    `The item text is:`,
-    claimed.text,
-    "",
-    "Inspect the repository (use file reads and directory listing) to find the existing code this item",
-    "relates to. If no existing code applies, propose a minimal, isolated change in a new file that",
-    "addresses the item without touching unrelated areas.",
-    "",
-    "Make a real code change that addresses the item. Do NOT run git yourself - a wrapper script commits",
-    "your file changes after you finish. Do not run tests; the orchestrator owns authoritative verification.",
-    "",
-    "Do NOT modify the wishlist file, the orchestrator state file, the relay state, or any swap/promotion",
-    "machinery; the orchestrator owns those. Do NOT mark the item DONE. Do NOT run the test suite; the",
-    "orchestrator runs the full test suite itself as a separate step after your change is committed.",
-    "",
-    "This is a fully unattended, non-interactive run: there is no human available to answer questions.",
-    "Never ask for confirmation, never present options for a human to choose between, and never pause",
-    "waiting on input. Decide autonomously and proceed. If you are genuinely blocked, print `ABORT <short",
-    "reason>` and exit non-zero instead of asking anything.",
-    "",
-    "When you finish, print exactly one line on the last stdout line: `SUMMARY: <short one-line summary of",
-    "the change>`. If you cannot make a real change, print `ABORT <short reason>` and exit non-zero.",
-  ].join("\n");
+  const prompt = buildImplementationPrompt({ item: claimed, worktree: isolated.worktree, state });
   const args = agentArgs(agent, isolated.worktree);
   const result = runAgent(isolated.worktree, agent, args, maxDurationMs, prompt);
   if (result.error) {

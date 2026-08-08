@@ -133,6 +133,43 @@ function deletingAgentStub(root: string, label: string, relativePath: string) {
   return `node "${stub}"`;
 }
 
+async function promptCapturingAgentStub(root: string, label: string, promptLog: string, relativePath = "evidence/D215-prompt.txt") {
+  const stub = path.join(root, `${label}.agent.cjs`);
+  const lines = [
+    "const fs = require('fs');",
+    "const path = require('path');",
+    "let input = '';",
+    "process.stdin.setEncoding('utf8');",
+    "process.stdin.on('data', (chunk) => { input += chunk; });",
+    "process.stdin.on('end', () => {",
+    `  fs.writeFileSync(${JSON.stringify(promptLog)}, input);`,
+    `  const target = path.join(process.cwd(), ${JSON.stringify(relativePath)});`,
+    "  fs.mkdirSync(path.dirname(target), { recursive: true });",
+    "  fs.writeFileSync(target, 'prompt captured\\n');",
+    "  process.stdout.write('SUMMARY: prompt captured\\n');",
+    "});",
+  ];
+  await writeFile(stub, lines.join("\n"), "utf8");
+  return `node "${stub}"`;
+}
+
+async function failingSelfCheckAgentStub(root: string, label: string, promptLog: string) {
+  const stub = path.join(root, `${label}.agent.cjs`);
+  const lines = [
+    "const fs = require('fs');",
+    "let input = '';",
+    "process.stdin.setEncoding('utf8');",
+    "process.stdin.on('data', (chunk) => { input += chunk; });",
+    "process.stdin.on('end', () => {",
+    `  fs.writeFileSync(${JSON.stringify(promptLog)}, input);`,
+    "  process.stderr.write('npm run typecheck failed in self-check\\n');",
+    "  process.exit(17);",
+    "});",
+  ];
+  await writeFile(stub, lines.join("\n"), "utf8");
+  return `node "${stub}"`;
+}
+
 async function codexAgentStub(root: string, label: string, relativePath = "evidence/D204-codex.txt") {
   const stub = path.join(root, `${label}.codex.cjs`);
   const launcher = path.join(root, `${label}.codex.cmd`);
@@ -547,6 +584,159 @@ describe("D200 reciprocal implement script", () => {
       expect(out.paths).toEqual(["app/renderer/src/cli-model-options.ts"]);
       const changed = (await execa("git", ["-C", f.root, "diff-tree", "--no-commit-id", "--name-status", "-r", "HEAD"])).stdout;
       expect(changed).toContain("D\tapp/renderer/src/cli-model-options.ts");
+    } finally {
+      await rm(f.root, { recursive: true, force: true });
+      await rm(f.helperRoot, { recursive: true, force: true });
+    }
+  });
+
+  windowsIt("omits retry failure feedback from the first-attempt prompt", async () => {
+    const f = await claimedImplementFixture("d215-first-prompt");
+    try {
+      const promptLog = path.join(f.helperRoot, "first-prompt.txt");
+      const agent = await promptCapturingAgentStub(f.helperRoot, "first-prompt-agent", promptLog);
+      const result = spawnSync("node", [implementScript, "--repo", f.root, "--state-path", f.statePath, "--claimed-item-id", "W9202", "--agent-bin", agent], {
+        cwd: f.root,
+        encoding: "utf8",
+      });
+      expect(result.status).toBe(0);
+      const prompt = await readFile(promptLog, "utf8");
+      expect(prompt).toContain("The item text is:\nCreate isolated evidence");
+      expect(prompt).not.toContain("=== RETRY FAILURE FEEDBACK - FIX THIS FIRST ===");
+      expect(prompt).not.toContain("Failed command:");
+      expect(prompt).toContain("A self-check pass is not round success.");
+    } finally {
+      await rm(f.root, { recursive: true, force: true });
+      await rm(f.helperRoot, { recursive: true, force: true });
+    }
+  });
+
+  windowsIt("renders retry failure command, exit code, output tail, round, and previous commit in the prompt", async () => {
+    const f = await claimedImplementFixture("d215-retry-prompt");
+    try {
+      const promptLog = path.join(f.helperRoot, "retry-prompt.txt");
+      const previousCommit = "35a063935a063935a063935a063935a063935a063";
+      await writeFile(f.statePath, JSON.stringify({
+        phase: "improving",
+        currentItem: { id: "W9202", priority: "P0", text: "Create isolated evidence" },
+        consecutiveFailures: 1,
+        lastImplementCommit: previousCommit,
+        failures: [{
+          command: "npm run typecheck && npm test && git diff --check",
+          exitCode: 2,
+          output: "src/tools/shell.ts(309,24): error TS2367: retry-specific compiler failure",
+          attemptCommit: previousCommit,
+        }],
+      }, null, 2), "utf8");
+      await execa("git", ["-C", f.root, "add", "state/orchestrator-state.json"]);
+      await execa("git", ["-C", f.root, "commit", "-m", "add retry state"]);
+      const agent = await promptCapturingAgentStub(f.helperRoot, "retry-prompt-agent", promptLog);
+      const result = spawnSync("node", [implementScript, "--repo", f.root, "--state-path", f.statePath, "--claimed-item-id", "W9202", "--agent-bin", agent], {
+        cwd: f.root,
+        encoding: "utf8",
+      });
+      expect(result.status).toBe(0);
+      const prompt = await readFile(promptLog, "utf8");
+      expect(prompt).toContain("=== RETRY FAILURE FEEDBACK - FIX THIS FIRST ===");
+      expect(prompt).toContain("Retry round: 2");
+      expect(prompt).toContain(`Previous attempt commit: ${previousCommit}`);
+      expect(prompt).toContain("Failed command: npm run typecheck && npm test && git diff --check");
+      expect(prompt).toContain("Exit code: 2");
+      expect(prompt).toContain("src/tools/shell.ts(309,24): error TS2367");
+      expect(prompt).toContain("The previous attempt failed verification. Your first priority is to fix the reported failure below.");
+    } finally {
+      await rm(f.root, { recursive: true, force: true });
+      await rm(f.helperRoot, { recursive: true, force: true });
+    }
+  });
+
+  windowsIt("truncates oversized retry output to the documented tail while preserving the item text", async () => {
+    const f = await claimedImplementFixture("d215-retry-truncate");
+    try {
+      const promptLog = path.join(f.helperRoot, "retry-truncate-prompt.txt");
+      const hugeOutput = `${"older noise\n".repeat(900)}FINAL TYPECHECK ERROR`;
+      await writeFile(f.statePath, JSON.stringify({
+        phase: "improving",
+        currentItem: { id: "W9202", priority: "P0", text: "Create isolated evidence" },
+        consecutiveFailures: 1,
+        lastImplementCommit: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        failures: [{ command: "npm run typecheck", exitCode: 2, output: hugeOutput }],
+      }, null, 2), "utf8");
+      await execa("git", ["-C", f.root, "add", "state/orchestrator-state.json"]);
+      await execa("git", ["-C", f.root, "commit", "-m", "add oversized retry state"]);
+      const agent = await promptCapturingAgentStub(f.helperRoot, "retry-truncate-agent", promptLog);
+      const result = spawnSync("node", [implementScript, "--repo", f.root, "--state-path", f.statePath, "--claimed-item-id", "W9202", "--agent-bin", agent], {
+        cwd: f.root,
+        encoding: "utf8",
+      });
+      expect(result.status).toBe(0);
+      const prompt = await readFile(promptLog, "utf8");
+      expect(prompt).toContain("Output shown below is the tail, truncated to 6000 bytes so the item text remains visible.");
+      expect(prompt).toContain("FINAL TYPECHECK ERROR");
+      expect(prompt).toContain("The item text is:\nCreate isolated evidence");
+      expect(prompt.length).toBeLessThan(9000);
+    } finally {
+      await rm(f.root, { recursive: true, force: true });
+      await rm(f.helperRoot, { recursive: true, force: true });
+    }
+  });
+
+  windowsIt("makes the retry prompt differ from the first-attempt prompt for the same item", async () => {
+    const first = await claimedImplementFixture("d215-first-diff");
+    const retry = await claimedImplementFixture("d215-retry-diff");
+    try {
+      const firstPromptLog = path.join(first.helperRoot, "first.txt");
+      const retryPromptLog = path.join(retry.helperRoot, "retry.txt");
+      const firstAgent = await promptCapturingAgentStub(first.helperRoot, "first-diff-agent", firstPromptLog);
+      const firstResult = spawnSync("node", [implementScript, "--repo", first.root, "--state-path", first.statePath, "--claimed-item-id", "W9202", "--agent-bin", firstAgent], {
+        cwd: first.root,
+        encoding: "utf8",
+      });
+      expect(firstResult.status).toBe(0);
+      await writeFile(retry.statePath, JSON.stringify({
+        phase: "improving",
+        currentItem: { id: "W9202", priority: "P0", text: "Create isolated evidence" },
+        consecutiveFailures: 1,
+        lastImplementCommit: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        failures: [{ command: "npm run typecheck", exitCode: 2, output: "retry failure" }],
+      }, null, 2), "utf8");
+      await execa("git", ["-C", retry.root, "add", "state/orchestrator-state.json"]);
+      await execa("git", ["-C", retry.root, "commit", "-m", "add retry diff state"]);
+      const retryAgent = await promptCapturingAgentStub(retry.helperRoot, "retry-diff-agent", retryPromptLog);
+      const retryResult = spawnSync("node", [implementScript, "--repo", retry.root, "--state-path", retry.statePath, "--claimed-item-id", "W9202", "--agent-bin", retryAgent], {
+        cwd: retry.root,
+        encoding: "utf8",
+      });
+      expect(retryResult.status).toBe(0);
+      const firstPrompt = await readFile(firstPromptLog, "utf8");
+      const retryPrompt = await readFile(retryPromptLog, "utf8");
+      expect(retryPrompt).not.toBe(firstPrompt);
+      expect(retryPrompt).toContain("=== RETRY FAILURE FEEDBACK - FIX THIS FIRST ===");
+      expect(firstPrompt).not.toContain("=== RETRY FAILURE FEEDBACK - FIX THIS FIRST ===");
+    } finally {
+      await rm(first.root, { recursive: true, force: true });
+      await rm(first.helperRoot, { recursive: true, force: true });
+      await rm(retry.root, { recursive: true, force: true });
+      await rm(retry.helperRoot, { recursive: true, force: true });
+    }
+  });
+
+  windowsIt("treats a non-authoritative self-check failure as agent failure, not round success", async () => {
+    const f = await claimedImplementFixture("d215-self-check-fails");
+    try {
+      const promptLog = path.join(f.helperRoot, "self-check-prompt.txt");
+      const agent = await failingSelfCheckAgentStub(f.helperRoot, "self-check-agent", promptLog);
+      const result = spawnSync("node", [implementScript, "--repo", f.root, "--state-path", f.statePath, "--claimed-item-id", "W9202", "--agent-bin", agent], {
+        cwd: f.root,
+        encoding: "utf8",
+      });
+      expect(result.status).not.toBe(0);
+      const out = JSON.parse(String(result.stdout));
+      expect(out).toMatchObject({ ok: false, step: "agent-exit" });
+      expect(out.message).toContain("agent exited 17");
+      expect(out.stderrTail).toContain("npm run typecheck failed in self-check");
+      const head = (await execa("git", ["-C", f.root, "log", "--oneline", "--max-count=1"])).stdout;
+      expect(head).toContain("fixture base");
     } finally {
       await rm(f.root, { recursive: true, force: true });
       await rm(f.helperRoot, { recursive: true, force: true });

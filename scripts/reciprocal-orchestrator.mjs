@@ -407,8 +407,20 @@ function main() {
     const test = implementation.ok ? runStep({ name: "a-tests", command: commands.test, cwd: repo, state, statePath, logPath }) : implementation;
     if (test.ok) break;
     state.consecutiveFailures += 1;
-    state.failures = [...(state.failures || []), { command: test.command, exitCode: test.exitCode, output: test.output.slice(0, 12000), at: now() }];
-    save(statePath, logPath, state, "cycle.retry-feedback", { consecutiveFailures: state.consecutiveFailures, feedbackBytes: Buffer.byteLength(test.output || "", utf8) });
+    const failure = {
+      command: test.command,
+      exitCode: test.exitCode,
+      output: test.output.slice(0, 12000),
+      attemptCommit: implementation.ok ? state.lastImplementCommit : null,
+      at: now(),
+    };
+    state.failures = [...(state.failures || []), failure];
+    save(statePath, logPath, state, "cycle.retry-feedback", {
+      consecutiveFailures: state.consecutiveFailures,
+      feedbackBytes: Buffer.byteLength(failure.output || "", "utf8"),
+      feedbackDeliveredVia: "state.failures",
+      attemptCommit: failure.attemptCommit,
+    });
     if (state.consecutiveFailures >= 2) {
       state.phase = "failed-paused";
       state.step = "failed-paused";
