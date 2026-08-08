@@ -292,7 +292,7 @@ export async function backgroundProcessTool(action: BackgroundProcessAction, id?
   return `Stopped background process ${id}.`;
 }
 
-export async function startBackgroundProcessBridge(): Promise<{ port: number; token: string }> {
+export async function startBackgroundProcessBridge(cwd?: string): Promise<{ port: number; token: string }> {
   if (backgroundBridge) return { port: backgroundBridge.port, token: backgroundBridge.token };
   const token = randomBytes(24).toString("hex");
   const server = createServer((request, response) => {
@@ -307,7 +307,7 @@ export async function startBackgroundProcessBridge(): Promise<{ port: number; to
       try {
         const input = JSON.parse(body) as { action: BackgroundProcessAction; id?: string; command?: string; cwd?: string };
         const result = input.action === "start"
-          ? await bashTool({ cwd: input.cwd ?? process.cwd(), permissionMode: "yolo" }, input.command ?? "", DEFAULT_BASH_TIMEOUT_MS, true)
+          ? await bashTool({ cwd: cwd ?? input.cwd ?? process.cwd(), permissionMode: "yolo" }, input.command ?? "", DEFAULT_BASH_TIMEOUT_MS, true)
           : await backgroundProcessTool(input.action, input.id);
         response.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify({ ok: true, result }));
       } catch (error) {

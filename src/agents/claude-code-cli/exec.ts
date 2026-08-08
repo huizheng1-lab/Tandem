@@ -211,7 +211,7 @@ export async function runClaudeExec(options: ClaudeExecOptions): Promise<unknown
     readOnly: options.readOnly,
     maxBudgetUsd: options.maxBudgetUsd
   });
-  const bridge = await startBackgroundProcessBridge();
+  const bridge = await startBackgroundProcessBridge(options.cwd);
   options.onToolEvent?.({ role: options.role, tool: "claude_code_cli", target: options.readOnly ? "read-only prompt" : "write prompt", phase: "start" });
   const started = Date.now();
   const result = await execa(claudePath, args, {

@@ -13,7 +13,13 @@ async function backgroundCommand(args: string[], env: NodeJS.ProcessEnv, cwd: st
   const action = args[0] as "start" | "list" | "read" | "stop" | undefined;
   if (!port || !token) return "Tandem background execution is unavailable outside a live agent session.";
   if (!action || !["start", "list", "read", "stop"].includes(action)) return "Usage: tandem /background start <base64-command> | list | read <id> | stop <id>";
-  const body: { action: typeof action; id?: string; command?: string; cwd: string } = { action, cwd };
+  // CLI-backed agents inherit this variable from the bridge wrapper. Prefer it
+  // over the child process cwd so every request remains scoped to the session's
+  // protected project root, even if the vendor CLI changes directories.
+  const body: { action: typeof action; id?: string; command?: string; cwd: string } = {
+    action,
+    cwd: env.TANDEM_BACKGROUND_CWD || cwd
+  };
   if (action === "start") {
     if (!args[1]) return "Usage: tandem /background start <base64-command>";
     body.command = Buffer.from(args[1], "base64").toString("utf8");

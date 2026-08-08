@@ -158,7 +158,7 @@ export async function runCodexExec(options: CodexExecOptions & { readOnly?: bool
       modelReasoningEffort: options.modelReasoningEffort,
       writableRoots: codexWritableRoots(options.env ?? process.env)
     });
-    const bridge = await startBackgroundProcessBridge();
+    const bridge = await startBackgroundProcessBridge(options.cwd);
     const child = spawn(codexPath, args, {
       cwd: options.cwd,
       env: backgroundBridgeEnvironment({ ...(options.env ?? process.env), TANDEM_BACKGROUND_CWD: options.cwd }, bridge),
