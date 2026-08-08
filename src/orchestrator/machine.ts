@@ -16,6 +16,7 @@ import {
 import { sanitizePromptValue } from "../tools/sanitize.js";
 import { VerificationRunner, VerificationResult } from "./verification.js";
 import { EnvironmentPreflightError } from "../environment/preflight.js";
+import type { ResolvedEnvironment } from "../environment/types.js";
 
 export type MachinePhase = "IDLE" | "PLANNING" | "BUILDING" | "REVIEWING" | "FEEDBACK" | "TAKEOVER" | "DONE";
 export interface OrchestrationCheckpoint {
@@ -55,6 +56,7 @@ export interface BuildStreamInput {
 
 export interface AgentFns {
   prepareEnvironment?: (commands: string[]) => Promise<void>;
+  getEnvironment?: () => ResolvedEnvironment | undefined;
   plan(input: { request: string; goals: string[]; history?: string; attachments?: AttachmentRef[]; previousAttemptError?: string }): Promise<PlanResult>;
   build(input: BuildStreamInput): Promise<unknown>;
   review(input: { plan: BuildPlan; report: CompletionReport; round: number; diff: string; previousAttemptError?: string }): Promise<unknown>;
@@ -388,7 +390,7 @@ export async function runOrchestration(options: RunOptions): Promise<RunResult> 
       }
     }
     try {
-      const results: VerificationResult[] = await options.verificationRunner(plan?.verification ?? []);
+      const results: VerificationResult[] = await options.verificationRunner(plan?.verification ?? [], options.agents.getEnvironment?.());
       const passed = results.filter((result) => result.passed).length;
       emit({ type: "notice", message: `verification: ${passed}/${results.length} passed` });
       return { report: { ...report, verificationResults: results }, ran: true };

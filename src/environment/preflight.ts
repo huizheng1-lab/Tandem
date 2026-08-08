@@ -9,6 +9,19 @@ export interface EnvironmentPreflightResult {
   env: NodeJS.ProcessEnv;
 }
 
+/** Put the resolver's canonical executable directories first for every caller. */
+export function applyResolvedEnvironment(env: NodeJS.ProcessEnv, environment: ResolvedEnvironment, platform: NodeJS.Platform = process.platform): NodeJS.ProcessEnv {
+  const pathSeparator = platform === "win32" ? ";" : ":";
+  const selectedDirectories = Object.values(environment.tools)
+    .map((tool) => tool?.executablePath ? path.dirname(tool.executablePath) : undefined)
+    .filter((directory): directory is string => Boolean(directory));
+  const currentPath = env.PATH ?? env.Path ?? env.path ?? "";
+  const normalizedPath = [...new Set([...selectedDirectories, ...currentPath.split(pathSeparator).filter(Boolean)])].join(pathSeparator);
+  env.PATH = normalizedPath;
+  if (platform === "win32" && env.Path !== undefined) env.Path = normalizedPath;
+  return env;
+}
+
 export class EnvironmentPreflightError extends Error {
   readonly environment: ResolvedEnvironment;
   constructor(environment: ResolvedEnvironment) {
@@ -84,13 +97,6 @@ export async function preflightEnvironment(options: {
   const environment = await (options.resolve ?? resolveEnvironment)({ requestedCapabilities, env: options.env, platform, installed });
   if (environment.unresolvedCapabilities.length > 0) throw new EnvironmentPreflightError(environment);
 
-  const pathSeparator = platform === "win32" ? ";" : ":";
-  const selectedDirectories = Object.values(environment.tools)
-    .map((tool) => tool?.executablePath ? path.dirname(tool.executablePath) : undefined)
-    .filter((directory): directory is string => Boolean(directory));
-  const currentPath = options.env.PATH ?? options.env.Path ?? options.env.path ?? "";
-  const normalizedPath = [...new Set([...selectedDirectories, ...currentPath.split(pathSeparator).filter(Boolean)])].join(pathSeparator);
-  options.env.PATH = normalizedPath;
-  if (platform === "win32" && options.env.Path !== undefined) options.env.Path = normalizedPath;
+  applyResolvedEnvironment(options.env, environment, platform);
   return { environment, env: options.env };
 }

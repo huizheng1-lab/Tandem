@@ -20,10 +20,14 @@ describe("environment preflight integration", () => {
   it("is reachable from the live worker path", () => {
     const live = readFileSync(new URL("../src/agents/live.ts", import.meta.url), "utf8");
     const machine = readFileSync(new URL("../src/orchestrator/machine.ts", import.meta.url), "utf8");
+    const verification = readFileSync(new URL("../src/orchestrator/verification.ts", import.meta.url), "utf8");
     const preflight = readFileSync(new URL("../src/environment/preflight.ts", import.meta.url), "utf8");
     expect(live).toContain("preflightEnvironment");
     expect(live).toContain("prepareEnvironment");
+    expect(live).toContain("getEnvironment");
     expect(machine).toContain("options.agents.prepareEnvironment");
+    expect(machine).toContain("options.agents.getEnvironment");
+    expect(verification).toContain("applyResolvedEnvironment");
     expect(preflight).toContain("resolveEnvironment");
   });
 

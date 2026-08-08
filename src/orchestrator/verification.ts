@@ -1,9 +1,11 @@
 import { PermissionBridge, ensurePermission } from "../tools/permissions.js";
 import { bashTool, ShellResult } from "../tools/shell.js";
 import { runnableVerificationCommand } from "./artifacts.js";
+import { applyResolvedEnvironment } from "../environment/preflight.js";
+import type { ResolvedEnvironment } from "../environment/types.js";
 
 export type VerificationResult = Pick<ShellResult, "command" | "passed" | "output">;
-export type VerificationRunner = (commands: string[]) => Promise<VerificationResult[]>;
+export type VerificationRunner = (commands: string[], environment?: ResolvedEnvironment) => Promise<VerificationResult[]>;
 
 export const VERIFICATION_COMMAND_TIMEOUT_MS = 300_000;
 
@@ -15,8 +17,9 @@ export function createVerificationRunner(options: {
   env?: NodeJS.ProcessEnv;
   timeoutMs?: number;
 }): VerificationRunner {
-  return async (commands) => {
+  return async (commands, environment) => {
     if (commands.length === 0) return [];
+    if (environment) applyResolvedEnvironment(options.env ?? process.env, environment);
     if (options.permissionMode === "ask") {
       await ensurePermission(
         "ask",

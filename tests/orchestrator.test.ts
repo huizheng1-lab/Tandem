@@ -6,6 +6,7 @@ import { AgentFns, OrchestrationCheckpoint, runOrchestration, WorkerStepExhausti
 import { BuildPlan, CompletionReport, ReviewVerdict } from "../src/orchestrator/artifacts.js";
 import { createVerificationRunner } from "../src/orchestrator/verification.js";
 import type { PermissionRequest } from "../src/tools/permissions.js";
+import type { ResolvedEnvironment } from "../src/environment/types.js";
 
 const plan: BuildPlan = {
   title: "Todo CLI",
@@ -98,6 +99,31 @@ describe("orchestration", () => {
     });
     expect(result.takeover).toBe(true);
     expect(builds).toBe(0);
+  });
+
+  it("re-resolves for takeover and gives authoritative verification the refreshed environment", async () => {
+    let preflightCalls = 0;
+    const environments: ResolvedEnvironment[] = [];
+    const result = await runOrchestration({
+      request: "build",
+      config: { maxReviewRounds: 0, maxParallelWorkers: 1 },
+      agents: agents({
+        prepareEnvironment: async () => {
+          preflightCalls += 1;
+          environments.push({
+            requestedCapabilities: [], tools: {}, probeEvidence: [], unresolvedCapabilities: [], attemptedSources: [],
+            diagnostics: [{ severity: "info", capability: "ffmpeg", message: `refresh ${preflightCalls}` }]
+          });
+        },
+        getEnvironment: () => environments.at(-1)
+      }),
+      verificationRunner: async (_commands, environment) => [{
+        command: "npm test", passed: true, output: environment?.diagnostics[0]?.message ?? "missing environment"
+      }]
+    });
+    expect(result.takeover).toBe(true);
+    expect(preflightCalls).toBe(2);
+    expect(result.reports.at(-1)?.verificationResults[0]?.output).toBe("refresh 2");
   });
 
   it("gives the worker exactly maxReviewRounds build attempts", async () => {

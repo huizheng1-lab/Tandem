@@ -27,6 +27,7 @@ import { codexLeaderPlan, codexLeaderReview, codexLeaderTakeover } from "./codex
 import { runClaudeWorkerBuild } from "./claude-code-cli/worker.js";
 import { claudeLeaderPlan, claudeLeaderReview, claudeLeaderTakeover } from "./claude-code-cli/leader.js";
 import { preflightEnvironment } from "../environment/preflight.js";
+import type { ResolvedEnvironment } from "../environment/types.js";
 
 export interface LiveAgentOptions {
   config: TandemConfig;
@@ -450,6 +451,7 @@ export async function createLiveAgents(options: LiveAgentOptions): Promise<Agent
   const leaderThread: RunnerMessage[] = [...(options.leaderThread ?? [])].map((message) =>
     message.role === "user" && typeof message.content === "string" ? { ...message, content: stripEmbeddedHistoryDigest(message.content) } : message
   );
+  let resolvedEnvironment: ResolvedEnvironment | undefined;
   const compactLeaderThread = async (system: string): Promise<void> => {
     const budgetChars = leaderContextBudgetChars(options.config);
     if (estimatePromptSize(system, leaderThread).chars <= budgetChars || leaderThread.length <= 12) return;
@@ -474,6 +476,7 @@ export async function createLiveAgents(options: LiveAgentOptions): Promise<Agent
     prepareEnvironment: async (commands: string[]) => {
       try {
         const result = await preflightEnvironment({ commands, env: options.env });
+        resolvedEnvironment = result.environment;
         const selected = Object.values(result.environment.tools)
           .map((tool) => tool?.executablePath)
           .filter((value): value is string => Boolean(value));
@@ -484,6 +487,7 @@ export async function createLiveAgents(options: LiveAgentOptions): Promise<Agent
         throw error;
       }
     },
+    getEnvironment: () => resolvedEnvironment,
     plan: async ({ request, goals, history, attachments = [], previousAttemptError }): Promise<PlanResult> => {
       if (leader.entry.provider === "codex-cli") {
         return codexLeaderPlan(
