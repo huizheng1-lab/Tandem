@@ -48,8 +48,67 @@ describe("environment preflight integration", () => {
         }});
       }
     });
-    expect(seen).toEqual(["ffmpeg", "ffprobe"]);
+    // The plan's own capabilities are requested first; the standard toolchain is
+    // then attempted opportunistically so ad-hoc worker commands still resolve.
+    expect(seen.slice(0, 2)).toEqual(["ffmpeg", "ffprobe"]);
+    expect(seen).toContain("node");
     expect(result.env.PATH?.split(";").slice(0, 2)).toEqual(["C:\\Media\\bin", "C:\\missing"]);
+  });
+
+  it("resolves ffmpeg even when the BuildPlan never mentions it", async () => {
+    // Live failure 2026-08-08: a plan whose verification mentioned only `node`
+    // resolved only node, so a worker running ad-hoc ffprobe during a render
+    // found nothing and falsely reported the toolchain unavailable.
+    const env: NodeJS.ProcessEnv = { PATH: "C:\\missing" };
+    let seen: string[] = [];
+    const result = await preflightEnvironment({
+      commands: ["node scripts/verify.mjs"],
+      env,
+      platform: "win32",
+      resolve: async (options) => {
+        seen = options.requestedCapabilities.map((item) => item.kind);
+        return resolved({ tools: {
+          node: { capability: "node", executablePath: "C:\\nodejs\\node.exe", source: "path" },
+          ffmpeg: { capability: "ffmpeg", executablePath: "C:\\Media\\bin\\ffmpeg.exe", source: "registered-directory" },
+          ffprobe: { capability: "ffprobe", executablePath: "C:\\Media\\bin\\ffprobe.exe", source: "registered-directory" }
+        }});
+      }
+    });
+    expect(seen).toContain("ffmpeg");
+    expect(seen).toContain("ffprobe");
+    expect(result.environment.tools.ffmpeg?.executablePath).toBe("C:\\Media\\bin\\ffmpeg.exe");
+    expect(result.env.PATH).toContain("C:\\Media\\bin");
+  });
+
+  it("does not fail a run when an opportunistic runtime is genuinely absent", async () => {
+    const env: NodeJS.ProcessEnv = { PATH: "C:\\missing" };
+    const result = await preflightEnvironment({
+      commands: ["node scripts/verify.mjs"],
+      env,
+      platform: "win32",
+      resolve: async () => resolved({
+        tools: { node: { capability: "node", executablePath: "C:\\nodejs\\node.exe", source: "path" } },
+        unresolvedCapabilities: [
+          { capability: "ffmpeg", name: "ffmpeg", reason: "not installed", attemptedSources: ["path"] },
+          { capability: "ffprobe", name: "ffprobe", reason: "not installed", attemptedSources: ["path"] }
+        ]
+      })
+    });
+    // ffmpeg was never required by the plan, so its absence must not throw.
+    expect(result.environment.tools.node?.executablePath).toBe("C:\\nodejs\\node.exe");
+  });
+
+  it("still fails closed when a plan-required capability is missing", async () => {
+    const env: NodeJS.ProcessEnv = { PATH: "C:\\missing" };
+    await expect(preflightEnvironment({
+      commands: ["ffmpeg -i in.mp4 out.mp4"],
+      env,
+      platform: "win32",
+      resolve: async () => resolved({
+        tools: {},
+        unresolvedCapabilities: [{ capability: "ffmpeg", name: "ffmpeg", reason: "not installed", attemptedSources: ["path"] }]
+      })
+    })).rejects.toThrow(/ffmpeg/);
   });
 
   it("resolves ffmpeg and ffprobe from a known install directory when PATH misses them", async () => {

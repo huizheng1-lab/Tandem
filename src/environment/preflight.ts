@@ -94,8 +94,25 @@ export async function preflightEnvironment(options: {
     ffmpegDirectories: [...new Set([...(discovered.ffmpegDirectories ?? []), ...(options.installed?.ffmpegDirectories ?? [])])],
     codexDirectories: [...new Set([...(discovered.codexDirectories ?? []), ...(options.installed?.codexDirectories ?? [])])]
   };
-  const environment = await (options.resolve ?? resolveEnvironment)({ requestedCapabilities, env: options.env, platform, installed });
-  if (environment.unresolvedCapabilities.length > 0) throw new EnvironmentPreflightError(environment);
+  // Resolve the standard toolchain opportunistically, not only what the plan text
+  // happened to name. A worker routinely runs commands the BuildPlan never mentions
+  // (ad-hoc ffprobe/ffmpeg during a render), and plan-scoped discovery left those
+  // unresolved so PATH was never augmented and the tool looked "unavailable" even
+  // when installed. These extras are best effort: discovered ones get their
+  // directory prepended, absent ones must never fail a run that did not need them.
+  const requiredKinds = new Set(requestedCapabilities.map((capability) => capability.kind));
+  const opportunistic: RequestedCapability[] = (["node", "ffmpeg", "ffprobe"] as const)
+    .filter((kind) => !requiredKinds.has(kind))
+    .map((kind) => ({ kind }));
+  const environment = await (options.resolve ?? resolveEnvironment)({
+    requestedCapabilities: [...requestedCapabilities, ...opportunistic],
+    env: options.env,
+    platform,
+    installed
+  });
+  // Fail closed only for capabilities the plan genuinely required.
+  const requiredUnresolved = environment.unresolvedCapabilities.filter((item) => requiredKinds.has(item.capability));
+  if (requiredUnresolved.length > 0) throw new EnvironmentPreflightError({ ...environment, unresolvedCapabilities: requiredUnresolved });
 
   applyResolvedEnvironment(options.env, environment, platform);
   return { environment, env: options.env };
