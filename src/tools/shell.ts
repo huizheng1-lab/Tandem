@@ -23,6 +23,7 @@ export interface BackgroundProcessInfo {
 }
 
 export type BackgroundProcessAction = "list" | "read" | "stop";
+type BackgroundBridgeAction = BackgroundProcessAction | "start";
 
 export const DEFAULT_BASH_TIMEOUT_MS = 120000;
 export const MAX_BASH_TIMEOUT_MS = 300000;
@@ -324,7 +325,7 @@ export async function startBackgroundProcessBridge(
     request.on("data", (chunk) => { body += chunk; });
     request.on("end", async () => {
       try {
-        const input = JSON.parse(body) as { action: BackgroundProcessAction; id?: string; command?: string; cwd?: string };
+        const input = JSON.parse(body) as { action: BackgroundBridgeAction; id?: string; command?: string; cwd?: string };
         const result = input.action === "start"
           ? await bashTool({
             cwd: backgroundBridge?.cwd ?? input.cwd ?? process.cwd(),
