@@ -472,11 +472,17 @@ export async function createLiveAgents(options: LiveAgentOptions): Promise<Agent
 
   return {
     prepareEnvironment: async (commands: string[]) => {
-      const result = await preflightEnvironment({ commands, env: options.env });
-      const selected = Object.values(result.environment.tools)
-        .map((tool) => tool?.executablePath)
-        .filter((value): value is string => Boolean(value));
-      if (selected.length > 0) options.onToolEvent?.({ role: "worker", tool: "environment-preflight", target: selected.join(", "), phase: "end", ok: true });
+      try {
+        const result = await preflightEnvironment({ commands, env: options.env });
+        const selected = Object.values(result.environment.tools)
+          .map((tool) => tool?.executablePath)
+          .filter((value): value is string => Boolean(value));
+        if (selected.length > 0) options.onToolEvent?.({ role: "worker", tool: "environment-preflight", target: selected.join(", "), phase: "end", ok: true });
+      } catch (error) {
+        const missing = (error as { environment?: { unresolvedCapabilities?: Array<{ name: string }> } }).environment?.unresolvedCapabilities?.map((item) => item.name).join(", ");
+        options.onToolEvent?.({ role: "worker", tool: "environment-preflight", target: `missing ${missing ?? "required capability"}`, phase: "end", ok: false });
+        throw error;
+      }
     },
     plan: async ({ request, goals, history, attachments = [], previousAttemptError }): Promise<PlanResult> => {
       if (leader.entry.provider === "codex-cli") {

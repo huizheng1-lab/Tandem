@@ -1,7 +1,8 @@
 import { readdirSync } from "node:fs";
 import path from "node:path";
 import { resolveEnvironment } from "./resolve.js";
-import type { RequestedCapability, ResolvedEnvironment } from "./types.js";
+import type { InstalledRuntimeCandidates } from "./resolve.js";
+import type { ResolvedEnvironment } from "./types.js";
 
 export interface EnvironmentPreflightResult {
   environment: ResolvedEnvironment;
@@ -12,7 +13,10 @@ export class EnvironmentPreflightError extends Error {
   readonly environment: ResolvedEnvironment;
   constructor(environment: ResolvedEnvironment) {
     const missing = environment.unresolvedCapabilities[0];
-    super(`Environment preflight blocked execution: missing ${missing?.name ?? "required capability"}. ${missing?.reason ?? "No usable runtime was found."}`);
+    const detail = missing
+      ? `${missing.name}: ${missing.reason} (attempted ${missing.attemptedSources.join(", ") || "no candidates"})`
+      : "No usable runtime was found.";
+    super(`Environment preflight blocked execution: missing ${detail}`);
     this.name = "EnvironmentPreflightError";
     this.environment = environment;
   }
@@ -24,8 +28,10 @@ function commandCapabilities(commands: string[], platform: NodeJS.Platform): Req
   const add = (capability: RequestedCapability) => {
     if (!capabilities.some((item) => item.kind === capability.kind)) capabilities.push(capability);
   };
-  const executable = platform === "win32" ? "(?:[A-Za-z]:[\\\\/][^\\s&|;]+[\\\\/])?" : "(?:\\.\\.?/)?";
-  const token = (name: string) => new RegExp(`(?:^|[\\s;&|])${executable}${name}(?:\\.exe)?(?=\\s|$)`, "im").test(text);
+  // Do not require the command to be a bare PATH token. Windows installations
+  // commonly live below a directory containing spaces (for example WinGet's
+  // package folder), and the shell may receive a quoted absolute path.
+  const token = (name: string) => new RegExp(`\\b${name}(?:\\.exe)?\\b`, "im").test(text);
   if (token("ffmpeg")) add({ kind: "ffmpeg" });
   if (token("ffprobe")) add({ kind: "ffprobe" });
   if (token("python(?:3)?")) add({ kind: "python" });
@@ -64,10 +70,17 @@ export async function preflightEnvironment(options: {
   env: NodeJS.ProcessEnv;
   platform?: NodeJS.Platform;
   resolve?: typeof resolveEnvironment;
+  installed?: InstalledRuntimeCandidates;
 }): Promise<EnvironmentPreflightResult> {
   const platform = options.platform ?? process.platform;
   const requestedCapabilities = commandCapabilities(options.commands, platform);
-  const installed = installedDirectories(options.env, platform);
+  const discovered = installedDirectories(options.env, platform);
+  const installed: InstalledRuntimeCandidates = {
+    ...discovered,
+    ...options.installed,
+    ffmpegDirectories: [...new Set([...(discovered.ffmpegDirectories ?? []), ...(options.installed?.ffmpegDirectories ?? [])])],
+    codexDirectories: [...new Set([...(discovered.codexDirectories ?? []), ...(options.installed?.codexDirectories ?? [])])]
+  };
   const environment = await (options.resolve ?? resolveEnvironment)({ requestedCapabilities, env: options.env, platform, installed });
   if (environment.unresolvedCapabilities.length > 0) throw new EnvironmentPreflightError(environment);
 
