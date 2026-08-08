@@ -109,9 +109,24 @@ function retryFailureFeedbackSection(state, itemId, tailLimit = FAILURE_OUTPUT_T
 
 function buildImplementationPrompt({ item, worktree, state, dependencyProvisioning }) {
   const retrySection = retryFailureFeedbackSection(state, item.id);
-  const dependencyLine = dependencyProvisioning?.status === "linked"
+  const dependencySelfCheckAvailable = ["linked", "present"].includes(dependencyProvisioning?.status);
+  const dependencyLine = dependencySelfCheckAvailable
     ? `Dependency self-check support: node_modules is available in this isolated worktree via ${dependencyProvisioning.strategy}.`
     : `Dependency self-check support: node_modules could not be provisioned (${dependencyProvisioning?.reason || "unknown"}), so type self-checks may be unavailable. Continue with implementation; the orchestrator remains authoritative.`;
+  const selfCheckInstruction = dependencySelfCheckAvailable
+    ? [
+      "After making your changes and before printing the final `SUMMARY:` line, run `npm run typecheck`",
+      "or `tsc --noEmit` as a mandatory non-authoritative syntax/type self-check. Fix every error",
+      "reported by that self-check and re-run it until it is clean. Finishing with a known-failing",
+      "compile is not acceptable; if you genuinely cannot reach a clean compile, say so explicitly",
+      "in the `SUMMARY:` line or print `ABORT <short reason>` and exit non-zero.",
+    ]
+    : [
+      "Because dependency provisioning did not make node_modules available in this isolated worktree,",
+      "the mandatory type self-check is waived for this round. Do not pretend it ran. If you cannot",
+      "run `npm run typecheck` or `tsc --noEmit`, say that explicitly in the `SUMMARY:` line while",
+      "still making the best implementation change you can. The orchestrator remains authoritative.",
+    ];
   return [
     `You are implementing wishlist item ${item.id} in an isolated repository worktree (cwd: ${worktree}).`,
     "",
@@ -127,8 +142,8 @@ function buildImplementationPrompt({ item, worktree, state, dependencyProvisioni
     "addresses the item without touching unrelated areas.",
     "",
     "Make a real code change that addresses the item. Do NOT run git yourself - a wrapper script commits",
-    "your file changes after you finish. You may run only a non-authoritative syntax/type self-check such",
-    "as `npm run typecheck` or `tsc --noEmit` to catch your own mistakes before finishing.",
+    "your file changes after you finish.",
+    ...selfCheckInstruction,
     "",
     "Do NOT modify the wishlist file, the orchestrator state file, the relay state, or any swap/promotion",
     "machinery; the orchestrator owns those. Do NOT mark the item DONE. Do NOT run the test suite; the",
@@ -269,7 +284,7 @@ function agentArgs(agent, cwd) {
     "--no-session-persistence",
     "--permission-mode", "acceptEdits",
     "--allowedTools", "Read,Edit,Write,Glob,Grep,Bash",
-    "--system-prompt", "Implement the wishlist item by editing files. Be terse. This is a headless, unattended run: never ask questions or wait for confirmation; decide autonomously. Do not use git. Bash is allowed only for non-authoritative syntax/type self-checks such as npm run typecheck or tsc --noEmit; do not run package-manager install commands or the full test suite. A wrapper commits your changes afterward.",
+    "--system-prompt", "Implement the wishlist item by editing files. Be terse. This is a headless, unattended run: never ask questions or wait for confirmation; decide autonomously. Do not use git. Use Bash only for the mandatory non-authoritative syntax/type self-check, npm run typecheck or tsc --noEmit, when dependencies are available; do not run package-manager install commands or the full test suite. A wrapper commits your changes afterward.",
   ];
 }
 

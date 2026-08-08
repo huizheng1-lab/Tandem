@@ -214,6 +214,30 @@ async function codexAgentStub(root: string, label: string, relativePath = "evide
   return { launcher, log };
 }
 
+async function claudeAgentStub(root: string, label: string, promptLog: string) {
+  const stub = path.join(root, `${label}.claude.cjs`);
+  const launcher = path.join(root, `${label}.claude.cmd`);
+  const log = path.join(root, `${label}.claude.json`);
+  const lines = [
+    "const fs = require('fs');",
+    "const path = require('path');",
+    "let input = '';",
+    "process.stdin.setEncoding('utf8');",
+    "process.stdin.on('data', (chunk) => input += chunk);",
+    "process.stdin.on('end', () => {",
+    `  fs.writeFileSync(${JSON.stringify(promptLog)}, input);`,
+    `  fs.writeFileSync(${JSON.stringify(log)}, JSON.stringify({ argv: process.argv.slice(2), input }, null, 2));`,
+    "  const target = path.join(process.cwd(), 'evidence', 'D219-claude.txt');",
+    "  fs.mkdirSync(path.dirname(target), { recursive: true });",
+    "  fs.writeFileSync(target, 'claude implementation\\n');",
+    "  process.stdout.write('SUMMARY: claude implementation\\n');",
+    "});",
+  ];
+  await writeFile(stub, lines.join("\n"), "utf8");
+  await writeFile(launcher, `@echo off\r\n"${process.execPath}" "${stub}" %*\r\n`, "utf8");
+  return { launcher, log };
+}
+
 async function claimedImplementFixture(name: string) {
   const root = await mkdtemp(path.join(tmpdir(), `tandem-d202-${name}-`));
   const helperRoot = await mkdtemp(path.join(tmpdir(), `tandem-d202-helper-${name}-`));
@@ -231,6 +255,23 @@ async function claimedImplementFixture(name: string) {
   await execa("git", ["-C", root, "add", ".gitignore", "state/orchestrator-state.json"]);
   await execa("git", ["-C", root, "commit", "-m", "fixture base"]);
   return { root, helperRoot, statePath: path.join(stateDir, "orchestrator-state.json") };
+}
+
+function expectImplementationPromptProhibitions(prompt: string) {
+  expect(prompt).toContain("Do NOT run git yourself");
+  expect(prompt).toContain("Do not run npm install, npm ci, pnpm install, yarn install");
+  expect(prompt).toContain("Do NOT modify the wishlist file, the orchestrator state file, the relay state");
+  expect(prompt).toContain("Do NOT mark the item DONE");
+  expect(prompt).toContain("Do NOT run the test suite");
+  expect(prompt).toContain("orchestrator runs `npm run typecheck && npm test && git diff --check` itself as the only authoritative");
+  expect(prompt).toContain("A self-check pass is not round success.");
+}
+
+function expectClaudeSystemPromptProhibitions(systemPrompt: string) {
+  expect(systemPrompt).toContain("Do not use git.");
+  expect(systemPrompt).toContain("do not run package-manager install commands");
+  expect(systemPrompt).toContain("or the full test suite");
+  expect(systemPrompt).toContain("A wrapper commits your changes afterward.");
 }
 
 async function linkRealNodeModules(root: string) {
@@ -579,6 +620,85 @@ describe("D200 reciprocal implement script", () => {
       const out = JSON.parse(String(result.stdout));
       expect(out).toMatchObject({ ok: true, dependencyProvisioning: { status: "missing", strategy: "none" } });
       expect(await readFile(path.join(f.root, "evidence", "D218-degraded.txt"), "utf8")).toContain("isolated implementation");
+    } finally {
+      await rm(f.root, { recursive: true, force: true });
+      await rm(f.helperRoot, { recursive: true, force: true });
+    }
+  });
+
+  windowsIt("requires a mandatory type self-check in the implementer prompt when dependencies are available", async () => {
+    const f = await claimedImplementFixture("d219-mandatory-typecheck-prompt");
+    let unlinkFixtureNodeModules: (() => Promise<void>) | null = null;
+    try {
+      unlinkFixtureNodeModules = await linkRealNodeModules(f.root);
+      const promptLog = path.join(f.helperRoot, "d219-mandatory-prompt.txt");
+      const agent = await promptCapturingAgentStub(f.helperRoot, "d219-mandatory-agent", promptLog, "evidence/D219-mandatory.txt");
+      const result = spawnSync("node", [implementScript, "--repo", f.root, "--state-path", f.statePath, "--claimed-item-id", "W9202", "--agent-bin", agent], {
+        cwd: f.root,
+        encoding: "utf8",
+      });
+      expect(result.status).toBe(0);
+      const prompt = await readFile(promptLog, "utf8");
+      expect(prompt).toContain("Dependency self-check support: node_modules is available");
+      expect(prompt).toContain("After making your changes and before printing the final `SUMMARY:` line, run `npm run typecheck`");
+      expect(prompt).toContain("or `tsc --noEmit` as a mandatory non-authoritative syntax/type self-check.");
+      expect(prompt).toContain("Fix every error");
+      expect(prompt).toContain("re-run it until it is clean");
+      expect(prompt).toContain("Finishing with a known-failing");
+      expect(prompt).toContain("compile is not acceptable");
+      expect(prompt).toContain("say so explicitly");
+      expect(prompt).not.toContain("You may run only a non-authoritative syntax/type self-check");
+      expect(prompt).not.toMatch(/\bmay run\b/i);
+      expectImplementationPromptProhibitions(prompt);
+    } finally {
+      if (unlinkFixtureNodeModules) await unlinkFixtureNodeModules();
+      await rm(f.root, { recursive: true, force: true });
+      await rm(f.helperRoot, { recursive: true, force: true });
+    }
+  });
+
+  windowsIt("waives the mandatory type self-check in the implementer prompt when dependencies are missing", async () => {
+    const f = await claimedImplementFixture("d219-waived-typecheck-prompt");
+    try {
+      const promptLog = path.join(f.helperRoot, "d219-waived-prompt.txt");
+      const agent = await promptCapturingAgentStub(f.helperRoot, "d219-waived-agent", promptLog, "evidence/D219-waived.txt");
+      const result = spawnSync("node", [implementScript, "--repo", f.root, "--state-path", f.statePath, "--claimed-item-id", "W9202", "--agent-bin", agent], {
+        cwd: f.root,
+        encoding: "utf8",
+      });
+      expect(result.status).toBe(0);
+      const prompt = await readFile(promptLog, "utf8");
+      expect(prompt).toContain("node_modules could not be provisioned");
+      expect(prompt).toContain("the mandatory type self-check is waived for this round");
+      expect(prompt).toContain("Do not pretend it ran");
+      expect(prompt).toContain("say that explicitly in the `SUMMARY:` line");
+      expect(prompt).not.toContain("Fix every error");
+      expect(prompt).not.toContain("You may run only a non-authoritative syntax/type self-check");
+      expect(prompt).not.toMatch(/\bmay run\b/i);
+      expectImplementationPromptProhibitions(prompt);
+    } finally {
+      await rm(f.root, { recursive: true, force: true });
+      await rm(f.helperRoot, { recursive: true, force: true });
+    }
+  });
+
+  windowsIt("uses a mandatory but still restricted Claude system prompt", async () => {
+    const f = await claimedImplementFixture("d219-claude-system-prompt");
+    try {
+      const promptLog = path.join(f.helperRoot, "d219-claude-prompt.txt");
+      const claude = await claudeAgentStub(f.helperRoot, "d219-claude-agent", promptLog);
+      const result = spawnSync("node", [implementScript, "--repo", f.root, "--state-path", f.statePath, "--claimed-item-id", "W9202", "--agent-bin", claude.launcher, "--agent-provider", "claude"], {
+        cwd: f.root,
+        encoding: "utf8",
+      });
+      expect(result.status).toBe(0);
+      const invocation = JSON.parse(await readFile(claude.log, "utf8")) as { argv: string[] };
+      const systemPrompt = invocation.argv.slice(invocation.argv.indexOf("--system-prompt") + 1).join(" ");
+      expect(systemPrompt).toContain("mandatory non-authoritative syntax/type self-check");
+      expect(systemPrompt).toContain("npm run typecheck or tsc --noEmit");
+      expect(systemPrompt).not.toMatch(/Bash is allowed only for non-authoritative/i);
+      expect(systemPrompt).not.toMatch(/\bmay run\b/i);
+      expectClaudeSystemPromptProhibitions(systemPrompt);
     } finally {
       await rm(f.root, { recursive: true, force: true });
       await rm(f.helperRoot, { recursive: true, force: true });
