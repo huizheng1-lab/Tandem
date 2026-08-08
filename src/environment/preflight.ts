@@ -7,8 +7,12 @@ import type { RequestedCapability, ResolvedEnvironment } from "./types.js";
 export interface EnvironmentPreflightResult {
   environment: ResolvedEnvironment;
   env: NodeJS.ProcessEnv;
-  /** Capabilities named by the plan/command; opportunistic probes are not included. */
+  /** Capabilities named by the plan/command and therefore strict. */
   requiredCapabilities: RequestedCapability[];
+  /** Every capability attempted, including best-effort standard toolchain probes. */
+  attemptedCapabilities: RequestedCapability[];
+  /** Best-effort misses are reported here but do not block execution. */
+  notFoundCapabilities: ResolvedEnvironment["unresolvedCapabilities"];
 }
 
 /** Put the resolver's canonical executable directories first for every caller. */
@@ -37,7 +41,7 @@ export class EnvironmentPreflightError extends Error {
   }
 }
 
-function commandCapabilities(commands: string[], platform: NodeJS.Platform): RequestedCapability[] {
+export function commandCapabilities(commands: string[], platform: NodeJS.Platform): RequestedCapability[] {
   const text = commands.join("\n");
   const capabilities: RequestedCapability[] = [];
   const add = (capability: RequestedCapability) => {
@@ -86,6 +90,8 @@ export async function preflightEnvironment(options: {
   platform?: NodeJS.Platform;
   resolve?: typeof resolveEnvironment;
   installed?: InstalledRuntimeCandidates;
+  /** Best-effort command discovery must not turn an optional miss into a blocker. */
+  strict?: boolean;
 }): Promise<EnvironmentPreflightResult> {
   const platform = options.platform ?? process.platform;
   const requestedCapabilities = commandCapabilities(options.commands, platform);
@@ -114,8 +120,14 @@ export async function preflightEnvironment(options: {
   });
   // Fail closed only for capabilities the plan genuinely required.
   const requiredUnresolved = environment.unresolvedCapabilities.filter((item) => requiredKinds.has(item.capability));
-  if (requiredUnresolved.length > 0) throw new EnvironmentPreflightError({ ...environment, unresolvedCapabilities: requiredUnresolved });
+  if (requiredUnresolved.length > 0 && options.strict !== false) throw new EnvironmentPreflightError({ ...environment, unresolvedCapabilities: requiredUnresolved });
 
   applyResolvedEnvironment(options.env, environment, platform);
-  return { environment, env: options.env, requiredCapabilities: requestedCapabilities };
+  return {
+    environment,
+    env: options.env,
+    requiredCapabilities: requestedCapabilities,
+    attemptedCapabilities: environment.requestedCapabilities,
+    notFoundCapabilities: environment.unresolvedCapabilities
+  };
 }

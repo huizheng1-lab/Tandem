@@ -26,7 +26,7 @@ import { runCodexWorkerBuild } from "./codex-cli/worker.js";
 import { codexLeaderPlan, codexLeaderReview, codexLeaderTakeover } from "./codex-cli/leader.js";
 import { runClaudeWorkerBuild } from "./claude-code-cli/worker.js";
 import { claudeLeaderPlan, claudeLeaderReview, claudeLeaderTakeover } from "./claude-code-cli/leader.js";
-import { preflightEnvironment } from "../environment/preflight.js";
+import { commandCapabilities, preflightEnvironment } from "../environment/preflight.js";
 import type { ResolvedEnvironment } from "../environment/types.js";
 
 export interface LiveAgentOptions {
@@ -440,6 +440,7 @@ export async function createLiveAgents(options: LiveAgentOptions): Promise<Agent
     cwd: options.cwd,
     env: options.env,
     environment: undefined as ResolvedEnvironment | undefined,
+    discoverEnvironment: undefined as ((commands: string[]) => Promise<void>) | undefined,
     permissionMode: options.config.permissionMode,
     permissionBridge: options.permissionBridge,
     recordTouchedPath: options.recordTouchedPath,
@@ -458,6 +459,7 @@ export async function createLiveAgents(options: LiveAgentOptions): Promise<Agent
   // installed-runtime roots for each of those calls is both expensive and can
   // produce inconsistent PATH snapshots.
   let environmentPreparation: Promise<Awaited<ReturnType<typeof preflightEnvironment>>> | undefined;
+  const commandDiscoveries = new Map<string, Promise<void>>();
   const compactLeaderThread = async (system: string): Promise<void> => {
     const budgetChars = leaderContextBudgetChars(options.config);
     if (estimatePromptSize(system, leaderThread).chars <= budgetChars || leaderThread.length <= 12) return;
@@ -478,6 +480,37 @@ export async function createLiveAgents(options: LiveAgentOptions): Promise<Agent
     await options.onLeaderCompaction?.({ summary: text.trim(), compactedTurns: older.length });
   };
 
+  const discoverEnvironment = async (commands: string[]): Promise<void> => {
+    const capabilities = commandCapabilities(commands, process.platform);
+    await Promise.all(capabilities.map(async (capability) => {
+      if (capability.kind === "network-host") return;
+      if (resolvedEnvironment?.tools[capability.kind]) return;
+      const key = capability.kind;
+      let discovery = commandDiscoveries.get(key);
+      if (!discovery) {
+        discovery = (async () => {
+          const result = await preflightEnvironment({ commands, env: options.env, strict: false });
+          if (!resolvedEnvironment) resolvedEnvironment = result.environment;
+          else {
+            resolvedEnvironment = {
+              ...resolvedEnvironment,
+              tools: { ...resolvedEnvironment.tools, ...result.environment.tools },
+              probeEvidence: [...resolvedEnvironment.probeEvidence, ...result.environment.probeEvidence],
+              attemptedSources: [...resolvedEnvironment.attemptedSources, ...result.environment.attemptedSources],
+              diagnostics: [...resolvedEnvironment.diagnostics, ...result.environment.diagnostics],
+              unresolvedCapabilities: resolvedEnvironment.unresolvedCapabilities.filter((item) => item.capability !== capability.kind)
+                .concat(result.environment.unresolvedCapabilities.filter((item) => item.capability === capability.kind))
+            };
+          }
+          toolContext.environment = resolvedEnvironment;
+        })();
+        commandDiscoveries.set(key, discovery);
+      }
+      await discovery;
+    }));
+  };
+  toolContext.discoverEnvironment = discoverEnvironment;
+
   return {
     prepareEnvironment: async (commands: string[]) => {
       try {
@@ -493,13 +526,15 @@ export async function createLiveAgents(options: LiveAgentOptions): Promise<Agent
           .filter((value): value is string => Boolean(value));
         const requested = result.requiredCapabilities.map((capability) => capability.kind);
         const attempted = result.environment.requestedCapabilities.map((capability) => capability.kind);
-        const missing = result.environment.unresolvedCapabilities.map((capability) => capability.name);
+        const missing = result.notFoundCapabilities.map((capability) => capability.name);
+        const required = new Set(result.requiredCapabilities.map((capability) => capability.kind));
+        const requiredMissing = result.notFoundCapabilities.filter((capability) => required.has(capability.capability));
         options.onToolEvent?.({
           role: "worker",
           tool: "environment-preflight",
           target: `requested=${[...new Set(requested)].join(",") || "none"}; attempted=${[...new Set(attempted)].join(",") || "none"}; resolved=${selected.join(",") || "none"}; not-found=${missing.join(",") || "none"}`,
           phase: "end",
-          ok: missing.length === 0
+          ok: requiredMissing.length === 0
         });
       } catch (error) {
         const missing = (error as { environment?: { unresolvedCapabilities?: Array<{ name: string }> } }).environment?.unresolvedCapabilities?.map((item) => item.name).join(", ");

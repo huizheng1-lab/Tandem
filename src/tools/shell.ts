@@ -413,6 +413,7 @@ export async function bashTool(ctx: ToolContext, command: string, timeoutMs = DE
   resolveInside(ctx.cwd, ".");
   assertSafeBash(ctx.cwd, command);
   await ensurePermission(ctx.permissionMode, { action: "bash", target: command }, ctx.permissionBridge);
+  await ctx.discoverEnvironment?.([command]);
   if (runInBackground) return startBackgroundProcess(ctx, command);
   const executionEnv = ctx.env ?? process.env;
   if (ctx.environment) applyResolvedEnvironment(executionEnv, ctx.environment);

@@ -14,6 +14,8 @@ export interface ToolContext {
   env?: NodeJS.ProcessEnv;
   /** The preflight snapshot shared by worker, takeover, and verification. */
   environment?: ResolvedEnvironment;
+  /** Resolve runtimes mentioned by an ad-hoc shell command before it runs. */
+  discoverEnvironment?: (commands: string[]) => Promise<void>;
   permissionMode: PermissionMode;
   permissionBridge?: PermissionBridge;
   recordTouchedPath?: (filePath: string) => void;
