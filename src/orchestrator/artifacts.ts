@@ -347,12 +347,17 @@ export function validateExecutionContextClaims(plan: BuildPlan): string[] {
   // execution-context impossibility claim.
   const readOnlyClaim =
     /\b(?:read[ -]?only|inspection[ -]?only)\b[\s\S]{0,120}\b(?:cannot|can't|unable|not able|impossible|blocked|no)\b[\s\S]{0,80}\b(?:write|writ(?:e|ing)|modify|create|run|start|execute|output|filesystem|file system|workspace)/i;
-  const directWriteImpossibility =
-    /\b(?:cannot|can't|unable|not able|impossible|blocked|no)\b[\s\S]{0,80}\b(?:write|writ(?:e|ing)|modify|create|run|start|execute|output)\b/i;
+  // A normal implementation constraint can quite legitimately say that a particular
+  // file must not be modified (for example, "do not modify package-lock.json"). It is
+  // only an invalid planning claim when the restriction is attributed to the planner's
+  // temporary context. Keep the generic impossibility check scoped to that context so
+  // validation does not turn ordinary task scope into a rejected plan.
+  const planningContextImpossibility =
+    /\b(?:planning|planner|leader|this\s+turn|read[ -]?only\s+tools?|inspection[ -]?only)\b[\s\S]{0,120}\b(?:cannot|can't|unable|not able|impossible|blocked|no)\b[\s\S]{0,80}\b(?:write|writ(?:e|ing)|modify|create|run|start|execute|output|filesystem|file system|workspace)\b/i;
   const readOnlyEnvironment =
     /\b(?:environment|workspace|filesystem|file system)\b[\s\S]{0,80}\b(?:read[ -]?only|not writable|cannot be written|can't be written|no write)\b/i;
   for (const constraint of plan.constraints) {
-    if (readOnlyClaim.test(constraint) || directWriteImpossibility.test(constraint) || readOnlyEnvironment.test(constraint)) {
+    if (readOnlyClaim.test(constraint) || planningContextImpossibility.test(constraint) || readOnlyEnvironment.test(constraint)) {
       errors.push(`constraint incorrectly treats the leader's planning-time read-only tools as a job limitation: "${constraint}"`);
     }
   }
