@@ -369,7 +369,9 @@ export function backgroundBridgeEnvironment(env: NodeJS.ProcessEnv, bridge: { po
     ...env,
     TANDEM_BACKGROUND_PORT: String(bridge.port),
     TANDEM_BACKGROUND_TOKEN: bridge.token,
-    TANDEM_BACKGROUND_COMMAND: "tandem /background"
+    // Allow packaged/development launchers to provide the exact command the
+    // vendor CLI can invoke; the installed CLI remains the default.
+    TANDEM_BACKGROUND_COMMAND: env.TANDEM_BACKGROUND_COMMAND?.trim() || "tandem /background"
   };
 }
 
@@ -378,10 +380,14 @@ Tandem-managed long-lived processes are available even in this CLI-backed turn. 
   tandem /background start <base64-command>
 It returns a process id. In later calls use \\"tandem /background list\\", \\"tandem /background read <id>\\", and \\"tandem /background stop <id>\\". Use this for local servers or jobs that must outlive one command call; do not use shell-only &, Start-Process, or detached-process workarounds. The process is automatically swept when the Tandem session/app exits.`;
 
-export function cliBackgroundInstructions(readOnly = false): string {
+export function cliBackgroundInstructions(readOnly = false, command = "tandem /background"): string {
+  const instructions = `
+Tandem-managed long-lived processes are available even in this CLI-backed turn. To start one, base64-encode the shell command and run:
+  ${command} start <base64-command>
+It returns a process id. In later calls use \"${command} list\", \"${command} read <id>\", and \"${command} stop <id>\". Use this for local servers or jobs that must outlive one command call; do not use shell-only &, Start-Process, or detached-process workarounds. The process is automatically swept when the Tandem session/app exits.`;
   return readOnly
-    ? `${CLI_BACKGROUND_INSTRUCTIONS}\nThis is a read-only turn: list, read, and stop are available, but starting a new process is not.`
-    : CLI_BACKGROUND_INSTRUCTIONS;
+    ? `${instructions}\nThis is a read-only turn: list, read, and stop are available, but starting a new process is not.`
+    : instructions;
 }
 
 export async function cleanupBackgroundProcesses(): Promise<void> {

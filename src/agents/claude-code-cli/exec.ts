@@ -216,10 +216,11 @@ export async function runClaudeExec(options: ClaudeExecOptions): Promise<unknown
   const bridge = await startBackgroundProcessBridge(options.cwd, options.permissionMode, options.permissionBridge, options.readOnly === true);
   options.onToolEvent?.({ role: options.role, tool: "claude_code_cli", target: options.readOnly ? "read-only prompt" : "write prompt", phase: "start" });
   const started = Date.now();
+  const cliEnv = backgroundBridgeEnvironment({ ...(options.env ?? process.env), TANDEM_BACKGROUND_CWD: options.cwd }, bridge);
   const result = await execa(claudePath, args, {
     cwd: options.cwd,
-    env: backgroundBridgeEnvironment({ ...(options.env ?? process.env), TANDEM_BACKGROUND_CWD: options.cwd }, bridge),
-    input: `${options.prompt}\n${cliBackgroundInstructions(options.readOnly === true)}`,
+    env: cliEnv,
+    input: `${options.prompt}\n${cliBackgroundInstructions(options.readOnly === true, cliEnv.TANDEM_BACKGROUND_COMMAND ?? "tandem /background")}`,
     windowsHide: true,
     reject: false,
     cancelSignal: options.abortSignal
