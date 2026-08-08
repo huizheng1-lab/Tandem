@@ -365,13 +365,20 @@ export async function startBackgroundProcessBridge(
 }
 
 export function backgroundBridgeEnvironment(env: NodeJS.ProcessEnv, bridge: { port: number; token: string }): NodeJS.ProcessEnv {
+  const configuredCommand = env.TANDEM_BACKGROUND_COMMAND?.trim();
+  const launcher = env.TANDEM_CLI_PATH?.trim();
+  // A packaged/embedded host may know exactly which Tandem launcher it is
+  // running, while the ordinary desktop/CLI install can continue to resolve
+  // the `tandem` bin through PATH.  Quote only the launcher path: the command
+  // is inserted into a prompt and later executed by the vendor CLI's shell.
+  const command = configuredCommand || (launcher ? `"${launcher.replaceAll('"', '\\"')}" /background` : "tandem /background");
   return {
     ...env,
     TANDEM_BACKGROUND_PORT: String(bridge.port),
     TANDEM_BACKGROUND_TOKEN: bridge.token,
     // Allow packaged/development launchers to provide the exact command the
     // vendor CLI can invoke; the installed CLI remains the default.
-    TANDEM_BACKGROUND_COMMAND: env.TANDEM_BACKGROUND_COMMAND?.trim() || "tandem /background"
+    TANDEM_BACKGROUND_COMMAND: command
   };
 }
 
