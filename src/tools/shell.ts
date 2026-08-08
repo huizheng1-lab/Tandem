@@ -64,6 +64,7 @@ let backgroundBridge: {
   cwd?: string;
   permissionMode: ToolContext["permissionMode"];
   permissionBridge?: PermissionBridge;
+  readOnly: boolean;
 } | undefined;
 
 function appendBackgroundOutput(current: string, chunk: Buffer | string): string {
@@ -303,7 +304,8 @@ export async function backgroundProcessTool(action: BackgroundProcessAction, id?
 export async function startBackgroundProcessBridge(
   cwd?: string,
   permissionMode: ToolContext["permissionMode"] = "yolo",
-  permissionBridge?: PermissionBridge
+  permissionBridge?: PermissionBridge,
+  readOnly = false
 ): Promise<{ port: number; token: string }> {
   if (backgroundBridge) {
     // CLI calls are sequential within a Tandem session. Refresh the request
@@ -312,6 +314,7 @@ export async function startBackgroundProcessBridge(
     backgroundBridge.cwd = cwd ?? backgroundBridge.cwd;
     backgroundBridge.permissionMode = permissionMode;
     backgroundBridge.permissionBridge = permissionBridge;
+    backgroundBridge.readOnly = readOnly;
     return { port: backgroundBridge.port, token: backgroundBridge.token };
   }
   const token = randomBytes(24).toString("hex");
@@ -332,13 +335,17 @@ export async function startBackgroundProcessBridge(
     request.on("end", async () => {
       try {
         const input = JSON.parse(body) as { action: BackgroundBridgeAction; id?: string; command?: string; cwd?: string };
-        const result = input.action === "start"
-          ? await bashTool({
+        let result: string;
+        if (input.action === "start") {
+          if (requestContext?.readOnly) throw new Error("Background process start is unavailable during a read-only CLI turn.");
+          result = (await bashTool({
             cwd: requestContext?.cwd ?? input.cwd ?? process.cwd(),
             permissionMode: requestContext?.permissionMode ?? "yolo",
             permissionBridge: requestContext?.permissionBridge
-          }, input.command ?? "", DEFAULT_BASH_TIMEOUT_MS, true)
-          : await backgroundProcessTool(input.action, input.id);
+          }, input.command ?? "", DEFAULT_BASH_TIMEOUT_MS, true)).output;
+        } else {
+          result = await backgroundProcessTool(input.action, input.id);
+        }
         response.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify({ ok: true, result }));
       } catch (error) {
         response.writeHead(400, { "content-type": "application/json" }).end(JSON.stringify({ ok: false, error: String(error) }));
@@ -351,7 +358,7 @@ export async function startBackgroundProcessBridge(
   });
   const address = server.address();
   if (!address || typeof address === "string") throw new Error("Could not determine background bridge port.");
-  backgroundBridge = { port: address.port, token, server, cwd, permissionMode, permissionBridge };
+  backgroundBridge = { port: address.port, token, server, cwd, permissionMode, permissionBridge, readOnly };
   registerBackgroundSweep();
   return { port: address.port, token };
 }
@@ -369,6 +376,12 @@ export const CLI_BACKGROUND_INSTRUCTIONS = `
 Tandem-managed long-lived processes are available even in this CLI-backed turn. To start one, base64-encode the shell command and run:
   tandem /background start <base64-command>
 It returns a process id. In later calls use \\"tandem /background list\\", \\"tandem /background read <id>\\", and \\"tandem /background stop <id>\\". Use this for local servers or jobs that must outlive one command call; do not use shell-only &, Start-Process, or detached-process workarounds. The process is automatically swept when the Tandem session/app exits.`;
+
+export function cliBackgroundInstructions(readOnly = false): string {
+  return readOnly
+    ? `${CLI_BACKGROUND_INSTRUCTIONS}\nThis is a read-only turn: list, read, and stop are available, but starting a new process is not.`
+    : CLI_BACKGROUND_INSTRUCTIONS;
+}
 
 export async function cleanupBackgroundProcesses(): Promise<void> {
   await Promise.all([...backgroundProcesses.keys()].map((id) => backgroundProcessTool("stop", id).catch(() => undefined)));

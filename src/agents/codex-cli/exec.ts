@@ -9,7 +9,7 @@ import type { ToolActivityEvent } from "../../tools/fs.js";
 import type { PermissionBridge } from "../../tools/permissions.js";
 import { locateCodexCli } from "./locate.js";
 import { stripNulls, withCodexSchemaFiles, type CodexSchemaKind } from "./schema-json.js";
-import { backgroundBridgeEnvironment, CLI_BACKGROUND_INSTRUCTIONS, startBackgroundProcessBridge } from "../../tools/shell.js";
+import { backgroundBridgeEnvironment, cliBackgroundInstructions, startBackgroundProcessBridge } from "../../tools/shell.js";
 export { stripNulls } from "./schema-json.js";
 
 export interface CodexExecOptions {
@@ -160,7 +160,7 @@ export async function runCodexExec(options: CodexExecOptions & { readOnly?: bool
       modelReasoningEffort: options.modelReasoningEffort,
       writableRoots: codexWritableRoots(options.env ?? process.env)
     });
-    const bridge = await startBackgroundProcessBridge(options.cwd, options.permissionMode, options.permissionBridge);
+    const bridge = await startBackgroundProcessBridge(options.cwd, options.permissionMode, options.permissionBridge, options.readOnly === true);
     const child = spawn(codexPath, args, {
       cwd: options.cwd,
       env: backgroundBridgeEnvironment({ ...(options.env ?? process.env), TANDEM_BACKGROUND_CWD: options.cwd }, bridge),
@@ -169,7 +169,7 @@ export async function runCodexExec(options: CodexExecOptions & { readOnly?: bool
       shell: process.platform === "win32" && /\.(?:cmd|bat)$/i.test(codexPath)
     });
     child.stdin.on("error", () => undefined);
-    child.stdin.end(`${options.prompt}\n${CLI_BACKGROUND_INSTRUCTIONS}`);
+    child.stdin.end(`${options.prompt}\n${cliBackgroundInstructions(options.readOnly === true)}`);
     const active = new Map<string, number>();
     const diagnostics: CodexJsonDiagnostics = { errors: [] };
     let stdoutBuffer = "";
