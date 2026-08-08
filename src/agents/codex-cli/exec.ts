@@ -161,15 +161,16 @@ export async function runCodexExec(options: CodexExecOptions & { readOnly?: bool
       writableRoots: codexWritableRoots(options.env ?? process.env)
     });
     const bridge = await startBackgroundProcessBridge(options.cwd, options.permissionMode, options.permissionBridge, options.readOnly === true);
+    const cliEnv = backgroundBridgeEnvironment({ ...(options.env ?? process.env), TANDEM_BACKGROUND_CWD: options.cwd }, bridge);
     const child = spawn(codexPath, args, {
       cwd: options.cwd,
-      env: backgroundBridgeEnvironment({ ...(options.env ?? process.env), TANDEM_BACKGROUND_CWD: options.cwd }, bridge),
+      env: cliEnv,
       stdio: ["pipe", "pipe", "pipe"],
       windowsHide: true,
       shell: process.platform === "win32" && /\.(?:cmd|bat)$/i.test(codexPath)
     });
     child.stdin.on("error", () => undefined);
-    const cliCommand = backgroundBridgeEnvironment({ ...(options.env ?? process.env), TANDEM_BACKGROUND_CWD: options.cwd }).TANDEM_BACKGROUND_COMMAND ?? "tandem /background";
+    const cliCommand = cliEnv.TANDEM_BACKGROUND_COMMAND ?? "tandem /background";
     child.stdin.end(`${options.prompt}\n${cliBackgroundInstructions(options.readOnly === true, cliCommand)}`);
     const active = new Map<string, number>();
     const diagnostics: CodexJsonDiagnostics = { errors: [] };
