@@ -6,6 +6,7 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
+. (Join-Path $PSScriptRoot "windows-file-locks.ps1")
 
 function Invoke-Native([string]$File, [string[]]$Arguments, [string]$WorkingDirectory) {
     $oldErrorAction = $ErrorActionPreference
@@ -25,19 +26,23 @@ function Invoke-Native([string]$File, [string[]]$Arguments, [string]$WorkingDire
     return $text
 }
 
-function Invoke-WithRetry([string]$Description, [scriptblock]$Operation, [int]$Attempts = 8) {
+function Invoke-WithRetry([string]$Description, [scriptblock]$Operation, [int]$Attempts = 8, [int]$MaxDurationSeconds = 0, [string]$LockPath = "") {
     $lastError = $null
-    for ($attempt = 1; $attempt -le $Attempts; $attempt++) {
+    $started = [Diagnostics.Stopwatch]::StartNew()
+    for ($attempt = 1; ($MaxDurationSeconds -gt 0 -and $started.Elapsed.TotalSeconds -lt $MaxDurationSeconds) -or ($MaxDurationSeconds -le 0 -and $attempt -le $Attempts); $attempt++) {
         try {
             & $Operation
             return
         } catch {
             $lastError = $_
-            if ($attempt -eq $Attempts) { break }
-            Start-Sleep -Milliseconds ([Math]::Min(2000, 250 * $attempt))
+            if (Test-SharingViolation $lastError) { $lastHolderReport = Get-LockHolderReport $(if ($LockPath) { $LockPath } else { $Description }) }
+            if (($MaxDurationSeconds -le 0 -and $attempt -eq $Attempts) -or ($MaxDurationSeconds -gt 0 -and $started.Elapsed.TotalSeconds -ge $MaxDurationSeconds)) { break }
+            Start-Sleep -Milliseconds ([Math]::Min(5000, 250 * $attempt))
         }
     }
-    throw "$Description failed after $Attempts attempts: $($lastError.Exception.Message)"
+    $budget = if ($MaxDurationSeconds -gt 0) { "$MaxDurationSeconds seconds" } else { "$Attempts attempts" }
+    $holder = if ($lastHolderReport) { " $lastHolderReport" } elseif (Test-SharingViolation $lastError) { " No lock holder could be determined." } else { "" }
+    throw "$Description failed after ${budget}: $($lastError.Exception.Message).$holder"
 }
 
 function Assert-UnderRoot([string]$Path, [string]$Root) {
@@ -115,7 +120,7 @@ if ($PreparedWinUnpacked.Trim()) {
     $freshWinUnpacked = (Resolve-Path -LiteralPath $PreparedWinUnpacked).Path
     $usedPrepared = $true
 } else {
-    Invoke-WithRetry "remove stale passive package build root" { Remove-Item -LiteralPath $buildRoot -Recurse -Force -ErrorAction SilentlyContinue }
+    Invoke-WithRetry "remove stale passive package build root" { Remove-Item -LiteralPath $buildRoot -Recurse -Force -ErrorAction SilentlyContinue } -MaxDurationSeconds 90
     New-Item -ItemType Directory -Path $buildRoot -Force | Out-Null
     Invoke-Native "npm.cmd" @("run", "build") $Workspace | Out-Null
     Invoke-Native "npx.cmd" @("electron-vite", "build") $Workspace | Out-Null
@@ -136,8 +141,8 @@ $stagingDir = Assert-UnderRoot (Join-Path $releaseRoot ".win-unpacked-next-$shor
 $oldDir = Assert-UnderRoot (Join-Path $releaseRoot ".win-unpacked-old-$shortSha-$PID") $releaseRoot
 $targetDir = Assert-UnderRoot (Join-Path $releaseRoot "win-unpacked") $releaseRoot
 
-Invoke-WithRetry "remove stale runtime staging directory" { Remove-Item -LiteralPath $stagingDir -Recurse -Force -ErrorAction SilentlyContinue }
-Invoke-WithRetry "remove stale runtime backup directory" { Remove-Item -LiteralPath $oldDir -Recurse -Force -ErrorAction SilentlyContinue }
+Invoke-WithRetry "remove stale runtime staging directory" { Remove-Item -LiteralPath $stagingDir -Recurse -Force -ErrorAction SilentlyContinue } -MaxDurationSeconds 90
+Invoke-WithRetry "remove stale runtime backup directory" { Remove-Item -LiteralPath $oldDir -Recurse -Force -ErrorAction SilentlyContinue } -MaxDurationSeconds 90
 New-Item -ItemType Directory -Path $stagingDir -Force | Out-Null
 Get-ChildItem -LiteralPath $freshWinUnpacked -Force | Copy-Item -Destination $stagingDir -Recurse -Force
 
@@ -185,10 +190,10 @@ if (Test-Path -LiteralPath $immutableDir) {
 $targetMoved = $false
 try {
     if (Test-Path -LiteralPath $targetDir) {
-        Invoke-WithRetry "move previous canonical runtime aside" { Move-Item -LiteralPath $targetDir -Destination $oldDir -Force }
+        Invoke-WithRetry "move previous canonical runtime aside" { Move-Item -LiteralPath $targetDir -Destination $oldDir -Force } -MaxDurationSeconds 90 -LockPath $targetDir
         $targetMoved = $true
     }
-    Invoke-WithRetry "promote passive package to canonical runtime path" { Move-Item -LiteralPath $stagingDir -Destination $targetDir -Force }
+    Invoke-WithRetry "promote passive package to canonical runtime path" { Move-Item -LiteralPath $stagingDir -Destination $targetDir -Force } -MaxDurationSeconds 90 -LockPath $stagingDir
 } catch {
     if ($targetMoved -and -not (Test-Path -LiteralPath $targetDir) -and (Test-Path -LiteralPath $oldDir)) {
         Move-Item -LiteralPath $oldDir -Destination $targetDir -Force

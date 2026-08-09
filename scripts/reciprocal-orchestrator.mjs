@@ -157,21 +157,41 @@ function runSwap({ repo, relayRoot, commands, state, statePath, logPath, reason 
     ["verify-a", commands.verifyA],
     ["stop-b", commands.stopB],
   ];
-  for (const [name, command] of swapSteps) {
-    const result = runStep({ name, command, cwd: repo, state, statePath, logPath });
-    if (!result.ok) {
-      state.phase = "failed-paused";
-      state.lastSummary = `${name} failed; at least the previously known-good executor must remain alive.`;
-      state.failures = [...(state.failures || []), { command, exitCode: result.exitCode, output: result.output.slice(0, 12000), at: now() }];
-      const report = failReport(relayRoot, state.currentItem || { id: "cutover", text: "explicit cutover" }, state.failures);
-      state.failureReport = report;
-      save(statePath, logPath, state, `${reason}.swap.failed-paused`, { failedStep: name, report });
-      console.log(JSON.stringify({ ok: false, failedPaused: true, report, state }, null, 2));
-      process.exitCode = 3;
-      return false;
+  const infrastructureAllowance = 3;
+  const consecutiveCycleAllowance = 2;
+  state.infrastructureFailures = state.infrastructureFailures || {};
+  for (let cycle = 1; cycle <= consecutiveCycleAllowance; cycle += 1) {
+    for (const [name, command] of swapSteps) {
+      let result = null;
+      for (let attempt = 1; attempt <= infrastructureAllowance; attempt += 1) {
+        result = runStep({ name, command, cwd: repo, state, statePath, logPath });
+        if (result.ok) break;
+        save(statePath, logPath, state, `${name}.infrastructure-retry`, { attempt, allowance: infrastructureAllowance, cycle });
+      }
+      if (!result.ok) {
+        const previous = state.infrastructureFailures[name] || { consecutiveCycles: 0 };
+        const consecutiveCycles = previous.consecutiveCycles + 1;
+        state.infrastructureFailures[name] = { consecutiveCycles, lastFailedAt: now(), allowance: infrastructureAllowance };
+        if (consecutiveCycles < consecutiveCycleAllowance && cycle < consecutiveCycleAllowance) {
+          save(statePath, logPath, state, `${reason}.swap.infrastructure-cycle-retry`, { failedStep: name, cycle, allowance: consecutiveCycleAllowance });
+          break;
+        }
+        state.phase = "failed-paused";
+        state.lastSummary = `${name} infrastructure failure exhausted ${infrastructureAllowance} attempts on ${consecutiveCycles} consecutive cycles; implementation passed at ${state.lastImplementCommit || state.acceptedSourceSha || "unknown commit"}.`;
+        const failure = { kind: "infrastructure", step: name, command, exitCode: result.exitCode, output: result.output.slice(0, 12000), implementationPassed: true, implementationCommit: state.lastImplementCommit || state.acceptedSourceSha || null, at: now() };
+        state.failures = [...(state.failures || []), failure];
+        const report = failReport(relayRoot, state.currentItem || { id: "cutover", text: "explicit cutover" }, state.failures, { infrastructure: true, implementationCommit: failure.implementationCommit, sameStepConsecutiveCycles: consecutiveCycles });
+        state.failureReport = report;
+        save(statePath, logPath, state, `${reason}.swap.failed-paused`, { failedStep: name, report, infrastructure: true, implementationCommit: failure.implementationCommit });
+        console.log(JSON.stringify({ ok: false, failedPaused: true, infrastructureFailure: true, report, state }, null, 2));
+        process.exitCode = 3;
+        return false;
+      }
+      state.infrastructureFailures[name] = { consecutiveCycles: 0, lastPassedAt: now(), allowance: infrastructureAllowance };
     }
+    if (state.step === "stop-b") return true;
   }
-  return true;
+  return false;
 }
 
 function parseWishlist(file) {
@@ -201,6 +221,7 @@ function initialState() {
     phase: "idle",
     currentItem: null,
     consecutiveFailures: 0,
+    infrastructureFailures: {},
     step: null,
     stableCommit: null,
     startedAt: null,
@@ -215,7 +236,7 @@ function save(statePath, logPath, state, action, detail = {}) {
   appendLog(logPath, { action, phase: state.phase, item: state.currentItem?.id || null, step: state.step || null, ...detail });
 }
 
-function failReport(relayRoot, item, failures) {
+function failReport(relayRoot, item, failures, context = {}) {
   const dir = path.join(relayRoot, "control", "failure-reports");
   ensureDir(dir);
   const file = path.join(dir, `${item.id}-${now().replace(/[:.]/g, "-")}.md`);
@@ -225,12 +246,16 @@ function failReport(relayRoot, item, failures) {
     `Item: ${item.text}`,
     `Created: ${now()}`,
     "",
-    "The single orchestrator paused after two consecutive failed A rounds.",
+    context.infrastructure
+      ? `Infrastructure failure paused the orchestrator after its bounded retry allowance${context.sameStepConsecutiveCycles >= 2 ? " (the same step failed on two consecutive cycles)" : ""}. The implementation itself passed; successful implementation commit: ${context.implementationCommit || "unknown"}.`
+      : "The single orchestrator paused after two consecutive failed A rounds.",
     "",
     ...failures.map((failure, index) => [
       `## Failure ${index + 1}`,
       "",
       `Command: ${failure.command}`,
+      `Cause: ${failure.kind || "item implementation/test"}`,
+      failure.implementationCommit ? `Implementation commit: ${failure.implementationCommit}` : "",
       `Exit: ${failure.exitCode}`,
       "",
       "```text",

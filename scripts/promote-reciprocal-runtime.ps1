@@ -10,6 +10,7 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
+. (Join-Path $PSScriptRoot "windows-file-locks.ps1")
 
 $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 $commonRaw = (& git -C $repoRoot rev-parse --git-common-dir).Trim()
@@ -49,19 +50,23 @@ function Invoke-Native([string]$File, [string[]]$Arguments, [string]$WorkingDire
     return $text
 }
 
-function Invoke-WithRetry([string]$Description, [scriptblock]$Operation, [int]$Attempts = 8) {
+function Invoke-WithRetry([string]$Description, [scriptblock]$Operation, [int]$Attempts = 8, [int]$MaxDurationSeconds = 0, [string]$LockPath = "") {
     $lastError = $null
-    for ($attempt = 1; $attempt -le $Attempts; $attempt++) {
+    $started = [Diagnostics.Stopwatch]::StartNew()
+    for ($attempt = 1; ($MaxDurationSeconds -gt 0 -and $started.Elapsed.TotalSeconds -lt $MaxDurationSeconds) -or ($MaxDurationSeconds -le 0 -and $attempt -le $Attempts); $attempt++) {
         try {
             & $Operation
             return
         } catch {
             $lastError = $_
-            if ($attempt -eq $Attempts) { break }
-            Start-Sleep -Milliseconds ([Math]::Min(2000, 250 * $attempt))
+            if (Test-SharingViolation $lastError) { $lastHolderReport = Get-LockHolderReport $(if ($LockPath) { $LockPath } else { $Description }) }
+            if (($MaxDurationSeconds -le 0 -and $attempt -eq $Attempts) -or ($MaxDurationSeconds -gt 0 -and $started.Elapsed.TotalSeconds -ge $MaxDurationSeconds)) { break }
+            Start-Sleep -Milliseconds ([Math]::Min(5000, 250 * $attempt))
         }
     }
-    throw "$Description failed after $Attempts attempts: $($lastError.Exception.Message)"
+    $budget = if ($MaxDurationSeconds -gt 0) { "$MaxDurationSeconds seconds" } else { "$Attempts attempts" }
+    $holder = if ($lastHolderReport) { " $lastHolderReport" } elseif (Test-SharingViolation $lastError) { " No lock holder could be determined." } else { "" }
+    throw "$Description failed after ${budget}: $($lastError.Exception.Message).$holder"
 }
 
 function Get-PackageIntegrity([string]$RuntimeRoot, [string]$ExpectedSourceSha = "", [string]$ExpectedPackageIdentity = "") {
@@ -167,7 +172,7 @@ foreach ($role in $roles) {
     } else {
         Assert-UnderRoot (Join-Path $backupRoot "executor-$role-$operationId") $backupRoot
     }
-    Invoke-WithRetry "remove stale promotion staging for executor-$role" { Remove-Item -LiteralPath $stagingDir -Recurse -Force -ErrorAction SilentlyContinue }
+    Invoke-WithRetry "remove stale promotion staging for executor-$role" { Remove-Item -LiteralPath $stagingDir -Recurse -Force -ErrorAction SilentlyContinue } -MaxDurationSeconds 90
     New-Item -ItemType Directory -Path $stagingDir -Force | Out-Null
 
     Get-ChildItem -LiteralPath $sourceDir -Force | Copy-Item -Destination $stagingDir -Recurse -Force
@@ -213,20 +218,20 @@ foreach ($role in $roles) {
     try {
         if ((Test-Path -LiteralPath $targetDir) -and -not (Test-Path -LiteralPath $backupDir)) {
             New-Item -ItemType Directory -Force -Path (Split-Path $backupDir -Parent) | Out-Null
-            Move-Item -LiteralPath $targetDir -Destination $backupDir -Force
+            Invoke-WithRetry "move previous executor-$role runtime aside" { Move-Item -LiteralPath $targetDir -Destination $backupDir -Force } -MaxDurationSeconds 90 -LockPath $targetDir
             $operationRecord.stage = "backup-created"
             $operationRecord.updatedAt = (Get-Date).ToUniversalTime().ToString("o")
             Write-JsonAtomic $operationPath $operationRecord
         } elseif (Test-Path -LiteralPath $targetDir) {
-            Invoke-WithRetry "remove retry target before promotion swap" { Remove-Item -LiteralPath $targetDir -Recurse -Force -ErrorAction SilentlyContinue }
+            Invoke-WithRetry "remove retry target before promotion swap" { Remove-Item -LiteralPath $targetDir -Recurse -Force -ErrorAction SilentlyContinue } -MaxDurationSeconds 90
         }
-        Move-Item -LiteralPath $stagingDir -Destination $targetDir -Force
+        Invoke-WithRetry "promote executor-$role runtime" { Move-Item -LiteralPath $stagingDir -Destination $targetDir -Force } -MaxDurationSeconds 90 -LockPath $stagingDir
         $operationRecord.stage = "target-swapped"
         $operationRecord.updatedAt = (Get-Date).ToUniversalTime().ToString("o")
         Write-JsonAtomic $operationPath $operationRecord
     } catch {
         if (-not (Test-Path -LiteralPath $targetDir) -and (Test-Path -LiteralPath $backupDir)) {
-            Move-Item -LiteralPath $backupDir -Destination $targetDir -Force
+            Invoke-WithRetry "restore previous executor-$role runtime" { Move-Item -LiteralPath $backupDir -Destination $targetDir -Force } -MaxDurationSeconds 90
         }
         throw
     }

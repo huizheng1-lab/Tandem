@@ -201,6 +201,38 @@ describe("single reciprocal orchestrator", () => {
     }
   });
 
+  windowsIt("retries infrastructure steps independently without spending item strikes", async () => {
+    const f = await fixture("infrastructure-retry");
+    try {
+      const sentinel = path.join(f.root, "package-attempts");
+      const packageCommand = `node -e "const fs=require('fs'); const p='${sentinel}'; const n=fs.existsSync(p)?Number(fs.readFileSync(p))+1:1; fs.writeFileSync(p,String(n)); process.exit(n<6?9:0)"`;
+      const result = await run(f.root, f.relayRoot, commands(f.root, { packageB: packageCommand }));
+      expect(result.exitCode).toBe(0);
+      const state = JSON.parse(await readFile(path.join(f.relayRoot, "state", "orchestrator-state.json"), "utf8"));
+      expect(state).toMatchObject({ phase: "idle", consecutiveFailures: 0 });
+      expect(state.infrastructureFailures["package-b"]).toMatchObject({ consecutiveCycles: 0 });
+    } finally {
+      await rm(f.root, { recursive: true, force: true });
+    }
+  });
+
+  windowsIt("pauses after bounded infrastructure exhaustion while naming the passed commit", async () => {
+    const f = await fixture("infrastructure-exhausted");
+    try {
+      const result = await run(f.root, f.relayRoot, commands(f.root, { packageB: command(f.root, "packageB", 9, "lock remains") }));
+      expect(result.exitCode).toBe(3);
+      const parsed = JSON.parse(result.stdout);
+      const report = await readFile(parsed.report, "utf8");
+      expect(report).toMatch(/implementation itself passed/i);
+      expect(report).toMatch(/successful implementation commit:/i);
+      const state = JSON.parse(await readFile(path.join(f.relayRoot, "state", "orchestrator-state.json"), "utf8"));
+      expect(state).toMatchObject({ phase: "failed-paused", consecutiveFailures: 0 });
+      expect(state.failures.at(-1)).toMatchObject({ kind: "infrastructure", step: "package-b", implementationPassed: true });
+    } finally {
+      await rm(f.root, { recursive: true, force: true });
+    }
+  });
+
   windowsIt("resumes failed-paused state after human-reviewed failure report", async () => {
     const f = await fixture("resume-failed-paused");
     try {

@@ -46,6 +46,16 @@ async function makeRuntime(prefix = "runtime-integrity-") {
 }
 
 describe("runtime package integrity", () => {
+  it("D205 gives runtime swaps a time budget and lock-holder diagnostics", async () => {
+    const packageScript = await readFile(path.resolve("scripts/package-passive-runtime.ps1"), "utf8");
+    const lockHelper = await readFile(path.resolve("scripts/windows-file-locks.ps1"), "utf8");
+    expect(packageScript).toMatch(/move previous canonical runtime aside[\s\S]*MaxDurationSeconds 90/);
+    expect(packageScript).toMatch(/Invoke-WithRetry[\s\S]*MaxDurationSeconds = 0/);
+    expect(lockHelper).toMatch(/RmStartSession/);
+    expect(lockHelper).toMatch(/PID=.*Name=.*Path=/);
+    expect(lockHelper).toMatch(/No lock holder could be determined/);
+  });
+
   it("D184 rejects independent package tamper cases while claimed identity is unchanged", async () => {
     const cases: Array<[string, (runtimeDir: string) => Promise<void>, RegExp]> = [
       ["file bytes", async (runtimeDir) => writeFile(path.join(runtimeDir, "resources", "app.asar"), "tampered\n", "utf8"), /manifest mismatch/i],
