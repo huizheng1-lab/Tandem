@@ -10,6 +10,7 @@ import {
   ReviewVerdictSchema,
   mergeCompletionReports,
   partitionPlan,
+  hasNewVerificationEvidence,
   validateBuildPlan,
   validateCompletionReport
 } from "./artifacts.js";
@@ -338,8 +339,10 @@ export interface RunResult {
 }
 
 /** A validator rejection is a concrete turn failure and must outrank model guesses. */
-export function takeoverValidationFailureSummary(error: unknown, userSummary: string): string {
-  return `Takeover could not be finalized because artifact validation failed: ${String(error)}. Agent summary (unverified): ${userSummary}`;
+export function takeoverValidationFailureSummary(error: unknown, userSummary: string, reports: CompletionReport[] = []): string {
+  const artifacts = [...new Set(reports.flatMap((report) => report.filesChanged).filter(Boolean))];
+  const inventory = artifacts.length > 0 ? artifacts.join(", ") : "no file list was recorded";
+  return `Takeover could not be finalized because artifact validation failed: ${String(error)}. Underlying work may be complete; artifacts recorded on disk/in reports: ${inventory}. Agent summary (unverified): ${userSummary}`;
 }
 
 export async function runOrchestration(options: RunOptions): Promise<RunResult> {
@@ -479,6 +482,7 @@ export async function runOrchestration(options: RunOptions): Promise<RunResult> 
     if (environmentFailure) return environmentFailure;
     let lastTakeover: { report: unknown; userSummary: string } | undefined;
     let lastError: unknown;
+    let previousTakeoverReport: CompletionReport | undefined;
     // Keep a concrete validator rejection separate from later transport/model errors.
     // A retry must not replace the known artifact cause with an environmental guess or
     // an unrelated failure from a subsequent attempt.
@@ -501,6 +505,12 @@ export async function runOrchestration(options: RunOptions): Promise<RunResult> 
            environment: options.agents.getEnvironment?.()
         });
         lastTakeover = takeover;
+        const parsedTakeover = CompletionReportSchema.safeParse(takeover.report);
+        const priorTakeoverReport = previousTakeoverReport;
+        if (parsedTakeover.success) previousTakeoverReport = parsedTakeover.data;
+        if (parsedTakeover.success && !hasNewVerificationEvidence(priorTakeoverReport, parsedTakeover.data)) {
+          throw new Error("Not a genuine retry: resubmission added no new verification evidence since the previous rejection.");
+        }
         let schemaReport: CompletionReport;
         try {
           schemaReport = validateCompletionReport(plan, takeover.report, plan.verification, {
@@ -548,7 +558,7 @@ export async function runOrchestration(options: RunOptions): Promise<RunResult> 
       reports.push(preservedReport);
     }
     emit({ type: "artifact", name: "TakeoverReport", value: lastTakeover.report });
-    const summary = takeoverValidationFailureSummary(lastValidationError ?? lastError, lastTakeover.userSummary);
+    const summary = takeoverValidationFailureSummary(lastValidationError ?? lastError, lastTakeover.userSummary, reports);
     transition("DONE", "takeover report validation failed; build preserved", round);
     return { phase: "DONE", summary, plan, reports, verdicts, takeover: true };
   };

@@ -2,7 +2,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { AgentFns, OrchestrationCheckpoint, runOrchestration, WorkerStepExhaustionError } from "../src/orchestrator/machine.js";
+import { AgentFns, OrchestrationCheckpoint, runOrchestration, takeoverValidationFailureSummary, WorkerStepExhaustionError } from "../src/orchestrator/machine.js";
 import { BuildPlan, CompletionReport, ReviewVerdict } from "../src/orchestrator/artifacts.js";
 import { createVerificationRunner } from "../src/orchestrator/verification.js";
 import type { PermissionRequest } from "../src/tools/permissions.js";
@@ -25,6 +25,15 @@ const report = (status: CompletionReport["status"] = "complete"): CompletionRepo
   filesChanged: ["src/index.ts"],
   verificationResults: [{ command: "npm test", passed: status === "complete", output: "ok" }],
   deviationsFromPlan: []
+});
+
+describe("validation failure preservation", () => {
+  it("reports recorded artifacts and the exact validator error", () => {
+    const summary = takeoverValidationFailureSummary(new Error("Capability absence claim is incomplete: probe required"), "claimed unavailable", [report()]);
+    expect(summary).toContain("src/index.ts");
+    expect(summary).toContain("Capability absence claim is incomplete: probe required");
+    expect(summary).toContain("Underlying work may be complete");
+  });
 });
 
 const verdict = (value: ReviewVerdict["verdict"], feedback: ReviewVerdict["feedback"] = []): ReviewVerdict => ({

@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { defaultConfig, type TandemConfig } from "../src/config/schema.js";
 import { CostLedger } from "../src/session/cost.js";
 import type { BuildPlan } from "../src/orchestrator/artifacts.js";
+import { buildWorkerContext } from "../src/agents/live.js";
 
 const runnerMocks = vi.hoisted(() => ({
   runAgentArtifact: vi.fn(),
@@ -69,6 +70,17 @@ describe("live leader implementation planning retries", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     runnerMocks.runAgentText.mockResolvedValue({ text: "direct answer", stepsUsed: 1, usage: undefined as LanguageModelUsage | undefined });
+  });
+
+  it("surfaces validator rejection as an actionable probe instruction", () => {
+    const context = buildWorkerContext({
+      round: 2,
+      plan,
+      feedback: [],
+      previousAttemptError: "Capability absence claim is incomplete: record a command that probes the claimed capability"
+    });
+    expect(context).toContain("execute the named remedy now");
+    expect(context).toContain("new verification evidence");
   });
 
   it("D108: retries implementation planning when the leader ends without submit_build_plan", async () => {

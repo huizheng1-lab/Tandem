@@ -53,7 +53,7 @@ async function projectInstructions(options: Pick<CodexLeaderOptions, "projectIns
 
 function retryFeedbackLine(previousAttemptError: string | undefined): string {
   const text = previousAttemptError?.trim();
-  return text ? `\n\nYour previous submission was rejected: ${text}. Fix that specific problem and resubmit. ${verificationScriptRetryRule}` : "";
+  return text ? `\n\nYour previous submission was rejected: ${text}. Treat this as an actionable instruction: execute the named remedy now, record the exact command and returned result as new verification evidence, then resubmit. A retry without new evidence is not a genuine retry. ${verificationScriptRetryRule}` : "";
 }
 
 function absoluteCwdLine(cwd: string): string {

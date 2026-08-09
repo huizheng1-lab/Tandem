@@ -57,7 +57,7 @@ function optionalSection(title: string, value: string | undefined): string {
 
 function retryFeedbackLine(previousAttemptError: string | undefined): string {
   const text = previousAttemptError?.trim();
-  return text ? `\n\nYour previous submission was rejected: ${text}. Fix that specific problem and resubmit. ${verificationScriptRetryRule}` : "";
+  return text ? `\n\nYour previous submission was rejected: ${text}. Treat this as an actionable instruction: execute the named remedy now, record the exact command and returned result as new verification evidence, then resubmit. A retry without new evidence is not a genuine retry. ${verificationScriptRetryRule}` : "";
 }
 
 async function claudeLeaderExec(options: ClaudeLeaderOptions, input: { schema: "plan-or-answer" | "review-verdict" | "takeover"; prompt: string; systemPrompt: string; readOnly?: boolean }): Promise<unknown> {

@@ -569,6 +569,24 @@ export function validateCapabilityAbsenceClaims(plan: BuildPlan, report: Complet
     : ["Capability absence claim is incomplete: record a command that probes the claimed capability, with its returned result, before reporting absent, missing, or unavailable."];
 }
 
+/** A successful capability probe invalidates an earlier absence assertion. */
+export function reconcileCapabilityAbsenceClaims(plan: BuildPlan, report: CompletionReport): CompletionReport {
+  const planText = [plan.objective, ...plan.tasks.map((task) => task.description), ...plan.acceptanceCriteria].join(" ");
+  const reportText = [report.summary, ...report.taskResults.map((task) => task.notes ?? ""), ...report.deviationsFromPlan].join(" ");
+  if (!capabilityAbsencePattern.test(reportText) || !/\b(?:tool|model|runtime|service|server|comfyui|stack|capabilit|installed|executable|port)\b/i.test(`${planText} ${reportText}`)) return report;
+  const contradiction = report.verificationResults.some((result) => result.passed && /\b(?:found|present|available|installed|works?|succeed|success|resolved|exit\s*(?:code\s*)?0|version|path)\b/i.test(`${result.command}\n${result.output}`));
+  if (!contradiction) return report;
+  const rewrite = (value: string) => value.replace(capabilityAbsencePattern, "capability probe succeeded; prior absence claim dropped");
+  return { ...report, summary: rewrite(report.summary), taskResults: report.taskResults.map((task) => ({ ...task, notes: task.notes ? rewrite(task.notes) : task.notes })), deviationsFromPlan: report.deviationsFromPlan.map(rewrite) };
+}
+
+/** True when a retry adds a new command/result pair rather than only rephrasing a claim. */
+export function hasNewVerificationEvidence(previous: CompletionReport | undefined, next: CompletionReport): boolean {
+  if (!previous) return true;
+  const before = new Set(previous.verificationResults.map((result) => `${result.command}\u0000${result.output}`));
+  return next.verificationResults.some((result) => !before.has(`${result.command}\u0000${result.output}`));
+}
+
 /** Enforce an attempted service start whenever the plan explicitly asks for one. */
 export function validateServiceStartAttempt(plan: BuildPlan, report: CompletionReport): string[] {
   const planText = [plan.objective, ...plan.tasks.map((task) => task.description), ...plan.acceptanceCriteria].join(" ");
@@ -655,7 +673,7 @@ export function validateCompletionReport(
   expectedCommands: string[] = plan.verification,
   options?: { enforceCommandEcho?: boolean; enforceCompleteVerification?: boolean }
 ): CompletionReport {
-  const report = sanitizePromptValue(CompletionReportSchema.parse(value));
+  const report = reconcileCapabilityAbsenceClaims(plan, sanitizePromptValue(CompletionReportSchema.parse(value)));
   enforceVerification(plan, report, expectedCommands, options);
   const evidenceErrors = [...validateCapabilityAbsenceClaims(plan, report), ...validateServiceStartAttempt(plan, report)];
   if (evidenceErrors.length > 0) throw new Error(evidenceErrors.join(" "));

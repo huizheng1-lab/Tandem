@@ -201,7 +201,7 @@ export function buildLeaderRequestMessage(input: { request: string; goals: strin
 
 function retryFeedbackLine(previousAttemptError: string | undefined): string {
   const text = previousAttemptError?.trim();
-  return text ? `\n\nYour previous submission was rejected: ${text}. Fix that specific problem and resubmit. ${verificationScriptRetryRule}` : "";
+  return text ? `\n\nYour previous submission was rejected: ${text}. Treat the rejection as an actionable instruction: execute the named remedy now, record the exact command and returned result as new verification evidence, then resubmit. Do not repeat the rejected claim without new evidence; a retry without new evidence is not a genuine retry. ${verificationScriptRetryRule}` : "";
 }
 
 function leaderToolCallThinking(options: LiveAgentOptions): ((toolName: string) => void) | undefined {

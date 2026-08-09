@@ -10,6 +10,8 @@ import {
   validateBuildPlan,
   validateCompletionReport,
   validateCapabilityAbsenceClaims,
+  hasNewVerificationEvidence,
+  reconcileCapabilityAbsenceClaims,
   validateServiceStartAttempt,
   validateStreamFileOwnership
 } from "../src/orchestrator/artifacts.js";
@@ -24,6 +26,21 @@ const plan: BuildPlan = {
 };
 
 describe("artifacts", () => {
+  it("rejects a repeated report as not a genuine retry when it adds no evidence", () => {
+    const first = verifierReport(["npm test"]);
+    const repeated = { ...first, summary: "same claim, reworded" };
+    expect(hasNewVerificationEvidence(first, repeated)).toBe(false);
+    expect(hasNewVerificationEvidence(first, { ...repeated, verificationResults: [{ command: "ffmpeg -version", passed: true, output: "ffmpeg version 8" }] })).toBe(true);
+  });
+
+  it("drops a contradicted absence claim after a successful probe", () => {
+    const absencePlan = { ...plan, objective: "Check whether ffmpeg tool is installed" };
+    const report = verifierReport(["npm test"]);
+    report.summary = "ffmpeg is unavailable";
+    report.verificationResults.push({ command: "ffmpeg -version", passed: true, output: "ffmpeg version 8" });
+    expect(reconcileCapabilityAbsenceClaims(absencePlan, report).summary).toMatch(/prior absence claim dropped/);
+  });
+
   it("rejects an absence claim without structured capability evidence", () => {
     const report = verifierReport(["npm test"]);
     const absencePlan = { ...plan, objective: "Check whether ComfyUI is installed" };
