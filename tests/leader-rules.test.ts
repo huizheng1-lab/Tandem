@@ -12,6 +12,7 @@ import {
   scopeExpansionReviewRule,
   securityAndScopeRule,
   streamPartitioningRule,
+  verificationScriptDeclarationRule,
   verificationScriptRule
 } from "../src/agents/leader.js";
 import { workerPrompt } from "../src/agents/worker.js";
@@ -185,5 +186,11 @@ describe("leader prompt exports (D60 + D61 wiring)", () => {
     expect(verificationScriptRule).toMatch(/long verification one-liners/i);
     expect(verificationScriptRule).toMatch(/verification script file/i);
     expect(leaderPlannerPrompt).toContain(verificationScriptRule);
+  });
+  it("D141: planner declares verification scripts for every stream shape", () => {
+    expect(verificationScriptDeclarationRule).toMatch(/every verification command.*script file/i);
+    expect(verificationScriptDeclarationRule).toMatch(/single-stream and multi-stream/i);
+    expect(verificationScriptDeclarationRule).toMatch(/files array/i);
+    expect(leaderPlannerPrompt).toContain(verificationScriptDeclarationRule);
   });
 });

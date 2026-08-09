@@ -198,7 +198,7 @@ export function buildLeaderRequestMessage(input: { request: string; goals: strin
 
 function retryFeedbackLine(previousAttemptError: string | undefined): string {
   const text = previousAttemptError?.trim();
-  return text ? `\n\nYour previous submission was rejected: ${text}. Fix that specific problem and resubmit.` : "";
+  return text ? `\n\nYour previous submission was rejected: ${text}. Fix that specific problem and resubmit. For a verification-script disclosure failure, make the concrete report edit: add a deviationsFromPlan entry naming each edited script and explaining why it was edited.` : "";
 }
 
 function leaderToolCallThinking(options: LiveAgentOptions): ((toolName: string) => void) | undefined {

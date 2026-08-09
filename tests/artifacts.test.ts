@@ -16,7 +16,7 @@ const plan: BuildPlan = {
   title: "Demo",
   objective: "Build demo.",
   constraints: [],
-  tasks: [{ id: "T1", description: "Do work" }],
+  tasks: [{ id: "T1", description: "Do work", files: ["test.mjs"] }],
   acceptanceCriteria: ["Works"],
   verification: ["npm test"]
 };
@@ -57,7 +57,13 @@ describe("artifacts", () => {
   });
 
   it("accepts Windows-safe and cross-platform verification commands", async () => {
-    expect((await validateBuildPlan({ ...plan, verification: ["npm test", "node test.mjs", "type launch.bat"] }, "win32")).verification).toHaveLength(3);
+    expect((await validateBuildPlan({ ...plan, tasks: [{ id: "T1", description: "Do work", files: ["test.mjs", "launch.bat"] }], verification: ["npm test", "node test.mjs", "type launch.bat"] }, "win32")).verification).toHaveLength(3);
+  });
+
+  it("rejects verification scripts that no task declares", async () => {
+    await expect(
+      validateBuildPlan({ ...plan, tasks: [{ id: "T1", description: "Do work", files: ["out.mp4"] }], verification: ["node verify_v3.mjs"] }, "win32")
+    ).rejects.toThrow(/verify_v3\.mjs.*files.*deviationsFromPlan/s);
   });
 
   it("D133: accepts authoritative-only verification entries and skipped worker reports", async () => {

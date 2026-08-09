@@ -62,4 +62,17 @@ describe("worker context", () => {
     expect(content).toContain("BuildPlan:");
     expect(content).not.toContain("Session notes");
   });
+
+  it("delivers verification disclosure retries with the script and exact report edit", () => {
+    const content = buildWorkerContext({
+      round: 1,
+      plan,
+      feedback: [],
+      previousAttemptError: "Verification script edited without disclosure: verify_v3.mjs. Required retry edit: add a deviationsFromPlan entry naming each edited script and why it was edited before resubmitting."
+    });
+
+    expect(content).toContain("verify_v3.mjs");
+    expect(content).toContain("add a deviationsFromPlan entry naming each edited script");
+    expect(content).toContain("explaining why it was edited");
+  });
 });

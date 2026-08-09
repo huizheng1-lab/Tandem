@@ -373,6 +373,26 @@ export function validateExecutionContextClaims(plan: BuildPlan): string[] {
   return errors;
 }
 
+// D141: a verification script must have an explicit task owner. This is the planning-side
+// counterpart to detectVerificationScriptTampering: declared edits use the sanctioned guard
+// escape hatch, while an undeclared script remains fail-closed at report validation time.
+export function validateVerificationScriptDeclarations(plan: BuildPlan): string[] {
+  const referenced = extractReferencedScriptBasenames(plan.verification);
+  if (referenced.size === 0) return [];
+  const declared = new Set(
+    plan.tasks
+      .flatMap((task) => task.files ?? [])
+      .map((file) => (file.split(/[\\/]/).pop() ?? file).toLowerCase())
+      .filter((name) => name.length > 0)
+  );
+  return [...referenced]
+    .filter((script) => !declared.has(script))
+    .map(
+      (script) =>
+        `verification references script \`${script}\`, but no task lists it in files. Add \`${script}\` to the files array of the task that creates or modifies it; if the script is edited during execution, add a deviationsFromPlan entry naming ${script} and why it was edited.`
+    );
+}
+
 export async function validateBuildPlan(
   value: unknown,
   platform: NodeJS.Platform = process.platform,
@@ -387,6 +407,7 @@ export async function validateBuildPlan(
   errors.push(...verifResults.flat());
   errors.push(...validateStreamFileOwnership(plan));
   errors.push(...validateExecutionContextClaims(plan));
+  errors.push(...validateVerificationScriptDeclarations(plan));
   if (errors.length > 0) throw new Error(`Invalid BuildPlan:\n${errors.join("\n")}`);
   return plan;
 }
@@ -525,7 +546,7 @@ export function enforceVerification(
   if (tampered.length > 0) {
     throw new Error(
       `Verification script edited without disclosure: ${tampered.join(", ")}. ` +
-        "Add an entry to deviationsFromPlan for each edited script before resubmitting."
+        "Required retry edit: add a deviationsFromPlan entry naming each edited script and why it was edited before resubmitting."
     );
   }
 }
