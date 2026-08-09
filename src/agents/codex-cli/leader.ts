@@ -9,7 +9,8 @@ import { formatAttachmentBlock } from "../../session/attachments.js";
 import type { ToolActivityEvent } from "../../tools/fs.js";
 import type { PermissionBridge } from "../../tools/permissions.js";
 import { assertSafeProjectDir } from "../../tools/protection.js";
-import { hostPlatformPrompt } from "../platform.js";
+import { hostPlatformPrompt, resolvedEnvironmentPrompt } from "../platform.js";
+import type { ResolvedEnvironment } from "../../environment/types.js";
 import { leaderPlannerPrompt, leaderReviewerPrompt, leaderTakeoverPrompt, verificationScriptRetryRule } from "../leader.js";
 import { runCodexExec } from "./exec.js";
 
@@ -139,10 +140,11 @@ ${input.diff || "(empty diff)"}${retryFeedbackLine(input.previousAttemptError)}`
   return ReviewVerdictSchema.parse(await codexLeaderExec(options, { schema: "review-verdict", prompt, readOnly: true }));
 }
 
-export async function codexLeaderTakeover(options: CodexLeaderOptions, input: { plan: BuildPlan; reports: CompletionReport[]; feedback: ReviewFeedback[]; previousAttemptError?: string }) {
+export async function codexLeaderTakeover(options: CodexLeaderOptions, input: { plan: BuildPlan; reports: CompletionReport[]; feedback: ReviewFeedback[]; previousAttemptError?: string; environment?: ResolvedEnvironment }) {
   const prompt = `${leaderTakeoverPrompt}
 ${hostPlatformPrompt(process.platform, options.env)}
 ${await projectInstructions(options)}${absoluteCwdLine(options.cwd)}
+${resolvedEnvironmentPrompt(input.environment)}
 Run every non-authoritative-only verification command, skip authoritative-only entries with the required skipped marker, then return takeover JSON with a CompletionReport and userSummary.
 
 BuildPlan:

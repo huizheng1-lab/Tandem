@@ -880,7 +880,7 @@ Standing goals are context only; do not redirect unrelated requests toward them.
       return extracted;
     },
 
-    takeover: async ({ plan, reports, feedback, permissionMode, previousAttemptError }) => {
+    takeover: async ({ plan, reports, feedback, permissionMode, previousAttemptError, environment }) => {
       // Takeover is an implementation round. Bind it to the session's active permission mode
       // explicitly instead of relying on the mode captured when these agents were created.
       const takeoverOptions = { ...options, config: { ...options.config, permissionMode } };
@@ -899,7 +899,7 @@ Standing goals are context only; do not redirect unrelated requests toward them.
             confirmCodexWrite: options.confirmCodexWrite,
             permissionBridge: options.permissionBridge
           },
-          { plan, reports, feedback, previousAttemptError }
+          { plan, reports, feedback, previousAttemptError, environment }
         );
       }
       if (leader.entry.provider === "claude-code-cli") {
@@ -917,7 +917,7 @@ Standing goals are context only; do not redirect unrelated requests toward them.
             confirmCodexWrite: options.confirmCodexWrite,
             permissionBridge: options.permissionBridge
           },
-          { plan, reports, feedback, previousAttemptError }
+          { plan, reports, feedback, previousAttemptError, environment }
         );
       }
       let submitted: { report: z.infer<typeof CompletionReportSchema>; userSummary: string } | undefined;

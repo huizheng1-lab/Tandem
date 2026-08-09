@@ -8,7 +8,8 @@ import type { AttachmentRef } from "../../session/attachments.js";
 import { formatAttachmentBlock } from "../../session/attachments.js";
 import type { ToolActivityEvent } from "../../tools/fs.js";
 import type { PermissionBridge } from "../../tools/permissions.js";
-import { hostPlatformPrompt } from "../platform.js";
+import { hostPlatformPrompt, resolvedEnvironmentPrompt } from "../platform.js";
+import type { ResolvedEnvironment } from "../../environment/types.js";
 import { leaderPlannerPrompt, leaderReviewerPrompt, leaderTakeoverPrompt, verificationScriptRetryRule } from "../leader.js";
 import { runClaudeExec } from "./exec.js";
 
@@ -150,12 +151,13 @@ ${input.diff || "(empty diff)"}${retryFeedbackLine(input.previousAttemptError)}`
 
 export async function buildClaudeLeaderTakeoverPrompts(
   options: Pick<ClaudeLeaderOptions, "env" | "projectInstructions" | "cwd">,
-  input: { plan: BuildPlan; reports: CompletionReport[]; feedback: ReviewFeedback[]; previousAttemptError?: string }
+  input: { plan: BuildPlan; reports: CompletionReport[]; feedback: ReviewFeedback[]; previousAttemptError?: string; environment?: ResolvedEnvironment }
 ): Promise<{ systemPrompt: string; prompt: string }> {
   return {
     systemPrompt: `${leaderTakeoverPrompt}
 ${hostPlatformPrompt(process.platform, options.env)}
 ${await projectInstructions(options)}${absoluteCwdLine(options.cwd)}
+${resolvedEnvironmentPrompt(input.environment)}
 Run every non-authoritative-only verification command, skip authoritative-only entries with the required skipped marker, then return takeover JSON with a CompletionReport and userSummary.`,
     prompt: `BuildPlan:
 ${jsonBlock(input.plan)}
@@ -173,7 +175,7 @@ export async function claudeLeaderReview(options: ClaudeLeaderOptions, input: { 
   return ReviewVerdictSchema.parse(await claudeLeaderExec(options, { schema: "review-verdict", prompt: prompts.prompt, systemPrompt: prompts.systemPrompt, readOnly: true }));
 }
 
-export async function claudeLeaderTakeover(options: ClaudeLeaderOptions, input: { plan: BuildPlan; reports: CompletionReport[]; feedback: ReviewFeedback[]; previousAttemptError?: string }) {
+export async function claudeLeaderTakeover(options: ClaudeLeaderOptions, input: { plan: BuildPlan; reports: CompletionReport[]; feedback: ReviewFeedback[]; previousAttemptError?: string; environment?: ResolvedEnvironment }) {
   const prompts = await buildClaudeLeaderTakeoverPrompts(options, input);
   const takeover = z.object({ report: CompletionReportSchema, userSummary: z.string() }).parse(await claudeLeaderExec(options, { schema: "takeover", prompt: prompts.prompt, systemPrompt: prompts.systemPrompt }));
   return takeover;

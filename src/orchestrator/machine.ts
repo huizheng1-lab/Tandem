@@ -60,7 +60,7 @@ export interface AgentFns {
   plan(input: { request: string; goals: string[]; history?: string; attachments?: AttachmentRef[]; previousAttemptError?: string }): Promise<PlanResult>;
   build(input: BuildStreamInput): Promise<unknown>;
   review(input: { plan: BuildPlan; report: CompletionReport; round: number; diff: string; previousAttemptError?: string }): Promise<unknown>;
-  takeover(input: { plan: BuildPlan; reports: CompletionReport[]; feedback: ReviewVerdict["feedback"][]; permissionMode: PermissionMode; previousAttemptError?: string }): Promise<{ report: CompletionReport; userSummary: string }>;
+  takeover(input: { plan: BuildPlan; reports: CompletionReport[]; feedback: ReviewVerdict["feedback"][]; permissionMode: PermissionMode; previousAttemptError?: string; environment?: ResolvedEnvironment }): Promise<{ report: CompletionReport; userSummary: string }>;
 }
 
 export interface RunOptions {
@@ -336,6 +336,11 @@ export interface RunResult {
   takeover: boolean;
 }
 
+/** A validator rejection is a concrete turn failure and must outrank model guesses. */
+export function takeoverValidationFailureSummary(error: unknown, userSummary: string): string {
+  return `Takeover could not be finalized because artifact validation failed: ${String(error)}. Agent summary (unverified): ${userSummary}`;
+}
+
 export async function runOrchestration(options: RunOptions): Promise<RunResult> {
   const emit = options.emit ?? (() => undefined);
   const waitIfPaused = options.waitIfPaused ?? (async () => undefined);
@@ -490,12 +495,13 @@ export async function runOrchestration(options: RunOptions): Promise<RunResult> 
     for (let attempt = 1; attempt <= 3; attempt += 1) {
       try {
         await waitIfPaused();
-        const takeover = await options.agents.takeover({
+         const takeover = await options.agents.takeover({
           plan,
           reports,
           feedback: allFeedback,
-          permissionMode: options.config.permissionMode ?? "ask",
-          previousAttemptError: lastError === undefined ? undefined : previousAttemptMessage(lastError)
+           permissionMode: options.config.permissionMode ?? "ask",
+           previousAttemptError: lastError === undefined ? undefined : previousAttemptMessage(lastError),
+           environment: options.agents.getEnvironment?.()
         });
         lastTakeover = takeover;
         let schemaReport = validateCompletionReport(plan, takeover.report, plan.verification, {
@@ -534,7 +540,7 @@ export async function runOrchestration(options: RunOptions): Promise<RunResult> 
       reports.push(preservedReport);
     }
     emit({ type: "artifact", name: "TakeoverReport", value: lastTakeover.report });
-    const summary = `Build finished under leader takeover, but takeover verification bookkeeping could not be finalized after retries: ${String(lastError)}. ${lastTakeover.userSummary}`;
+    const summary = takeoverValidationFailureSummary(lastError, lastTakeover.userSummary);
     transition("DONE", "takeover report validation failed; build preserved", round);
     return { phase: "DONE", summary, plan, reports, verdicts, takeover: true };
   };

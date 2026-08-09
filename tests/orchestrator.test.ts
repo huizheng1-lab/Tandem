@@ -7,6 +7,7 @@ import { BuildPlan, CompletionReport, ReviewVerdict } from "../src/orchestrator/
 import { createVerificationRunner } from "../src/orchestrator/verification.js";
 import type { PermissionRequest } from "../src/tools/permissions.js";
 import type { ResolvedEnvironment } from "../src/environment/types.js";
+import { resolvedEnvironmentPrompt } from "../src/agents/platform.js";
 
 const plan: BuildPlan = {
   title: "Todo CLI",
@@ -332,9 +333,46 @@ describe("orchestration", () => {
     expect(takeovers).toBe(3);
     expect(result.phase).toBe("DONE");
     expect(result.takeover).toBe(true);
-    expect(result.summary).toContain("takeover verification bookkeeping could not be finalized");
+    expect(result.summary).toContain("artifact validation failed");
+    expect(result.summary).toContain("verification command \"node test.mjs\" does not match plan command \"npm test\"");
     expect(result.summary).toContain("takeover work finished");
     expect(result.reports).toHaveLength(1);
+  });
+
+  it("reports the exact takeover validator failure as the terminal cause", async () => {
+    const validatorMessage = "Verification script edited without disclosure: verify_v3.mjs";
+    const invalidTakeover = { ...report(), verificationResults: [{ command: "npm test", passed: true, output: "ok" }] };
+    const result = await runOrchestration({
+      request: "build",
+      config: { maxReviewRounds: 0, maxParallelWorkers: 1 },
+      agents: agents({
+        takeover: async () => ({ report: invalidTakeover, userSummary: "ffmpeg is unavailable" }),
+        // Keep this test focused on the terminal summary's structured validation cause.
+        // The real validator error is represented by the same error text it emits.
+      }),
+      postBuildReport: async () => { throw new Error(validatorMessage); }
+    });
+    expect(result.summary).toContain("artifact validation failed");
+    expect(result.summary).toContain(validatorMessage);
+    expect(result.summary).toContain("Agent summary (unverified)");
+  });
+
+  it("uses recorded preflight resolution instead of declaring a resolved runtime unavailable", () => {
+    const prompt = resolvedEnvironmentPrompt({
+      requestedCapabilities: [{ kind: "ffmpeg" }],
+      tools: { ffmpeg: { capability: "ffmpeg", executablePath: "C:\\tools\\ffmpeg.exe", source: "path" } },
+      probeEvidence: [], unresolvedCapabilities: [], attemptedSources: [], diagnostics: []
+    });
+    expect(prompt).toContain("ffmpeg=C:\\tools\\ffmpeg.exe");
+    expect(prompt).toContain("Do not infer a runtime is unavailable");
+  });
+
+  it("names genuinely missing runtimes in the recorded preflight prompt", () => {
+    const prompt = resolvedEnvironmentPrompt({
+      requestedCapabilities: [{ kind: "ffprobe" }], tools: {}, probeEvidence: [], attemptedSources: [], diagnostics: [],
+      unresolvedCapabilities: [{ capability: "ffprobe", name: "ffprobe", reason: "not found on PATH", attemptedSources: ["path"] }]
+    });
+    expect(prompt).toContain("ffprobe: not found on PATH");
   });
 
   it("retries artifact validation failures", async () => {
