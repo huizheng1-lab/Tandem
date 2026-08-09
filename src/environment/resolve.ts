@@ -34,6 +34,8 @@ export interface InstalledRuntimeCandidates {
   codexSandboxHelper?: string[];
   ffmpegDirectories?: string[];
   codexDirectories?: string[];
+  /** User/project-provided directories for arbitrary executable names. */
+  executableDirectories?: Record<string, string[]>;
 }
 
 export interface ResolveEnvironmentOptions {
@@ -173,12 +175,16 @@ function collectPathCandidates(
 function installedFor(tool: ExecutableCapability, installed: InstalledRuntimeCandidates): string[] {
   if (tool === "codex-sandbox-helper") return installed.codexSandboxHelper ?? [];
   if (tool === "python" || tool === "node" || tool === "ffmpeg" || tool === "ffprobe") return installed[tool] ?? [];
-  return [];
+  return installed.executableDirectories?.[tool] ?? [];
 }
 
 function directoryCandidates(tool: ExecutableCapability, installed: InstalledRuntimeCandidates, names: string[], platform: NodeJS.Platform): string[] {
   const pathApi = platform === "win32" ? path.win32 : path.posix;
-  const directories = tool === "ffmpeg" || tool === "ffprobe" ? installed.ffmpegDirectories ?? [] : tool === "codex-sandbox-helper" ? installed.codexDirectories ?? [] : [];
+  const directories = tool === "ffmpeg" || tool === "ffprobe"
+    ? installed.ffmpegDirectories ?? []
+    : tool === "codex-sandbox-helper"
+      ? installed.codexDirectories ?? []
+      : installed.executableDirectories?.[tool] ?? [];
   return directories.flatMap((directory) => names.map((name) => pathApi.join(directory, name)));
 }
 
@@ -262,7 +268,11 @@ async function probeCandidate(
   }
 
   const version = parseVersion(`${versionResult.stdout}\n${versionResult.stderr}`);
-  if (tool !== "codex-sandbox-helper" && !version) {
+  // Arbitrary executables are discoverable by successful invocation alone. A
+  // numeric version is required only where the request carries runtime
+  // semantics (the named runtimes and their version/module checks).
+  const requiresVersion = request.kind !== "executable" && tool !== "codex-sandbox-helper";
+  if (requiresVersion && !version) {
     return {
       evidence: {
         capability: tool,

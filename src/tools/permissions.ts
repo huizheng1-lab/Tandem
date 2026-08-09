@@ -9,7 +9,8 @@ export interface PermissionRequest {
 
 export const DEFAULT_DENY_RULES = [
   "Bash(rm -rf /*)", "Bash(format *:*)", "Bash(:(){ :|:& };:)", "Bash(del /f *:\\*)",
-  "Bash(uninstall *)", "Bash(downgrade *)", "Bash(setx PATH *)", "Bash(*security software*)"
+  "Bash(uninstall *)", "Bash(downgrade *)", "Bash(setx PATH *)", "Bash(*security software*)",
+  "Bash(* install http://*)", "Bash(* install https://*)"
 ] as const;
 
 export interface PermissionOptions { rules?: PermissionRules; unattended?: boolean }
@@ -28,7 +29,13 @@ const destructivePatterns = [
   // (e.g. `format C:`, `format c:`, `format /FS:NTFS C:`, `format C: /FS:exFAT /Q`).
   /\bformat\s+(?:\/[a-z]+(?::[a-z]+)?\s+)*[a-z]:/i,
   /:\s*\(\s*\)\s*\{\s*:\s*\|\s*:\s*&\s*\}/,
-  /\bdel\s+\/[fsq]\s+[a-z]:\\/i
+  /\bdel\s+\/[fsq]\s+[a-z]:\\/i,
+  // Package removal/downgrades and persistent PATH/security changes are
+  // machine-wide side effects that yolo must not bypass.
+  /\b(?:npm|pip|python(?:3)?\s+-m\s+pip)\s+(?:uninstall|remove|downgrade)\b/i,
+  /\b(?:setx|export)\s+PATH\b/i,
+  /\b(?:disable|turn\s+off)\b.*\b(?:defender|antivirus|security\s+software)\b/i,
+  /\b(?:npm|pip|python(?:3)?\s+-m\s+pip)\s+install\s+https?:\/\//i
 ];
 
 export function isDestructiveCommand(command: string): boolean {
