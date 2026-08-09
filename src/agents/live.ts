@@ -107,6 +107,7 @@ export function buildWorkerContext(
     tasks?: BuildPlan["tasks"];
     verification?: string[];
     previousAttemptError?: string;
+    /** Kept for call-site compatibility; advisory capability context belongs in system instructions. */
     environment?: ResolvedEnvironment;
   },
   budget = WORKER_CONTEXT_CHAR_BUDGET
@@ -125,7 +126,7 @@ export function buildWorkerContext(
   const streamBlock = compact.stream
     ? `\n\nThis worker invocation is responsible for stream "${compact.stream.id}". The full plan is shown for context; focus on the tasks in this stream and run only this stream's verification commands (verbatim).\n\nStream "${compact.stream.id}" tasks:\n${jsonBlock(compact.stream.tasks)}\n\nStream "${compact.stream.id}" verification:\n${jsonBlock(compact.stream.verification)}`
     : "";
-  let content = `${resolvedEnvironmentPrompt(input.environment)}\n\nBuildPlan:\n${jsonBlock(input.plan)}\n\nRound ${input.round}\n\nReview feedback:\n${jsonBlock(compact.feedback)}\n\nPrevious report summary:\n${jsonBlock(compact.previousReport)}${streamBlock}${retryFeedbackLine(input.previousAttemptError)}`;
+  let content = `BuildPlan:\n${jsonBlock(input.plan)}\n\nRound ${input.round}\n\nReview feedback:\n${jsonBlock(compact.feedback)}\n\nPrevious report summary:\n${jsonBlock(compact.previousReport)}${streamBlock}${retryFeedbackLine(input.previousAttemptError)}`;
   if (content.length > budget) {
     const suffix = "\n[context truncated; full prior artifacts remain in the session log]";
     content = `${content.slice(0, Math.max(0, budget - suffix.length))}${suffix}`;
@@ -569,7 +570,8 @@ export async function createLiveAgents(options: LiveAgentOptions): Promise<Agent
             projectInstructions: options.projectInstructions,
             onTriage: options.onTriage,
             confirmCodexWrite: options.confirmCodexWrite,
-            permissionBridge: options.permissionBridge
+            permissionBridge: options.permissionBridge,
+            environment: resolvedEnvironment
           },
           { request, goals, history, attachments, previousAttemptError }
         );
@@ -588,7 +590,8 @@ export async function createLiveAgents(options: LiveAgentOptions): Promise<Agent
             projectInstructions: options.projectInstructions,
             onTriage: options.onTriage,
             confirmCodexWrite: options.confirmCodexWrite,
-            permissionBridge: options.permissionBridge
+            permissionBridge: options.permissionBridge,
+            environment: resolvedEnvironment
           },
           { request, goals, history, attachments, previousAttemptError }
         );
@@ -720,7 +723,8 @@ Standing goals are context only; do not redirect unrelated requests toward them.
             onToolEvent: options.onToolEvent,
             projectInstructions: options.projectInstructions,
             confirmCodexWrite: options.confirmCodexWrite,
-            permissionBridge: options.permissionBridge
+            permissionBridge: options.permissionBridge,
+            environment: resolvedEnvironment
           },
           { plan, streamId, tasks, verification, round, feedback, previousReport, previousAttemptError }
         );
@@ -738,7 +742,8 @@ Standing goals are context only; do not redirect unrelated requests toward them.
             onToolEvent: options.onToolEvent,
             projectInstructions: options.projectInstructions,
             confirmCodexWrite: options.confirmCodexWrite,
-            permissionBridge: options.permissionBridge
+            permissionBridge: options.permissionBridge,
+            environment: resolvedEnvironment
           },
           { plan, streamId, tasks, verification, round, feedback, previousReport, previousAttemptError }
         );
@@ -765,7 +770,7 @@ Standing goals are context only; do not redirect unrelated requests toward them.
         messages: [
           {
             role: "user",
-         content: buildWorkerContext({ round, plan, feedback, previousReport, streamId, tasks, verification, previousAttemptError, environment: resolvedEnvironment })
+         content: buildWorkerContext({ round, plan, feedback, previousReport, streamId, tasks, verification, previousAttemptError })
           }
         ],
         tools: mergeTools(makeToolSet({ ...toolContext, media: worker.entry.media }, "worker"), submitTools),
@@ -798,7 +803,8 @@ Standing goals are context only; do not redirect unrelated requests toward them.
             onToolEvent: options.onToolEvent,
             projectInstructions: options.projectInstructions,
             confirmCodexWrite: options.confirmCodexWrite,
-            permissionBridge: options.permissionBridge
+            permissionBridge: options.permissionBridge,
+            environment: resolvedEnvironment
           },
           { plan, report, round, diff, previousAttemptError }
         );
@@ -816,7 +822,8 @@ Standing goals are context only; do not redirect unrelated requests toward them.
             onToolEvent: options.onToolEvent,
             projectInstructions: options.projectInstructions,
             confirmCodexWrite: options.confirmCodexWrite,
-            permissionBridge: options.permissionBridge
+            permissionBridge: options.permissionBridge,
+            environment: resolvedEnvironment
           },
           { plan, report, round, diff, previousAttemptError }
         );
@@ -892,7 +899,8 @@ Standing goals are context only; do not redirect unrelated requests toward them.
             onToolEvent: options.onToolEvent,
             projectInstructions: options.projectInstructions,
             confirmCodexWrite: options.confirmCodexWrite,
-            permissionBridge: options.permissionBridge
+            permissionBridge: options.permissionBridge,
+            environment: resolvedEnvironment
           },
           { plan, reports, feedback, previousAttemptError, environment }
         );
@@ -910,7 +918,8 @@ Standing goals are context only; do not redirect unrelated requests toward them.
             onToolEvent: options.onToolEvent,
             projectInstructions: options.projectInstructions,
             confirmCodexWrite: options.confirmCodexWrite,
-            permissionBridge: options.permissionBridge
+            permissionBridge: options.permissionBridge,
+            environment: resolvedEnvironment
           },
           { plan, reports, feedback, previousAttemptError, environment }
         );

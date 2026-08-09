@@ -6,7 +6,8 @@ import { CostLedger } from "../../session/cost.js";
 import type { ToolActivityEvent } from "../../tools/fs.js";
 import type { PermissionBridge } from "../../tools/permissions.js";
 import { buildWorkerContext } from "../live.js";
-import { hostPlatformPrompt } from "../platform.js";
+import { hostPlatformPrompt, resolvedEnvironmentPrompt } from "../platform.js";
+import type { ResolvedEnvironment } from "../../environment/types.js";
 import { workerPrompt } from "../worker.js";
 import { runClaudeExec } from "./exec.js";
 
@@ -22,6 +23,7 @@ export interface ClaudeWorkerOptions {
   confirmCodexWrite?: (role: "leader" | "worker", message: string) => Promise<boolean>;
   projectInstructions?: () => string | Promise<string>;
   permissionBridge?: PermissionBridge;
+  environment?: ResolvedEnvironment;
 }
 
 async function projectInstructions(options: Pick<ClaudeWorkerOptions, "projectInstructions">): Promise<string> {
@@ -29,12 +31,13 @@ async function projectInstructions(options: Pick<ClaudeWorkerOptions, "projectIn
 }
 
 export async function buildClaudeWorkerPrompts(
-  options: Pick<ClaudeWorkerOptions, "env" | "projectInstructions">,
+  options: Pick<ClaudeWorkerOptions, "env" | "projectInstructions" | "environment">,
   input: { plan: BuildPlan; streamId: string; tasks: BuildPlan["tasks"]; verification: string[]; round: number; feedback: ReviewFeedback; previousReport?: CompletionReport; previousAttemptError?: string }
 ): Promise<{ systemPrompt: string; prompt: string }> {
   return {
     systemPrompt: `${workerPrompt}
 ${hostPlatformPrompt(process.platform, options.env)}
+${resolvedEnvironmentPrompt(options.environment)}
 ${await projectInstructions(options)}
 If read_file says you CANNOT view a file's visual content, never guess, infer, or claim to know what it shows. If the task depends on that content and the plan lacks sufficient leader-provided findings, submit a blocked CompletionReport.
 Before submit_completion_report, follow Tandem's verification rule: run every non-authoritative-only verification command, and skip authoritative-only entries with the required skipped marker. In verificationResults[].command, repeat the BuildPlan verification command string verbatim. If you adapt a command for the host platform, still use the plan's original command as command and describe the adapted command plus real output in output.`,

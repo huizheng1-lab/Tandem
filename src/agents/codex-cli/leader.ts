@@ -40,6 +40,7 @@ export interface CodexLeaderOptions {
   onTriage?: (kind: "question" | "implementation") => void | Promise<void>;
   confirmCodexWrite?: (role: "leader" | "worker", message: string) => Promise<boolean>;
   permissionBridge?: PermissionBridge;
+  environment?: ResolvedEnvironment;
 }
 
 function jsonBlock(value: unknown): string {
@@ -95,6 +96,7 @@ export async function codexLeaderPlan(
   // intentionally not applied for Codex-backed leaders.
   const prompt = `${leaderPlannerPrompt}
 ${hostPlatformPrompt(process.platform, options.env)}
+${resolvedEnvironmentPrompt(options.environment)}
 ${await projectInstructions(options)}${absoluteCwdLine(options.cwd)}
 
 FIRST, classify the request:
@@ -125,6 +127,7 @@ ${input.request}${attachmentBlock}${retryFeedbackLine(input.previousAttemptError
 export async function codexLeaderReview(options: CodexLeaderOptions, input: { plan: BuildPlan; report: CompletionReport; round: number; diff: string; previousAttemptError?: string }) {
   const prompt = `${leaderReviewerPrompt}
 ${hostPlatformPrompt(process.platform, options.env)}
+${resolvedEnvironmentPrompt(options.environment)}
 ${await projectInstructions(options)}${absoluteCwdLine(options.cwd)}
 You may rerun only the plan verification commands if needed. Return only the ReviewVerdict JSON.
 

@@ -385,7 +385,7 @@ describe("orchestration", () => {
       probeEvidence: [], unresolvedCapabilities: [], attemptedSources: [], diagnostics: []
     });
     expect(prompt).toContain("ffmpeg=C:\\tools\\ffmpeg.exe");
-    expect(prompt).toContain("Do not infer a runtime is unavailable");
+    expect(prompt).toContain("Do not claim a resolved runtime is unavailable");
   });
 
   it("names genuinely missing runtimes in the recorded preflight prompt", () => {

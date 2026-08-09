@@ -39,6 +39,7 @@ export interface ClaudeLeaderOptions {
   onTriage?: (kind: "question" | "implementation") => void | Promise<void>;
   confirmCodexWrite?: (role: "leader" | "worker", message: string) => Promise<boolean>;
   permissionBridge?: PermissionBridge;
+  environment?: ResolvedEnvironment;
 }
 
 function jsonBlock(value: unknown): string {
@@ -93,7 +94,7 @@ function absoluteCwdLine(cwd: string): string {
 }
 
 export async function buildClaudeLeaderPlanPrompts(
-  options: Pick<ClaudeLeaderOptions, "env" | "projectInstructions" | "cwd">,
+  options: Pick<ClaudeLeaderOptions, "env" | "projectInstructions" | "cwd" | "environment">,
   input: { request: string; goals: string[]; history?: string; attachments?: AttachmentRef[]; previousAttemptError?: string }
 ): Promise<{ systemPrompt: string; prompt: string }> {
   const attachmentBlock = input.attachments && input.attachments.length > 0 ? `\n\n${formatAttachmentBlock(input.attachments)}` : "";
@@ -101,6 +102,7 @@ export async function buildClaudeLeaderPlanPrompts(
   return {
     systemPrompt: `${leaderPlannerPrompt}
 ${hostPlatformPrompt(process.platform, options.env)}
+${resolvedEnvironmentPrompt(options.environment)}
 ${await projectInstructions(options)}${absoluteCwdLine(options.cwd)}
 
 FIRST, classify the request:
@@ -129,12 +131,13 @@ export async function claudeLeaderPlan(
 }
 
 export async function buildClaudeLeaderReviewPrompts(
-  options: Pick<ClaudeLeaderOptions, "env" | "projectInstructions" | "cwd">,
+  options: Pick<ClaudeLeaderOptions, "env" | "projectInstructions" | "cwd" | "environment">,
   input: { plan: BuildPlan; report: CompletionReport; round: number; diff: string; previousAttemptError?: string }
 ): Promise<{ systemPrompt: string; prompt: string }> {
   return {
     systemPrompt: `${leaderReviewerPrompt}
 ${hostPlatformPrompt(process.platform, options.env)}
+${resolvedEnvironmentPrompt(options.environment)}
 ${await projectInstructions(options)}${absoluteCwdLine(options.cwd)}
 You may rerun only the plan verification commands if needed. Return only the ReviewVerdict JSON.`,
     prompt: `Review round ${input.round}.
@@ -150,7 +153,7 @@ ${input.diff || "(empty diff)"}${retryFeedbackLine(input.previousAttemptError)}`
 }
 
 export async function buildClaudeLeaderTakeoverPrompts(
-  options: Pick<ClaudeLeaderOptions, "env" | "projectInstructions" | "cwd">,
+  options: Pick<ClaudeLeaderOptions, "env" | "projectInstructions" | "cwd" | "environment">,
   input: { plan: BuildPlan; reports: CompletionReport[]; feedback: ReviewFeedback[]; previousAttemptError?: string; environment?: ResolvedEnvironment }
 ): Promise<{ systemPrompt: string; prompt: string }> {
   return {
