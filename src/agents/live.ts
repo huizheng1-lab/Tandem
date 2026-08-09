@@ -29,7 +29,6 @@ import { claudeLeaderPlan, claudeLeaderReview, claudeLeaderTakeover } from "./cl
 import { commandCapabilities, installedRuntimeCandidates, preflightEnvironment } from "../environment/preflight.js";
 import type { InstalledRuntimeCandidates } from "../environment/resolve.js";
 import type { ResolvedEnvironment } from "../environment/types.js";
-import { installMissingTool } from "../environment/install.js";
 
 export interface LiveAgentOptions {
   config: TandemConfig;
@@ -108,6 +107,7 @@ export function buildWorkerContext(
     tasks?: BuildPlan["tasks"];
     verification?: string[];
     previousAttemptError?: string;
+    environment?: ResolvedEnvironment;
   },
   budget = WORKER_CONTEXT_CHAR_BUDGET
 ): string {
@@ -125,7 +125,7 @@ export function buildWorkerContext(
   const streamBlock = compact.stream
     ? `\n\nThis worker invocation is responsible for stream "${compact.stream.id}". The full plan is shown for context; focus on the tasks in this stream and run only this stream's verification commands (verbatim).\n\nStream "${compact.stream.id}" tasks:\n${jsonBlock(compact.stream.tasks)}\n\nStream "${compact.stream.id}" verification:\n${jsonBlock(compact.stream.verification)}`
     : "";
-  let content = `BuildPlan:\n${jsonBlock(input.plan)}\n\nRound ${input.round}\n\nReview feedback:\n${jsonBlock(compact.feedback)}\n\nPrevious report summary:\n${jsonBlock(compact.previousReport)}${streamBlock}${retryFeedbackLine(input.previousAttemptError)}`;
+  let content = `${resolvedEnvironmentPrompt(input.environment)}\n\nBuildPlan:\n${jsonBlock(input.plan)}\n\nRound ${input.round}\n\nReview feedback:\n${jsonBlock(compact.feedback)}\n\nPrevious report summary:\n${jsonBlock(compact.previousReport)}${streamBlock}${retryFeedbackLine(input.previousAttemptError)}`;
   if (content.length > budget) {
     const suffix = "\n[context truncated; full prior artifacts remain in the session log]";
     content = `${content.slice(0, Math.max(0, budget - suffix.length))}${suffix}`;
@@ -503,9 +503,7 @@ export async function createLiveAgents(options: LiveAgentOptions): Promise<Agent
             env: options.env,
             installed: await installedCandidates(),
             skipInstalledDirectoryDiscovery: true,
-            strict: true,
-            installMissing: async (requested) => installMissingTool({ executable: requested.name, cwd: options.cwd, env: options.env, permissionMode: options.config.permissionMode, permissionBridge: options.permissionBridge, rules: options.config.permissions, unattended: true })
-          });
+           });
           if (!resolvedEnvironment) resolvedEnvironment = result.environment;
           else {
             resolvedEnvironment = {
@@ -536,8 +534,7 @@ export async function createLiveAgents(options: LiveAgentOptions): Promise<Agent
           env: options.env,
           installed: await installedCandidates(),
           skipInstalledDirectoryDiscovery: true,
-          installMissing: async (requested) => installMissingTool({ executable: requested.name, cwd: options.cwd, env: options.env, permissionMode: options.config.permissionMode, permissionBridge: options.permissionBridge, rules: options.config.permissions, unattended: true })
-        }))();
+         }))();
         const result = await environmentPreparation;
         resolvedEnvironment = result.environment;
         // Keep the same snapshot on the context used by every in-process leader
@@ -675,7 +672,7 @@ Standing goals are context only; do not redirect unrelated requests toward them.
             }
           })
         };
-        const system = `${leaderPlannerPrompt}\n${hostPrompt}\n${await projectInstructions()}\n${absoluteCwdLine(options.cwd)}\n${memoryInstruction}\n${triage}${workerMediaWarning(attachments, worker.entry)}\nTreat the new request in the context of this continuing session conversation; pronouns, references like "that file", and follow-ups may refer to earlier turns.\nUsers may reference standing goals by number (for example, "goal 1"); resolve those references against the Standing goals list before asking for clarification.\nStanding goals are context only; do not redirect unrelated requests toward them.\nThe "verification" field must contain exact runnable shell commands only (e.g. "node test.mjs"), one command per entry - never prose or manual instructions. Put manual checks in acceptanceCriteria instead. Verification commands MUST be runnable verbatim on the host platform. Quote absolute path arguments that contain spaces.`;
+         const system = `${leaderPlannerPrompt}\n${hostPrompt}\n${resolvedEnvironmentPrompt(resolvedEnvironment)}\n${await projectInstructions()}\n${absoluteCwdLine(options.cwd)}\n${memoryInstruction}\n${triage}${workerMediaWarning(attachments, worker.entry)}\nTreat the new request in the context of this continuing session conversation; pronouns, references like "that file", and follow-ups may refer to earlier turns.\nUsers may reference standing goals by number (for example, "goal 1"); resolve those references against the Standing goals list before asking for clarification.\nStanding goals are context only; do not redirect unrelated requests toward them.\nThe "verification" field must contain exact runnable shell commands only (e.g. "node test.mjs"), one command per entry - never prose or manual instructions. Put manual checks in acceptanceCriteria instead. Verification commands MUST be runnable verbatim on the host platform. Quote absolute path arguments that contain spaces.`;
         await compactLeaderThread(system);
         const userText = validationFeedback ? buildLeaderRequestMessage({ request, goals, history, includeHistoryDigest, validationFeedback }) : baseUserText;
         leaderThread.push({
@@ -774,12 +771,12 @@ Standing goals are context only; do not redirect unrelated requests toward them.
         modelEntry: worker.entry,
         costRole: "worker",
         ledger: options.ledger,
-        system: `${workerPrompt}\n${hostPrompt}\n${await projectInstructions()}\n${memoryInstruction}\nIf read_file says you CANNOT view a file's visual content, never guess, infer, or claim to know what it shows. If the task depends on that content and the plan lacks sufficient leader-provided findings, submit a blocked CompletionReport.\nBefore submit_completion_report, follow Tandem's verification rule: run every non-authoritative-only verification command, and skip authoritative-only entries with the required skipped marker. In verificationResults[].command, repeat the BuildPlan verification command string verbatim. If you adapt a command for the host platform, still use the plan's original command as command and describe the adapted command plus real output in output.`,
+          system: `${workerPrompt}\n${hostPrompt}\n${resolvedEnvironmentPrompt(resolvedEnvironment)}\n${await projectInstructions()}\n${memoryInstruction}\nIf read_file says you CANNOT view a file's visual content, never guess, infer, or claim to know what it shows. If the task depends on that content and the plan lacks sufficient leader-provided findings, submit a blocked CompletionReport.\nBefore submit_completion_report, follow Tandem's verification rule: run every non-authoritative-only verification command, and skip authoritative-only entries with the required skipped marker. In verificationResults[].command, repeat the BuildPlan verification command string verbatim. If you adapt a command for the host platform, still use the plan's original command as command and describe the adapted command plus real output in output.`,
         providerOptions: openAiPromptCacheProviderOptions(worker.entry, options.cwd, "worker"),
         messages: [
           {
             role: "user",
-            content: buildWorkerContext({ round, plan, feedback, previousReport, streamId, tasks, verification, previousAttemptError })
+         content: buildWorkerContext({ round, plan, feedback, previousReport, streamId, tasks, verification, previousAttemptError, environment: resolvedEnvironment })
           }
         ],
         tools: mergeTools(makeToolSet({ ...toolContext, media: worker.entry.media }, "worker"), submitTools),
@@ -846,7 +843,7 @@ Standing goals are context only; do not redirect unrelated requests toward them.
           }
         })
       };
-      const system = `${leaderReviewerPrompt}\n${hostPrompt}\n${await projectInstructions()}\n${absoluteCwdLine(options.cwd)}\n${memoryInstruction}\nYou may rerun only the plan verification commands. Prose verdicts are discarded; the turn is only complete after submit_review has been called.`;
+      const system = `${leaderReviewerPrompt}\n${hostPrompt}\n${resolvedEnvironmentPrompt(resolvedEnvironment)}\n${await projectInstructions()}\n${absoluteCwdLine(options.cwd)}\n${memoryInstruction}\nYou may rerun only the plan verification commands. Prose verdicts are discarded; the turn is only complete after submit_review has been called.`;
       await compactLeaderThread(system);
       leaderThread.push({
         role: "user",

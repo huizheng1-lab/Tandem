@@ -15,7 +15,6 @@ import {
 } from "./artifacts.js";
 import { sanitizePromptValue } from "../tools/sanitize.js";
 import { VerificationRunner, VerificationResult } from "./verification.js";
-import { EnvironmentPreflightError } from "../environment/preflight.js";
 import type { ResolvedEnvironment } from "../environment/types.js";
 
 export type MachinePhase = "IDLE" | "PLANNING" | "BUILDING" | "REVIEWING" | "FEEDBACK" | "TAKEOVER" | "DONE";
@@ -398,16 +397,8 @@ export async function runOrchestration(options: RunOptions): Promise<RunResult> 
 
   const prepareEnvironment = async (commands: string[]): Promise<RunResult | undefined> => {
     if (!options.agents.prepareEnvironment) return undefined;
-    try {
-      await options.agents.prepareEnvironment(commands);
-      return undefined;
-    } catch (error) {
-      if (!(error instanceof EnvironmentPreflightError)) throw error;
-      const message = error.message;
-      emit({ type: "error", message });
-      transition("DONE", message, round);
-      return { phase: "DONE", summary: message, plan, reports, verdicts, takeover: false };
-    }
+    await options.agents.prepareEnvironment(commands);
+    return undefined;
   };
   const planEnvironmentCommands = (): string[] => [
     ...(plan?.verification ?? []),

@@ -14,5 +14,5 @@ export function resolvedEnvironmentPrompt(environment: ResolvedEnvironment | und
     .filter((entry): entry is [string, ResolvedTool] => Boolean(entry[1]?.executablePath))
     .map(([capability, tool]) => `${capability}=${tool.executablePath}`);
   const missing = environment.unresolvedCapabilities.map((item) => `${item.name}: ${item.reason}`);
-  return `Recorded environment preflight (authoritative for runtime availability): resolved=${resolved.join(", ") || "none"}; unresolved=${missing.join("; ") || "none"}. Do not infer a runtime is unavailable from this CLI sandbox when preflight resolved it; defer to this record and to actual command output.`;
+  return `Recorded environment preflight (advisory snapshot): resolved=${resolved.join(", ") || "none"}; unresolved=${missing.join("; ") || "none"}. Use this snapshot to plan efficiently, but treat actual command output as authoritative. Do not claim a resolved runtime is unavailable based on a different CLI sandbox.`;
 }

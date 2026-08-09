@@ -17,6 +17,16 @@ export interface EnvironmentPreflightResult {
   notFoundCapabilities: ResolvedEnvironment["unresolvedCapabilities"];
 }
 
+/** @deprecated Preflight is advisory; callers must not use this as control flow. */
+export class EnvironmentPreflightError extends Error {
+  readonly environment: ResolvedEnvironment;
+  constructor(environment: ResolvedEnvironment) {
+    super("Environment preflight is advisory and does not block execution.");
+    this.name = "EnvironmentPreflightError";
+    this.environment = environment;
+  }
+}
+
 /** Put the resolver's canonical executable directories first for every caller. */
 export function applyResolvedEnvironment(env: NodeJS.ProcessEnv, environment: ResolvedEnvironment, platform: NodeJS.Platform = process.platform): NodeJS.ProcessEnv {
   const pathSeparator = platform === "win32" ? ";" : ":";
@@ -28,19 +38,6 @@ export function applyResolvedEnvironment(env: NodeJS.ProcessEnv, environment: Re
   env.PATH = normalizedPath;
   if (platform === "win32" && env.Path !== undefined) env.Path = normalizedPath;
   return env;
-}
-
-export class EnvironmentPreflightError extends Error {
-  readonly environment: ResolvedEnvironment;
-  constructor(environment: ResolvedEnvironment) {
-    const missing = environment.unresolvedCapabilities[0];
-    const detail = missing
-      ? `${missing.name}: ${missing.reason} (attempted ${missing.attemptedSources.join(", ") || "no candidates"})`
-      : "No usable runtime was found.";
-    super(`Environment preflight blocked execution: missing ${detail}`);
-    this.name = "EnvironmentPreflightError";
-    this.environment = environment;
-  }
 }
 
 export function commandCapabilities(commands: string[], platform: NodeJS.Platform): RequestedCapability[] {
@@ -102,8 +99,9 @@ export async function preflightEnvironment(options: {
   installed?: InstalledRuntimeCandidates;
   /** Set when the caller has already memoized the bounded installed scan. */
   skipInstalledDirectoryDiscovery?: boolean;
-  /** Best-effort command discovery must not turn an optional miss into a blocker. */
+  /** @deprecated Retained for source compatibility; missing capabilities never gate. */
   strict?: boolean;
+  /** @deprecated Installation is performed through the ordinary shell tool. */
   installMissing?: (capability: Extract<RequestedCapability, { kind: "executable" }>) => Promise<InstallEvidence>;
 }): Promise<EnvironmentPreflightResult> {
   const platform = options.platform ?? process.platform;
@@ -138,38 +136,6 @@ export async function preflightEnvironment(options: {
     platform,
     installed
   });
-  if (options.installMissing) {
-    for (const capability of requestedCapabilities) {
-      if (capability.kind !== "executable" || environment.tools[capability.name] || !environment.unresolvedCapabilities.some((item) => item.capability === capability.name)) continue;
-      let evidence: InstallEvidence;
-      try {
-        evidence = await options.installMissing(capability);
-      } catch (error) {
-        evidence = {
-          executable: capability.name,
-          packageManager: "none",
-          source: "No install was attempted",
-          command: "",
-          requestedBy: capability.name,
-          status: "blocked",
-          detail: error instanceof Error ? error.message : String(error)
-        };
-      }
-      (environment.installEvidence ??= []).push(evidence);
-      if (evidence.status === "completed") {
-        const retry = await (options.resolve ?? resolveEnvironment)({ requestedCapabilities: [capability], env: options.env, platform, installed });
-        environment.tools = { ...environment.tools, ...retry.tools };
-        environment.probeEvidence.push(...retry.probeEvidence);
-        environment.attemptedSources.push(...retry.attemptedSources);
-        environment.diagnostics.push(...retry.diagnostics);
-        environment.unresolvedCapabilities = environment.unresolvedCapabilities.filter((item) => item.capability !== capability.name).concat(retry.unresolvedCapabilities);
-      }
-    }
-  }
-  // Fail closed only for capabilities the plan genuinely required.
-  const requiredUnresolved = environment.unresolvedCapabilities.filter((item) => requiredKinds.has(item.capability) || [...requiredKinds].some((key) => key.endsWith(`:${item.capability}`)));
-  if (requiredUnresolved.length > 0 && options.strict !== false) throw new EnvironmentPreflightError({ ...environment, unresolvedCapabilities: requiredUnresolved });
-
   applyResolvedEnvironment(options.env, environment, platform);
   return {
     environment,
