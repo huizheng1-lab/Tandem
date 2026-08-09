@@ -22,6 +22,39 @@ const plan: BuildPlan = {
 };
 
 describe("artifacts", () => {
+  const verifierReport = (filesChanged: string[], deviationsFromPlan: string[] = []): CompletionReport => ({
+    status: "complete",
+    summary: "verified",
+    taskResults: [{ id: "T1", status: "done" }],
+    filesChanged,
+    verificationResults: [{ command: "node verify_v3.mjs", passed: true, output: "ok" }],
+    deviationsFromPlan
+  });
+
+  it("allows an authored verification script when its task declares the file", async () => {
+    const declaredPlan: BuildPlan = {
+      ...plan,
+      tasks: [{ id: "T1", description: "Author the verifier", files: ["verify_v3.mjs"] }],
+      verification: ["node verify_v3.mjs"]
+    };
+    await expect(validateBuildPlan(declaredPlan)).resolves.toBeDefined();
+    expect(() => validateCompletionReport(declaredPlan, verifierReport(["verify_v3.mjs"]))).not.toThrow();
+  });
+
+  it("fails closed when a verification script edit is not declared", () => {
+    const undeclaredPlan: BuildPlan = { ...plan, verification: ["node verify_v3.mjs"] };
+    expect(() => validateCompletionReport(undeclaredPlan, verifierReport(["verify_v3.mjs"]))).toThrow(
+      /Verification script edited without disclosure: verify_v3\.mjs/
+    );
+  });
+
+  it("rejects a plan that references an undeclared verification script before execution", async () => {
+    const undeclaredPlan: BuildPlan = { ...plan, verification: ["node verify_v3.mjs"] };
+    await expect(validateBuildPlan(undeclaredPlan)).rejects.toThrow(
+      /verify_v3\.mjs.*Add `verify_v3\.mjs` to the files array.*deviationsFromPlan entry naming verify_v3\.mjs/
+    );
+  });
+
   it("rejects reports that omit plan verification commands", async () => {
     expect(() =>
       validateCompletionReport(plan, {

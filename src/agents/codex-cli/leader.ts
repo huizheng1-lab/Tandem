@@ -10,7 +10,7 @@ import type { ToolActivityEvent } from "../../tools/fs.js";
 import type { PermissionBridge } from "../../tools/permissions.js";
 import { assertSafeProjectDir } from "../../tools/protection.js";
 import { hostPlatformPrompt } from "../platform.js";
-import { leaderPlannerPrompt, leaderReviewerPrompt, leaderTakeoverPrompt } from "../leader.js";
+import { leaderPlannerPrompt, leaderReviewerPrompt, leaderTakeoverPrompt, verificationScriptRetryRule } from "../leader.js";
 import { runCodexExec } from "./exec.js";
 
 const PlanOrAnswerSchema = z
@@ -51,7 +51,7 @@ async function projectInstructions(options: Pick<CodexLeaderOptions, "projectIns
 
 function retryFeedbackLine(previousAttemptError: string | undefined): string {
   const text = previousAttemptError?.trim();
-  return text ? `\n\nYour previous submission was rejected: ${text}. Fix that specific problem and resubmit.` : "";
+  return text ? `\n\nYour previous submission was rejected: ${text}. Fix that specific problem and resubmit. ${verificationScriptRetryRule}` : "";
 }
 
 function absoluteCwdLine(cwd: string): string {

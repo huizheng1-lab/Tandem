@@ -18,7 +18,7 @@ import { buildUserContentWithAttachments } from "../session/attachments.js";
 import type { ContentPart } from "../session/attachments.js";
 import { estimatePromptSize, runAgentArtifact, runAgentText, toolCallThinkingDelta } from "./runner.js";
 import type { RunnerMessage } from "./runner.js";
-import { leaderPlannerPrompt, leaderReviewerPrompt, leaderTakeoverPrompt } from "./leader.js";
+import { leaderPlannerPrompt, leaderReviewerPrompt, leaderTakeoverPrompt, verificationScriptRetryRule } from "./leader.js";
 import { workerPrompt } from "./worker.js";
 import { hostPlatformPrompt } from "./platform.js";
 import { stripEmbeddedHistoryDigest } from "../session/leader-thread.js";
@@ -198,7 +198,7 @@ export function buildLeaderRequestMessage(input: { request: string; goals: strin
 
 function retryFeedbackLine(previousAttemptError: string | undefined): string {
   const text = previousAttemptError?.trim();
-  return text ? `\n\nYour previous submission was rejected: ${text}. Fix that specific problem and resubmit. For a verification-script disclosure failure, make the concrete report edit: add a deviationsFromPlan entry naming each edited script and explaining why it was edited.` : "";
+  return text ? `\n\nYour previous submission was rejected: ${text}. Fix that specific problem and resubmit. ${verificationScriptRetryRule}` : "";
 }
 
 function leaderToolCallThinking(options: LiveAgentOptions): ((toolName: string) => void) | undefined {

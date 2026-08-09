@@ -9,7 +9,7 @@ import { formatAttachmentBlock } from "../../session/attachments.js";
 import type { ToolActivityEvent } from "../../tools/fs.js";
 import type { PermissionBridge } from "../../tools/permissions.js";
 import { hostPlatformPrompt } from "../platform.js";
-import { leaderPlannerPrompt, leaderReviewerPrompt, leaderTakeoverPrompt } from "../leader.js";
+import { leaderPlannerPrompt, leaderReviewerPrompt, leaderTakeoverPrompt, verificationScriptRetryRule } from "../leader.js";
 import { runClaudeExec } from "./exec.js";
 
 const PlanOrAnswerSchema = z
@@ -55,7 +55,7 @@ function optionalSection(title: string, value: string | undefined): string {
 
 function retryFeedbackLine(previousAttemptError: string | undefined): string {
   const text = previousAttemptError?.trim();
-  return text ? `\n\nYour previous submission was rejected: ${text}. Fix that specific problem and resubmit.` : "";
+  return text ? `\n\nYour previous submission was rejected: ${text}. Fix that specific problem and resubmit. ${verificationScriptRetryRule}` : "";
 }
 
 async function claudeLeaderExec(options: ClaudeLeaderOptions, input: { schema: "plan-or-answer" | "review-verdict" | "takeover"; prompt: string; systemPrompt: string; readOnly?: boolean }): Promise<unknown> {

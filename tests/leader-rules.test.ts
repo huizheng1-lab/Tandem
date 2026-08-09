@@ -13,6 +13,7 @@ import {
   securityAndScopeRule,
   streamPartitioningRule,
   verificationScriptDeclarationRule,
+  verificationScriptRetryRule,
   verificationScriptRule
 } from "../src/agents/leader.js";
 import { workerPrompt } from "../src/agents/worker.js";
@@ -192,5 +193,10 @@ describe("leader prompt exports (D60 + D61 wiring)", () => {
     expect(verificationScriptDeclarationRule).toMatch(/single-stream and multi-stream/i);
     expect(verificationScriptDeclarationRule).toMatch(/files array/i);
     expect(leaderPlannerPrompt).toContain(verificationScriptDeclarationRule);
+  });
+
+  it("D141: retry guidance requires a concrete deviationsFromPlan edit", () => {
+    expect(verificationScriptRetryRule).toMatch(/add a deviationsFromPlan entry naming each edited script/i);
+    expect(verificationScriptRetryRule).toMatch(/why it was edited/i);
   });
 });
