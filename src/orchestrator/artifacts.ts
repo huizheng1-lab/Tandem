@@ -527,7 +527,12 @@ export function enforceVerification(
   if (enforceCommandEcho) {
     const missing = expectedCommands.filter((entry) => !matchResult(entry, report.verificationResults));
     if (missing.length > 0) {
-      throw new Error(`Completion report omitted verification commands: ${missing.join(", ")}${verificationReportDiagnostic(report.verificationResults)}`);
+      throw new Error(
+        `Completion report omitted verification commands: ${missing.join(", ")}${verificationReportDiagnostic(
+          missing,
+          report.verificationResults
+        )}`
+      );
     }
   }
   if (enforceCompleteVerification) {
@@ -559,9 +564,23 @@ function truncateDiagnostic(value: string, max = 500): string {
   return normalized.length <= max ? normalized : `${normalized.slice(0, max)}... (${normalized.length} chars)`;
 }
 
-function verificationReportDiagnostic(results: CompletionReport["verificationResults"]): string {
+function verificationReportDiagnostic(
+  missing: string[],
+  results: CompletionReport["verificationResults"]
+): string {
   if (results.length === 0) return "\nReported verification commands: none";
-  return `\nReported verification commands:\n${results.map((result, index) => `${index + 1}. ${truncateDiagnostic(result.command)} [passed=${result.passed}]`).join("\n")}`;
+  const mismatches = missing.flatMap((expected) =>
+    results
+      .filter((result) => normalizeCommand(result.command) !== normalizeCommand(expected))
+      .map(
+        (result) =>
+          `verification command "${truncateDiagnostic(result.command)}" does not match plan command "${truncateDiagnostic(expected)}"`
+      )
+  );
+  const mismatchDiagnostic = mismatches.length > 0 ? `\n${mismatches.join("\n")}` : "";
+  return `\nReported verification commands:\n${results
+    .map((result, index) => `${index + 1}. ${truncateDiagnostic(result.command)} [passed=${result.passed}]`)
+    .join("\n")}${mismatchDiagnostic}`;
 }
 
 export function validateCompletionReport(
