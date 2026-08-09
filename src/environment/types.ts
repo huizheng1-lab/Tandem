@@ -72,10 +72,10 @@ export interface ResolvedEnvironment {
 
 export interface InstallEvidence {
   executable: string;
-  packageManager: "npm" | "pip";
+  packageManager: "npm" | "pip" | "none";
   source: string;
   command: string;
   requestedBy: string;
-  status: "started" | "completed" | "failed" | "blocked";
+  status: "started" | "completed" | "failed" | "blocked" | "skipped";
   detail?: string;
 }

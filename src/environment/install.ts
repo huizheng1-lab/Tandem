@@ -5,6 +5,11 @@ import type { InstallEvidence } from "./types.js";
 import { ensurePermission, type PermissionBridge } from "../tools/permissions.js";
 import { assertSafeBash, assertSafeProjectDir } from "../tools/protection.js";
 import type { PermissionMode, PermissionRules } from "../config/schema.js";
+import { resolveOnPath } from "../tools/resolve-on-path.js";
+
+const TOOL_PACKAGE_MAP: Record<string, { packageManager: "npm" | "pip"; packageName: string }> = {
+  whisper: { packageManager: "pip", packageName: "openai-whisper" }
+};
 
 export interface InstallOptions {
   executable: string;
@@ -21,18 +26,36 @@ export interface InstallOptions {
 export async function installMissingTool(options: InstallOptions): Promise<InstallEvidence> {
   const executable = options.executable.trim();
   if (!/^[A-Za-z0-9._-]+$/.test(executable)) throw new Error(`Refusing ambiguous tool package name '${executable}'.`);
+  const pathSeparator = process.platform === "win32" ? ";" : ":";
+  const names = process.platform === "win32"
+    ? [executable, `${executable}.exe`, `${executable}.cmd`, `${executable}.bat`]
+    : [executable];
+  const existing = resolveOnPath({ token: executable, names, env: options.env, pathSeparator });
+  if (existing) {
+    return {
+      executable,
+      packageManager: "none",
+      source: "PATH",
+      command: "",
+      requestedBy: executable,
+      status: "skipped",
+      detail: `Already available at ${existing}; installation was not attempted.`
+    };
+  }
+  const mapping = TOOL_PACKAGE_MAP[executable.toLowerCase()];
+  if (!mapping) throw new Error(`No explicit package mapping exists for '${executable}'; installation was refused.`);
   // Check the project before creating even the project-local staging directory.
   // This keeps the installer subject to the same self-modification boundary as
   // the eventual shell command.
   assertSafeProjectDir(options.cwd);
-  const npm = /^(npm|npx|node)$/i.test(executable);
-  const packageManager = npm ? "npm" : "pip";
+  const npm = mapping.packageManager === "npm";
+  const packageManager = mapping.packageManager;
   const source = npm ? "npm registry" : "Python package index (pip)";
   const installRoot = path.join(options.cwd, ".tandem", "tools");
   await mkdir(installRoot, { recursive: true });
   const command = npm
     ? `npm install --no-save --prefix "${installRoot}" ${executable}`
-    : `python -m pip install --user ${executable}`;
+    : `python -m pip install --user ${mapping.packageName}`;
   const base: InstallEvidence = { executable, packageManager, source, command, requestedBy: executable, status: "started" };
   options.record?.(base);
   try {
@@ -41,7 +64,6 @@ export async function installMissingTool(options: InstallOptions): Promise<Insta
     const result = await execa(command, { cwd: options.cwd, env: options.env, shell: true, reject: false, windowsHide: true });
     const evidence: InstallEvidence = { ...base, status: result.exitCode === 0 ? "completed" : "failed", detail: `${result.stdout}\n${result.stderr}`.trim() };
     options.record?.(evidence);
-    if (result.exitCode !== 0) throw new Error(`Could not install ${executable} with ${packageManager}: ${evidence.detail}`);
     return evidence;
   } catch (error) {
     const evidence: InstallEvidence = { ...base, status: "blocked", detail: String(error) };

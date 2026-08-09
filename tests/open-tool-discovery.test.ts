@@ -19,6 +19,28 @@ describe("open-ended tool discovery and installs", () => {
     expect(result.tools.whisper?.executablePath).toBe("C:\\tools\\whisper.exe");
   });
 
+  it("keeps shell and arbitrary command names out of strict requirements", async () => {
+    const result = await preflightEnvironment({
+      commands: ["powershell -NoProfile -File verify.ps1", "cmd /c echo ok", "bash script.sh", "git status"],
+      env: { PATH: "C:\\missing" }, platform: "win32", strict: true,
+      resolve: async (options) => ({ requestedCapabilities: options.requestedCapabilities, tools: {}, probeEvidence: [], unresolvedCapabilities: options.requestedCapabilities.map((capability) => ({ capability: capability.kind === "executable" ? capability.name : capability.kind, name: capability.kind, reason: "absent", attemptedSources: [] })), attemptedSources: [], diagnostics: [], installEvidence: [] })
+    });
+    expect(result.requiredCapabilities).toEqual([]);
+  });
+
+  it("accepts a PATH executable when its generic version probe exits non-zero", async () => {
+    const result = await resolveEnvironment({
+      requestedCapabilities: [{ kind: "executable", name: "powershell" }], env: { PATH: "C:\\tools" }, platform: "win32",
+      filesystem: { stat: () => ({ size: 1, isFile: () => true }) },
+      processProbe: { run: async () => ({ exitCode: 1, stdout: "", stderr: "unknown option" }) }
+    });
+    expect(result.tools.powershell?.version).toBeUndefined();
+  });
+
+  it("canonicalizes foo.exe and foo to one discovered capability", () => {
+    expect(commandCapabilities(["foo.exe", "foo"], "win32")).toEqual([{ kind: "executable", name: "foo" }]);
+  });
+
   it("calls the install path only for a requested missing executable and records evidence", async () => {
     let installs = 0;
     const result = await preflightEnvironment({

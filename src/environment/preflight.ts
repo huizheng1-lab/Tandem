@@ -56,7 +56,7 @@ export function commandCapabilities(commands: string[], platform: NodeJS.Platfor
   for (const match of text.matchAll(commandTokens)) {
     const raw = match[1] ?? match[2] ?? match[3];
     if (!raw) continue;
-    const name = raw.replaceAll("\\", "/").split("/").pop()!.replace(/\\.exe$/i, "");
+    const name = raw.replaceAll("\\", "/").split("/").pop()!.replace(/\.exe$/i, "");
     if (!name || shellBuiltins.has(name.toLowerCase()) || name.startsWith("-")) continue;
     if (name.toLowerCase() === "ffmpeg") add({ kind: "ffmpeg" });
     else if (name.toLowerCase() === "ffprobe") add({ kind: "ffprobe" });
@@ -123,7 +123,12 @@ export async function preflightEnvironment(options: {
   // unresolved so PATH was never augmented and the tool looked "unavailable" even
   // when installed. These extras are best effort: discovered ones get their
   // directory prepended, absent ones must never fail a run that did not need them.
-  const requiredKinds = new Set(requestedCapabilities.map((capability) => capability.kind === "executable" ? `executable:${capability.name}` : capability.kind));
+  // Open-ended executable discovery is best effort. A command can name a shell,
+  // interpreter, or task-specific CLI without making its absence a preflight
+  // blocker; explicit runtime capabilities remain strict.
+  const requiredKinds: Set<string> = new Set(requestedCapabilities
+    .filter((capability) => capability.kind !== "executable")
+    .map((capability) => capability.kind));
   const opportunistic: RequestedCapability[] = (["node", "ffmpeg", "ffprobe", "python"] as const)
     .filter((kind) => !requiredKinds.has(kind))
     .map((kind) => ({ kind }));
@@ -136,7 +141,20 @@ export async function preflightEnvironment(options: {
   if (options.installMissing) {
     for (const capability of requestedCapabilities) {
       if (capability.kind !== "executable" || environment.tools[capability.name] || !environment.unresolvedCapabilities.some((item) => item.capability === capability.name)) continue;
-      const evidence = await options.installMissing(capability);
+      let evidence: InstallEvidence;
+      try {
+        evidence = await options.installMissing(capability);
+      } catch (error) {
+        evidence = {
+          executable: capability.name,
+          packageManager: "none",
+          source: "No install was attempted",
+          command: "",
+          requestedBy: capability.name,
+          status: "blocked",
+          detail: error instanceof Error ? error.message : String(error)
+        };
+      }
       (environment.installEvidence ??= []).push(evidence);
       if (evidence.status === "completed") {
         const retry = await (options.resolve ?? resolveEnvironment)({ requestedCapabilities: [capability], env: options.env, platform, installed });
@@ -157,7 +175,7 @@ export async function preflightEnvironment(options: {
     environment,
     env: options.env,
     installed,
-    requiredCapabilities: requestedCapabilities,
+    requiredCapabilities: requestedCapabilities.filter((capability) => capability.kind !== "executable"),
     attemptedCapabilities: environment.requestedCapabilities,
     notFoundCapabilities: environment.unresolvedCapabilities
   };

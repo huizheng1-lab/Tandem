@@ -253,7 +253,12 @@ async function probeCandidate(
   }
 
   const versionResult = await dependencies.processProbe.run(candidate.path, probeArguments(tool), { timeoutMs: dependencies.timeoutMs });
-  if (versionResult.exitCode !== 0) {
+  // Generic executables are discoverable by invocation even when they do not
+  // implement the conventional --version flag (PowerShell is one example).
+  // Runtime capabilities retain strict probe semantics because their version
+  // and module requirements are meaningful.
+  const requiresVersion = request.kind !== "executable" && tool !== "codex-sandbox-helper";
+  if (versionResult.exitCode !== 0 && requiresVersion) {
     return {
       evidence: {
         capability: tool,
@@ -271,7 +276,6 @@ async function probeCandidate(
   // Arbitrary executables are discoverable by successful invocation alone. A
   // numeric version is required only where the request carries runtime
   // semantics (the named runtimes and their version/module checks).
-  const requiresVersion = request.kind !== "executable" && tool !== "codex-sandbox-helper";
   if (requiresVersion && !version) {
     return {
       evidence: {

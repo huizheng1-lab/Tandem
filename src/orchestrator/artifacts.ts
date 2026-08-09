@@ -472,7 +472,9 @@ function extractReferencedScriptBasenames(commands: string[]): Set<string> {
   for (const cmd of commands) {
     const tokens = cmd.split(/\s+/);
     for (const token of tokens) {
-      const cleaned = token.replace(/^["']|["']$/g, "");
+      // Commands commonly quote verification paths. Strip all surrounding
+      // quote characters before extension and basename comparison.
+      const cleaned = token.replace(/^["']+|["']+$/g, "");
       if (SCRIPT_EXTENSION.test(cleaned)) {
         const basename = cleaned.split(/[\\/]/).pop() ?? cleaned;
         basenames.add(basename.toLowerCase());
