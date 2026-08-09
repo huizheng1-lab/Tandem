@@ -517,6 +517,22 @@ function detectVerificationScriptTampering(plan: BuildPlan, report: CompletionRe
 
 const capabilityAbsencePattern = /\b(?:absent|unavailable|not\s+(?:installed|found|present|available)|does\s+not\s+exist|cannot\s+(?:run|start|be\s+used)|can't\s+(?:run|start|be\s+used)|missing)\b/i;
 const explicitCheckPattern = /(?:exact\s+(?:command|tool\s+call)|(?:ran|running|executed|called|tested|checked|verified)\b|(?:command|tool\s+call)\s*[:=]|returned\s+(?:no|an?\s+error|exit)|test-path|read_file|glob|grep|bash)/i;
+const capabilityEvidenceStopWords = new Set([
+  "about", "after", "before", "being", "could", "does", "from", "into", "just", "made", "missing",
+  "not", "only", "plan", "that", "the", "their", "this", "was", "were", "with", "without",
+  "verified", "checked", "tested", "ran", "running", "executed", "called", "exact", "command",
+  "tool", "call", "output", "returned", "result", "found", "present", "available", "installed"
+]);
+
+function capabilityEvidenceTerms(value: string): Set<string> {
+  return new Set(
+    value
+      .toLowerCase()
+      .match(/[a-z0-9][a-z0-9._/-]{2,}/g)
+      ?.map((term) => term.replace(/^[./]+|[./]+$/g, ""))
+      .filter((term) => term.length >= 4 && !capabilityEvidenceStopWords.has(term)) ?? []
+  );
+}
 
 /** Fail closed when a report turns an unverified empty search into an absence claim. */
 export function validateCapabilityAbsenceClaims(plan: BuildPlan, report: CompletionReport): string[] {
@@ -526,10 +542,16 @@ export function validateCapabilityAbsenceClaims(plan: BuildPlan, report: Complet
   // Ordinary verification failures are not capability claims unless the plan was asking
   // about a tool/model/runtime/service. This keeps the guard focused on the incident class.
   if (!/\b(?:tool|model|runtime|service|server|comfyui|stack|capabilit|installed|executable|port)\b/i.test(`${planText} ${reportText}`)) return [];
-  const evidence = report.verificationResults.map((result) => `${result.command}\n${result.output}`).join("\n");
-  return explicitCheckPattern.test(evidence) || explicitCheckPattern.test(reportText)
+  const planAndReportTerms = capabilityEvidenceTerms(`${planText} ${reportText}`);
+  const hasProbeEvidence = report.verificationResults.some((result) => {
+    if (!result.command.trim() || !result.output.trim()) return false;
+    const evidence = `${result.command}\n${result.output}`;
+    if (!explicitCheckPattern.test(evidence)) return false;
+    return [...capabilityEvidenceTerms(evidence)].some((term) => planAndReportTerms.has(term));
+  });
+  return hasProbeEvidence
     ? []
-    : ["Capability absence claim is incomplete: record the exact command or search/tool call used to verify it and its returned result before reporting absent, missing, or unavailable."];
+    : ["Capability absence claim is incomplete: record a command that probes the claimed capability, with its returned result, before reporting absent, missing, or unavailable."];
 }
 
 /** Enforce an attempted service start whenever the plan explicitly asks for one. */

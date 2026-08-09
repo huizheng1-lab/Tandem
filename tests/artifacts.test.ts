@@ -24,12 +24,32 @@ const plan: BuildPlan = {
 };
 
 describe("artifacts", () => {
-  it("rejects an absence claim without an exact verification check", () => {
+  it("rejects an absence claim without structured capability evidence", () => {
     const report = verifierReport(["npm test"]);
-    report.summary = "ComfyUI is unavailable";
-    expect(validateCapabilityAbsenceClaims({ ...plan, objective: "Check whether the runtime is installed" }, report)).not.toEqual([]);
-    report.verificationResults[0]!.output = "Ran Test-Path C:\\ComfyUI\\main.py; returned False";
-    expect(validateCapabilityAbsenceClaims({ ...plan, objective: "Check whether the runtime is installed" }, report)).toEqual([]);
+    const absencePlan = { ...plan, objective: "Check whether ComfyUI is installed" };
+    report.summary = "Takeover was triggered by the previous blocked run. I verified the workspace and bounded host search, but the required generation stack is still missing, so no files were changed and the verification command cannot run because verify_mv.ps1 does not exist.";
+    expect(validateCapabilityAbsenceClaims(absencePlan, report)).not.toEqual([]);
+    report.verificationResults[0] = { command: "Test-Path C:\\ComfyUI\\main.py", passed: true, output: "False" };
+    expect(validateCapabilityAbsenceClaims(absencePlan, report)).toEqual([]);
+  });
+
+  it("does not accept check vocabulary in prose or an unrelated probe", () => {
+    const absencePlan = { ...plan, objective: "Check whether ComfyUI and MiniMax-H3 are available" };
+    for (const wording of ["I verified it is missing", "I checked and it is unavailable", "I ran the search", "I tested the runtime"]) {
+      const report = verifierReport(["npm test"]);
+      report.summary = `ComfyUI is unavailable; ${wording}.`;
+      expect(validateCapabilityAbsenceClaims(absencePlan, report)).not.toEqual([]);
+    }
+    const unrelated = verifierReport(["npm test"]);
+    unrelated.summary = "ComfyUI is unavailable";
+    unrelated.verificationResults[0]!.output = "verified: tests passed";
+    expect(validateCapabilityAbsenceClaims(absencePlan, unrelated)).not.toEqual([]);
+  });
+
+  it("does not affect reports without an absence claim", () => {
+    const report = verifierReport(["npm test"]);
+    report.summary = "The generation stack is ready and the output is complete.";
+    expect(validateCapabilityAbsenceClaims({ ...plan, objective: "Check whether ComfyUI is installed" }, report)).toEqual([]);
   });
 
   it("requires evidence for an explicitly requested service start", () => {
