@@ -29,6 +29,7 @@ import { claudeLeaderPlan, claudeLeaderReview, claudeLeaderTakeover } from "./cl
 import { commandCapabilities, installedRuntimeCandidates, preflightEnvironment } from "../environment/preflight.js";
 import type { InstalledRuntimeCandidates } from "../environment/resolve.js";
 import type { ResolvedEnvironment } from "../environment/types.js";
+import { registerBackgroundAwait } from "../orchestrator/await.js";
 
 export interface LiveAgentOptions {
   config: TandemConfig;
@@ -451,6 +452,13 @@ export async function createLiveAgents(options: LiveAgentOptions): Promise<Agent
     rememberNote: options.rememberNote,
     abortSignal: options.abortSignal,
     onToolEvent: options.onToolEvent
+    ,durableAwait: ({ processId, timeoutMs, id }: { processId: string; timeoutMs: number; id?: string }) =>
+      registerBackgroundAwait({ cwd: options.cwd, processId, timeoutMs, id }).then((record) => JSON.stringify({
+        status: record.status,
+        awaitId: record.id,
+        deadlineAt: record.deadlineAt,
+        message: "Round suspended. The orchestrator will resume it on process exit or deadline and restore the checkpoint context."
+      }))
   };
   const projectInstructions = async () => (await options.projectInstructions?.())?.trim() || "Project instructions:\nnone";
   const memoryInstruction = "Honor Project instructions. Use remember only for durable project facts such as conventions, constraints, decisions, or unresolved issues. Never use remember for Q&A trivia or one-off answers; direct answers rarely warrant notes.";

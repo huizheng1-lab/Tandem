@@ -24,6 +24,7 @@ export interface ToolContext {
   media?: ModelEntry["media"];
   abortSignal?: AbortSignal;
   onToolEvent?: (event: ToolActivityEvent) => void;
+  durableAwait?: (input: { processId: string; timeoutMs: number; id?: string }) => Promise<string>;
 }
 
 export type ToolActivityRole = "leader" | "worker";

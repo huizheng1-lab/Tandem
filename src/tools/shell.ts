@@ -28,6 +28,7 @@ type BackgroundBridgeAction = BackgroundProcessAction | "start";
 
 export const DEFAULT_BASH_TIMEOUT_MS = 120000;
 export const MAX_BASH_TIMEOUT_MS = 300000;
+export const FOREGROUND_SLEEP_DEVIATION_THRESHOLD_MS = 10000;
 export const BASH_SETTLE_GRACE_MS = 5000;
 const BASH_ABORT_SETTLE_GRACE_MS = 2000;
 const INTERNAL_PROCESS_TIMEOUT_MS = 5000;
@@ -56,6 +57,7 @@ interface BackgroundProcess {
 }
 
 const backgroundProcesses = new Map<string, BackgroundProcess>();
+const durableBackgroundProcesses = new Set<string>();
 let backgroundSequence = 0;
 let backgroundSweepRegistered = false;
 let backgroundBridge: {
@@ -197,7 +199,10 @@ async function startBackgroundProcess(ctx: ToolContext, command: string): Promis
     detached: process.platform !== "win32",
     reject: false,
     all: true,
-    cleanup: true,
+    // Cleanup is explicit in the session sweep below. Keeping execa from
+    // installing its own parent-exit hook lets a process registered with
+    // await_background outlive an orchestrator restart.
+    cleanup: false,
     windowsHide: true
   });
   const id = backgroundId();
@@ -287,6 +292,12 @@ async function stopBackgroundProcess(entry: BackgroundProcess): Promise<void> {
 
 export function listBackgroundProcesses(): BackgroundProcessInfo[] {
   return [...backgroundProcesses.values()].map(({ info }) => ({ ...info }));
+}
+
+/** Mark a process as owned by a durable await. Session shutdown must not sweep it. */
+export function keepBackgroundProcessAlive(id: string): void {
+  if (!backgroundProcesses.has(id)) throw new Error(`Unknown background process id: ${id}`);
+  durableBackgroundProcesses.add(id);
 }
 
 export async function backgroundProcessTool(action: BackgroundProcessAction, id?: string): Promise<string> {
@@ -402,7 +413,7 @@ It returns a process id. In later calls use \"${command} list\", \"${command} re
 }
 
 export async function cleanupBackgroundProcesses(): Promise<void> {
-  await Promise.all([...backgroundProcesses.keys()].map((id) => backgroundProcessTool("stop", id).catch(() => undefined)));
+  await Promise.all([...backgroundProcesses.keys()].filter((id) => !durableBackgroundProcesses.has(id)).map((id) => backgroundProcessTool("stop", id).catch(() => undefined)));
   if (backgroundBridge) {
     await new Promise<void>((resolve) => backgroundBridge?.server.close(() => resolve()));
     backgroundBridge = undefined;
@@ -415,6 +426,11 @@ export async function bashTool(ctx: ToolContext, command: string, timeoutMs = DE
   await ensurePermission(ctx.permissionMode, { action: "bash", target: command }, ctx.permissionBridge, { rules: ctx.permissionRules });
   await ctx.discoverEnvironment?.([command]);
   if (runInBackground) return startBackgroundProcess(ctx, command);
+  const sleepMatch = command.match(/(?:Start-Sleep\s+-Seconds\s+(\d+)|(?:^|\s)sleep\s+(\d+))/i);
+  const sleepMs = sleepMatch ? Number(sleepMatch[1] ?? sleepMatch[2]) * 1000 : 0;
+  if (sleepMs > FOREGROUND_SLEEP_DEVIATION_THRESHOLD_MS) {
+    return { command, passed: false, output: `[DEVIATION] Foreground sleep of ${sleepMs}ms rejected. Use await_background for registered background work.` };
+  }
   const executionEnv = ctx.env ?? process.env;
   if (ctx.environment) applyResolvedEnvironment(executionEnv, ctx.environment);
   let tracker: DescendantTracker | undefined;

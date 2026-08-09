@@ -4,6 +4,7 @@ import { z } from "zod";
 import { editFileTool, listDirTool, readFileTool, ToolActivityRole, ToolContext, writeFileTool } from "./fs.js";
 import { searchFilesTool, MAX_SEARCH_RESULTS, MAX_SEARCH_RUNTIME_MS } from "./search.js";
 import { backgroundProcessTool, bashTool } from "./shell.js";
+import { DURABLE_AWAIT_DESCRIPTION } from "../orchestrator/await.js";
 
 export type ToolRole = "leader-readonly" | "worker" | "reviewer" | "takeover";
 
@@ -83,6 +84,14 @@ export function makeToolSet(ctx: ToolContext, role: ToolRole, allowedBashCommand
     inputSchema: z.object({ action: z.enum(["list", "read", "stop"]), id: z.string().optional() }),
     execute: wrapExecute(ctx, role, "bash_background", ({ action, id }) => id ?? action, ({ action, id }) => backgroundProcessTool(action, id))
   });
+  const awaitTool = tool({
+    description: DURABLE_AWAIT_DESCRIPTION,
+    inputSchema: z.object({ processId: z.string(), timeoutMs: z.number().int().positive(), id: z.string().optional() }),
+    execute: wrapExecute(ctx, role, "await_background", ({ processId }) => processId, ({ processId, timeoutMs, id }) => {
+      if (!ctx.durableAwait) throw new Error("Durable await is unavailable outside an orchestrated round.");
+      return ctx.durableAwait({ processId, timeoutMs, id });
+    })
+  });
 
   const sharedTools = memoryTools(ctx, role);
 
@@ -93,6 +102,7 @@ export function makeToolSet(ctx: ToolContext, role: ToolRole, allowedBashCommand
       ...readonlyTools,
         ...sharedTools,
         bash_background: backgroundTool,
+        await_background: awaitTool,
         bash: tool({
         description: "Run one of the plan verification commands in the project root.",
         inputSchema: z.object({ command: z.string(), timeoutMs: z.number().int().positive().optional(), runInBackground: z.boolean().optional() }),
@@ -105,6 +115,7 @@ export function makeToolSet(ctx: ToolContext, role: ToolRole, allowedBashCommand
     ...readonlyTools,
     ...sharedTools,
     bash_background: backgroundTool,
+    await_background: awaitTool,
     write_file: tool({
       description: "Write a file.",
       inputSchema: z.object({ path: z.string(), content: z.string() }),
