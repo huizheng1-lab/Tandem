@@ -11,6 +11,17 @@ const TOOL_PACKAGE_MAP: Record<string, { packageManager: "npm" | "pip"; packageN
   whisper: { packageManager: "pip", packageName: "openai-whisper" }
 };
 
+// These names are launchers supplied by the operating system or its shell
+// environment. They are never Python/npm distributions, even when a caller
+// discovers them as an unresolved command token.
+const SYSTEM_EXECUTABLES = new Set([
+  "bash",
+  "cmd",
+  "powershell",
+  "pwsh",
+  "sh"
+]);
+
 export interface InstallOptions {
   executable: string;
   cwd: string;
@@ -26,6 +37,17 @@ export interface InstallOptions {
 export async function installMissingTool(options: InstallOptions): Promise<InstallEvidence> {
   const executable = options.executable.trim();
   if (!/^[A-Za-z0-9._-]+$/.test(executable)) throw new Error(`Refusing ambiguous tool package name '${executable}'.`);
+  if (SYSTEM_EXECUTABLES.has(executable.toLowerCase())) {
+    return {
+      executable,
+      packageManager: "none",
+      source: "Operating-system component",
+      command: "",
+      requestedBy: executable,
+      status: "skipped",
+      detail: `Installation was not attempted for system executable '${executable}'.`
+    };
+  }
   const pathSeparator = process.platform === "win32" ? ";" : ":";
   const names = process.platform === "win32"
     ? [executable, `${executable}.exe`, `${executable}.cmd`, `${executable}.bat`]
@@ -54,7 +76,7 @@ export async function installMissingTool(options: InstallOptions): Promise<Insta
   const installRoot = path.join(options.cwd, ".tandem", "tools");
   await mkdir(installRoot, { recursive: true });
   const command = npm
-    ? `npm install --no-save --prefix "${installRoot}" ${executable}`
+    ? `npm install --no-save --prefix "${installRoot}" ${mapping.packageName}`
     : `python -m pip install --user ${mapping.packageName}`;
   const base: InstallEvidence = { executable, packageManager, source, command, requestedBy: executable, status: "started" };
   options.record?.(base);
