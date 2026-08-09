@@ -534,6 +534,18 @@ function capabilityEvidenceTerms(value: string): Set<string> {
   );
 }
 
+function capabilitySubjectTerms(planText: string): Set<string> {
+  const genericTerms = new Set([
+    "check", "checks", "checking", "whether", "available", "availability", "absence",
+    "capability", "capabilities", "tool", "tools", "model", "models", "runtime", "runtimes",
+    "service", "services", "server", "servers", "executable", "executables", "installed",
+    "installation", "present", "missing", "unavailable", "found", "exists", "exist"
+  ]);
+  return new Set(
+    [...capabilityEvidenceTerms(planText)].filter((term) => !genericTerms.has(term))
+  );
+}
+
 /** Fail closed when a report turns an unverified empty search into an absence claim. */
 export function validateCapabilityAbsenceClaims(plan: BuildPlan, report: CompletionReport): string[] {
   const planText = [plan.objective, ...plan.tasks.map((task) => task.description), ...plan.acceptanceCriteria].join(" ");
@@ -542,12 +554,15 @@ export function validateCapabilityAbsenceClaims(plan: BuildPlan, report: Complet
   // Ordinary verification failures are not capability claims unless the plan was asking
   // about a tool/model/runtime/service. This keeps the guard focused on the incident class.
   if (!/\b(?:tool|model|runtime|service|server|comfyui|stack|capabilit|installed|executable|port)\b/i.test(`${planText} ${reportText}`)) return [];
-  const planAndReportTerms = capabilityEvidenceTerms(`${planText} ${reportText}`);
+  // The subject must come from the plan, and it must occur in the probe command itself.
+  // Output is useful as the returned result, but cannot launder an unrelated command into
+  // evidence merely by repeating the model's absence claim.
+  const subjectTerms = capabilitySubjectTerms(planText);
   const hasProbeEvidence = report.verificationResults.some((result) => {
     if (!result.command.trim() || !result.output.trim()) return false;
     const evidence = `${result.command}\n${result.output}`;
     if (!explicitCheckPattern.test(evidence)) return false;
-    return [...capabilityEvidenceTerms(evidence)].some((term) => planAndReportTerms.has(term));
+    return [...capabilityEvidenceTerms(result.command)].some((term) => subjectTerms.has(term));
   });
   return hasProbeEvidence
     ? []

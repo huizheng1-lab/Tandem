@@ -46,6 +46,14 @@ describe("artifacts", () => {
     expect(validateCapabilityAbsenceClaims(absencePlan, unrelated)).not.toEqual([]);
   });
 
+  it("does not let an unrelated command launder a subject claim through its output", () => {
+    const absencePlan = { ...plan, objective: "Check whether ComfyUI is available" };
+    const report = verifierReport(["npm test"]);
+    report.summary = "ComfyUI is unavailable; I verified the result.";
+    report.verificationResults[0]!.output = "ComfyUI is unavailable";
+    expect(validateCapabilityAbsenceClaims(absencePlan, report)).not.toEqual([]);
+  });
+
   it("does not affect reports without an absence claim", () => {
     const report = verifierReport(["npm test"]);
     report.summary = "The generation stack is ready and the output is complete.";
