@@ -515,8 +515,8 @@ function detectVerificationScriptTampering(plan: BuildPlan, report: CompletionRe
   return missing;
 }
 
-const capabilityAbsencePattern = /\b(?:absent|unavailable|not\s+(?:installed|found|present|available)|does\s+not\s+exist|cannot\s+(?:run|start|be\s+used)|can't\s+(?:run|start|be\s+used)|missing)\b/i;
-const explicitCheckPattern = /(?:exact\s+(?:command|tool\s+call)|(?:ran|running|executed|called|tested|checked|verified)\b|(?:command|tool\s+call)\s*[:=]|returned\s+(?:no|an?\s+error|exit)|test-path|read_file|glob|grep|bash)/i;
+const capabilityAbsencePattern = /\b(?:absent|unavailable|not\s+(?:installed|found|present|available|usable)|does\s+not\s+exist|cannot\s+(?:run|start|be\s+used)|can't\s+(?:run|start|be\s+used)|missing)\b/i;
+const explicitCheckPattern = /(?:exact\s+(?:command|tool\s+call)|(?:ran|running|executed|called|tested|checked|verified)\b|(?:command|tool\s+call)\s*[:=]|returned\s+(?:no|an?\s+error|exit)|test-path|read_file|glob|grep|bash|\bversion\b|\s-[a-z][\w-]*)/i;
 const capabilityEvidenceStopWords = new Set([
   "about", "after", "before", "being", "could", "does", "from", "into", "just", "made", "missing",
   "not", "only", "plan", "that", "the", "their", "this", "was", "were", "with", "without",
@@ -574,10 +574,22 @@ export function reconcileCapabilityAbsenceClaims(plan: BuildPlan, report: Comple
   const planText = [plan.objective, ...plan.tasks.map((task) => task.description), ...plan.acceptanceCriteria].join(" ");
   const reportText = [report.summary, ...report.taskResults.map((task) => task.notes ?? ""), ...report.deviationsFromPlan].join(" ");
   if (!capabilityAbsencePattern.test(reportText) || !/\b(?:tool|model|runtime|service|server|comfyui|stack|capabilit|installed|executable|port)\b/i.test(`${planText} ${reportText}`)) return report;
-  const contradiction = report.verificationResults.some((result) => result.passed && /\b(?:found|present|available|installed|works?|succeed|success|resolved|exit\s*(?:code\s*)?0|version|path)\b/i.test(`${result.command}\n${result.output}`));
+  const subjectTerms = new Set([...capabilitySubjectTerms(planText), ...capabilityEvidenceTerms(reportText)]);
+  const contradiction = report.verificationResults.some((result) => {
+    if (!result.passed || !result.command.trim() || !result.output.trim()) return false;
+    const evidence = `${result.command}\n${result.output}`;
+    const namesClaimedCapability = [...capabilityEvidenceTerms(result.command)].some((term) => subjectTerms.has(term));
+    return namesClaimedCapability && /\b(?:found|present|available|installed|works?|succeed|success|resolved|exit\s*(?:code\s*)?0|version|path)\b/i.test(evidence);
+  });
   if (!contradiction) return report;
   const rewrite = (value: string) => value.replace(capabilityAbsencePattern, "capability probe succeeded; prior absence claim dropped");
-  return { ...report, summary: rewrite(report.summary), taskResults: report.taskResults.map((task) => ({ ...task, notes: task.notes ? rewrite(task.notes) : task.notes })), deviationsFromPlan: report.deviationsFromPlan.map(rewrite) };
+  const continuationNote = "Capability probe contradicted the prior absence claim; the claim was dropped and the verified capability must be used in the next step.";
+  return {
+    ...report,
+    summary: `${rewrite(report.summary)} ${continuationNote}`,
+    taskResults: report.taskResults.map((task) => ({ ...task, notes: task.notes ? rewrite(task.notes) : task.notes })),
+    deviationsFromPlan: [...report.deviationsFromPlan.map(rewrite), continuationNote]
+  };
 }
 
 /** True when a retry adds a new command/result pair rather than only rephrasing a claim. */

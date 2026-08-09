@@ -223,6 +223,7 @@ async function runOneStreamBuild(
   authoritativeVerification: boolean
 ): Promise<CompletionReport> {
   emit({ type: "transition", phase: "BUILDING", message: `round ${currentRound} worker build [stream ${stream.id}: ${stream.tasks.length} task(s)]` });
+  let previousSubmittedReport: CompletionReport | undefined;
   return retryArtifact(
     "CompletionReport",
     emit,
@@ -247,11 +248,17 @@ async function runOneStreamBuild(
         stepBudgetMultiplier
       });
     },
-    (value) =>
-      validateCompletionReport(plan, value, stream.verification, {
+    (value) => {
+      const candidate = CompletionReportSchema.parse(sanitizePromptValue(value));
+      if (previousSubmittedReport && !hasNewVerificationEvidence(previousSubmittedReport, candidate)) {
+        throw new Error("not a genuine retry: resubmission added no new verification evidence since the previous rejection");
+      }
+      previousSubmittedReport = candidate;
+      return validateCompletionReport(plan, candidate, stream.verification, {
         enforceCommandEcho: !authoritativeVerification,
         enforceCompleteVerification: !authoritativeVerification
-      })
+      });
+    }
   );
 }
 
@@ -341,8 +348,8 @@ export interface RunResult {
 /** A validator rejection is a concrete turn failure and must outrank model guesses. */
 export function takeoverValidationFailureSummary(error: unknown, userSummary: string, reports: CompletionReport[] = []): string {
   const artifacts = [...new Set(reports.flatMap((report) => report.filesChanged).filter(Boolean))];
-  const inventory = artifacts.length > 0 ? artifacts.join(", ") : "no file list was recorded";
-  return `Takeover could not be finalized because artifact validation failed: ${String(error)}. Underlying work may be complete; artifacts recorded on disk/in reports: ${inventory}. Agent summary (unverified): ${userSummary}`;
+  const inventory = artifacts.length > 0 ? artifacts.join(", ") : "no artifact paths were recorded";
+  return `Takeover could not be finalized because artifact validation failed: ${String(error)}. Underlying work may be complete; artifacts present on disk (as recorded by the reports): ${inventory}. Exact validator error: ${String(error)}. Agent summary (unverified): ${userSummary}`;
 }
 
 export async function runOrchestration(options: RunOptions): Promise<RunResult> {
@@ -509,7 +516,7 @@ export async function runOrchestration(options: RunOptions): Promise<RunResult> 
         const priorTakeoverReport = previousTakeoverReport;
         if (parsedTakeover.success) previousTakeoverReport = parsedTakeover.data;
         if (parsedTakeover.success && !hasNewVerificationEvidence(priorTakeoverReport, parsedTakeover.data)) {
-          throw new Error("Not a genuine retry: resubmission added no new verification evidence since the previous rejection.");
+          throw new Error("not a genuine retry: resubmission added no new verification evidence since the previous rejection");
         }
         let schemaReport: CompletionReport;
         try {
