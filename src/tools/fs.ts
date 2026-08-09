@@ -1,6 +1,6 @@
 import { mkdir, readFile, readdir, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
-import { PermissionBridge, ensurePermission } from "./permissions.js";
+import { PermissionBridge, ensurePermission, PermissionOptions } from "./permissions.js";
 import { PermissionMode } from "../config/schema.js";
 import { assertSafeWritePath } from "./protection.js";
 import { mediaContentForFile } from "../session/attachments.js";
@@ -18,6 +18,7 @@ export interface ToolContext {
   discoverEnvironment?: (commands: string[]) => Promise<void>;
   permissionMode: PermissionMode;
   permissionBridge?: PermissionBridge;
+  permissionRules?: PermissionOptions["rules"];
   recordTouchedPath?: (filePath: string) => void;
   rememberNote?: (text: string, by: "leader" | "worker") => Promise<string>;
   media?: ModelEntry["media"];
@@ -61,7 +62,7 @@ export async function readFileTool(ctx: Pick<ToolContext, "cwd" | "media">, file
 export async function writeFileTool(ctx: ToolContext, filePath: string, content: string): Promise<string> {
   const fullPath = resolveInside(ctx.cwd, filePath);
   assertSafeWritePath(ctx.cwd, fullPath);
-  await ensurePermission(ctx.permissionMode, { action: "write", target: filePath }, ctx.permissionBridge);
+  await ensurePermission(ctx.permissionMode, { action: "write", target: filePath }, ctx.permissionBridge, { rules: ctx.permissionRules });
   await mkdir(path.dirname(fullPath), { recursive: true });
   await writeFile(fullPath, content, "utf8");
   ctx.recordTouchedPath?.(filePath);
@@ -71,7 +72,7 @@ export async function writeFileTool(ctx: ToolContext, filePath: string, content:
 export async function editFileTool(ctx: ToolContext, filePath: string, oldString: string, newString: string, replaceAll = false): Promise<string> {
   const fullPath = resolveInside(ctx.cwd, filePath);
   assertSafeWritePath(ctx.cwd, fullPath);
-  await ensurePermission(ctx.permissionMode, { action: "edit", target: filePath }, ctx.permissionBridge);
+  await ensurePermission(ctx.permissionMode, { action: "edit", target: filePath }, ctx.permissionBridge, { rules: ctx.permissionRules });
   const content = await readFile(fullPath, "utf8");
   const occurrences = content.split(oldString).length - 1;
   if (occurrences === 0) throw new Error(`Could not find exact text in ${filePath}.`);

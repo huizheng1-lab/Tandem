@@ -1,4 +1,6 @@
-export type ExecutableCapability = "python" | "node" | "ffmpeg" | "ffprobe" | "codex-sandbox-helper";
+/** Executable names are intentionally open-ended. The named runtimes below are
+ * richer requests, not an access allowlist. */
+export type ExecutableCapability = string;
 
 export type RequestedCapability =
   | { kind: "python"; modules?: string[]; minimumVersion?: string }
@@ -6,12 +8,13 @@ export type RequestedCapability =
   | { kind: "ffmpeg" }
   | { kind: "ffprobe" }
   | { kind: "codex-sandbox-helper" }
+  | { kind: "executable"; name: string }
   | { kind: "network-host"; host: string };
 
 export type ResolutionSource = "override" | "path" | "installed-runtime" | "registered-directory" | "declared-host";
 
 export interface ResolutionSourceAttempt {
-  capability: RequestedCapability["kind"];
+  capability: string;
   source: ResolutionSource;
   value: string;
 }
@@ -25,7 +28,7 @@ export interface ProcessProbeResult {
 }
 
 export interface CandidateProbeEvidence {
-  capability: RequestedCapability["kind"];
+  capability: string;
   candidate?: string;
   source: ResolutionSource | "network";
   accepted: boolean;
@@ -44,7 +47,7 @@ export interface ResolvedTool {
 }
 
 export interface UnresolvedCapability {
-  capability: RequestedCapability["kind"];
+  capability: string;
   name: string;
   reason: string;
   attemptedSources: string[];
@@ -52,7 +55,7 @@ export interface UnresolvedCapability {
 
 export interface ResolutionDiagnostic {
   severity: "info" | "warning" | "error";
-  capability: RequestedCapability["kind"];
+  capability: string;
   message: string;
   candidate?: string;
 }
@@ -64,4 +67,15 @@ export interface ResolvedEnvironment {
   unresolvedCapabilities: UnresolvedCapability[];
   attemptedSources: ResolutionSourceAttempt[];
   diagnostics: ResolutionDiagnostic[];
+  installEvidence?: InstallEvidence[];
+}
+
+export interface InstallEvidence {
+  executable: string;
+  packageManager: "npm" | "pip";
+  source: string;
+  command: string;
+  requestedBy: string;
+  status: "started" | "completed" | "failed" | "blocked";
+  detail?: string;
 }

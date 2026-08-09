@@ -412,7 +412,7 @@ export async function cleanupBackgroundProcesses(): Promise<void> {
 export async function bashTool(ctx: ToolContext, command: string, timeoutMs = DEFAULT_BASH_TIMEOUT_MS, runInBackground = false): Promise<ShellResult> {
   resolveInside(ctx.cwd, ".");
   assertSafeBash(ctx.cwd, command);
-  await ensurePermission(ctx.permissionMode, { action: "bash", target: command }, ctx.permissionBridge);
+  await ensurePermission(ctx.permissionMode, { action: "bash", target: command }, ctx.permissionBridge, { rules: ctx.permissionRules });
   await ctx.discoverEnvironment?.([command]);
   if (runInBackground) return startBackgroundProcess(ctx, command);
   const executionEnv = ctx.env ?? process.env;

@@ -63,7 +63,7 @@ const SOURCE_ORDER: Record<ResolutionSource, number> = {
   "declared-host": 4
 };
 
-const WINDOWS_NAMES: Record<ExecutableCapability, string[]> = {
+const WINDOWS_NAMES: Record<string, string[]> = {
   python: ["python.exe", "python3.exe", "python"],
   node: ["node.exe", "node"],
   ffmpeg: ["ffmpeg.exe", "ffmpeg"],
@@ -71,7 +71,7 @@ const WINDOWS_NAMES: Record<ExecutableCapability, string[]> = {
   "codex-sandbox-helper": ["codex-windows-sandbox.exe", "codex-windows-sandbox"]
 };
 
-const POSIX_NAMES: Record<ExecutableCapability, string[]> = {
+const POSIX_NAMES: Record<string, string[]> = {
   python: ["python3", "python"],
   node: ["node"],
   ffmpeg: ["ffmpeg"],
@@ -172,7 +172,8 @@ function collectPathCandidates(
 
 function installedFor(tool: ExecutableCapability, installed: InstalledRuntimeCandidates): string[] {
   if (tool === "codex-sandbox-helper") return installed.codexSandboxHelper ?? [];
-  return installed[tool] ?? [];
+  if (tool === "python" || tool === "node" || tool === "ffmpeg" || tool === "ffprobe") return installed[tool] ?? [];
+  return [];
 }
 
 function directoryCandidates(tool: ExecutableCapability, installed: InstalledRuntimeCandidates, names: string[], platform: NodeJS.Platform): string[] {
@@ -201,7 +202,8 @@ function requestedExecutableKinds(requested: RequestedCapability[]): ExecutableC
   const result: ExecutableCapability[] = [];
   for (const request of requested) {
     if (request.kind === "network-host") continue;
-    if (!result.includes(request.kind)) result.push(request.kind);
+    const executable = request.kind === "executable" ? request.name : request.kind;
+    if (!result.includes(executable)) result.push(executable);
   }
   return result;
 }
@@ -334,12 +336,13 @@ export async function resolveEnvironment(options: ResolveEnvironmentOptions): Pr
     probeEvidence: [],
     unresolvedCapabilities: [],
     attemptedSources: [],
-    diagnostics: []
+    diagnostics: [],
+    installEvidence: []
   };
 
   for (const tool of requestedExecutableKinds(options.requestedCapabilities)) {
-    const request = options.requestedCapabilities.find((item): item is Exclude<RequestedCapability, { kind: "network-host" }> => item.kind === tool)!;
-    const names = namesByTool[tool];
+    const request = options.requestedCapabilities.find((item): item is Exclude<RequestedCapability, { kind: "network-host" }> => (item.kind === "executable" ? item.name : item.kind) === tool)!;
+    const names = namesByTool[tool] ?? (platform === "win32" ? [tool, `${tool}.exe`] : [tool]);
     const rawCandidates: Candidate[] = [];
     const record = (source: ResolutionSource, value: string, candidates: string[]) => {
       result.attemptedSources.push({ capability: tool, source, value });

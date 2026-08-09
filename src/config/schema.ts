@@ -2,6 +2,13 @@ import { z } from "zod";
 
 export const PermissionModeSchema = z.enum(["ask", "auto-edit", "yolo"]);
 export type PermissionMode = z.infer<typeof PermissionModeSchema>;
+export const PermissionRulesSchema = z.object({
+  allow: z.array(z.string().min(1)).default([]),
+  deny: z.array(z.string().min(1)).default([]),
+  ask: z.array(z.string().min(1)).default([]),
+  unattendedAsk: z.enum(["deny", "allow"]).default("deny")
+});
+export type PermissionRules = z.infer<typeof PermissionRulesSchema>;
 
 export const TriageModeSchema = z.enum(["auto", "always-plan"]);
 export type TriageMode = z.infer<typeof TriageModeSchema>;
@@ -67,6 +74,7 @@ export const ConfigSchema = z.object({
   worker: z.string().min(1),
   maxReviewRounds: z.number().int().min(0),
   permissionMode: PermissionModeSchema,
+  permissions: PermissionRulesSchema.default({ allow: [], deny: [], ask: [], unattendedAsk: "deny" }),
   triage: TriageModeSchema,
   codexCliPath: z.string().min(1).optional(),
   claudeCliPath: z.string().min(1).optional(),
@@ -103,6 +111,7 @@ export const defaultConfig: TandemConfig = {
   worker: "minimax/minimax-m3",
   maxReviewRounds: 3,
   permissionMode: "ask",
+  permissions: { allow: [], deny: [], ask: [], unattendedAsk: "deny" },
   triage: "auto",
   showThinking: false,
   desktopTheme: "auto",

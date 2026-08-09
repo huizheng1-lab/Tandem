@@ -2,7 +2,7 @@ import { readdirSync } from "node:fs";
 import path from "node:path";
 import { resolveEnvironment } from "./resolve.js";
 import type { InstalledRuntimeCandidates } from "./resolve.js";
-import type { RequestedCapability, ResolvedEnvironment } from "./types.js";
+import type { InstallEvidence, RequestedCapability, ResolvedEnvironment } from "./types.js";
 
 export interface EnvironmentPreflightResult {
   environment: ResolvedEnvironment;
@@ -47,16 +47,24 @@ export function commandCapabilities(commands: string[], platform: NodeJS.Platfor
   const text = commands.join("\n");
   const capabilities: RequestedCapability[] = [];
   const add = (capability: RequestedCapability) => {
-    if (!capabilities.some((item) => item.kind === capability.kind)) capabilities.push(capability);
+    if (!capabilities.some((item) => item.kind === capability.kind && (item.kind !== "executable" || capability.kind !== "executable" || item.name === capability.name))) capabilities.push(capability);
   };
-  // Do not require the command to be a bare PATH token. Windows installations
-  // commonly live below a directory containing spaces (for example WinGet's
-  // package folder), and the shell may receive a quoted absolute path.
-  const token = (name: string) => new RegExp(`\\b${name}(?:\\.exe)?\\b`, "im").test(text);
-  if (token("ffmpeg")) add({ kind: "ffmpeg" });
-  if (token("ffprobe")) add({ kind: "ffprobe" });
-  if (token("python(?:3)?")) add({ kind: "python" });
-  if (token("node")) add({ kind: "node" });
+  // Inspect command positions, rather than maintaining a list of approved
+  // binaries. Quoted absolute paths are supported for Windows installs.
+  const shellBuiltins = new Set(["if", "then", "else", "fi", "for", "do", "done", "in", "echo", "cd", "set", "call"]);
+  const commandTokens = /(?:^|[\r\n;&|]\s*)(?:(?:[A-Za-z_][A-Za-z0-9_]*=\S+)\s+)*(?:"([^"]+)"|'([^']+)'|([^\s;&|]+))/gm;
+  for (const match of text.matchAll(commandTokens)) {
+    const raw = match[1] ?? match[2] ?? match[3];
+    if (!raw) continue;
+    const name = raw.replaceAll("\\", "/").split("/").pop()!.replace(/\\.exe$/i, "");
+    if (!name || shellBuiltins.has(name.toLowerCase()) || name.startsWith("-")) continue;
+    if (name.toLowerCase() === "ffmpeg") add({ kind: "ffmpeg" });
+    else if (name.toLowerCase() === "ffprobe") add({ kind: "ffprobe" });
+    else if (/^python(?:3)?$/i.test(name)) add({ kind: "python" });
+    else if (name.toLowerCase() === "node") add({ kind: "node" });
+    else if (name.toLowerCase() === "codex-windows-sandbox") add({ kind: "codex-sandbox-helper" });
+    else add({ kind: "executable", name });
+  }
   return capabilities;
 }
 
@@ -96,6 +104,7 @@ export async function preflightEnvironment(options: {
   skipInstalledDirectoryDiscovery?: boolean;
   /** Best-effort command discovery must not turn an optional miss into a blocker. */
   strict?: boolean;
+  installMissing?: (capability: Extract<RequestedCapability, { kind: "executable" }>) => Promise<InstallEvidence>;
 }): Promise<EnvironmentPreflightResult> {
   const platform = options.platform ?? process.platform;
   const requestedCapabilities = commandCapabilities(options.commands, platform);
@@ -114,7 +123,7 @@ export async function preflightEnvironment(options: {
   // unresolved so PATH was never augmented and the tool looked "unavailable" even
   // when installed. These extras are best effort: discovered ones get their
   // directory prepended, absent ones must never fail a run that did not need them.
-  const requiredKinds = new Set(requestedCapabilities.map((capability) => capability.kind));
+  const requiredKinds = new Set(requestedCapabilities.map((capability) => capability.kind === "executable" ? `executable:${capability.name}` : capability.kind));
   const opportunistic: RequestedCapability[] = (["node", "ffmpeg", "ffprobe", "python"] as const)
     .filter((kind) => !requiredKinds.has(kind))
     .map((kind) => ({ kind }));
@@ -124,8 +133,23 @@ export async function preflightEnvironment(options: {
     platform,
     installed
   });
+  if (options.installMissing) {
+    for (const capability of requestedCapabilities) {
+      if (capability.kind !== "executable" || environment.tools[capability.name] || !environment.unresolvedCapabilities.some((item) => item.capability === capability.name)) continue;
+      const evidence = await options.installMissing(capability);
+      (environment.installEvidence ??= []).push(evidence);
+      if (evidence.status === "completed") {
+        const retry = await (options.resolve ?? resolveEnvironment)({ requestedCapabilities: [capability], env: options.env, platform, installed });
+        environment.tools = { ...environment.tools, ...retry.tools };
+        environment.probeEvidence.push(...retry.probeEvidence);
+        environment.attemptedSources.push(...retry.attemptedSources);
+        environment.diagnostics.push(...retry.diagnostics);
+        environment.unresolvedCapabilities = environment.unresolvedCapabilities.filter((item) => item.capability !== capability.name).concat(retry.unresolvedCapabilities);
+      }
+    }
+  }
   // Fail closed only for capabilities the plan genuinely required.
-  const requiredUnresolved = environment.unresolvedCapabilities.filter((item) => requiredKinds.has(item.capability));
+  const requiredUnresolved = environment.unresolvedCapabilities.filter((item) => requiredKinds.has(item.capability) || [...requiredKinds].some((key) => key.endsWith(`:${item.capability}`)));
   if (requiredUnresolved.length > 0 && options.strict !== false) throw new EnvironmentPreflightError({ ...environment, unresolvedCapabilities: requiredUnresolved });
 
   applyResolvedEnvironment(options.env, environment, platform);

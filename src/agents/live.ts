@@ -29,6 +29,7 @@ import { claudeLeaderPlan, claudeLeaderReview, claudeLeaderTakeover } from "./cl
 import { commandCapabilities, installedRuntimeCandidates, preflightEnvironment } from "../environment/preflight.js";
 import type { InstalledRuntimeCandidates } from "../environment/resolve.js";
 import type { ResolvedEnvironment } from "../environment/types.js";
+import { installMissingTool } from "../environment/install.js";
 
 export interface LiveAgentOptions {
   config: TandemConfig;
@@ -444,6 +445,7 @@ export async function createLiveAgents(options: LiveAgentOptions): Promise<Agent
     discoverEnvironment: undefined as ((commands: string[]) => Promise<void>) | undefined,
     permissionMode: options.config.permissionMode,
     permissionBridge: options.permissionBridge,
+    permissionRules: options.config.permissions,
     recordTouchedPath: options.recordTouchedPath,
     rememberNote: options.rememberNote,
     abortSignal: options.abortSignal,
@@ -490,8 +492,9 @@ export async function createLiveAgents(options: LiveAgentOptions): Promise<Agent
     const capabilities = commandCapabilities(commands, process.platform);
     await Promise.all(capabilities.map(async (capability) => {
       if (capability.kind === "network-host") return;
-      if (resolvedEnvironment?.tools[capability.kind]) return;
-      const key = capability.kind;
+      const executable = capability.kind === "executable" ? capability.name : capability.kind;
+      if (resolvedEnvironment?.tools[executable]) return;
+      const key = executable;
       let discovery = commandDiscoveries.get(key);
       if (!discovery) {
         discovery = (async () => {
@@ -500,7 +503,8 @@ export async function createLiveAgents(options: LiveAgentOptions): Promise<Agent
             env: options.env,
             installed: await installedCandidates(),
             skipInstalledDirectoryDiscovery: true,
-            strict: false
+            strict: true,
+            installMissing: async (requested) => installMissingTool({ executable: requested.name, cwd: options.cwd, env: options.env, permissionMode: options.config.permissionMode, permissionBridge: options.permissionBridge, rules: options.config.permissions, unattended: true })
           });
           if (!resolvedEnvironment) resolvedEnvironment = result.environment;
           else {
@@ -510,8 +514,9 @@ export async function createLiveAgents(options: LiveAgentOptions): Promise<Agent
               probeEvidence: [...resolvedEnvironment.probeEvidence, ...result.environment.probeEvidence],
               attemptedSources: [...resolvedEnvironment.attemptedSources, ...result.environment.attemptedSources],
               diagnostics: [...resolvedEnvironment.diagnostics, ...result.environment.diagnostics],
-              unresolvedCapabilities: resolvedEnvironment.unresolvedCapabilities.filter((item) => item.capability !== capability.kind)
-                .concat(result.environment.unresolvedCapabilities.filter((item) => item.capability === capability.kind))
+              unresolvedCapabilities: resolvedEnvironment.unresolvedCapabilities.filter((item) => item.capability !== executable)
+                .concat(result.environment.unresolvedCapabilities.filter((item) => item.capability === executable)),
+              installEvidence: [...(resolvedEnvironment.installEvidence ?? []), ...(result.environment.installEvidence ?? [])]
             };
           }
           toolContext.environment = resolvedEnvironment;
@@ -530,7 +535,8 @@ export async function createLiveAgents(options: LiveAgentOptions): Promise<Agent
           commands,
           env: options.env,
           installed: await installedCandidates(),
-          skipInstalledDirectoryDiscovery: true
+          skipInstalledDirectoryDiscovery: true,
+          installMissing: async (requested) => installMissingTool({ executable: requested.name, cwd: options.cwd, env: options.env, permissionMode: options.config.permissionMode, permissionBridge: options.permissionBridge, rules: options.config.permissions, unattended: true })
         }))();
         const result = await environmentPreparation;
         resolvedEnvironment = result.environment;
