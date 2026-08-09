@@ -157,41 +157,46 @@ function runSwap({ repo, relayRoot, commands, state, statePath, logPath, reason 
     ["verify-a", commands.verifyA],
     ["stop-b", commands.stopB],
   ];
-  const infrastructureAllowance = 3;
+  const infrastructureAllowance = 8;
   const consecutiveCycleAllowance = 2;
   state.infrastructureFailures = state.infrastructureFailures || {};
-  for (let cycle = 1; cycle <= consecutiveCycleAllowance; cycle += 1) {
-    for (const [name, command] of swapSteps) {
-      let result = null;
+  for (const [name, command] of swapSteps) {
+    let passed = false;
+    let result = null;
+    for (let cycle = 1; cycle <= consecutiveCycleAllowance && !passed; cycle += 1) {
       for (let attempt = 1; attempt <= infrastructureAllowance; attempt += 1) {
         result = runStep({ name, command, cwd: repo, state, statePath, logPath });
-        if (result.ok) break;
+        if (result.ok) {
+          passed = true;
+          break;
+        }
         save(statePath, logPath, state, `${name}.infrastructure-retry`, { attempt, allowance: infrastructureAllowance, cycle });
       }
-      if (!result.ok) {
+      if (!passed) {
         const previous = state.infrastructureFailures[name] || { consecutiveCycles: 0 };
         const consecutiveCycles = previous.consecutiveCycles + 1;
         state.infrastructureFailures[name] = { consecutiveCycles, lastFailedAt: now(), allowance: infrastructureAllowance };
-        if (consecutiveCycles < consecutiveCycleAllowance && cycle < consecutiveCycleAllowance) {
+        if (cycle < consecutiveCycleAllowance) {
           save(statePath, logPath, state, `${reason}.swap.infrastructure-cycle-retry`, { failedStep: name, cycle, allowance: consecutiveCycleAllowance });
-          break;
         }
-        state.phase = "failed-paused";
-        state.lastSummary = `${name} infrastructure failure exhausted ${infrastructureAllowance} attempts on ${consecutiveCycles} consecutive cycles; implementation passed at ${state.lastImplementCommit || state.acceptedSourceSha || "unknown commit"}.`;
-        const failure = { kind: "infrastructure", step: name, command, exitCode: result.exitCode, output: result.output.slice(0, 12000), implementationPassed: true, implementationCommit: state.lastImplementCommit || state.acceptedSourceSha || null, at: now() };
-        state.failures = [...(state.failures || []), failure];
-        const report = failReport(relayRoot, state.currentItem || { id: "cutover", text: "explicit cutover" }, state.failures, { infrastructure: true, implementationCommit: failure.implementationCommit, sameStepConsecutiveCycles: consecutiveCycles });
-        state.failureReport = report;
-        save(statePath, logPath, state, `${reason}.swap.failed-paused`, { failedStep: name, report, infrastructure: true, implementationCommit: failure.implementationCommit });
-        console.log(JSON.stringify({ ok: false, failedPaused: true, infrastructureFailure: true, report, state }, null, 2));
-        process.exitCode = 3;
-        return false;
       }
-      state.infrastructureFailures[name] = { consecutiveCycles: 0, lastPassedAt: now(), allowance: infrastructureAllowance };
     }
-    if (state.step === "stop-b") return true;
+    if (!passed) {
+      const consecutiveCycles = state.infrastructureFailures[name]?.consecutiveCycles || consecutiveCycleAllowance;
+      state.phase = "failed-paused";
+      state.lastSummary = `${name} infrastructure failure exhausted ${infrastructureAllowance} attempts on ${consecutiveCycles} consecutive cycles; implementation passed at ${state.lastImplementCommit || state.acceptedSourceSha || "unknown commit"}.`;
+      const failure = { kind: "infrastructure", step: name, command, exitCode: result.exitCode, output: result.output.slice(0, 12000), implementationPassed: true, implementationCommit: state.lastImplementCommit || state.acceptedSourceSha || null, at: now() };
+      state.failures = [...(state.failures || []), failure];
+      const report = failReport(relayRoot, state.currentItem || { id: "cutover", text: "explicit cutover" }, state.failures, { infrastructure: true, implementationCommit: failure.implementationCommit, sameStepConsecutiveCycles: consecutiveCycles });
+      state.failureReport = report;
+      save(statePath, logPath, state, `${reason}.swap.failed-paused`, { failedStep: name, report, infrastructure: true, implementationCommit: failure.implementationCommit });
+      console.log(JSON.stringify({ ok: false, failedPaused: true, infrastructureFailure: true, report, state }, null, 2));
+      process.exitCode = 3;
+      return false;
+    }
+    state.infrastructureFailures[name] = { consecutiveCycles: 0, lastPassedAt: now(), allowance: infrastructureAllowance };
   }
-  return false;
+  return true;
 }
 
 function parseWishlist(file) {

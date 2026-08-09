@@ -202,10 +202,11 @@ describe("single reciprocal orchestrator", () => {
   });
 
   windowsIt("retries infrastructure steps independently without spending item strikes", async () => {
-    const f = await fixture("infrastructure-retry");
+      const f = await fixture("infrastructure-retry");
     try {
       const sentinel = path.join(f.root, "package-attempts");
-      const packageCommand = `node -e "const fs=require('fs'); const p='${sentinel}'; const n=fs.existsSync(p)?Number(fs.readFileSync(p))+1:1; fs.writeFileSync(p,String(n)); process.exit(n<6?9:0)"`;
+      const escapedSentinel = sentinel.replaceAll("\\", "\\\\").replaceAll("'", "\\'");
+      const packageCommand = `node -e "const fs=require('fs'); const p='${escapedSentinel}'; const n=fs.existsSync(p)?Number(fs.readFileSync(p))+1:1; fs.writeFileSync(p,String(n)); process.exit(n<6?9:0)"`;
       const result = await run(f.root, f.relayRoot, commands(f.root, { packageB: packageCommand }));
       expect(result.exitCode).toBe(0);
       const state = JSON.parse(await readFile(path.join(f.relayRoot, "state", "orchestrator-state.json"), "utf8"));
