@@ -3,7 +3,7 @@ import path from "node:path";
 import { execa } from "execa";
 import type { InstallEvidence } from "./types.js";
 import { ensurePermission, type PermissionBridge } from "../tools/permissions.js";
-import { assertSafeBash } from "../tools/protection.js";
+import { assertSafeBash, assertSafeProjectDir } from "../tools/protection.js";
 import type { PermissionMode, PermissionRules } from "../config/schema.js";
 
 export interface InstallOptions {
@@ -21,6 +21,10 @@ export interface InstallOptions {
 export async function installMissingTool(options: InstallOptions): Promise<InstallEvidence> {
   const executable = options.executable.trim();
   if (!/^[A-Za-z0-9._-]+$/.test(executable)) throw new Error(`Refusing ambiguous tool package name '${executable}'.`);
+  // Check the project before creating even the project-local staging directory.
+  // This keeps the installer subject to the same self-modification boundary as
+  // the eventual shell command.
+  assertSafeProjectDir(options.cwd);
   const npm = /^(npm|npx|node)$/i.test(executable);
   const packageManager = npm ? "npm" : "pip";
   const source = npm ? "npm registry" : "Python package index (pip)";

@@ -550,11 +550,14 @@ export async function createLiveAgents(options: LiveAgentOptions): Promise<Agent
         const requested = result.requiredCapabilities.map((capability) => capability.kind);
         const attempted = result.environment.requestedCapabilities.map((capability) => capability.kind);
         const missing = result.notFoundCapabilities.map((capability) => capability.name);
+        const installs = (result.environment.installEvidence ?? []).map((evidence) =>
+          `${evidence.executable}:${evidence.packageManager}:${evidence.source}:${evidence.status}`
+        );
         const required = new Set(result.requiredCapabilities.map((capability) => capability.kind));
         options.onToolEvent?.({
           role: "worker",
           tool: "environment-preflight",
-          target: `required=${[...required].join(",") || "none"}; requested=${[...new Set(requested)].join(",") || "none"}; attempted=${[...new Set(attempted)].join(",") || "none"}; resolved=${selected.join(",") || "none"}; not-found=${missing.join(",") || "none"}`,
+          target: `required=${[...required].join(",") || "none"}; requested=${[...new Set(requested)].join(",") || "none"}; attempted=${[...new Set(attempted)].join(",") || "none"}; resolved=${selected.join(",") || "none"}; not-found=${missing.join(",") || "none"}; installs=${installs.join(",") || "none"}`,
           phase: "end",
           ok: result.notFoundCapabilities.length === 0
         });

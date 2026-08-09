@@ -62,8 +62,12 @@ export async function ensurePermission(
     throw new PermissionDeniedError(`Blocked destructive command. Change the command and try again: ${request.target}`);
   }
   if (rules?.allow.some((rule) => ruleMatches(rule, request))) return;
-  if (rules?.ask.some((rule) => ruleMatches(rule, request)) && options.unattended && rules.unattendedAsk === "deny") {
-    throw new PermissionDeniedError(`Unattended ask rule denied ${request.action} ${request.target}.`);
+  const asks = rules?.ask.some((rule) => ruleMatches(rule, request)) ?? false;
+  if (asks && options.unattended) {
+    if (rules?.unattendedAsk === "deny") {
+      throw new PermissionDeniedError(`Unattended ask rule denied ${request.action} ${request.target}.`);
+    }
+    if (rules?.unattendedAsk === "allow") return;
   }
   if (mode === "yolo") return;
   if (mode === "auto-edit" && request.action !== "bash") return;
