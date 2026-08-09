@@ -357,6 +357,27 @@ describe("orchestration", () => {
     expect(result.summary).toContain("Agent summary (unverified)");
   });
 
+  it("preserves an earlier takeover validation cause when a later retry fails elsewhere", async () => {
+    let attempt = 0;
+    const invalidTakeover = {
+      ...report(),
+      verificationResults: [{ command: "node test.mjs", passed: true, output: "ok" }]
+    };
+    const result = await runOrchestration({
+      request: "build",
+      config: { maxReviewRounds: 0, maxParallelWorkers: 1 },
+      agents: agents({
+        takeover: async () => {
+          attempt += 1;
+          if (attempt === 1) return { report: invalidTakeover, userSummary: "takeover completed" };
+          throw new Error("CLI provider disconnected");
+        }
+      })
+    });
+    expect(result.summary).toContain('verification command "node test.mjs" does not match plan command "npm test"');
+    expect(result.summary).not.toContain("CLI provider disconnected");
+  });
+
   it("uses recorded preflight resolution instead of declaring a resolved runtime unavailable", () => {
     const prompt = resolvedEnvironmentPrompt({
       requestedCapabilities: [{ kind: "ffmpeg" }],

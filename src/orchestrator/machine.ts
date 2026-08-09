@@ -486,6 +486,10 @@ export async function runOrchestration(options: RunOptions): Promise<RunResult> 
     if (environmentFailure) return environmentFailure;
     let lastTakeover: { report: unknown; userSummary: string } | undefined;
     let lastError: unknown;
+    // Keep a concrete validator rejection separate from later transport/model errors.
+    // A retry must not replace the known artifact cause with an environmental guess or
+    // an unrelated failure from a subsequent attempt.
+    let lastValidationError: unknown;
     const applyPostBuildReport = async (report: CompletionReport): Promise<CompletionReport> => {
       if (!options.postBuildReport) return report;
       const postBuildReport = await options.postBuildReport(report, { plan, round });
@@ -504,17 +508,28 @@ export async function runOrchestration(options: RunOptions): Promise<RunResult> 
            environment: options.agents.getEnvironment?.()
         });
         lastTakeover = takeover;
-        let schemaReport = validateCompletionReport(plan, takeover.report, plan.verification, {
-          enforceCommandEcho: !options.verificationRunner,
-          enforceCompleteVerification: !options.verificationRunner
-        });
+        let schemaReport: CompletionReport;
+        try {
+          schemaReport = validateCompletionReport(plan, takeover.report, plan.verification, {
+            enforceCommandEcho: !options.verificationRunner,
+            enforceCompleteVerification: !options.verificationRunner
+          });
+        } catch (error) {
+          lastValidationError = error;
+          throw error;
+        }
         schemaReport = await applyPostBuildReport(schemaReport);
         const authoritative = await attachAuthoritativeVerification(schemaReport);
         const report = completeTakeoverWhenVerificationPasses(plan, authoritative.report);
-        validateCompletionReport(plan, report, plan.verification, {
-          enforceCommandEcho: !authoritative.ran,
-          enforceCompleteVerification: !authoritative.ran
-        });
+        try {
+          validateCompletionReport(plan, report, plan.verification, {
+            enforceCommandEcho: !authoritative.ran,
+            enforceCompleteVerification: !authoritative.ran
+          });
+        } catch (error) {
+          lastValidationError = error;
+          throw error;
+        }
         const verificationWarning = authoritative.ran ? takeoverAuthoritativeVerificationWarning(report) : undefined;
         if (verificationWarning) emit({ type: "notice", message: verificationWarning });
         reports.push(report);
@@ -540,7 +555,7 @@ export async function runOrchestration(options: RunOptions): Promise<RunResult> 
       reports.push(preservedReport);
     }
     emit({ type: "artifact", name: "TakeoverReport", value: lastTakeover.report });
-    const summary = takeoverValidationFailureSummary(lastError, lastTakeover.userSummary);
+    const summary = takeoverValidationFailureSummary(lastValidationError ?? lastError, lastTakeover.userSummary);
     transition("DONE", "takeover report validation failed; build preserved", round);
     return { phase: "DONE", summary, plan, reports, verdicts, takeover: true };
   };

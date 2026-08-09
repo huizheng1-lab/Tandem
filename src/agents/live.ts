@@ -20,7 +20,7 @@ import { estimatePromptSize, runAgentArtifact, runAgentText, toolCallThinkingDel
 import type { RunnerMessage } from "./runner.js";
 import { leaderPlannerPrompt, leaderReviewerPrompt, leaderTakeoverPrompt, verificationScriptRetryRule } from "./leader.js";
 import { workerPrompt } from "./worker.js";
-import { hostPlatformPrompt } from "./platform.js";
+import { hostPlatformPrompt, resolvedEnvironmentPrompt } from "./platform.js";
 import { stripEmbeddedHistoryDigest } from "../session/leader-thread.js";
 import { runCodexWorkerBuild } from "./codex-cli/worker.js";
 import { codexLeaderPlan, codexLeaderReview, codexLeaderTakeover } from "./codex-cli/leader.js";
@@ -931,7 +931,7 @@ Standing goals are context only; do not redirect unrelated requests toward them.
           }
         })
       };
-      const system = `${leaderTakeoverPrompt}\n${hostPrompt}\n${await projectInstructions()}\n${absoluteCwdLine(options.cwd)}\n${memoryInstruction}\nRun every non-authoritative-only verification command, skip authoritative-only entries with the required skipped marker, then call submit_takeover. In verificationResults[].command, repeat the BuildPlan verification command string verbatim. If you adapt a command for the host platform, still use the plan's original command as command and describe the adapted command plus real output in output. Quote absolute path arguments that contain spaces.`;
+      const system = `${leaderTakeoverPrompt}\n${hostPrompt}\n${resolvedEnvironmentPrompt(resolvedEnvironment)}\n${await projectInstructions()}\n${absoluteCwdLine(options.cwd)}\n${memoryInstruction}\nRun every non-authoritative-only verification command, skip authoritative-only entries with the required skipped marker, then call submit_takeover. In verificationResults[].command, repeat the BuildPlan verification command string verbatim. If you adapt a command for the host platform, still use the plan's original command as command and describe the adapted command plus real output in output. Quote absolute path arguments that contain spaces.`;
       await compactLeaderThread(system);
       leaderThread.push({
         role: "user",
