@@ -9,6 +9,8 @@ import {
   ReviewVerdictSchema,
   validateBuildPlan,
   validateCompletionReport,
+  validateCapabilityAbsenceClaims,
+  validateServiceStartAttempt,
   validateStreamFileOwnership
 } from "../src/orchestrator/artifacts.js";
 
@@ -22,6 +24,21 @@ const plan: BuildPlan = {
 };
 
 describe("artifacts", () => {
+  it("rejects an absence claim without an exact verification check", () => {
+    const report = verifierReport(["npm test"]);
+    report.summary = "ComfyUI is unavailable";
+    expect(validateCapabilityAbsenceClaims({ ...plan, objective: "Check whether the runtime is installed" }, report)).not.toEqual([]);
+    report.verificationResults[0]!.output = "Ran Test-Path C:\\ComfyUI\\main.py; returned False";
+    expect(validateCapabilityAbsenceClaims({ ...plan, objective: "Check whether the runtime is installed" }, report)).toEqual([]);
+  });
+
+  it("requires evidence for an explicitly requested service start", () => {
+    const servicePlan = { ...plan, objective: "Start the ComfyUI service and verify port 8188" };
+    const report = verifierReport(["npm test"]);
+    expect(validateServiceStartAttempt(servicePlan, report)).not.toEqual([]);
+    report.summary = "Started with runInBackground; port 8188 responded.";
+    expect(validateServiceStartAttempt(servicePlan, report)).toEqual([]);
+  });
   const verifierReport = (filesChanged: string[], deviationsFromPlan: string[] = []): CompletionReport => ({
     status: "complete",
     summary: "verified",

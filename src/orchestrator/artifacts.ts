@@ -515,6 +515,33 @@ function detectVerificationScriptTampering(plan: BuildPlan, report: CompletionRe
   return missing;
 }
 
+const capabilityAbsencePattern = /\b(?:absent|unavailable|not\s+(?:installed|found|present|available)|does\s+not\s+exist|cannot\s+(?:run|start|be\s+used)|can't\s+(?:run|start|be\s+used)|missing)\b/i;
+const explicitCheckPattern = /(?:exact\s+(?:command|tool\s+call)|(?:ran|running|executed|called|tested|checked|verified)\b|(?:command|tool\s+call)\s*[:=]|returned\s+(?:no|an?\s+error|exit)|test-path|read_file|glob|grep|bash)/i;
+
+/** Fail closed when a report turns an unverified empty search into an absence claim. */
+export function validateCapabilityAbsenceClaims(plan: BuildPlan, report: CompletionReport): string[] {
+  const planText = [plan.objective, ...plan.tasks.map((task) => task.description), ...plan.acceptanceCriteria].join(" ");
+  const reportText = [report.summary, ...report.taskResults.map((task) => task.notes ?? ""), ...report.deviationsFromPlan].join(" ");
+  if (!capabilityAbsencePattern.test(reportText)) return [];
+  // Ordinary verification failures are not capability claims unless the plan was asking
+  // about a tool/model/runtime/service. This keeps the guard focused on the incident class.
+  if (!/\b(?:tool|model|runtime|service|server|comfyui|stack|capabilit|installed|executable|port)\b/i.test(`${planText} ${reportText}`)) return [];
+  const evidence = report.verificationResults.map((result) => `${result.command}\n${result.output}`).join("\n");
+  return explicitCheckPattern.test(evidence) || explicitCheckPattern.test(reportText)
+    ? []
+    : ["Capability absence claim is incomplete: record the exact command or search/tool call used to verify it and its returned result before reporting absent, missing, or unavailable."];
+}
+
+/** Enforce an attempted service start whenever the plan explicitly asks for one. */
+export function validateServiceStartAttempt(plan: BuildPlan, report: CompletionReport): string[] {
+  const planText = [plan.objective, ...plan.tasks.map((task) => task.description), ...plan.acceptanceCriteria].join(" ");
+  if (!/\b(?:start|launch|run)\b[\s\S]{0,100}\b(?:service|server|comfyui|daemon|port)\b/i.test(planText)) return [];
+  const reportText = [report.summary, ...report.taskResults.map((task) => task.notes ?? ""), ...report.deviationsFromPlan, ...report.verificationResults.map((result) => `${result.command}\n${result.output}`)].join(" ");
+  const attempted = /\b(?:start(?:ed|ing)?|launch(?:ed|ing)?|spawn(?:ed|ing)?|runInBackground|bash_background|background process|port\s+8188|server responded|service responded)\b/i.test(reportText);
+  const explicitReason = /\b(?:no\s+(?:attempt|start)|did\s+not\s+(?:attempt|start)|why\s+no\s+attempt|attempt\s+(?:was\s+)?not\s+made|not\s+attempted)\b/i.test(reportText);
+  return attempted || explicitReason ? [] : ["Service-start instruction is incomplete: record a start attempt and its outcome (including background-process/port polling evidence), or explicitly state why no attempt was made."];
+}
+
 export function enforceVerification(
   plan: BuildPlan,
   report: CompletionReport,
@@ -593,6 +620,8 @@ export function validateCompletionReport(
 ): CompletionReport {
   const report = sanitizePromptValue(CompletionReportSchema.parse(value));
   enforceVerification(plan, report, expectedCommands, options);
+  const evidenceErrors = [...validateCapabilityAbsenceClaims(plan, report), ...validateServiceStartAttempt(plan, report)];
+  if (evidenceErrors.length > 0) throw new Error(evidenceErrors.join(" "));
   return report;
 }
 

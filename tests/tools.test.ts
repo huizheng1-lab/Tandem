@@ -9,6 +9,7 @@ import type { ToolActivityEvent } from "../src/tools/fs.js";
 import { makeToolSet } from "../src/tools/index.js";
 import { backgroundProcessTool, BASH_SETTLE_GRACE_MS, backgroundBridgeEnvironment, bashTool, cleanupBackgroundProcesses, effectiveBashTimeout, listBackgroundProcesses, MAX_BASH_TIMEOUT_MS, startBackgroundProcessBridge, tailOutput } from "../src/tools/shell.js";
 import { isDestructiveCommand } from "../src/tools/permissions.js";
+import { searchFilesTool } from "../src/tools/search.js";
 
 async function tempDir(): Promise<string> {
   const dir = path.join(tmpdir(), `tandem-tools-${Date.now()}-${Math.random().toString(16).slice(2)}`);
@@ -232,6 +233,25 @@ async function writeNestedProcessFixture(cwd: string): Promise<void> {
 }
 
 describe("tools", () => {
+  it("returns bounded, typed glob results with the searched root and explicit no-match status", async () => {
+    const cwd = await tempDir();
+    await writeFile(path.join(cwd, "needle.txt"), "needle", "utf8");
+    const found = await searchFilesTool({ root: cwd, patterns: ["**/*.txt"] });
+    expect(found).toMatchObject({ status: "matched", roots: [path.resolve(cwd)], patterns: ["**/*.txt"] });
+    expect(found.matches[0]?.path).toBe(path.join(cwd, "needle.txt"));
+    const empty = await searchFilesTool({ root: cwd, patterns: ["**/*.json"] });
+    expect(empty).toMatchObject({ status: "no-match", roots: [path.resolve(cwd)], matches: [] });
+  });
+
+  it("exposes the search tools to both leader and worker tool sets", () => {
+    const ctx = { cwd: process.cwd(), permissionMode: "yolo" as const };
+    for (const role of ["leader-readonly", "worker"] as const) {
+      const tools = makeToolSet(ctx, role);
+      expect(tools).toHaveProperty("glob");
+      expect(tools).toHaveProperty("grep");
+    }
+  });
+
   it("writes, reads, and edits inside cwd", async () => {
     const cwd = await tempDir();
     const ctx = { cwd, permissionMode: "yolo" as const };

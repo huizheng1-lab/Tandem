@@ -2,7 +2,7 @@ import { tool } from "ai";
 import type { ToolSet } from "ai";
 import { z } from "zod";
 import { editFileTool, listDirTool, readFileTool, ToolActivityRole, ToolContext, writeFileTool } from "./fs.js";
-import { globTool, grepTool } from "./search.js";
+import { searchFilesTool, MAX_SEARCH_RESULTS, MAX_SEARCH_RUNTIME_MS } from "./search.js";
 import { backgroundProcessTool, bashTool } from "./shell.js";
 
 export type ToolRole = "leader-readonly" | "worker" | "reviewer" | "takeover";
@@ -56,14 +56,18 @@ export function makeToolSet(ctx: ToolContext, role: ToolRole, allowedBashCommand
       execute: wrapExecute(ctx, role, "list_dir", ({ path }) => path ?? ".", ({ path }) => listDirTool(ctx, path ?? "."))
     }),
     glob: tool({
-      description: "Find files by glob pattern.",
-      inputSchema: z.object({ pattern: z.string() }),
-      execute: wrapExecute(ctx, role, "glob", ({ pattern }) => pattern, ({ pattern }) => globTool(ctx.cwd, pattern))
+      description: "Find files by one or more glob patterns. Returns an explicit no-match result and the roots actually searched.",
+      inputSchema: z.object({ root: z.string().optional(), pattern: z.string().optional(), patterns: z.array(z.string()).min(1).max(32).optional(), maxResults: z.number().int().positive().max(MAX_SEARCH_RESULTS).optional(), timeoutMs: z.number().int().positive().max(MAX_SEARCH_RUNTIME_MS).optional() }),
+      execute: wrapExecute(ctx, role, "glob", ({ root, pattern, patterns }) => `${root ?? ctx.cwd}:${(patterns ?? (pattern ? [pattern] : [])).join(",")}`, ({ root, pattern, patterns, maxResults, timeoutMs }) => {
+        const selected = patterns ?? (pattern ? [pattern] : []);
+        if (selected.length === 0) throw new Error("glob requires pattern or patterns.");
+        return searchFilesTool({ root: root ?? ctx.cwd, patterns: selected, maxResults, timeoutMs });
+      })
     }),
     grep: tool({
-      description: "Search files by regex.",
-      inputSchema: z.object({ pattern: z.string(), glob: z.string().optional(), path: z.string().optional() }),
-      execute: wrapExecute(ctx, role, "grep", ({ pattern }) => pattern, ({ pattern, glob, path }) => grepTool(ctx.cwd, pattern, glob, path))
+      description: "Search file contents by regex under a root and glob patterns. Returns an explicit no-match result and searched roots.",
+      inputSchema: z.object({ pattern: z.string(), root: z.string().optional(), glob: z.string().optional(), patterns: z.array(z.string()).min(1).max(32).optional(), maxResults: z.number().int().positive().max(MAX_SEARCH_RESULTS).optional(), timeoutMs: z.number().int().positive().max(MAX_SEARCH_RUNTIME_MS).optional() }),
+      execute: wrapExecute(ctx, role, "grep", ({ pattern, root }) => `${root ?? ctx.cwd}:${pattern}`, ({ pattern, root, glob, patterns, maxResults, timeoutMs }) => searchFilesTool({ root: root ?? ctx.cwd, patterns: patterns ?? [glob ?? "**/*"], contentPattern: pattern, maxResults, timeoutMs }))
     })
   };
 
