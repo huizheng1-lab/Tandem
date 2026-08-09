@@ -539,9 +539,12 @@ export function enforceVerification(
       throw new Error(`Completion report marked complete with failing verification: ${failed.join(", ")}`);
     }
   }
-  // D56-2: if a worker/takeover edited a script that's referenced by the plan's verification
-  // commands, the change MUST be declared in `deviationsFromPlan`. Otherwise the worker
-  // effectively gets to write its own passing grade.
+  // D56-2: for plans accepted by validateBuildPlan this branch is unreachable: every referenced
+  // script must be listed in a task, and expectedBasenames then intentionally skips those planned
+  // edits. It remains reachable for callers validating a legacy or otherwise unvalidated plan
+  // directly, so retain this fail-closed defense rather than leaving that boundary unprotected.
+  // If such a worker/takeover edits a referenced script, the change MUST be declared in
+  // `deviationsFromPlan`; otherwise the worker effectively gets to write its own passing grade.
   const tampered = detectVerificationScriptTampering(plan, report);
   if (tampered.length > 0) {
     throw new Error(

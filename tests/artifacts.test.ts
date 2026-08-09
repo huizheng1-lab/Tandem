@@ -48,6 +48,15 @@ describe("artifacts", () => {
     );
   });
 
+  it("keeps the report-time guard for direct validation of an unvalidated legacy plan", () => {
+    // Normal orchestration rejects this plan earlier; this direct call covers the remaining
+    // boundary where a legacy/restored caller reaches report validation without plan validation.
+    const legacyPlan: BuildPlan = { ...plan, verification: ["node verify_v3.mjs"] };
+    expect(() => validateCompletionReport(legacyPlan, verifierReport(["verify_v3.mjs"]))).toThrow(
+      /Verification script edited without disclosure: verify_v3\.mjs/
+    );
+  });
+
   it("rejects a plan that references an undeclared verification script before execution", async () => {
     const undeclaredPlan: BuildPlan = { ...plan, verification: ["node verify_v3.mjs"] };
     await expect(validateBuildPlan(undeclaredPlan)).rejects.toThrow(

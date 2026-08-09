@@ -507,29 +507,35 @@ describe("orchestration", () => {
     expect(result.summary).toMatch(/Warning: takeover claimed complete/);
   });
 
-  it("D97: undisclosed verification script edits still fail with authoritative verification enabled", async () => {
+  it("D97: undeclared verification scripts are rejected before dispatch with actionable retry feedback", async () => {
     const tamperPlan: BuildPlan = {
       ...plan,
       tasks: [{ id: "T1", description: "Create CLI", files: ["src/index.ts"] }],
       verification: ["node verify.js"]
     };
+    let builds = 0;
+    let retryFeedback = "";
     const result = await runOrchestration({
       request: "build",
       config: { maxReviewRounds: 3, maxParallelWorkers: 1 },
-      verificationRunner: async () => [{ command: "node verify.js", passed: true, output: "real ok" }],
       agents: agents({
-        plan: async () => ({ kind: "plan", plan: tamperPlan }),
-        build: async () => ({
-          ...report(),
-          taskResults: [{ id: "T1", status: "done" }],
-          filesChanged: ["src/index.ts", "verify.js"],
-          verificationResults: []
-        })
+        plan: async ({ previousAttemptError }) => {
+          if (previousAttemptError) retryFeedback = previousAttemptError;
+          return { kind: "plan", plan: tamperPlan };
+        },
+        build: async () => {
+          builds += 1;
+          return report();
+        }
       })
     });
 
-    expect(result.takeover).toBe(true);
-    expect(result.summary).toContain("takeover");
+    expect(result.phase).toBe("DONE");
+    expect(result.takeover).toBe(false);
+    expect(result.reports).toHaveLength(0);
+    expect(builds).toBe(0);
+    expect(result.summary).toMatch(/verify\.js.*Add `verify\.js` to the files array.*deviationsFromPlan entry naming verify\.js/s);
+    expect(retryFeedback).toMatch(/verify\.js.*Add `verify\.js` to the files array.*deviationsFromPlan entry naming verify\.js/s);
   });
 
   it("D97: build retries receive previous validation feedback", async () => {
