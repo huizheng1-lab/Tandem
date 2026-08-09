@@ -2,7 +2,7 @@ import { readdirSync } from "node:fs";
 import path from "node:path";
 import { resolveEnvironment } from "./resolve.js";
 import type { InstalledRuntimeCandidates } from "./resolve.js";
-import type { InstallEvidence, RequestedCapability, ResolvedEnvironment } from "./types.js";
+import type { RequestedCapability, ResolvedEnvironment } from "./types.js";
 
 export interface EnvironmentPreflightResult {
   environment: ResolvedEnvironment;
@@ -15,16 +15,6 @@ export interface EnvironmentPreflightResult {
   attemptedCapabilities: RequestedCapability[];
   /** Best-effort misses are reported here but do not block execution. */
   notFoundCapabilities: ResolvedEnvironment["unresolvedCapabilities"];
-}
-
-/** @deprecated Preflight is advisory; callers must not use this as control flow. */
-export class EnvironmentPreflightError extends Error {
-  readonly environment: ResolvedEnvironment;
-  constructor(environment: ResolvedEnvironment) {
-    super("Environment preflight is advisory and does not block execution.");
-    this.name = "EnvironmentPreflightError";
-    this.environment = environment;
-  }
 }
 
 /** Put the resolver's canonical executable directories first for every caller. */
@@ -99,10 +89,6 @@ export async function preflightEnvironment(options: {
   installed?: InstalledRuntimeCandidates;
   /** Set when the caller has already memoized the bounded installed scan. */
   skipInstalledDirectoryDiscovery?: boolean;
-  /** @deprecated Retained for source compatibility; missing capabilities never gate. */
-  strict?: boolean;
-  /** @deprecated Installation is performed through the ordinary shell tool. */
-  installMissing?: (capability: Extract<RequestedCapability, { kind: "executable" }>) => Promise<InstallEvidence>;
 }): Promise<EnvironmentPreflightResult> {
   const platform = options.platform ?? process.platform;
   const requestedCapabilities = commandCapabilities(options.commands, platform);

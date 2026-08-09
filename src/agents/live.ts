@@ -514,7 +514,6 @@ export async function createLiveAgents(options: LiveAgentOptions): Promise<Agent
               diagnostics: [...resolvedEnvironment.diagnostics, ...result.environment.diagnostics],
               unresolvedCapabilities: resolvedEnvironment.unresolvedCapabilities.filter((item) => item.capability !== executable)
                 .concat(result.environment.unresolvedCapabilities.filter((item) => item.capability === executable)),
-              installEvidence: [...(resolvedEnvironment.installEvidence ?? []), ...(result.environment.installEvidence ?? [])]
             };
           }
           toolContext.environment = resolvedEnvironment;
@@ -528,41 +527,31 @@ export async function createLiveAgents(options: LiveAgentOptions): Promise<Agent
 
   return {
     prepareEnvironment: async (commands: string[]) => {
-      try {
-        environmentPreparation ??= (async () => preflightEnvironment({
-          commands,
-          env: options.env,
-          installed: await installedCandidates(),
-          skipInstalledDirectoryDiscovery: true,
-         }))();
-        const result = await environmentPreparation;
-        resolvedEnvironment = result.environment;
-        // Keep the same snapshot on the context used by every in-process leader
-        // and worker shell tool. The env PATH update remains important for CLI
-        // workers, while this explicit object prevents later PATH drift in tools.
-        toolContext.environment = result.environment;
-        const selected = Object.values(result.environment.tools)
-          .map((tool) => tool?.executablePath)
-          .filter((value): value is string => Boolean(value));
-        const requested = result.requiredCapabilities.map((capability) => capability.kind);
-        const attempted = result.environment.requestedCapabilities.map((capability) => capability.kind);
-        const missing = result.notFoundCapabilities.map((capability) => capability.name);
-        const installs = (result.environment.installEvidence ?? []).map((evidence) =>
-          `${evidence.executable}:${evidence.packageManager}:${evidence.source}:${evidence.status}`
-        );
-        const required = new Set(result.requiredCapabilities.map((capability) => capability.kind));
-        options.onToolEvent?.({
-          role: "worker",
-          tool: "environment-preflight",
-          target: `required=${[...required].join(",") || "none"}; requested=${[...new Set(requested)].join(",") || "none"}; attempted=${[...new Set(attempted)].join(",") || "none"}; resolved=${selected.join(",") || "none"}; not-found=${missing.join(",") || "none"}; installs=${installs.join(",") || "none"}`,
-          phase: "end",
-          ok: result.notFoundCapabilities.length === 0
-        });
-      } catch (error) {
-        const missing = (error as { environment?: { unresolvedCapabilities?: Array<{ name: string }> } }).environment?.unresolvedCapabilities?.map((item) => item.name).join(", ");
-        options.onToolEvent?.({ role: "worker", tool: "environment-preflight", target: `missing ${missing ?? "required capability"}`, phase: "end", ok: false });
-        throw error;
-      }
+      environmentPreparation ??= (async () => preflightEnvironment({
+        commands,
+        env: options.env,
+        installed: await installedCandidates(),
+        skipInstalledDirectoryDiscovery: true,
+      }))();
+      const result = await environmentPreparation;
+      resolvedEnvironment = result.environment;
+      // Keep one advisory snapshot for both agents and the verification runner.
+      // Missing capabilities are context for the model, never a round failure.
+      toolContext.environment = result.environment;
+      const selected = Object.values(result.environment.tools)
+        .map((tool) => tool?.executablePath)
+        .filter((value): value is string => Boolean(value));
+      const requested = result.requiredCapabilities.map((capability) => capability.kind);
+      const attempted = result.environment.requestedCapabilities.map((capability) => capability.kind);
+      const missing = result.notFoundCapabilities.map((capability) => `${capability.name}: ${capability.reason}`);
+      const required = new Set(result.requiredCapabilities.map((capability) => capability.kind));
+      options.onToolEvent?.({
+        role: "worker",
+        tool: "environment-preflight",
+        target: `required=${[...required].join(",") || "none"}; requested=${[...new Set(requested)].join(",") || "none"}; attempted=${[...new Set(attempted)].join(",") || "none"}; resolved=${selected.join(",") || "none"}; not-found=${missing.join(",") || "none"}`,
+        phase: "end",
+        ok: true
+      });
     },
     getEnvironment: () => resolvedEnvironment,
     plan: async ({ request, goals, history, attachments = [], previousAttemptError }): Promise<PlanResult> => {

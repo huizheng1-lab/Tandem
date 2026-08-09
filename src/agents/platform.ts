@@ -12,7 +12,7 @@ export function resolvedEnvironmentPrompt(environment: ResolvedEnvironment | und
   if (!environment) return "Recorded environment preflight: unavailable; do not assert that a runtime is missing based only on this CLI sandbox. Report only commands that actually failed.";
   const resolved = Object.entries(environment.tools)
     .filter((entry): entry is [string, ResolvedTool] => Boolean(entry[1]?.executablePath))
-    .map(([capability, tool]) => `${capability}=${tool.executablePath}`);
+    .map(([capability, tool]) => `${capability}=${tool.executablePath}${tool.version ? ` (version ${tool.version})` : ""}`);
   const missing = environment.unresolvedCapabilities.map((item) => `${item.name}: ${item.reason}`);
   return `Recorded environment preflight (advisory snapshot): resolved=${resolved.join(", ") || "none"}; unresolved=${missing.join("; ") || "none"}. Use this snapshot to plan efficiently, but treat actual command output as authoritative. Do not claim a resolved runtime is unavailable based on a different CLI sandbox.`;
 }

@@ -350,8 +350,7 @@ export async function resolveEnvironment(options: ResolveEnvironmentOptions): Pr
     probeEvidence: [],
     unresolvedCapabilities: [],
     attemptedSources: [],
-    diagnostics: [],
-    installEvidence: []
+    diagnostics: []
   };
 
   for (const tool of requestedExecutableKinds(options.requestedCapabilities)) {

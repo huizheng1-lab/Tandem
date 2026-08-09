@@ -67,15 +67,4 @@ export interface ResolvedEnvironment {
   unresolvedCapabilities: UnresolvedCapability[];
   attemptedSources: ResolutionSourceAttempt[];
   diagnostics: ResolutionDiagnostic[];
-  installEvidence?: InstallEvidence[];
-}
-
-export interface InstallEvidence {
-  executable: string;
-  packageManager: "npm" | "pip" | "none";
-  source: string;
-  command: string;
-  requestedBy: string;
-  status: "started" | "completed" | "failed" | "blocked" | "skipped";
-  detail?: string;
 }

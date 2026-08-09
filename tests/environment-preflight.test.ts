@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
-import { preflightEnvironment, EnvironmentPreflightError } from "../src/environment/preflight.js";
+import { preflightEnvironment } from "../src/environment/preflight.js";
 import { resolveEnvironment } from "../src/environment/resolve.js";
 import type { ResolvedEnvironment } from "../src/environment/types.js";
 
@@ -98,9 +98,9 @@ describe("environment preflight integration", () => {
     expect(result.environment.tools.node?.executablePath).toBe("C:\\nodejs\\node.exe");
   });
 
-  it("still fails closed when a plan-required capability is missing", async () => {
+  it("reports a plan-required capability when it is missing without failing the round", async () => {
     const env: NodeJS.ProcessEnv = { PATH: "C:\\missing" };
-    await expect(preflightEnvironment({
+    const result = await preflightEnvironment({
       commands: ["ffmpeg -i in.mp4 out.mp4"],
       env,
       platform: "win32",
@@ -108,7 +108,8 @@ describe("environment preflight integration", () => {
         tools: {},
         unresolvedCapabilities: [{ capability: "ffmpeg", name: "ffmpeg", reason: "not installed", attemptedSources: ["path"] }]
       })
-    })).rejects.toThrow(/ffmpeg/);
+    });
+    expect(result.notFoundCapabilities).toContainEqual(expect.objectContaining({ name: "ffmpeg", reason: "not installed" }));
   });
 
   it("resolves ffmpeg and ffprobe from a known install directory when PATH misses them", async () => {
@@ -135,19 +136,14 @@ describe("environment preflight integration", () => {
     expect(result.env.PATH?.split(";").slice(0, 2)).toEqual(["C:\\Media\\bin", "C:\\missing"]);
   });
 
-  it("reports one exact blocker for a genuinely absent capability", async () => {
+  it("reports one exact reason for a genuinely absent capability", async () => {
     const environment = resolved({ unresolvedCapabilities: [{
       capability: "ffprobe", name: "ffprobe", reason: "No usable ffprobe executable was found", attemptedSources: ["path:C:\\missing"]
     }] });
-    await expect(preflightEnvironment({
+    const result = await preflightEnvironment({
       commands: ["ffprobe -version"], env: { PATH: "C:\\missing" }, platform: "win32",
       resolve: async () => environment
-    })).rejects.toThrow("missing ffprobe");
-    try {
-      await preflightEnvironment({ commands: ["ffprobe -version"], env: { PATH: "C:\\missing" }, platform: "win32", resolve: async () => environment });
-    } catch (error) {
-      expect(error).toBeInstanceOf(EnvironmentPreflightError);
-      expect((error as EnvironmentPreflightError).message).toContain("No usable ffprobe executable was found");
-    }
+    });
+    expect(result.notFoundCapabilities).toContainEqual(expect.objectContaining({ name: "ffprobe", reason: "No usable ffprobe executable was found" }));
   });
 });
