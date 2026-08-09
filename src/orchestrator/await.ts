@@ -1,6 +1,6 @@
 import { mkdir, readFile, readdir, writeFile } from "node:fs/promises";
 import path from "node:path";
-import { keepBackgroundProcessAlive, listBackgroundProcesses } from "../tools/shell.js";
+import { keepBackgroundProcessAlive, listBackgroundProcesses, releaseBackgroundProcess } from "../tools/shell.js";
 
 export type DurableAwaitStatus = "suspended" | "completed" | "failed" | "timed_out";
 
@@ -14,6 +14,16 @@ export interface DurableAwaitRecord {
   createdAt: string;
   resumedAt?: string;
   round?: number;
+  checkpoint?: { plan?: unknown; tasks?: unknown; evidence?: unknown };
+}
+
+export class DurableAwaitSuspendedError extends Error {
+  readonly record: DurableAwaitRecord;
+  constructor(record: DurableAwaitRecord) {
+    super(`Round suspended on background process ${record.processId} until ${record.deadlineAt}.`);
+    this.name = "DurableAwaitSuspendedError";
+    this.record = record;
+  }
 }
 
 function awaitDir(cwd: string): string {
@@ -44,9 +54,13 @@ export async function listDurableAwaits(cwd: string): Promise<DurableAwaitRecord
   return Promise.all(names.filter((name) => name.endsWith(".json")).map((name) => readDurableAwait(cwd, name.slice(0, -5))));
 }
 
-function processState(processId: string, pid?: number): "running" | "exited" | "stopped" | undefined {
+function processState(processId: string, pid?: number): "running" | "exited" | "failed" | "stopped" | undefined {
   const registered = listBackgroundProcesses().find((entry) => entry.id === processId);
-  if (registered) return registered.status;
+  if (registered) {
+    if (registered.status === "stopped") return "stopped";
+    if (registered.status === "exited") return registered.exitCode === 0 ? "exited" : "failed";
+    return "running";
+  }
   if (pid === undefined) return undefined;
   try { process.kill(pid, 0); return "running"; } catch { return "exited"; }
 }
@@ -57,6 +71,7 @@ export async function registerBackgroundAwait(input: {
   timeoutMs: number;
   id?: string;
   round?: number;
+  checkpoint?: DurableAwaitRecord["checkpoint"];
 }): Promise<DurableAwaitRecord> {
   if (!Number.isFinite(input.timeoutMs) || input.timeoutMs <= 0) throw new Error("Await timeout must be positive.");
   const id = safeId(input.id ?? `await-${Date.now().toString(36)}`);
@@ -71,10 +86,15 @@ export async function registerBackgroundAwait(input: {
     deadlineAt: new Date(Date.now() + input.timeoutMs).toISOString(),
     status: "suspended",
     createdAt: new Date().toISOString(),
-    round: input.round
+    round: input.round,
+    checkpoint: input.checkpoint
   };
   await save(input.cwd, record);
   return record;
+}
+
+export async function suspendOnBackgroundAwait(input: Parameters<typeof registerBackgroundAwait>[0]): Promise<never> {
+  throw new DurableAwaitSuspendedError(await registerBackgroundAwait(input));
 }
 
 /** Re-prime a parked round. This is deliberately side-effect free until a terminal event is observed. */
@@ -83,8 +103,9 @@ export async function resumeBackgroundAwait(cwd: string, id: string): Promise<Du
   if (record.status !== "suspended") return record;
   const state = processState(record.processId, record.pid);
   const timedOut = Date.now() >= Date.parse(record.deadlineAt);
-  const status: DurableAwaitStatus = timedOut ? "timed_out" : state === "exited" ? "completed" : state === "stopped" ? "failed" : "suspended";
+  const status: DurableAwaitStatus = timedOut ? "timed_out" : state === "exited" ? "completed" : state === "failed" || state === "stopped" ? "failed" : "suspended";
   if (status === "suspended") return record;
+  releaseBackgroundProcess(record.processId);
   const resumed = { ...record, status, resumedAt: new Date().toISOString() };
   await save(cwd, resumed);
   return resumed;

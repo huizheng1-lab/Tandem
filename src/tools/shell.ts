@@ -82,7 +82,8 @@ function registerBackgroundSweep(): void {
     await cleanupBackgroundProcesses();
   });
   process.once("exit", () => {
-    for (const entry of backgroundProcesses.values()) {
+    for (const [id, entry] of backgroundProcesses) {
+      if (durableBackgroundProcesses.has(id)) continue;
       killBackgroundProcessSync(entry);
     }
   });
@@ -298,6 +299,11 @@ export function listBackgroundProcesses(): BackgroundProcessInfo[] {
 export function keepBackgroundProcessAlive(id: string): void {
   if (!backgroundProcesses.has(id)) throw new Error(`Unknown background process id: ${id}`);
   durableBackgroundProcesses.add(id);
+}
+
+/** Release a process after its durable await reaches a terminal state. */
+export function releaseBackgroundProcess(id: string): void {
+  durableBackgroundProcesses.delete(id);
 }
 
 export async function backgroundProcessTool(action: BackgroundProcessAction, id?: string): Promise<string> {

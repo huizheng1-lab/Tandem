@@ -16,8 +16,9 @@ import {
 import { sanitizePromptValue } from "../tools/sanitize.js";
 import { VerificationRunner, VerificationResult } from "./verification.js";
 import type { ResolvedEnvironment } from "../environment/types.js";
+import { DurableAwaitSuspendedError } from "./await.js";
 
-export type MachinePhase = "IDLE" | "PLANNING" | "BUILDING" | "REVIEWING" | "FEEDBACK" | "TAKEOVER" | "DONE";
+export type MachinePhase = "IDLE" | "PLANNING" | "BUILDING" | "REVIEWING" | "FEEDBACK" | "PARKED" | "TAKEOVER" | "DONE";
 export interface OrchestrationCheckpoint {
   phase: MachinePhase;
   round: number;
@@ -333,6 +334,7 @@ export interface RunResult {
   reports: CompletionReport[];
   verdicts: ReviewVerdict[];
   takeover: boolean;
+  parkedAwaitId?: string;
 }
 
 /** A validator rejection is a concrete turn failure and must outrank model guesses. */
@@ -640,6 +642,11 @@ export async function runOrchestration(options: RunOptions): Promise<RunResult> 
             enforceCompleteVerification: !authoritative.ran
           });
         } catch (error) {
+          if (error instanceof DurableAwaitSuspendedError) {
+            transition("PARKED", `round ${currentRound} parked until ${error.record.deadlineAt}`, currentRound);
+            emit({ type: "notice", message: `Round parked on ${error.record.processId}; waiting consumes no review round or agent budget.` });
+            return { phase: "PARKED", summary: `Round parked on ${error.record.processId} until ${error.record.deadlineAt}.`, plan, reports, verdicts, takeover: false, parkedAwaitId: error.record.id };
+          }
           // D66-2: rate-limit errors should not trigger a takeover (the failure isn't in the
           // worker's output, it's a transient quota hit). Surface the resetsAt so the user
           // knows when to retry, and end the run cleanly rather than going through a doomed
