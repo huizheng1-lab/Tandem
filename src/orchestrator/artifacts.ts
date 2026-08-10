@@ -633,14 +633,14 @@ function capabilitySubjectTerms(plan: BuildPlan, reportText: string): Set<string
 /** Commands may name a capability inside a Windows/Unix path, with an executable suffix. */
 function capabilityCommandTerms(command: string): Set<string> {
   const terms = capabilityEvidenceTerms(command);
-  // `capabilityEvidenceTerms` deliberately treats a slash as part of a token,
-  // but Windows paths use a backslash which is also a token boundary. Add the
-  // raw command's path components explicitly so `C:\ComfyUI\main.py` names
-  // both `comfyui` and `main`, regardless of which separators were present.
-  const commandTokens = command.toLowerCase().match(/[a-z0-9][a-z0-9._-]{2,}/g) ?? [];
-  for (const term of [...terms, ...commandTokens]) {
-    for (const part of term.split(/[\\/]/)) {
-      const normalized = part.replace(/\.[a-z0-9]+$/i, "");
+  // `capabilityEvidenceTerms` keeps path separators inside tokens. Split the
+  // original command as well, so a Windows path names its directory and file
+  // independently (`C:\ComfyUI\main.py` -> `comfyui`, `main`).
+  for (const token of command.toLowerCase().split(/\s+/)) {
+    for (const part of token.split(/[\\/]/)) {
+      const normalized = part
+        .replace(/^[^a-z0-9]+|[^a-z0-9._-]+$/gi, "")
+        .replace(/\.[a-z0-9]+$/i, "");
       if (normalized.length >= 4 && !capabilityEvidenceStopWords.has(normalized)) terms.add(normalized);
     }
   }
