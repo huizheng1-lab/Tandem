@@ -2,7 +2,11 @@ import { z } from "zod";
 
 export const DerivedArtifactEntrySchema = z.object({
   status: z.enum(["measured", "interpolated", "absent"]),
-  distanceFromNearestMeasuredBoundary: z.number().finite().min(0).optional()
+  // Every projected entry must disclose how closely it is supported by the
+  // measurement.  A measured entry normally has distance 0; requiring the
+  // field prevents a producer from omitting the evidence declaration while
+  // still allowing interpolation at any explicitly reported distance.
+  distanceFromNearestMeasuredBoundary: z.number().finite().min(0)
 });
 
 export const DerivedArtifactProvenanceSchema = z
@@ -14,7 +18,7 @@ export const DerivedArtifactProvenanceSchema = z
     measuredSpanEnd: z.number().finite().min(0),
     artifactSpanEnd: z.number().finite().min(0),
     entries: z.array(DerivedArtifactEntrySchema),
-    shortfall: z.string().optional()
+    shortfall: z.string().trim().min(1).optional()
   })
   .superRefine((value, ctx) => {
     if (value.measuredDuration > value.sourceDuration) {
@@ -30,11 +34,8 @@ export const DerivedArtifactProvenanceSchema = z
       ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["shortfall"], message: "must declare uncovered or interpolated source extent" });
     }
     for (const [index, entry] of value.entries.entries()) {
-      if (entry.status === "measured" && entry.distanceFromNearestMeasuredBoundary !== undefined && entry.distanceFromNearestMeasuredBoundary > 0.001) {
+      if (entry.status === "measured" && entry.distanceFromNearestMeasuredBoundary > 0.001) {
         ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["entries", index, "distanceFromNearestMeasuredBoundary"], message: "measured entries must be on a measured boundary" });
-      }
-      if (entry.status !== "measured" && entry.distanceFromNearestMeasuredBoundary === undefined) {
-        ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["entries", index, "distanceFromNearestMeasuredBoundary"], message: "interpolated or absent entries must declare their distance from evidence" });
       }
     }
   });
