@@ -155,14 +155,14 @@ describe("artifacts", () => {
   const verifierReport = (
     filesChanged: string[],
     deviationsFromPlan: string[] = [],
-    verificationCommand = "npm test",
+    verificationCommand?: string,
     derivedArtifacts?: CompletionReport["derivedArtifacts"]
   ): CompletionReport => ({
     status: "complete",
     summary: "verified",
     taskResults: [{ id: "T1", status: "done" }],
     filesChanged,
-    verificationResults: [{ command: verificationCommand, passed: true, output: "ok" }],
+    verificationResults: [{ command: verificationCommand ?? plan.verification[0] ?? "npm test", passed: true, output: "ok" }],
     deviationsFromPlan,
     ...(derivedArtifacts ? { derivedArtifacts } : {})
   });

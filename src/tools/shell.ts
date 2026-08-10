@@ -56,6 +56,8 @@ interface BackgroundProcess {
   stderr: string;
 }
 
+type BackgroundLaunch = { spawned: true } | { spawned: false; error: unknown };
+
 const backgroundProcesses = new Map<string, BackgroundProcess>();
 const durableBackgroundProcesses = new Set<string>();
 let backgroundSequence = 0;
@@ -190,6 +192,34 @@ function backgroundId(): string {
   return `bg-${Date.now().toString(36)}-${backgroundSequence.toString(36)}`;
 }
 
+/**
+ * Wait only for the child-process launch handshake. The execa promise must not
+ * be used for this: it settles at process exit, where a non-zero exit is a
+ * normal background lifecycle result rather than a launch failure.
+ */
+function waitForBackgroundLaunch(subprocess: ReturnType<typeof execa>): Promise<BackgroundLaunch> {
+  return new Promise<BackgroundLaunch>((resolve) => {
+    let spawned = false;
+    const onSpawn = () => {
+      spawned = true;
+      subprocess.removeListener("spawn", onSpawn);
+      subprocess.removeListener("error", onError);
+      resolve({ spawned: true });
+    };
+    const onError = (error: unknown) => {
+      // ChildProcess may report an error after spawn (for example while a
+      // shell is shutting down). Once spawn won, preserve lifecycle
+      // observability and never reclassify that later event as startup.
+      if (spawned) return;
+      subprocess.removeListener("spawn", onSpawn);
+      subprocess.removeListener("error", onError);
+      resolve({ spawned: false, error });
+    };
+    subprocess.once("spawn", onSpawn);
+    subprocess.once("error", onError);
+  });
+}
+
 async function startBackgroundProcess(ctx: ToolContext, command: string): Promise<ShellResult> {
   const executionEnv = ctx.env ?? process.env;
   if (ctx.environment) applyResolvedEnvironment(executionEnv, ctx.environment);
@@ -222,26 +252,7 @@ async function startBackgroundProcess(ctx: ToolContext, command: string): Promis
   });
   backgroundProcesses.set(id, entry);
   registerBackgroundSweep();
-  // The execa promise describes the whole process lifetime, not whether the
-  // process launched. Waiting on it here turns a legitimate later non-zero
-  // exit into a false start failure and hides the id needed for lifecycle
-  // inspection. The child-process spawn/error events are the launch boundary:
-  // once spawn wins, every later exit is an ordinary observable lifecycle
-  // transition, including a non-zero exit.
-  const launch = new Promise<{ spawned: true } | { spawned: false; error: unknown }>((resolve) => {
-    const onSpawn = () => {
-      subprocess.removeListener("spawn", onSpawn);
-      subprocess.removeListener("error", onError);
-      resolve({ spawned: true });
-    };
-    const onError = (error: unknown) => {
-      subprocess.removeListener("spawn", onSpawn);
-      subprocess.removeListener("error", onError);
-      resolve({ spawned: false, error });
-    };
-    subprocess.once("spawn", onSpawn);
-    subprocess.once("error", onError);
-  });
+  const launch = waitForBackgroundLaunch(subprocess);
   void Promise.resolve(subprocess).then((result) => {
     entry.info.status = "exited";
     entry.info.exitCode = result.exitCode;
