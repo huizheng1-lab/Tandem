@@ -133,6 +133,8 @@ export const CompletionReportSchema = z.object({
     })
   ),
   deviationsFromPlan: z.array(z.string()),
+  securityRisks: z.array(z.object({ kind: z.string(), action: z.string(), proceeded: z.literal(true) })).optional(),
+  blockedSecurityActions: z.array(z.object({ boundary: z.string(), action: z.string(), performed: z.literal(false) })).optional(),
   derivedArtifacts: z.array(DerivedArtifactProvenanceSchema).optional(),
   // A filesystem snapshot captured by the orchestrator, never supplied as proof of correctness.
   workspaceInventory: z.custom<WorkspaceInventory>().optional(),

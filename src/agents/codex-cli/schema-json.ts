@@ -75,7 +75,9 @@ export const completionReportJsonSchema = {
         }
       }
     },
-    deviationsFromPlan: { type: "array", items: stringSchema }
+    deviationsFromPlan: { type: "array", items: stringSchema },
+    securityRisks: { type: "array", items: { type: "object", additionalProperties: false, required: ["kind", "action", "proceeded"], properties: { kind: stringSchema, action: stringSchema, proceeded: { const: true } } } },
+    blockedSecurityActions: { type: "array", items: { type: "object", additionalProperties: false, required: ["boundary", "action", "performed"], properties: { boundary: stringSchema, action: stringSchema, performed: { const: false } } } }
   }
 } as const;
 

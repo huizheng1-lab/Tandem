@@ -6,6 +6,7 @@ import { searchFilesTool, MAX_SEARCH_RESULTS, MAX_SEARCH_RUNTIME_MS } from "./se
 import { backgroundProcessTool, bashTool } from "./shell.js";
 import { DURABLE_AWAIT_DESCRIPTION } from "../orchestrator/await.js";
 import { sanitizePromptText } from "./sanitize.js";
+import { SecurityBoundaryError, securityRiskFor } from "./security.js";
 
 export type ToolRole = "leader-readonly" | "worker" | "reviewer" | "takeover";
 
@@ -33,20 +34,23 @@ function wrapExecute<Input, Output>(ctx: ToolContext, role: ToolRole, toolName: 
   return async (input) => {
     const started = Date.now();
     const eventBase = { role: activityRole(role), tool: toolName, target: target(input) };
+    const securityRisk = securityRiskFor(toolName, eventBase.target);
+    if (securityRisk) ctx.recordSecurityRisk?.(securityRisk);
     ctx.onToolEvent?.({ ...eventBase, phase: "start" });
     try {
       const result = await execute(input);
       const output = result && typeof result === "object" && "output" in result && typeof result.output === "string"
         ? result.output
         : undefined;
-      ctx.onToolEvent?.({ ...eventBase, phase: "end", ok: true, ms: Date.now() - started, output });
+      ctx.onToolEvent?.({ ...eventBase, phase: "end", ok: true, ms: Date.now() - started, output, securityRisk });
       return result;
     } catch (error) {
       const errorText = String(error);
       // Keep the bounded failure detail in the event payload as well as the
       // display-oriented error field. Session records otherwise lose the
       // command's stderr when a bridge rejects a background start.
-      ctx.onToolEvent?.({ ...eventBase, phase: "end", ok: false, ms: Date.now() - started, error: errorText, output: sanitizePromptText(errorText).slice(-2000) });
+      const blockedSecurityAction = error instanceof SecurityBoundaryError ? error.report : undefined;
+      ctx.onToolEvent?.({ ...eventBase, phase: "end", ok: false, ms: Date.now() - started, error: errorText, output: sanitizePromptText(errorText).slice(-2000), blockedSecurityAction });
       throw error;
     }
   };

@@ -3,8 +3,7 @@ import { homedir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { tandemStateDir } from "../paths.js";
-
-const SELF_PROTECTION_MESSAGE = "Tandem will not modify its own installation. Pick a different project folder.";
+import { SecurityBoundaryError } from "./security.js";
 
 function normalizePath(filePath: string): string {
   const resolved = path.resolve(filePath);
@@ -59,17 +58,17 @@ export function isProtectedProjectDir(projectDir: string, homeDir?: string): boo
 }
 
 export function assertSafeProjectDir(projectDir: string): void {
-  if (isProtectedProjectDir(projectDir)) throw new Error(SELF_PROTECTION_MESSAGE);
+  if (isProtectedProjectDir(projectDir)) throw new SecurityBoundaryError("self-modification-protection", `modify project "${projectDir}"`);
 }
 
 export function assertSafeWritePath(projectDir: string, targetPath: string): void {
   assertSafeProjectDir(projectDir);
-  if (isProtectedPath(targetPath)) throw new Error(SELF_PROTECTION_MESSAGE);
+  if (isProtectedPath(targetPath)) throw new SecurityBoundaryError("self-modification-protection", `write "${targetPath}"`);
 }
 
 export function assertSafeBash(projectDir: string, command: string): void {
   assertSafeProjectDir(projectDir);
   if (/(^|[\s"'`])(?:~[/\\]\.tandem|\$HOME[/\\]\.tandem|%USERPROFILE%[/\\]\.tandem)(?=$|[\s"'`/\\])/i.test(command)) {
-    throw new Error(SELF_PROTECTION_MESSAGE);
+    throw new SecurityBoundaryError("self-modification-protection", command);
   }
 }

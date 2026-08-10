@@ -8,6 +8,7 @@ import type { ContentPart } from "../session/attachments.js";
 import type { ModelEntry } from "../providers/registry.js";
 import { sanitizePromptText } from "./sanitize.js";
 import type { ResolvedEnvironment } from "../environment/types.js";
+import type { SecurityRisk } from "./security.js";
 
 export interface ToolContext {
   cwd: string;
@@ -24,6 +25,7 @@ export interface ToolContext {
   media?: ModelEntry["media"];
   abortSignal?: AbortSignal;
   onToolEvent?: (event: ToolActivityEvent) => void;
+  recordSecurityRisk?: (risk: SecurityRisk) => void;
   durableAwait?: (input: { processId: string; timeoutMs: number; id?: string }) => Promise<string>;
 }
 
@@ -40,6 +42,8 @@ export interface ToolActivityEvent {
   /** Bounded command output is persisted with the session event for failed launches. */
   output?: string;
   error?: string;
+  securityRisk?: SecurityRisk;
+  blockedSecurityAction?: { boundary: string; action: string; performed: false };
 }
 
 export function resolveInside(cwd: string, target: string): string {

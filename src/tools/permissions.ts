@@ -1,4 +1,5 @@
 import { PermissionMode, PermissionRules } from "../config/schema.js";
+import { SecurityBoundaryError } from "./security.js";
 
 export type PermissionAction = "write" | "edit" | "bash";
 
@@ -59,7 +60,10 @@ export async function ensurePermission(
   const rules = options.rules;
   const denyRules = [...DEFAULT_DENY_RULES, ...(rules?.deny ?? [])];
   if (request.action === "bash" && (isDestructiveCommand(request.target) || denyRules.some((rule) => ruleMatches(rule, request)))) {
-    throw new PermissionDeniedError(`Blocked destructive command. Change the command and try again: ${request.target}`);
+    if (isDestructiveCommand(request.target)) {
+      throw new SecurityBoundaryError("destructive-command-blacklist", request.target);
+    }
+    throw new PermissionDeniedError(`Permission policy denied bash action "${request.target}". The action was not performed.`);
   }
   if (rules?.allow.some((rule) => ruleMatches(rule, request))) return;
   const asks = rules?.ask.some((rule) => ruleMatches(rule, request)) ?? false;
