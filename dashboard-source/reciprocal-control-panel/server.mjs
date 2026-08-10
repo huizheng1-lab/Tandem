@@ -57,6 +57,8 @@ const updateReviewIndexPath = path.join(relayRoot, "control", "UPDATE_REVIEW_IND
 const mainUpdateReviewPath = path.join(relayRoot, "control", "MAIN_UPDATES.md");
 const candidateSource = path.join(repoRoot, "release", "win-unpacked");
 const candidateExe = path.join(candidateSource, "Tandem.exe");
+const passiveDesktopSource = path.join(repoRoot, "release", "reciprocal-passive", "win-unpacked");
+const desktopRefreshStatePath = path.join(relayRoot, "control", "DESKTOP_APP_REFRESH_STATE.json");
 const candidateHome = path.join(relayRoot, "state", "candidate-preview");
 const candidateUserData = path.join(relayRoot, "user-data", "candidate-preview");
 const candidateProject = path.join(relayRoot, "candidate-preview-project");
@@ -85,6 +87,7 @@ const packageIntegrityPromise = import(pathToFileURL(path.join(repoRoot, "script
 let approvalFlow = null;
 let githubSyncInFlight = null;
 let githubSyncStateWriteQueue = Promise.resolve();
+let desktopRebuildInFlight = null;
 
 const durableRecoveryStages = [
   "package-ready",
@@ -185,6 +188,214 @@ function runResult(command, args, cwd = repoRoot, env = process.env, options = {
 }
 
 const git = (cwd, ...args) => run("git", args, cwd);
+
+function outputTail(value, maxChars = 8000) {
+  const text = String(value || "");
+  return text.length > maxChars ? text.slice(-maxChars) : text;
+}
+
+function npmCommand() {
+  return process.platform === "win32" ? "npm.cmd" : "npm";
+}
+
+async function desktopAppLockHolderReport() {
+  if (testHarness && process.env.TANDEM_DASHBOARD_TEST_DESKTOP_LOCK_REPORT === "__none__") {
+    return "";
+  }
+  if (testHarness && process.env.TANDEM_DASHBOARD_TEST_DESKTOP_LOCK_REPORT) {
+    return process.env.TANDEM_DASHBOARD_TEST_DESKTOP_LOCK_REPORT;
+  }
+  const helper = path.join(repoRoot, "scripts", "windows-file-locks.ps1");
+  const escapedHelper = helper.replaceAll("'", "''");
+  const escapedTarget = candidateSource.replaceAll("'", "''");
+  const report = await powershell("-Command", `. '${escapedHelper}'; Get-ExecutablePathLockHolderReport -Path '${escapedTarget}'`).catch((error) => {
+    throw new Error(`Could not check whether the desktop app is running: ${error.message}`);
+  });
+  return /^Candidate lock holders\b/i.test(report) ? report : "";
+}
+
+async function assertDesktopAppNotRunning() {
+  const report = await desktopAppLockHolderReport();
+  if (report) throw new Error(`Close the desktop app before refreshing release/win-unpacked. ${report}`);
+}
+
+function assertRebuildPhaseAllowed(orchestratorState) {
+  const phase = orchestratorState?.phase || "unknown";
+  const step = orchestratorState?.step || "";
+  if (phase === "swapping" || step === "package-b") {
+    throw new Error(`Full rebuild is disabled while the orchestrator is packaging: phase=${phase}${step ? ` step=${step}` : ""}.`);
+  }
+}
+
+async function readDesktopRefreshState() {
+  return jsonFile(desktopRefreshStatePath, null);
+}
+
+async function writeDesktopRefreshState(next) {
+  await writeJsonAtomic(desktopRefreshStatePath, { ...next, updatedAt: new Date().toISOString() });
+}
+
+async function desktopAppStatus(orchestratorState) {
+  const [current, passive, stableSha, rebuild] = await Promise.all([
+    jsonFile(path.join(candidateSource, "BUILD_INFO.json"), null),
+    jsonFile(path.join(passiveDesktopSource, "BUILD_INFO.json"), null),
+    git(repoRoot, "rev-parse", "--verify", "refs/tandem-relay/stable").catch(() => ""),
+    readDesktopRefreshState(),
+  ]);
+  const currentSha = current?.sourceSha || "";
+  const passiveSha = passive?.sourceSha || "";
+  const lockReport = await desktopAppLockHolderReport().catch((error) => `Lock check unavailable: ${error.message}`);
+  const rebuildBlockedByPhase = orchestratorState?.phase === "swapping" || orchestratorState?.step === "package-b";
+  const passiveExists = existsSync(path.join(passiveDesktopSource, "Tandem.exe")) && Boolean(passiveSha);
+  const appBehindPassive = Boolean(passiveSha && currentSha !== passiveSha);
+  return {
+    current: {
+      sourceSha: currentSha || null,
+      sourceShortSha: shortSha(currentSha) || current?.sourceShortSha || null,
+      builtAt: current?.builtAt || null,
+      path: candidateSource,
+      exists: existsSync(candidateExe),
+    },
+    passive: {
+      sourceSha: passiveSha || null,
+      sourceShortSha: shortSha(passiveSha) || passive?.sourceShortSha || null,
+      builtAt: passive?.builtAt || null,
+      path: passiveDesktopSource,
+      exists: passiveExists,
+    },
+    stable: {
+      sourceSha: stableSha || null,
+      sourceShortSha: shortSha(stableSha),
+    },
+    appBehindPassive,
+    lockReport: lockReport || null,
+    canPromote: passiveExists && !lockReport,
+    promoteDisabledReason: !passiveExists
+      ? "No last verified passive runtime exists yet."
+      : lockReport
+        ? `Desktop app is running: ${lockReport}`
+        : "",
+    canRebuild: !lockReport && !rebuildBlockedByPhase && rebuild?.status !== "running",
+    rebuildDisabledReason: lockReport
+      ? `Desktop app is running: ${lockReport}`
+      : rebuildBlockedByPhase
+        ? `Orchestrator is packaging: phase=${orchestratorState?.phase || "unknown"}${orchestratorState?.step ? ` step=${orchestratorState.step}` : ""}`
+        : rebuild?.status === "running"
+          ? "A full desktop app rebuild is already running."
+          : "",
+    rebuild: rebuild || { status: "idle" },
+    defaultAction: "promote-last-verified",
+    promotionAllowedDuringSwap: true,
+  };
+}
+
+async function refreshDesktopFromPassive() {
+  await assertDesktopAppNotRunning();
+  if (!existsSync(path.join(passiveDesktopSource, "Tandem.exe"))) throw new Error("No last verified passive runtime exists at release/reciprocal-passive/win-unpacked.");
+  const buildInfo = await jsonFile(path.join(passiveDesktopSource, "BUILD_INFO.json"), null);
+  if (!buildInfo?.sourceSha) throw new Error("Last verified passive runtime is missing BUILD_INFO sourceSha.");
+  if (testHarness) {
+    await recordHarnessCommand(["DESKTOP_PROMOTE", passiveDesktopSource, candidateSource, buildInfo.sourceSha]);
+  }
+  await rm(candidateSource, { recursive: true, force: true });
+  await cp(passiveDesktopSource, candidateSource, { recursive: true });
+  const promoted = {
+    ...buildInfo,
+    sourceShortSha: shortSha(buildInfo.sourceSha) || buildInfo.sourceShortSha || null,
+    artifact: "release/win-unpacked",
+    promotedToDesktopAt: new Date().toISOString(),
+    promotedFrom: "release/reciprocal-passive/win-unpacked",
+  };
+  await writeJsonAtomic(path.join(candidateSource, "BUILD_INFO.json"), promoted);
+  await writeDesktopRefreshState({
+    status: "succeeded",
+    action: "promote",
+    sourceSha: promoted.sourceSha,
+    sourceShortSha: promoted.sourceShortSha,
+    message: `Desktop app refreshed from last verified build ${promoted.sourceShortSha}.`,
+  });
+  await audit("desktop-app.promote", { sourceSha: promoted.sourceSha, source: passiveDesktopSource, target: candidateSource });
+  return promoted;
+}
+
+async function startDesktopRebuild(orchestratorState) {
+  await assertDesktopAppNotRunning();
+  assertRebuildPhaseAllowed(orchestratorState);
+  if (desktopRebuildInFlight) throw new Error("A full desktop app rebuild is already running.");
+  const startedAt = new Date().toISOString();
+  await writeDesktopRefreshState({
+    status: "running",
+    action: "rebuild",
+    startedAt,
+    message: "Full desktop app rebuild is running.",
+    outputTail: "",
+  });
+  if (testHarness && process.env.TANDEM_DASHBOARD_TEST_REBUILD_MODE === "synthetic") {
+    setTimeout(async () => {
+      await writeDesktopRefreshState({
+        status: "failed",
+        action: "rebuild",
+        startedAt,
+        completedAt: new Date().toISOString(),
+        exitCode: 42,
+        message: "Full desktop app rebuild failed.",
+        outputTail: "synthetic rebuild failure tail",
+      });
+      desktopRebuildInFlight = null;
+    }, Number(process.env.TANDEM_DASHBOARD_TEST_REBUILD_DELAY_MS || 250)).unref();
+    desktopRebuildInFlight = { synthetic: true };
+    await audit("desktop-app.rebuild.started", { synthetic: true });
+    return { status: "running", action: "rebuild", startedAt, synthetic: true };
+  }
+  const child = spawn(npmCommand(), ["run", "dist:app"], { cwd: repoRoot, windowsHide: true });
+  desktopRebuildInFlight = child;
+  let output = "";
+  const onData = async (chunk) => {
+    output = outputTail(`${output}${chunk.toString()}`);
+    await writeDesktopRefreshState({
+      status: "running",
+      action: "rebuild",
+      startedAt,
+      pid: child.pid || null,
+      message: "Full desktop app rebuild is running.",
+      outputTail: output,
+    }).catch(() => {});
+  };
+  child.stdout.on("data", onData);
+  child.stderr.on("data", onData);
+  child.on("error", async (error) => {
+    desktopRebuildInFlight = null;
+    await writeDesktopRefreshState({
+      status: "failed",
+      action: "rebuild",
+      startedAt,
+      completedAt: new Date().toISOString(),
+      message: error.message,
+      outputTail: outputTail(`${output}\n${error.message}`),
+    }).catch(() => {});
+    await audit("desktop-app.rebuild.failed", { message: error.message }).catch(() => {});
+  });
+  child.on("close", async (code) => {
+    desktopRebuildInFlight = null;
+    const buildInfo = await jsonFile(path.join(candidateSource, "BUILD_INFO.json"), null);
+    const ok = code === 0;
+    await writeDesktopRefreshState({
+      status: ok ? "succeeded" : "failed",
+      action: "rebuild",
+      startedAt,
+      completedAt: new Date().toISOString(),
+      pid: child.pid || null,
+      exitCode: code,
+      sourceSha: buildInfo?.sourceSha || null,
+      sourceShortSha: shortSha(buildInfo?.sourceSha) || buildInfo?.sourceShortSha || null,
+      message: ok ? `Full desktop app rebuild succeeded for ${shortSha(buildInfo?.sourceSha) || "unknown"}.` : "Full desktop app rebuild failed.",
+      outputTail: output,
+    }).catch(() => {});
+    await audit(ok ? "desktop-app.rebuild.succeeded" : "desktop-app.rebuild.failed", { code, sourceSha: buildInfo?.sourceSha || null }).catch(() => {});
+  });
+  await audit("desktop-app.rebuild.started", { pid: child.pid || null });
+  return { status: "running", action: "rebuild", startedAt, pid: child.pid || null };
+}
 
 async function runtimePackageIdentity(runtimeDir) {
   const integrity = await packageIntegrityPromise;
@@ -620,6 +831,9 @@ async function currentRevision() {
     path.join(relayRoot, "runtimes", "executor-b", "BUILD_INFO.json"),
     path.join(repoRoot, "release", "win-unpacked", "Tandem.exe"),
     path.join(repoRoot, "release", "win-unpacked", "BUILD_INFO.json"),
+    path.join(repoRoot, "release", "reciprocal-passive", "win-unpacked", "Tandem.exe"),
+    path.join(repoRoot, "release", "reciprocal-passive", "win-unpacked", "BUILD_INFO.json"),
+    desktopRefreshStatePath,
     path.join(repoRoot, "scripts", "reciprocal-relay.ps1"),
     path.join(here, "lib.mjs"),
     path.join(here, "server.mjs"),
@@ -1531,6 +1745,7 @@ async function getStatus() {
   }
   const mainVersion = await getMainVersionStatus(masterHead, state.stableCommit, candidateUpdate, runtimeA, runtimeB);
   const githubSync = await githubSyncBoundary({ runtimeA, orchestratorState });
+  const desktopApp = await desktopAppStatus(state);
   candidateUpdate.mainVersion = mainVersion.tag;
   candidateUpdate.candidateMainVersion = mainVersion.candidateTag;
   candidateUpdate.promoted = candidateUpdate.promoted.map((item) => ({ ...item, mainVersion: mainVersion.runtimeTags[item.role] }));
@@ -1582,6 +1797,7 @@ async function getStatus() {
     { label: "Branches vs master", ok: a.drift.upToDate && b.drift.upToDate, detail: `A ${a.drift.behindMaster}/${a.drift.aheadOfMaster}, B ${b.drift.behindMaster}/${b.drift.aheadOfMaster}` },
     { label: "Runtime builds vs master", ok: !runtimeA.lagsMaster && !runtimeB.lagsMaster, detail: `A ${runtimeA.buildShortSha}, B ${runtimeB.buildShortSha}` },
     { label: "Candidate update", ok: !candidateUpdate.unknownProvenance, detail: candidateUpdate.reviewNote?.visible ? `${candidateUpdate.reviewNote.shortSha} awaits review` : candidateUpdate.message },
+    { label: "Desktop app", ok: !desktopApp.appBehindPassive && !desktopApp.lockReport, detail: desktopApp.appBehindPassive ? `App ${desktopApp.current.sourceShortSha || "missing"} trails verified ${desktopApp.passive.sourceShortSha || "missing"}` : desktopApp.lockReport ? "Desktop app is running" : `App ${desktopApp.current.sourceShortSha || "missing"}` },
     { label: "GitHub stable sync", ok: githubSync.ok && ["already-synced", "fast-forward-ready"].includes(githubSync.state), detail: githubSync.message },
     { label: "Source reconciliation", ok: !sourceReconciliationPending, detail: sourceReconciliationPending ? `${sourceReconciliationPending.status}: ${sourceReconciliationPending.reasonCode}` : "No pending source reconciliation" },
     { label: "Candidate finalization", ok: true, detail: pendingFinalization ? `${pendingFinalization.wishlistId || "candidate"}: ${pendingFinalization.stage || "pending"}${pendingFinalization.commit ? ` ${shortSha(pendingFinalization.commit)}` : ""}` : "No pending finalization" },
@@ -1616,6 +1832,7 @@ async function getStatus() {
     candidateUpdate,
     mainVersion,
     githubSync,
+    desktopApp,
     sourceReconciliationPending,
     pendingFinalization,
     models: { a: modelsA, b: modelsB, implementation: implementationModel },
@@ -2258,6 +2475,8 @@ async function handle(request, response) {
       "/api/update/launch-candidate",
       "/api/update/reject",
       "/api/update/stop-candidate",
+      "/api/desktop-app/promote",
+      "/api/desktop-app/rebuild",
       "/api/github-sync",
       "/api/relay/pause",
       "/api/quit",
@@ -2274,6 +2493,17 @@ async function handle(request, response) {
     if (url.pathname === "/api/github-sync") {
       const result = await runGithubSync(input);
       return send(response, 200, { ok: true, result });
+    }
+
+    if (url.pathname === "/api/desktop-app/promote") {
+      const result = await refreshDesktopFromPassive();
+      return send(response, 200, { ok: true, result });
+    }
+
+    if (url.pathname === "/api/desktop-app/rebuild") {
+      const orchestratorState = await jsonFile(orchestratorStatePath, {});
+      const result = await startDesktopRebuild(orchestratorState);
+      return send(response, 202, { ok: true, result });
     }
 
     if (url.pathname === "/api/wishlist") {

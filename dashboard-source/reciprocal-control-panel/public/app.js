@@ -3,6 +3,7 @@ import { buildOverview } from "./overview-state.js";
 const token = document.querySelector('meta[name="control-token"]').content;
 const state = { data: null, filter: "open", busy: false, revision: "", dirtyModelRoles: new Set() };
 let githubSyncPollTimer = null;
+let desktopAppPollTimer = null;
 const $ = (selector) => document.querySelector(selector);
 const $$ = (selector) => [...document.querySelectorAll(selector)];
 const escapeHtml = (value = "") => String(value).replace(/[&<>'"]/g, (char) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", "'": "&#39;", '"': "&quot;" })[char]);
@@ -86,6 +87,7 @@ function render(data, audit) {
   renderDrift(data);
   renderMainVersion(data.mainVersion, relay);
   renderGithubSync(data.githubSync);
+  renderDesktopApp(data.desktopApp);
   renderReviewNote(data.candidateUpdate?.reviewNote);
   renderUpdateGate(data.candidateUpdate, data.runtimes);
   renderVersions(data);
@@ -327,6 +329,48 @@ function renderGithubSync(sync) {
     : sync.disabledReason || sync.message || "Verified stable cannot be synced right now";
 }
 
+function renderDesktopApp(app) {
+  if (!app) return;
+  const stateChip = $("#desktop-app-state");
+  const rebuildStatus = app.rebuild?.status || "idle";
+  const running = rebuildStatus === "running";
+  stateChip.classList.toggle("warn", Boolean(app.appBehindPassive || running));
+  stateChip.classList.toggle("bad", Boolean(app.lockReport || rebuildStatus === "failed"));
+  stateChip.textContent = app.lockReport
+    ? "Close app"
+    : running
+      ? "Rebuilding"
+      : app.appBehindPassive
+        ? "Behind"
+        : rebuildStatus === "failed"
+          ? "Rebuild failed"
+          : "Current";
+  $("#desktop-app-current").textContent = app.current?.sourceShortSha || "missing";
+  $("#desktop-app-passive").textContent = app.passive?.sourceShortSha || "missing";
+  $("#desktop-app-stable").textContent = app.stable?.sourceShortSha || "missing";
+  $("#desktop-app-rebuild-state").textContent = rebuildStatus;
+  $("#desktop-app-summary").textContent = app.appBehindPassive
+    ? `Desktop app ${app.current?.sourceShortSha || "missing"} is behind last verified build ${app.passive?.sourceShortSha || "missing"}.`
+    : app.passive?.exists
+      ? `Desktop app matches the last verified build ${app.passive?.sourceShortSha || "unknown"}.`
+      : "No verified passive build is available to promote yet.";
+  const message = app.rebuild?.status === "failed" && app.rebuild?.outputTail
+    ? `Full rebuild failed: ${app.rebuild.outputTail}`
+    : app.promoteDisabledReason || app.rebuildDisabledReason || app.rebuild?.message || "Refresh from last verified build is the default; full rebuild is for source ahead of the last verified cycle.";
+  $("#desktop-app-message").textContent = message;
+  const promote = $("#desktop-app-promote");
+  promote.disabled = state.busy || running || !app.canPromote;
+  promote.title = app.canPromote ? "Copy the verified passive runtime into release/win-unpacked" : app.promoteDisabledReason || "Cannot refresh right now";
+  const rebuild = $("#desktop-app-rebuild");
+  rebuild.disabled = state.busy || !app.canRebuild;
+  rebuild.title = app.canRebuild ? "Run npm run dist:app in the background" : app.rebuildDisabledReason || "Cannot rebuild right now";
+  if (running && !desktopAppPollTimer) desktopAppPollTimer = setInterval(() => refresh(true, true), 1200);
+  if (!running && desktopAppPollTimer) {
+    clearInterval(desktopAppPollTimer);
+    desktopAppPollTimer = null;
+  }
+}
+
 function renderVersions(data) {
   const cards = [
     { title: "Copy A", subtitle: "Passive B test target", value: data.worktrees.a },
@@ -522,6 +566,20 @@ async function githubSyncAction() {
   }
 }
 
+async function desktopAppAction(path, success) {
+  if (state.busy) return;
+  state.busy = true;
+  try {
+    const payload = await api(path, { method: "POST", body: JSON.stringify({}) });
+    toast(payload.result?.status === "running" ? "Desktop app rebuild started" : success);
+    await refresh(true, true);
+  } catch (error) {
+    setAlert(error.message);
+  } finally {
+    state.busy = false;
+  }
+}
+
 function renderApprovalFlow(flow) {
   const panel = $("#approval-progress");
   if (!flow || (!flow.active && !flow.status)) {
@@ -569,6 +627,8 @@ $("#review-note-dismiss").addEventListener("click", async () => {
 $("#stop-candidate").addEventListener("click", () => updateAction("/api/update/stop-candidate", "Candidate preview stopped"));
 $("#github-sync-button").addEventListener("click", githubSyncAction);
 $("#approve-backup").addEventListener("click", githubSyncAction);
+$("#desktop-app-promote").addEventListener("click", () => desktopAppAction("/api/desktop-app/promote", "Desktop app refreshed from last verified build"));
+$("#desktop-app-rebuild").addEventListener("click", () => desktopAppAction("/api/desktop-app/rebuild", "Desktop app rebuild started"));
 $("#approval-cancel").addEventListener("click", async () => {
   try {
     await api("/api/update/approve/cancel", { method: "POST", body: JSON.stringify({}) });
