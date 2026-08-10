@@ -293,6 +293,7 @@ export function App({ config: initialConfig, env, cwd, initialError }: { config:
         agents,
         goals: activeGoals,
         history: history.text,
+        projectInstructions: currentProjectInstructions,
         diffProvider: diffTracker,
         verificationRunner: createVerificationRunner({
           cwd,

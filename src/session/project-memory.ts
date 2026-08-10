@@ -9,7 +9,7 @@ export interface ProjectInstructions {
   truncated: boolean;
 }
 
-export const PROJECT_INSTRUCTION_FILES = ["TANDEM.md", "AGENTS.md", "CLAUDE.md"] as const;
+export const PROJECT_INSTRUCTION_FILES = ["TANDEM.md", "AGENTS.md", "CLAUDE.md", "MV_INSTRUCTION.md"] as const;
 const PROJECT_INSTRUCTION_CHAR_LIMIT = 8000;
 const NOTE_TEXT_LIMIT = 300;
 
@@ -30,6 +30,7 @@ function instructionRoots(cwd: string): string[] {
 export async function readProjectInstructions(cwd: string, limit = PROJECT_INSTRUCTION_CHAR_LIMIT): Promise<ProjectInstructions | undefined> {
   const roots = instructionRoots(cwd);
   const primaryRoot = roots[0];
+  const found: ProjectInstructions[] = [];
   for (const root of roots) {
     for (const fileName of PROJECT_INSTRUCTION_FILES) {
       const filePath = path.join(root, fileName);
@@ -41,10 +42,17 @@ export async function readProjectInstructions(cwd: string, limit = PROJECT_INSTR
       const sourcedName = root === primaryRoot && roots.length > 1
         ? `${fileName} via TANDEM_PROJECT_INSTRUCTIONS_ROOT`
         : fileName;
-      return { fileName: sourcedName, content, chars: raw.length, truncated };
+      found.push({ fileName: sourcedName, content, chars: raw.length, truncated });
     }
   }
-  return undefined;
+  if (found.length === 0) return undefined;
+  if (found.length === 1) return found[0];
+  return {
+    fileName: found.map((item) => item.fileName).join(", "),
+    content: found.map((item) => `## ${item.fileName}\n${item.content}`).join("\n\n"),
+    chars: found.reduce((total, item) => total + item.chars, 0),
+    truncated: found.some((item) => item.truncated)
+  };
 }
 
 export function formatProjectInstructions(instructions: ProjectInstructions | undefined): string {

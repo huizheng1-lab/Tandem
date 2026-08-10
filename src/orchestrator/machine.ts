@@ -21,6 +21,7 @@ import { VerificationRunner, VerificationResult } from "./verification.js";
 import type { ResolvedEnvironment } from "../environment/types.js";
 import { DurableAwaitSuspendedError, resumeBackgroundAwait, waitForDurableAwait } from "./await.js";
 import { inventoryWorkspace, type WorkspaceInventory } from "./inventory.js";
+import { DECISION_PRECEDENCE, regenerationDecision, regenerationNotice } from "./precedence.js";
 
 export type MachinePhase = "IDLE" | "PLANNING" | "BUILDING" | "REVIEWING" | "FEEDBACK" | "PARKED" | "TAKEOVER" | "DONE";
 export interface OrchestrationCheckpoint {
@@ -83,6 +84,7 @@ export interface RunOptions {
   confirmPlan?: (plan: BuildPlan) => Promise<boolean>;
   waitIfPaused?: () => Promise<void>;
   addSessionNote?: (text: string, by: "system") => Promise<void>;
+  projectInstructions?: () => string | Promise<string>;
   removeSessionNotesByPrefix?: (prefix: string) => Promise<void>;
   initialState?: OrchestrationCheckpoint;
   emit?: (event: MachineEvent) => void;
@@ -377,6 +379,7 @@ export async function runOrchestration(options: RunOptions): Promise<RunResult> 
   let round = options.initialState?.round ?? 0;
   let parkedAwaitId = options.initialState?.parkedAwaitId;
   let currentInventory: WorkspaceInventory | undefined;
+  let freshnessDecision = { required: false } as ReturnType<typeof regenerationDecision>;
 
   const inventory = async (reason: string): Promise<WorkspaceInventory> => {
     currentInventory = await inventoryWorkspace(options.cwd ?? process.cwd(), plan);
@@ -402,6 +405,18 @@ export async function runOrchestration(options: RunOptions): Promise<RunResult> 
     deviationsFromPlan: ["Worker regeneration was skipped because the current workspace inventory satisfies every acceptance criterion; existing artifacts still require plan verification."],
     workspaceInventory: snapshot
   });
+
+  const resolveFreshnessDecision = async () => {
+    const instructions = (await options.projectInstructions?.()) ?? "";
+    const planText = [plan?.objective ?? "", ...(plan?.constraints ?? []), ...(plan?.tasks.map((task) => task.description) ?? []), ...(plan?.acceptanceCriteria ?? [])].join("\n");
+    freshnessDecision = regenerationDecision(options.request, instructions, planText);
+    const notice = regenerationNotice(freshnessDecision);
+    if (notice) emit({ type: "notice", message: notice });
+  };
+  const recordFreshnessDecision = (report: CompletionReport): CompletionReport => {
+    const notice = regenerationNotice(freshnessDecision);
+    return notice ? { ...report, deviationsFromPlan: [...report.deviationsFromPlan, notice] } : report;
+  };
 
   const emitCheckpoint = () => {
     emit({
@@ -519,6 +534,10 @@ export async function runOrchestration(options: RunOptions): Promise<RunResult> 
     emitCheckpoint();
     return { phase: "DONE", summary: "Session already completed.", plan, reports, verdicts, takeover: false };
   }
+
+  await resolveFreshnessDecision();
+  emit({ type: "notice", message: `Decision precedence: ${DECISION_PRECEDENCE}` });
+  await options.addSessionNote?.(`Decision precedence: ${DECISION_PRECEDENCE}`, "system");
 
   // Inventory after planning and before every resumed/build round. This is evidence for
   // deciding what to reuse; artifact validators and plan verification remain authoritative.
@@ -688,14 +707,14 @@ export async function runOrchestration(options: RunOptions): Promise<RunResult> 
             syntheticCarryReport(stream, previousReportsByStream.get(stream.id))
         }));
 
-      const reusable = currentRound === 1 && currentInventory && plan.acceptanceCriteria.length > 0 &&
+      const reusable = !freshnessDecision.required && currentRound === 1 && currentInventory && plan.acceptanceCriteria.length > 0 &&
         plan.acceptanceCriteria.every((criterion) => currentInventory?.satisfiedCriteria.includes(criterion));
       if (reusable) {
         emit({ type: "notice", message: "All acceptance criteria are satisfied by stable existing artifacts; skipping regeneration and finalizing." });
         report = reusableReport(currentInventory);
         try {
           const authoritative = await attachAuthoritativeVerification(report);
-          report = await attachInventory(authoritative.report);
+          report = recordFreshnessDecision(await attachInventory(authoritative.report));
           validateCompletionReport(plan, report, plan.verification, {
             enforceCommandEcho: !authoritative.ran,
             enforceCompleteVerification: !authoritative.ran

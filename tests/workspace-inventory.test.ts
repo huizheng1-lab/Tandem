@@ -66,4 +66,42 @@ describe("workspace inventory and resume", () => {
       await rm(cwd, { recursive: true, force: true });
     }
   });
+
+  it("regenerates when the user explicitly requests it, even if inventory is satisfied", async () => {
+    const cwd = await mkdtemp(path.join(tmpdir(), "tandem-regenerate-request-"));
+    try {
+      await mkdir(path.join(cwd, "work"));
+      await writeFile(path.join(cwd, "work", "existing.txt"), "complete");
+      let builds = 0;
+      const report: CompletionReport = { status: "complete", summary: "rebuilt", taskResults: [{ id: "T1", status: "done" }], filesChanged: [], verificationResults: [], deviationsFromPlan: [] };
+      const result = await runOrchestration({
+        cwd, request: "regenerate the output", config: { maxReviewRounds: 1, maxParallelWorkers: 1 },
+        agents: { plan: async () => ({ kind: "plan" as const, plan }), build: async () => { builds += 1; return report; }, review: async () => verdict, takeover: async () => ({ report, userSummary: "takeover" }) }
+      });
+      expect(result.phase).toBe("DONE");
+      expect(builds).toBe(1);
+      expect(result.reports[0]?.deviationsFromPlan.join(" ")).toContain("reuse was bypassed");
+    } finally {
+      await rm(cwd, { recursive: true, force: true });
+    }
+  });
+
+  it("regenerates when a project instruction requires fresh output", async () => {
+    const cwd = await mkdtemp(path.join(tmpdir(), "tandem-regenerate-instruction-"));
+    try {
+      await mkdir(path.join(cwd, "work"));
+      await writeFile(path.join(cwd, "work", "existing.txt"), "complete");
+      let builds = 0;
+      const report: CompletionReport = { status: "complete", summary: "rebuilt", taskResults: [{ id: "T1", status: "done" }], filesChanged: [], verificationResults: [], deviationsFromPlan: [] };
+      const result = await runOrchestration({
+        cwd, request: "build", projectInstructions: async () => "Generate everything fresh; do not reuse clips.", config: { maxReviewRounds: 1, maxParallelWorkers: 1 },
+        agents: { plan: async () => ({ kind: "plan" as const, plan }), build: async () => { builds += 1; return report; }, review: async () => verdict, takeover: async () => ({ report, userSummary: "takeover" }) }
+      });
+      expect(result.phase).toBe("DONE");
+      expect(builds).toBe(1);
+      expect(result.reports[0]?.deviationsFromPlan.join(" ")).toContain("reuse was bypassed");
+    } finally {
+      await rm(cwd, { recursive: true, force: true });
+    }
+  });
 });
