@@ -15,6 +15,7 @@ import {
   validateServiceStartAttempt,
   validateStreamFileOwnership
 } from "../src/orchestrator/artifacts.js";
+import { validateDerivedArtifactProvenance } from "../src/orchestrator/provenance.js";
 
 const plan: BuildPlan = {
   title: "Demo",
@@ -26,6 +27,53 @@ const plan: BuildPlan = {
 };
 
 describe("artifacts", () => {
+  const provenance = (overrides: Partial<import("../src/orchestrator/provenance.js").DerivedArtifactProvenance> = {}) => ({
+    artifactId: "subtitles",
+    sourceDuration: 100,
+    measuredDuration: 90,
+    measuredFraction: 0.9,
+    measuredSpanEnd: 90,
+    artifactSpanEnd: 90,
+    entries: [
+      { status: "measured" as const, distanceFromNearestMeasuredBoundary: 0 },
+      { status: "interpolated" as const, distanceFromNearestMeasuredBoundary: 1.2 }
+    ],
+    shortfall: "10 seconds were not measured and remain absent.",
+    ...overrides
+  });
+
+  it("records measured extent and interpolation distance for derived entries", () => {
+    const artifact = provenance();
+    expect(artifact.measuredDuration).toBe(90);
+    expect(artifact.measuredFraction).toBe(0.9);
+    expect(artifact.entries[1]).toMatchObject({ status: "interpolated", distanceFromNearestMeasuredBoundary: 1.2 });
+  });
+
+  it("fails insufficient measured coverage and passes sufficient evidence", () => {
+    const assertion = { artifactId: "subtitles", minMeasuredCoverageFraction: 0.8 };
+    expect(validateDerivedArtifactProvenance(provenance({ measuredDuration: 55, measuredFraction: 0.55 }), assertion)).not.toEqual([]);
+    expect(validateDerivedArtifactProvenance(provenance(), assertion)).toEqual([]);
+  });
+
+  it("rejects an undeclared material extension beyond measured evidence", () => {
+    expect(() => validateCompletionReport(
+      { ...plan, provenanceAssertions: [{ artifactId: "subtitles" }] },
+      { ...verifierReport([]), derivedArtifacts: [provenance({ artifactSpanEnd: 100, shortfall: undefined })] }
+    )).toThrow(/shortfall/);
+  });
+
+  it("allows declared interpolation within the plan threshold", () => {
+    expect(validateDerivedArtifactProvenance(provenance(), { artifactId: "subtitles", maxInterpolatedEntryFraction: 0.5 })).toEqual([]);
+  });
+
+  it("surfaces an underperforming measurement in the completion summary", () => {
+    const report = validateCompletionReport(
+      { ...plan, provenanceAssertions: [{ artifactId: "subtitles" }] },
+      { ...verifierReport([]), derivedArtifacts: [provenance()] }
+    );
+    expect(report.summary).toContain("90.0% of the 100.000s source");
+  });
+
   it("rejects a repeated report as not a genuine retry when it adds no evidence", () => {
     const first = verifierReport(["npm test"]);
     const repeated = { ...first, summary: "same claim, reworded" };

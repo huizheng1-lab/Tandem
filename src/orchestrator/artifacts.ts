@@ -4,6 +4,8 @@ import { readFile } from "node:fs/promises";
 import { resolveOnPath } from "../tools/resolve-on-path.js";
 import { sanitizePromptValue } from "../tools/sanitize.js";
 import type { WorkspaceInventory } from "./inventory.js";
+import { DerivedArtifactProvenanceSchema, ProvenanceAssertionSchema, validateDerivedArtifactProvenance, provenanceShortfall } from "./provenance.js";
+import type { DerivedArtifactProvenance } from "./provenance.js";
 
 export const BuildPlanSchema = z.object({
   title: z.string(),
@@ -23,6 +25,7 @@ export const BuildPlanSchema = z.object({
   ),
   acceptanceCriteria: z.array(z.string()),
   verification: z.array(z.string()),
+  provenanceAssertions: z.array(ProvenanceAssertionSchema).optional(),
   // D54: optional per-stream verification subset. Each worker runs only its own stream's
   // commands (verbatim-echo contract). The full plan-level verification is run by the leader
   // during review. Single-stream plans ignore this map (the worker runs plan.verification).
@@ -130,6 +133,7 @@ export const CompletionReportSchema = z.object({
     })
   ),
   deviationsFromPlan: z.array(z.string()),
+  derivedArtifacts: z.array(DerivedArtifactProvenanceSchema).optional(),
   // A filesystem snapshot captured by the orchestrator, never supplied as proof of correctness.
   workspaceInventory: z.custom<WorkspaceInventory>().optional(),
   reciprocalArtifact: z
@@ -149,6 +153,9 @@ export const CompletionReportSchema = z.object({
     .optional()
 });
 export type CompletionReport = z.infer<typeof CompletionReportSchema>;
+
+export { DerivedArtifactProvenanceSchema, ProvenanceAssertionSchema, validateDerivedArtifactProvenance } from "./provenance.js";
+export type { DerivedArtifactProvenance } from "./provenance.js";
 
 export const ReviewVerdictSchema = z
   .object({
@@ -757,10 +764,27 @@ export function validateCompletionReport(
   expectedCommands: string[] = plan.verification,
   options?: { enforceCommandEcho?: boolean; enforceCompleteVerification?: boolean }
 ): CompletionReport {
-  const report = reconcileCapabilityAbsenceClaims(plan, sanitizePromptValue(CompletionReportSchema.parse(value)));
+  let report = reconcileCapabilityAbsenceClaims(plan, sanitizePromptValue(CompletionReportSchema.parse(value)));
   enforceVerification(plan, report, expectedCommands, options);
   const evidenceErrors = [...validateCapabilityAbsenceClaims(plan, report), ...validateServiceStartAttempt(plan, report)];
+  const artifacts = report.derivedArtifacts ?? [];
+  for (const assertion of plan.provenanceAssertions ?? []) {
+    const artifact = artifacts.find((candidate) => candidate.artifactId === assertion.artifactId);
+    if (!artifact) {
+      evidenceErrors.push(`derived artifact "${assertion.artifactId}" is missing required provenance`);
+      continue;
+    }
+    evidenceErrors.push(...validateDerivedArtifactProvenance(artifact, assertion));
+  }
+  if (artifacts.some((artifact) => artifact.measuredDuration < artifact.sourceDuration && !artifact.shortfall)) {
+    // A shortfall is useful report data, but must not be silently hidden in a full-span artifact.
+    evidenceErrors.push(...artifacts.filter((artifact) => artifact.measuredDuration < artifact.sourceDuration).map((artifact) => `derived artifact "${artifact.artifactId}" reports a source shortfall: ${provenanceShortfall(artifact)}`));
+  }
   if (evidenceErrors.length > 0) throw new Error(evidenceErrors.join(" "));
+  const shortfalls = artifacts
+    .filter((artifact) => artifact.measuredDuration < artifact.sourceDuration)
+    .map((artifact) => `Derived artifact ${artifact.artifactId}: ${provenanceShortfall(artifact)}.`);
+  if (shortfalls.length > 0) report = { ...report, summary: `${report.summary} ${shortfalls.join(" ")}` };
   return report;
 }
 
@@ -797,6 +821,7 @@ export function mergeCompletionReports(
     (entry) => entry.report.verificationResults
   );
   const deviationsFromPlan: string[] = reports.flatMap((entry) => entry.report.deviationsFromPlan);
+  const derivedArtifacts = reports.flatMap((entry) => entry.report.derivedArtifacts ?? []);
   const status: CompletionReport["status"] = reports.every((entry) => entry.report.status === "complete")
     ? "complete"
     : "blocked";
@@ -809,6 +834,7 @@ export function mergeCompletionReports(
     taskResults: allTaskResults,
     filesChanged,
     verificationResults,
-    deviationsFromPlan
+    deviationsFromPlan,
+    ...(derivedArtifacts.length > 0 ? { derivedArtifacts } : {})
   };
 }
