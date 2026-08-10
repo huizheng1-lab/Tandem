@@ -1,0 +1,25 @@
+D223 done
+
+Round: D223
+Implementation commit:
+- b5a318bc48b7ff8cc0e697d764c466258c9fe99e D223-1 isolate test and executor Tandem homes
+
+Summary:
+- Added a test-only real-home guard in tandemStateDir so code under test fails fast if it resolves the real ~/.tandem while TANDEM_TEST_REAL_HOME_GUARD=1.
+- Changed the Vitest suite setup to force TANDEM_HOME to a temp directory instead of byte-snapshotting the real ~/.tandem, making the guard immune to external Tandem writers.
+- Added regression coverage proving suite code resolves the temp Tandem home, external writes to real ~/.tandem do not affect the suite, and real-home resolution fails under the guard.
+- Verified reciprocal executor launch keeps TANDEM_HOME isolated under the reciprocal relay state directory and writes its marker there, with no matching marker in the real ~/.tandem.
+- Confirmed executor A was running from C:\Users\huizh\Apps\Tandem Reciprocal\runtimes\executor-a\Tandem.exe with isolated user data at C:\Users\huizh\Apps\Tandem Reciprocal\user-data\executor-a during full-suite verification.
+
+Verification:
+- npx vitest run tests/tandem-home-isolation.test.ts --configLoader runner: passed, 3 tests.
+- npx vitest run tests/reciprocal-setup-script.test.ts --configLoader runner --reporter verbose: passed, 2 tests.
+- npx vitest run tests/config.test.ts tests/session-search.test.ts --configLoader runner: passed, 47 tests.
+- npx vitest run tests/tandem-home-isolation.test.ts tests/reciprocal-setup-script.test.ts --configLoader runner: passed, 5 tests.
+- npm run typecheck: passed.
+- git diff --check: passed.
+- npm test with executor A running, run 1: passed, 64 files passed / 2 skipped; 728 tests passed / 43 skipped; duration about 198.76s.
+- npm test with executor A running, run 2: passed, 64 files passed / 2 skipped; 728 tests passed / 43 skipped; duration about 192.58s.
+- npm test with executor A running, run 3: passed, 64 files passed / 2 skipped; 728 tests passed / 43 skipped; duration about 189.49s.
+- npm test with executor A running, run 4: passed, 64 files passed / 2 skipped; 728 tests passed / 43 skipped; duration about 195.17s.
+- npm test with executor A running, run 5: passed, 64 files passed / 2 skipped; 728 tests passed / 43 skipped; duration about 190.77s.
