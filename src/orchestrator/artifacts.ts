@@ -572,7 +572,7 @@ function detectVerificationScriptTampering(plan: BuildPlan, report: CompletionRe
   return missing;
 }
 
-const capabilityAbsencePattern = /\b(?:absent|unavailable|not\s+(?:installed|found|present|available|usable)|does\s+not\s+exist|cannot\s+(?:run|start|be\s+used)|can't\s+(?:run|start|be\s+used)|missing)\b/i;
+const capabilityAbsencePattern = /\b(?:absent|unavailable|not\s+(?:installed|found|present|available|usable)|does\s+not\s+exist|cannot\s+(?:run|start|be\s+used)|can't\s+(?:run|start|be\s+used)|missing|removed|deleted|gone|no\s+longer\s+(?:present|available)|nonexistent|broken|points\s+to\s+(?:a\s+)?(?:removed|nonexistent)\s+path)\b/i;
 const explicitCheckPattern = /(?:exact\s+(?:command|tool\s+call)|(?:ran|running|executed|called|tested|checked|verified)\b|(?:command|tool\s+call)\s*[:=]|returned\s+(?:no|an?\s+error|exit)|test-path|read_file|glob|grep|bash|\bversion\b|\s-[a-z][\w-]*)/i;
 const capabilityEvidenceStopWords = new Set([
   "about", "after", "before", "being", "could", "does", "from", "into", "just", "made", "missing",
@@ -665,13 +665,25 @@ function successfulInvocationEvidence(result: CompletionReport["verificationResu
 export function validateRecordedCapabilityContradictions(plan: BuildPlan, report: CompletionReport): string[] {
   const planText = [plan.objective, ...plan.tasks.map((task) => task.description), ...plan.acceptanceCriteria].join(" ");
   const reportText = [report.summary, ...report.taskResults.map((task) => task.notes ?? ""), ...report.deviationsFromPlan].join(" ");
-  if (!capabilityAbsencePattern.test(reportText) || !/\b(?:tool|model|runtime|service|server|comfyui|stack|capabilit|installed|executable|port)\b/i.test(`${planText} ${reportText}`)) return [];
-  const subjectTerms = new Set([...capabilitySubjectTerms(planText), ...capabilityEvidenceTerms(reportText)]);
+  const hasCapabilityAbsenceClaim = capabilityAbsencePattern.test(reportText)
+    && /\b(?:tool|model|runtime|service|server|comfyui|stack|capabilit|installed|executable|port)\b/i.test(`${planText} ${reportText}`);
+  // A blocked report is terminal and, by definition, has not satisfied the plan's
+  // acceptance criteria. Do not make this second safety net depend on the agent's
+  // choice of blocker vocabulary: the subject match below remains the required
+  // narrowness boundary.
+  if (!hasCapabilityAbsenceClaim && report.status !== "blocked") return [];
+  const subjectTerms = hasCapabilityAbsenceClaim
+    ? new Set([...capabilitySubjectTerms(planText), ...capabilityEvidenceTerms(reportText)])
+    : capabilitySubjectTerms(planText);
   const contradictions = report.verificationResults
     .filter(successfulInvocationEvidence)
     .filter((result) => [...capabilityEvidenceTerms(result.command)].some((term) => subjectTerms.has(term)))
     .map((result) => `Capability blocker contradicted by successful invocation of the same subject: ${truncateDiagnostic(`${result.command} -> ${result.output}`)}`);
-  return contradictions.length > 0 ? contradictions : [];
+  return contradictions.length > 0 ? contradictions.map((diagnostic) =>
+    report.status === "blocked" && !hasCapabilityAbsenceClaim
+      ? diagnostic.replace("Capability blocker contradicted", "Terminal unsatisfied report contradicted")
+      : diagnostic
+  ) : [];
 }
 
 export interface AuthoredFileContent {

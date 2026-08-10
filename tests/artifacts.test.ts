@@ -101,6 +101,34 @@ describe("artifacts", () => {
     expect(() => validateCompletionReport(absencePlan, report)).toThrow(/python -V.*Python 3\.10\.9/);
   });
 
+  it.each(["removed", "deleted", "gone", "no longer present", "nonexistent"])(
+    "catches a capability blocker phrased %s",
+    (wording) => {
+      const absencePlan = { ...plan, objective: "Check whether python runtime is installed" };
+      const report = verifierReport(["npm test"]);
+      report.summary = `ComfyUI's launcher points to a ${wording} Python runtime`;
+      report.verificationResults.push({ command: "python -V", passed: true, output: "Python 3.10.9" });
+      expect(() => validateCompletionReport(absencePlan, report)).toThrow(/python -V.*Python 3\.10\.9/);
+    }
+  );
+
+  it("catches a blocked unsatisfied report even without absence vocabulary", () => {
+    const absencePlan = { ...plan, objective: "Check whether python runtime is installed" };
+    const report = verifierReport(["npm test"]);
+    report.status = "blocked";
+    report.summary = "The next scene could not be generated.";
+    report.verificationResults.push({ command: "python -V", passed: true, output: "Python 3.10.9" });
+    expect(() => validateCompletionReport(absencePlan, report)).toThrow(/Terminal unsatisfied report contradicted.*python -V/);
+  });
+
+  it("does not flag an ordinary successful report or an unrelated passing command", () => {
+    const absencePlan = { ...plan, objective: "Check whether ComfyUI is installed" };
+    const report = verifierReport(["npm test"]);
+    report.summary = "The generation output is complete.";
+    report.verificationResults.push({ command: "python -V", passed: true, output: "Python 3.10.9" });
+    expect(validateRecordedCapabilityContradictions(absencePlan, report)).toEqual([]);
+  });
+
   it("does not treat a failed probe as a successful invocation", () => {
     const absencePlan = { ...plan, objective: "Check whether python runtime is installed" };
     const report = verifierReport(["npm test"]);
