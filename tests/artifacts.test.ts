@@ -155,7 +155,7 @@ describe("artifacts", () => {
   const verifierReport = (
     filesChanged: string[],
     deviationsFromPlan: string[] = [],
-    verificationCommand = "node verify_v3.mjs",
+    verificationCommand = "npm test",
     derivedArtifacts?: CompletionReport["derivedArtifacts"]
   ): CompletionReport => ({
     status: "complete",
@@ -174,12 +174,12 @@ describe("artifacts", () => {
       verification: ["node verify_v3.mjs"]
     };
     await expect(validateBuildPlan(declaredPlan)).resolves.toBeDefined();
-    expect(() => validateCompletionReport(declaredPlan, verifierReport(["verify_v3.mjs"]))).not.toThrow();
+    expect(() => validateCompletionReport(declaredPlan, verifierReport(["verify_v3.mjs"], [], "node verify_v3.mjs"))).not.toThrow();
   });
 
   it("fails closed when a verification script edit is not declared", () => {
     const undeclaredPlan: BuildPlan = { ...plan, verification: ["node verify_v3.mjs"] };
-    expect(() => validateCompletionReport(undeclaredPlan, verifierReport(["verify_v3.mjs"]))).toThrow(
+    expect(() => validateCompletionReport(undeclaredPlan, verifierReport(["verify_v3.mjs"], [], "node verify_v3.mjs"))).toThrow(
       /Verification script edited without disclosure: verify_v3\.mjs/
     );
   });
@@ -188,7 +188,7 @@ describe("artifacts", () => {
     // Normal orchestration rejects this plan earlier; this direct call covers the remaining
     // boundary where a legacy/restored caller reaches report validation without plan validation.
     const legacyPlan: BuildPlan = { ...plan, verification: ["node verify_v3.mjs"] };
-    expect(() => validateCompletionReport(legacyPlan, verifierReport(["verify_v3.mjs"]))).toThrow(
+    expect(() => validateCompletionReport(legacyPlan, verifierReport(["verify_v3.mjs"], [], "node verify_v3.mjs"))).toThrow(
       /Verification script edited without disclosure: verify_v3\.mjs/
     );
   });

@@ -223,20 +223,27 @@ async function startBackgroundProcess(ctx: ToolContext, command: string): Promis
   });
   backgroundProcesses.set(id, entry);
   registerBackgroundSweep();
-  const settled = Promise.resolve(subprocess).then((result) => {
+  // The execa promise describes the whole process lifetime, not whether the
+  // process launched. Waiting on it here turns a legitimate later non-zero
+  // exit into a false start failure and hides the id needed for lifecycle
+  // inspection. The child-process error event is the launch boundary.
+  const launchError = new Promise<unknown>((resolve) => {
+    subprocess.once("error", resolve);
+  });
+  void Promise.resolve(subprocess).then((result) => {
     entry.info.status = "exited";
     entry.info.exitCode = result.exitCode;
     entry.tracker?.stop();
-    return result;
   }, () => {
     entry.info.status = "exited";
     entry.info.exitCode = null;
     entry.tracker?.stop();
-    return undefined;
   });
-  const startup = await settleWithin(settled, BACKGROUND_START_FAILURE_GRACE_MS);
-  if (startup.status === "settled" && (startup.value === undefined || startup.value.exitCode !== 0)) {
-    const detail = tailOutput(`${entry.stdout}${entry.stderr}`) || `process exited with code ${startup.value?.exitCode ?? "unknown"}`;
+  const startup = await settleWithin(launchError, BACKGROUND_START_FAILURE_GRACE_MS);
+  if (startup.status === "settled") {
+    backgroundProcesses.delete(id);
+    entry.tracker?.stop();
+    const detail = tailOutput(`${entry.stdout}${entry.stderr}`) || String(startup.value);
     return {
       command,
       passed: false,
@@ -367,8 +374,9 @@ export async function startBackgroundProcessBridge(
     request.setEncoding("utf8");
     request.on("data", (chunk) => { body += chunk; });
     request.on("end", async () => {
+      let input: { action: BackgroundBridgeAction; id?: string; command?: string; cwd?: string } | undefined;
       try {
-        const input = JSON.parse(body) as { action: BackgroundBridgeAction; id?: string; command?: string; cwd?: string };
+        input = JSON.parse(body) as { action: BackgroundBridgeAction; id?: string; command?: string; cwd?: string };
         let result: string;
         if (input.action === "start") {
           if (requestContext?.readOnly) throw new Error("Background process start is unavailable during a read-only CLI turn.");
@@ -384,7 +392,13 @@ export async function startBackgroundProcessBridge(
         }
         response.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify({ ok: true, result }));
       } catch (error) {
-        response.writeHead(400, { "content-type": "application/json" }).end(JSON.stringify({ ok: false, error: String(error) }));
+        const detail = String(error);
+        const errorText = input?.action === "start"
+          ? detail.startsWith("Tandem background-start failure:")
+            ? detail
+            : `Tandem background-start failure: command "${input.command ?? ""}" via CLI bridge /background start returned: ${detail}`
+          : detail;
+        response.writeHead(400, { "content-type": "application/json" }).end(JSON.stringify({ ok: false, error: errorText }));
       }
     });
   });
