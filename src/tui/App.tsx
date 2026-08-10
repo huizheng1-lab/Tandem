@@ -93,7 +93,8 @@ export function App({ config: initialConfig, env, cwd, initialError }: { config:
 
   const addToolMessage = (event: ToolActivityEvent) => {
     const status = event.phase === "start" ? "running" : event.ok ? `ok ${((event.ms ?? 0) / 1000).toFixed(1)}s` : `failed ${((event.ms ?? 0) / 1000).toFixed(1)}s`;
-    addMessage("SYSTEM", `tool ${event.role} - ${event.tool}: ${event.target} - ${status}`);
+    const detail = event.phase === "end" && !event.ok ? (event.output ?? event.error) : undefined;
+    addMessage("SYSTEM", `tool ${event.role} - ${event.tool}: ${event.target} - ${status}${detail ? `\noutput: ${detail}` : ""}`);
   };
 
   const permissionBridge: PermissionBridge = {

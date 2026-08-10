@@ -5,6 +5,7 @@ import { editFileTool, listDirTool, readFileTool, ToolActivityRole, ToolContext,
 import { searchFilesTool, MAX_SEARCH_RESULTS, MAX_SEARCH_RUNTIME_MS } from "./search.js";
 import { backgroundProcessTool, bashTool } from "./shell.js";
 import { DURABLE_AWAIT_DESCRIPTION } from "../orchestrator/await.js";
+import { sanitizePromptText } from "./sanitize.js";
 
 export type ToolRole = "leader-readonly" | "worker" | "reviewer" | "takeover";
 
@@ -41,7 +42,11 @@ function wrapExecute<Input, Output>(ctx: ToolContext, role: ToolRole, toolName: 
       ctx.onToolEvent?.({ ...eventBase, phase: "end", ok: true, ms: Date.now() - started, output });
       return result;
     } catch (error) {
-      ctx.onToolEvent?.({ ...eventBase, phase: "end", ok: false, ms: Date.now() - started, error: String(error) });
+      const errorText = String(error);
+      // Keep the bounded failure detail in the event payload as well as the
+      // display-oriented error field. Session records otherwise lose the
+      // command's stderr when a bridge rejects a background start.
+      ctx.onToolEvent?.({ ...eventBase, phase: "end", ok: false, ms: Date.now() - started, error: errorText, output: sanitizePromptText(errorText).slice(-2000) });
       throw error;
     }
   };

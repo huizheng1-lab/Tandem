@@ -608,9 +608,12 @@ function successfulInvocationEvidence(result: CompletionReport["verificationResu
   if (!result.passed || !result.command.trim() || !result.output.trim()) return false;
   // A successful invocation is deliberately narrower than a positive-sounding log line:
   // the recorded command must have a successful result marker (exit code, version, path,
-  // or an explicit success verb). A failed probe with an error mentioning a version does
-  // not satisfy this predicate because passed must also be true.
-  return /\b(?:exit\s*(?:code\s*)?0|version\b|\bpath\b|(?:succeed|success|successful|works?)\b|returned\s+(?:true|ok)|true\b)/i.test(result.output);
+  // or an explicit success verb). Version-flag probes may report only the version
+  // number (for example `python -V` -> `Python 3.10.9`), so the command shape is
+  // also accepted in that narrow case. A failed probe with an error mentioning a
+  // version does not satisfy this predicate because passed must also be true.
+  if (/\b(?:exit\s*(?:code\s*)?0|version\b|\bpath\b|(?:succeed|success|successful|works?)\b|returned\s+(?:true|ok)|true\b)/i.test(result.output)) return true;
+  return /(?:^|\s)(?:-v|-V|--version)(?:\s|$)/.test(result.command) && /\b\d+(?:\.\d+){1,3}\b/.test(result.output);
 }
 
 /** Reject a blocker whose named subject is contradicted by that same subject's successful probe. */

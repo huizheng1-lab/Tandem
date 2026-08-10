@@ -240,7 +240,7 @@ async function startBackgroundProcess(ctx: ToolContext, command: string): Promis
     return {
       command,
       passed: false,
-      output: `Tandem background-start failure: command "${command}" via "tandem /background start" CLI bridge returned: ${detail}`
+      output: `Tandem background-start failure: command "${command}" via CLI bridge /background start returned: ${detail}`
     };
   }
   return {
