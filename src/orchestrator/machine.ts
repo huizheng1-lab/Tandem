@@ -17,7 +17,7 @@ import {
 import { sanitizePromptValue } from "../tools/sanitize.js";
 import { VerificationRunner, VerificationResult } from "./verification.js";
 import type { ResolvedEnvironment } from "../environment/types.js";
-import { DurableAwaitSuspendedError } from "./await.js";
+import { DurableAwaitSuspendedError, resumeBackgroundAwait, waitForDurableAwait } from "./await.js";
 
 export type MachinePhase = "IDLE" | "PLANNING" | "BUILDING" | "REVIEWING" | "FEEDBACK" | "PARKED" | "TAKEOVER" | "DONE";
 export interface OrchestrationCheckpoint {
@@ -27,6 +27,7 @@ export interface OrchestrationCheckpoint {
   reports: CompletionReport[];
   verdicts: ReviewVerdict[];
   feedbackHistory: ReviewVerdict["feedback"][];
+  parkedAwaitId?: string;
 }
 
 export type MachineEvent =
@@ -65,6 +66,7 @@ export interface AgentFns {
 }
 
 export interface RunOptions {
+  cwd?: string;
   request: string;
   config: Pick<TandemConfig, "maxReviewRounds" | "maxParallelWorkers"> & Partial<Pick<TandemConfig, "permissionMode">>;
   agents: AgentFns;
@@ -366,6 +368,7 @@ export async function runOrchestration(options: RunOptions): Promise<RunResult> 
   const streamReportHistory: { streamId: string; report: CompletionReport }[][] = [];
   let phase: MachinePhase = options.initialState?.phase ?? "PLANNING";
   let round = options.initialState?.round ?? 0;
+  let parkedAwaitId = options.initialState?.parkedAwaitId;
 
   const emitCheckpoint = () => {
     emit({
@@ -376,7 +379,8 @@ export async function runOrchestration(options: RunOptions): Promise<RunResult> 
         plan,
         reports: [...reports],
         verdicts: [...verdicts],
-        feedbackHistory: [...allFeedback]
+        feedbackHistory: [...allFeedback],
+        parkedAwaitId
       }
     });
   };
@@ -481,6 +485,27 @@ export async function runOrchestration(options: RunOptions): Promise<RunResult> 
   if (phase === "DONE") {
     emitCheckpoint();
     return { phase: "DONE", summary: "Session already completed.", plan, reports, verdicts, takeover: false };
+  }
+
+  // PARKED is resumable state, never a terminal state. The host may call this function
+  // again after its durable-await observer wakes it, or after an orchestrator restart.
+  if (phase === "PARKED") {
+    if (!parkedAwaitId) throw new Error("Parked round is missing its durable await id and cannot be resumed.");
+    const resumed = await resumeBackgroundAwait(options.cwd ?? process.cwd(), parkedAwaitId);
+    if (resumed.status === "suspended") {
+      const summary = `Round parked on ${resumed.processId} until ${resumed.deadlineAt}; waiting consumes no review round.`;
+      emit({ type: "notice", message: summary });
+      return { phase: "PARKED", summary, plan, reports, verdicts, takeover: false, parkedAwaitId };
+    }
+    parkedAwaitId = undefined;
+    phase = "BUILDING";
+    emit({
+      type: "notice",
+      message: resumed.status === "timed_out"
+        ? `Background process await timed out at ${resumed.resumedAt}; the work was not classified as failed.`
+        : `Background process ${resumed.processId} exited; resuming the parked round.`
+    });
+    emitCheckpoint();
   }
 
   const runTakeover = async (message: string): Promise<RunResult> => {
@@ -666,6 +691,7 @@ export async function runOrchestration(options: RunOptions): Promise<RunResult> 
           });
         } catch (error) {
           if (error instanceof DurableAwaitSuspendedError) {
+            parkedAwaitId = error.record.id;
             transition("PARKED", `round ${currentRound} parked until ${error.record.deadlineAt}`, currentRound);
             emit({ type: "notice", message: `Round parked on ${error.record.processId}; waiting consumes no review round or agent budget.` });
             return { phase: "PARKED", summary: `Round parked on ${error.record.processId} until ${error.record.deadlineAt}.`, plan, reports, verdicts, takeover: false, parkedAwaitId: error.record.id };
@@ -745,4 +771,29 @@ export async function runOrchestration(options: RunOptions): Promise<RunResult> 
   }
 
   return runTakeover("round limit exhausted; leader takeover");
+}
+
+/**
+ * Host-facing durable runner. A parked result is not reported as completion: the host
+ * waits on the file-backed condition and invokes the machine again with its checkpoint.
+ * The observer uses timers and process/file state only, so no agent tool call or review
+ * round is spent while the background job is running; the await directory is sufficient
+ * to recover after this process is restarted.
+ */
+export async function runOrchestrationDurably(options: RunOptions): Promise<RunResult> {
+  let initialState = options.initialState;
+  while (true) {
+    const result = await runOrchestration({ ...options, initialState });
+    if (result.phase !== "PARKED" || !result.parkedAwaitId) return result;
+    const resumed = await waitForDurableAwait(options.cwd ?? process.cwd(), result.parkedAwaitId);
+    initialState = {
+      phase: "PARKED",
+      round: initialState?.round ?? 1,
+      plan: result.plan,
+      reports: result.reports,
+      verdicts: result.verdicts,
+      feedbackHistory: initialState?.feedbackHistory ?? [],
+      parkedAwaitId: resumed.id
+    };
+  }
 }

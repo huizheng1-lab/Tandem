@@ -21,7 +21,7 @@ import { SessionStore, listSessions } from "../session/store.js";
 import { createLiveAgents, suggestGoalProgressNotes } from "../agents/live.js";
 import { locateCodexCli } from "../agents/codex-cli/locate.js";
 import { locateClaudeCli } from "../agents/claude-code-cli/locate.js";
-import { runOrchestration, MachineEvent, OrchestrationCheckpoint } from "../orchestrator/machine.js";
+import { runOrchestrationDurably, MachineEvent, OrchestrationCheckpoint } from "../orchestrator/machine.js";
 import { BuildPlan, CompletionReport, ReviewVerdict } from "../orchestrator/artifacts.js";
 import { createDiffTracker } from "../orchestrator/diff.js";
 import { createVerificationRunner } from "../orchestrator/verification.js";
@@ -285,8 +285,9 @@ export function App({ config: initialConfig, env, cwd, initialError }: { config:
         onTriage: (kind) => handleEvent({ type: "notice", message: `triage: ${kind}` }),
         confirmCodexWrite: (_role, message) => permissionBridge.approve({ action: "bash", target: message })
       });
-      const result = await runOrchestration({
+      const result = await runOrchestrationDurably({
         request: prompt,
+        cwd,
         config,
         agents,
         goals: activeGoals,

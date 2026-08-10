@@ -111,4 +111,28 @@ export async function resumeBackgroundAwait(cwd: string, id: string): Promise<Du
   return resumed;
 }
 
+/** Observe a persisted await without consuming an agent turn. */
+export async function waitForDurableAwait(
+  cwd: string,
+  id: string,
+  options: { pollMs?: number; signal?: AbortSignal } = {}
+): Promise<DurableAwaitRecord> {
+  const pollMs = Math.max(25, options.pollMs ?? 1000);
+  while (true) {
+    const record = await resumeBackgroundAwait(cwd, id);
+    if (record.status !== "suspended") return record;
+    if (options.signal?.aborted) throw new Error("Durable await observer aborted.");
+    await new Promise<void>((resolve, reject) => {
+      const timer = setTimeout(resolve, pollMs);
+      const abort = () => {
+        clearTimeout(timer);
+        reject(new Error("Durable await observer aborted."));
+      };
+      options.signal?.addEventListener("abort", abort, { once: true });
+      const cleanup = () => options.signal?.removeEventListener("abort", abort);
+      if (options.signal) setTimeout(cleanup, pollMs);
+    });
+  }
+}
+
 export const DURABLE_AWAIT_DESCRIPTION = "Suspend this round until a named background process exits or the deadline expires. Waiting consumes no tool calls, tokens, wall-clock budget, or review rounds; resume restores the checkpoint, plan, tasks, and evidence.";
