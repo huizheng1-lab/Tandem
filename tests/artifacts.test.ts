@@ -38,7 +38,7 @@ describe("artifacts", () => {
       { status: "measured" as const, distanceFromNearestMeasuredBoundary: 0 },
       { status: "interpolated" as const, distanceFromNearestMeasuredBoundary: 1.2 }
     ],
-    shortfall: "10 seconds were not measured and remain absent.",
+    shortfall: "Measured evidence covers 90.0% of the 100.000s source; 10 seconds were not measured and remain absent.",
     ...overrides
   });
 
@@ -69,7 +69,7 @@ describe("artifacts", () => {
   it("surfaces an underperforming measurement in the completion summary", () => {
     const report = validateCompletionReport(
       { ...plan, provenanceAssertions: [{ artifactId: "subtitles" }] },
-      { ...verifierReport(["npm test"]), derivedArtifacts: [provenance()] }
+      verifierReport([], [], "npm test", [provenance()])
     );
     expect(report.summary).toContain("90.0% of the 100.000s source");
   });
@@ -132,13 +132,19 @@ describe("artifacts", () => {
     report.summary = "Started with runInBackground; port 8188 responded.";
     expect(validateServiceStartAttempt(servicePlan, report)).toEqual([]);
   });
-  const verifierReport = (filesChanged: string[], deviationsFromPlan: string[] = []): CompletionReport => ({
+  const verifierReport = (
+    filesChanged: string[],
+    deviationsFromPlan: string[] = [],
+    verificationCommand = "node verify_v3.mjs",
+    derivedArtifacts?: CompletionReport["derivedArtifacts"]
+  ): CompletionReport => ({
     status: "complete",
     summary: "verified",
     taskResults: [{ id: "T1", status: "done" }],
     filesChanged,
-    verificationResults: [{ command: "node verify_v3.mjs", passed: true, output: "ok" }],
-    deviationsFromPlan
+    verificationResults: [{ command: verificationCommand, passed: true, output: "ok" }],
+    deviationsFromPlan,
+    ...(derivedArtifacts ? { derivedArtifacts } : {})
   });
 
   it("allows an authored verification script when its task declares the file", async () => {
