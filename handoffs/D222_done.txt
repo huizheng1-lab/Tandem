@@ -1,0 +1,23 @@
+D222 done
+
+Round: D222
+Implementation commit:
+- 0b67d809fce9d00dcd83fad8198de0e8f560c0e2 D222 add desktop app refresh controls
+
+Summary:
+- Added dashboard status for the user's local desktop app at release/win-unpacked, the last verified passive build at release/reciprocal-passive/win-unpacked, and refs/tandem-relay/stable.
+- Added a default "Refresh from last verified build" action that copies the verified passive runtime into release/win-unpacked and stamps BUILD_INFO.json with the promoted source SHA.
+- Added a "Full rebuild" action that starts npm run dist:app in the background and reports running/succeeded/failed state plus a bounded output tail through /api/status.
+- Both actions refuse when a Tandem.exe process is running from release/win-unpacked, using scripts/windows-file-locks.ps1 Get-ExecutablePathLockHolderReport.
+- Full rebuild refuses during orchestrator packaging (phase=swapping or step=package-b). Promotion-by-copy is allowed during swap because it does not use dist/out/electron-builder intermediates, but it still respects the running desktop app lock check.
+- The new endpoints remain behind the D196 dashboard mutation allowlist. This does not reopen orchestration mutation paths: the actions are local desktop app packaging only and do not claim wishlist items, advance phases, alter stable refs, or participate in the reciprocal cycle.
+
+Regression coverage:
+- tests/desktop-app-refresh.test.ts covers passive promotion and BUILD_INFO stamping, lock-holder refusal for both actions, rebuild refusal during package-b/swap, async rebuild status and failure tail through /api/status, D196 410 allowlist enforcement for omitted endpoints, status visibility for app/passive/stable SHAs, and no mutation of orchestrator state, wishlist, or stable ref during promotion.
+
+Verification:
+- npx vitest run tests/desktop-app-refresh.test.ts --configLoader runner --reporter verbose: passed, 6 tests.
+- npm run typecheck: passed.
+- git diff --check: passed.
+- npm test: passed, 65 files passed / 2 skipped; 734 tests passed / 43 skipped.
+- npm run dist:app: passed after the implementation commit; release/win-unpacked/BUILD_INFO.json is stamped sourceSha 0b67d809fce9d00dcd83fad8198de0e8f560c0e2, sourceShortSha 0b67d80.
