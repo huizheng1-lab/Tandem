@@ -633,7 +633,12 @@ function capabilitySubjectTerms(plan: BuildPlan, reportText: string): Set<string
 /** Commands may name a capability inside a Windows/Unix path, with an executable suffix. */
 function capabilityCommandTerms(command: string): Set<string> {
   const terms = capabilityEvidenceTerms(command);
-  for (const term of [...terms]) {
+  // `capabilityEvidenceTerms` deliberately treats a slash as part of a token,
+  // but Windows paths use a backslash which is also a token boundary. Add the
+  // raw command's path components explicitly so `C:\ComfyUI\main.py` names
+  // both `comfyui` and `main`, regardless of which separators were present.
+  const commandTokens = command.toLowerCase().match(/[a-z0-9][a-z0-9._-]{2,}/g) ?? [];
+  for (const term of [...terms, ...commandTokens]) {
     for (const part of term.split(/[\\/]/)) {
       const normalized = part.replace(/\.[a-z0-9]+$/i, "");
       if (normalized.length >= 4 && !capabilityEvidenceStopWords.has(normalized)) terms.add(normalized);
@@ -692,7 +697,7 @@ function successfulInvocationEvidence(result: CompletionReport["verificationResu
   if (!result.passed || !result.command.trim() || !result.output.trim()) return false;
   // A probe can execute successfully while finding nothing. Keep that distinct from
   // invoking the capability successfully (for example Test-Path -> False).
-  if (/\b(?:false|not\s+found|could\s+not\s+find|no\s+matches?|does\s+not\s+exist|exit\s*(?:code\s*)?[1-9]\b|returned\s+(?:false|not\s+found|no))\b/i.test(result.output)) return false;
+  if (/\b(?:false|not\s+found|could\s+not\s+find|cannot\s+find|no\s+matches?|no\s+such\s+file|does\s+not\s+exist|not\s+recognized|command\s+not\s+found|exit\s*(?:code\s*)?[1-9]\b|returned\s+(?:false|not\s+found|no))\b/i.test(result.output)) return false;
   // A successful invocation is deliberately narrower than a positive-sounding log line:
   // the recorded command must have a successful result marker (exit code, version, path,
   // or an explicit success verb). Version-flag probes may report only the version
