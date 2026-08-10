@@ -604,6 +604,28 @@ export function reconcileCapabilityAbsenceClaims(plan: BuildPlan, report: Comple
   };
 }
 
+function successfulInvocationEvidence(result: CompletionReport["verificationResults"][number]): boolean {
+  if (!result.passed || !result.command.trim() || !result.output.trim()) return false;
+  // A successful invocation is deliberately narrower than a positive-sounding log line:
+  // the recorded command must have a successful result marker (exit code, version, path,
+  // or an explicit success verb). A failed probe with an error mentioning a version does
+  // not satisfy this predicate because passed must also be true.
+  return /\b(?:exit\s*(?:code\s*)?0|version\b|\bpath\b|(?:succeed|success|successful|works?)\b|returned\s+(?:true|ok)|true\b)/i.test(result.output);
+}
+
+/** Reject a blocker whose named subject is contradicted by that same subject's successful probe. */
+export function validateRecordedCapabilityContradictions(plan: BuildPlan, report: CompletionReport): string[] {
+  const planText = [plan.objective, ...plan.tasks.map((task) => task.description), ...plan.acceptanceCriteria].join(" ");
+  const reportText = [report.summary, ...report.taskResults.map((task) => task.notes ?? ""), ...report.deviationsFromPlan].join(" ");
+  if (!capabilityAbsencePattern.test(reportText) || !/\b(?:tool|model|runtime|service|server|comfyui|stack|capabilit|installed|executable|port)\b/i.test(`${planText} ${reportText}`)) return [];
+  const subjectTerms = new Set([...capabilitySubjectTerms(planText), ...capabilityEvidenceTerms(reportText)]);
+  const contradictions = report.verificationResults
+    .filter(successfulInvocationEvidence)
+    .filter((result) => [...capabilityEvidenceTerms(result.command)].some((term) => subjectTerms.has(term)))
+    .map((result) => `Capability blocker contradicted by successful invocation of the same subject: ${truncateDiagnostic(`${result.command} -> ${result.output}`)}`);
+  return contradictions.length > 0 ? contradictions : [];
+}
+
 export interface AuthoredFileContent {
   path: string;
   content: string;
@@ -764,9 +786,13 @@ export function validateCompletionReport(
   expectedCommands: string[] = plan.verification,
   options?: { enforceCommandEcho?: boolean; enforceCompleteVerification?: boolean }
 ): CompletionReport {
-  let report = reconcileCapabilityAbsenceClaims(plan, sanitizePromptValue(CompletionReportSchema.parse(value)));
+  let report = sanitizePromptValue(CompletionReportSchema.parse(value));
   enforceVerification(plan, report, expectedCommands, options);
-  const evidenceErrors = [...validateCapabilityAbsenceClaims(plan, report), ...validateServiceStartAttempt(plan, report)];
+  const evidenceErrors = [
+    ...validateCapabilityAbsenceClaims(plan, report),
+    ...validateRecordedCapabilityContradictions(plan, report),
+    ...validateServiceStartAttempt(plan, report)
+  ];
   const artifacts = report.derivedArtifacts ?? [];
   for (const assertion of plan.provenanceAssertions ?? []) {
     const artifact = artifacts.find((candidate) => candidate.artifactId === assertion.artifactId);

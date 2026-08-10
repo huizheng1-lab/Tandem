@@ -32,6 +32,7 @@ export const FOREGROUND_SLEEP_DEVIATION_THRESHOLD_MS = 10000;
 export const BASH_SETTLE_GRACE_MS = 5000;
 const BASH_ABORT_SETTLE_GRACE_MS = 2000;
 const INTERNAL_PROCESS_TIMEOUT_MS = 5000;
+const BACKGROUND_START_FAILURE_GRACE_MS = 100;
 
 export function effectiveBashTimeout(timeoutMs = DEFAULT_BASH_TIMEOUT_MS): number {
   return Math.min(timeoutMs, MAX_BASH_TIMEOUT_MS);
@@ -222,15 +223,26 @@ async function startBackgroundProcess(ctx: ToolContext, command: string): Promis
   });
   backgroundProcesses.set(id, entry);
   registerBackgroundSweep();
-  void Promise.resolve(subprocess).then((result) => {
+  const settled = Promise.resolve(subprocess).then((result) => {
     entry.info.status = "exited";
     entry.info.exitCode = result.exitCode;
     entry.tracker?.stop();
+    return result;
   }, () => {
     entry.info.status = "exited";
     entry.info.exitCode = null;
     entry.tracker?.stop();
+    return undefined;
   });
+  const startup = await settleWithin(settled, BACKGROUND_START_FAILURE_GRACE_MS);
+  if (startup.status === "settled" && (startup.value === undefined || startup.value.exitCode !== 0)) {
+    const detail = tailOutput(`${entry.stdout}${entry.stderr}`) || `process exited with code ${startup.value?.exitCode ?? "unknown"}`;
+    return {
+      command,
+      passed: false,
+      output: `Tandem background-start failure: command "${command}" via "tandem /background start" CLI bridge returned: ${detail}`
+    };
+  }
   return {
     command,
     passed: true,
@@ -360,11 +372,13 @@ export async function startBackgroundProcessBridge(
         let result: string;
         if (input.action === "start") {
           if (requestContext?.readOnly) throw new Error("Background process start is unavailable during a read-only CLI turn.");
-          result = (await bashTool({
+          const startResult = await bashTool({
             cwd: requestContext?.cwd ?? input.cwd ?? process.cwd(),
             permissionMode: requestContext?.permissionMode ?? "yolo",
             permissionBridge: requestContext?.permissionBridge
-          }, input.command ?? "", DEFAULT_BASH_TIMEOUT_MS, true)).output;
+          }, input.command ?? "", DEFAULT_BASH_TIMEOUT_MS, true);
+          if (!startResult.passed) throw new Error(startResult.output);
+          result = startResult.output;
         } else {
           result = await backgroundProcessTool(input.action, input.id);
         }

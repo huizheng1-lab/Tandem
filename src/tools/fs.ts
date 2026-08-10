@@ -37,6 +37,9 @@ export interface ToolActivityEvent {
   phase: ToolActivityPhase;
   ok?: boolean;
   ms?: number;
+  /** Bounded command output is persisted with the session event for failed launches. */
+  output?: string;
+  error?: string;
 }
 
 export function resolveInside(cwd: string, target: string): string {

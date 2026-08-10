@@ -12,6 +12,7 @@ import {
   validateCapabilityAbsenceClaims,
   hasNewVerificationEvidence,
   reconcileCapabilityAbsenceClaims,
+  validateRecordedCapabilityContradictions,
   validateServiceStartAttempt,
   validateStreamFileOwnership
 } from "../src/orchestrator/artifacts.js";
@@ -87,6 +88,25 @@ describe("artifacts", () => {
     report.summary = "ffmpeg is unavailable";
     report.verificationResults.push({ command: "ffmpeg -version", passed: true, output: "ffmpeg version 8" });
     expect(reconcileCapabilityAbsenceClaims(absencePlan, report).summary).toMatch(/prior absence claim dropped/);
+  });
+
+  it("rejects a blocker contradicted by a successful invocation of the same subject", () => {
+    const absencePlan = { ...plan, objective: "Check whether python runtime is installed" };
+    const report = verifierReport(["npm test"]);
+    report.summary = "python runtime is missing";
+    report.verificationResults.push({ command: "python -V", passed: true, output: "Python 3.10.9 (exit code 0)" });
+    expect(validateRecordedCapabilityContradictions(absencePlan, report)).toEqual([
+      expect.stringContaining("python -V -> Python 3.10.9")
+    ]);
+    expect(() => validateCompletionReport(absencePlan, report)).toThrow(/python -V.*Python 3\.10\.9/);
+  });
+
+  it("does not treat a failed probe as a successful invocation", () => {
+    const absencePlan = { ...plan, objective: "Check whether python runtime is installed" };
+    const report = verifierReport(["npm test"]);
+    report.summary = "python runtime is missing";
+    report.verificationResults.push({ command: "python -V", passed: false, output: "python: command not found" });
+    expect(validateRecordedCapabilityContradictions(absencePlan, report)).toEqual([]);
   });
 
   it("rejects an absence claim without structured capability evidence", () => {

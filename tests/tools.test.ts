@@ -674,6 +674,23 @@ describe("tools", () => {
     expect(listBackgroundProcesses()).toEqual([]);
   });
 
+  it("reports an immediate CLI background-start failure with the command and bridge error", async () => {
+    const cwd = await tempDir();
+    const bridge = await startBackgroundProcessBridge();
+    const response = await fetch(`http://127.0.0.1:${bridge.port}/background`, {
+      method: "POST",
+      headers: { authorization: `Bearer ${bridge.token}`, "content-type": "application/json" },
+      body: JSON.stringify({ action: "start", command: "node -e \"console.error('launcher exploded'); process.exit(17)\"", cwd })
+    });
+    const body = await response.json() as { error?: string };
+    expect(response.ok).toBe(false);
+    expect(body.error).toMatch(/Tandem background-start failure/);
+    expect(body.error).toMatch(/node -e/);
+    expect(body.error).toMatch(/CLI bridge \/background/);
+    expect(body.error).toMatch(/launcher exploded/);
+    await cleanupBackgroundProcesses();
+  });
+
   it("keeps the admitted CLI authorization context for an in-flight start", async () => {
     const cwd = await tempDir();
     let approveRequest: (() => void) | undefined;

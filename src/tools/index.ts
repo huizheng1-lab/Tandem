@@ -35,10 +35,13 @@ function wrapExecute<Input, Output>(ctx: ToolContext, role: ToolRole, toolName: 
     ctx.onToolEvent?.({ ...eventBase, phase: "start" });
     try {
       const result = await execute(input);
-      ctx.onToolEvent?.({ ...eventBase, phase: "end", ok: true, ms: Date.now() - started });
+      const output = result && typeof result === "object" && "output" in result && typeof result.output === "string"
+        ? result.output
+        : undefined;
+      ctx.onToolEvent?.({ ...eventBase, phase: "end", ok: true, ms: Date.now() - started, output });
       return result;
     } catch (error) {
-      ctx.onToolEvent?.({ ...eventBase, phase: "end", ok: false, ms: Date.now() - started });
+      ctx.onToolEvent?.({ ...eventBase, phase: "end", ok: false, ms: Date.now() - started, error: String(error) });
       throw error;
     }
   };
