@@ -788,6 +788,10 @@ export async function runOrchestration(options: RunOptions): Promise<RunResult> 
           return runTakeover("worker artifact failure; leader takeover");
         }
       }
+      // Freshness is an explicit user/instruction decision, so record it on the
+      // report regardless of whether the run took the reuse shortcut or performed
+      // a real worker build. This makes the reason auditable in both paths.
+      report = recordFreshnessDecision(report);
       reports.push(report);
       emitCheckpoint();
     }

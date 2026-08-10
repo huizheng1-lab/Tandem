@@ -30,7 +30,6 @@ function instructionRoots(cwd: string): string[] {
 export async function readProjectInstructions(cwd: string, limit = PROJECT_INSTRUCTION_CHAR_LIMIT): Promise<ProjectInstructions | undefined> {
   const roots = instructionRoots(cwd);
   const primaryRoot = roots[0];
-  const found: ProjectInstructions[] = [];
   for (const root of roots) {
     for (const fileName of PROJECT_INSTRUCTION_FILES) {
       const filePath = path.join(root, fileName);
@@ -42,17 +41,14 @@ export async function readProjectInstructions(cwd: string, limit = PROJECT_INSTR
       const sourcedName = root === primaryRoot && roots.length > 1
         ? `${fileName} via TANDEM_PROJECT_INSTRUCTIONS_ROOT`
         : fileName;
-      found.push({ fileName: sourcedName, content, chars: raw.length, truncated });
+      // Instruction files are ordered policy sources. The first available file wins;
+      // combining lower-priority files can turn unrelated conventions into a false
+      // conflict and, more importantly, changes the long-standing TANDEM/AGENTS/etc.
+      // precedence that callers rely on.
+      return { fileName: sourcedName, content, chars: raw.length, truncated };
     }
   }
-  if (found.length === 0) return undefined;
-  if (found.length === 1) return found[0];
-  return {
-    fileName: found.map((item) => item.fileName).join(", "),
-    content: found.map((item) => `## ${item.fileName}\n${item.content}`).join("\n\n"),
-    chars: found.reduce((total, item) => total + item.chars, 0),
-    truncated: found.some((item) => item.truncated)
-  };
+  return undefined;
 }
 
 export function formatProjectInstructions(instructions: ProjectInstructions | undefined): string {

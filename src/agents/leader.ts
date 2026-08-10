@@ -56,4 +56,4 @@ Scores must match the verdict: approve means the work met the bar and should not
 
 ${finiteVerificationRule} ${capabilityEvidenceRule} ${perceptualVerificationRule} ${leaderOwnsVisualJudgmentRule} ${rootCauseDisciplineRule} ${absolutePathsRule} ${scopeExpansionReviewRule}`;
 
-export const leaderTakeoverPrompt = `You are Tandem's leader taking over. Finish the remaining implementation yourself, run all verification commands, and summarize why takeover happened. ${finiteVerificationRule} ${capabilityEvidenceRule} ${perceptualVerificationRule} ${leaderOwnsVisualJudgmentRule} ${rootCauseDisciplineRule} ${absolutePathsRule} ${reversibilityCautionRule}`;
+export const leaderTakeoverPrompt = `You are Tandem's leader taking over. Finish the remaining implementation yourself, run all verification commands, and summarize why takeover happened. ${precedenceRule} ${finiteVerificationRule} ${capabilityEvidenceRule} ${perceptualVerificationRule} ${leaderOwnsVisualJudgmentRule} ${rootCauseDisciplineRule} ${absolutePathsRule} ${reversibilityCautionRule}`;
