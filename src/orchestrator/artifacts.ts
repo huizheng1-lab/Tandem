@@ -968,6 +968,8 @@ export function mergeCompletionReports(
   );
   const deviationsFromPlan: string[] = reports.flatMap((entry) => entry.report.deviationsFromPlan);
   const derivedArtifacts = reports.flatMap((entry) => entry.report.derivedArtifacts ?? []);
+  const securityRisks = reports.flatMap((entry) => entry.report.securityRisks ?? []);
+  const blockedSecurityActions = reports.flatMap((entry) => entry.report.blockedSecurityActions ?? []);
   const status: CompletionReport["status"] = reports.every((entry) => entry.report.status === "complete")
     ? "complete"
     : "blocked";
@@ -981,6 +983,8 @@ export function mergeCompletionReports(
     filesChanged,
     verificationResults,
     deviationsFromPlan,
+    ...(securityRisks.length > 0 ? { securityRisks } : {}),
+    ...(blockedSecurityActions.length > 0 ? { blockedSecurityActions } : {}),
     ...(derivedArtifacts.length > 0 ? { derivedArtifacts } : {})
   };
 }

@@ -31,6 +31,7 @@ import type { InstalledRuntimeCandidates } from "../environment/resolve.js";
 import type { ResolvedEnvironment } from "../environment/types.js";
 import { suspendOnBackgroundAwait } from "../orchestrator/await.js";
 import type { WorkspaceInventory } from "../orchestrator/inventory.js";
+import type { SecurityRisk } from "../tools/security.js";
 
 export interface LiveAgentOptions {
   config: TandemConfig;
@@ -444,6 +445,34 @@ export async function createLiveAgents(options: LiveAgentOptions): Promise<Agent
   const worker = await makeModel(options.config.worker, options.config, options.env);
   const hostPrompt = hostPlatformPrompt(process.platform, options.env);
   let activePlan: BuildPlan | undefined;
+  let roundSecurityRisks: SecurityRisk[] = [];
+  let roundBlockedSecurityActions: { boundary: string; action: string; performed: false }[] = [];
+  const recordSecurityEvent = (event: ToolActivityEvent): void => {
+    if (event.securityRisk && !roundSecurityRisks.some((risk) => risk.kind === event.securityRisk?.kind && risk.action === event.securityRisk.action)) {
+      roundSecurityRisks.push(event.securityRisk);
+    }
+    if (event.blockedSecurityAction && !roundBlockedSecurityActions.some((blocked) => blocked.boundary === event.blockedSecurityAction?.boundary && blocked.action === event.blockedSecurityAction.action)) {
+      roundBlockedSecurityActions.push(event.blockedSecurityAction);
+    }
+    options.onToolEvent?.(event);
+  };
+  const reportSecurityEvents = (report: CompletionReport): CompletionReport => {
+    const additions: string[] = [];
+    if (roundBlockedSecurityActions.length > 0) {
+      additions.push(...roundBlockedSecurityActions.map((blocked) => `Not performed: "${blocked.action}" was blocked by the ${blocked.boundary} hard safety boundary.`));
+    }
+    if (roundSecurityRisks.length > 0) {
+      additions.push(...roundSecurityRisks.map((risk) => `Security risk noted: ${risk.kind} for "${risk.action}"; the explicit action proceeded.`));
+    }
+    return additions.length === 0
+      ? report
+      : {
+          ...report,
+          summary: `${report.summary} ${additions.join(" ")}`,
+          ...(roundSecurityRisks.length > 0 ? { securityRisks: [...(report.securityRisks ?? []), ...roundSecurityRisks] } : {}),
+          ...(roundBlockedSecurityActions.length > 0 ? { blockedSecurityActions: [...(report.blockedSecurityActions ?? []), ...roundBlockedSecurityActions] } : {})
+        };
+  };
   const toolContext = {
     cwd: options.cwd,
     env: options.env,
@@ -455,7 +484,10 @@ export async function createLiveAgents(options: LiveAgentOptions): Promise<Agent
     recordTouchedPath: options.recordTouchedPath,
     rememberNote: options.rememberNote,
     abortSignal: options.abortSignal,
-    onToolEvent: options.onToolEvent
+    onToolEvent: recordSecurityEvent,
+    recordSecurityRisk: (risk: SecurityRisk) => {
+      if (!roundSecurityRisks.some((existing) => existing.kind === risk.kind && existing.action === risk.action)) roundSecurityRisks.push(risk);
+    }
     ,durableAwait: ({ processId, timeoutMs, id }: { processId: string; timeoutMs: number; id?: string }) =>
       suspendOnBackgroundAwait({ cwd: options.cwd, processId, timeoutMs, id, checkpoint: { plan: activePlan, tasks: activePlan?.tasks, evidence: { phase: "worker" } } })
   };
@@ -718,8 +750,10 @@ Standing goals are context only; do not redirect unrelated requests toward them.
 
     build: async ({ plan, streamId, tasks, verification, round, feedback, previousReport, workspaceInventory, previousAttemptError, stepBudgetMultiplier }) => {
       activePlan = plan;
+      roundSecurityRisks = [];
+      roundBlockedSecurityActions = [];
       if (worker.entry.provider === "codex-cli") {
-        return runCodexWorkerBuild(
+        return reportSecurityEvents(await runCodexWorkerBuild(
           {
             config: options.config,
             cwd: options.cwd,
@@ -735,10 +769,10 @@ Standing goals are context only; do not redirect unrelated requests toward them.
             environment: resolvedEnvironment
           },
           { plan, streamId, tasks, verification, round, feedback, previousReport, workspaceInventory, previousAttemptError }
-        );
+        ));
       }
       if (worker.entry.provider === "claude-code-cli") {
-        return runClaudeWorkerBuild(
+        return reportSecurityEvents(await runClaudeWorkerBuild(
           {
             config: options.config,
             cwd: options.cwd,
@@ -754,7 +788,7 @@ Standing goals are context only; do not redirect unrelated requests toward them.
             environment: resolvedEnvironment
           },
           { plan, streamId, tasks, verification, round, feedback, previousReport, workspaceInventory, previousAttemptError }
-        );
+        ));
       }
       let report: z.infer<typeof CompletionReportSchema> | undefined;
       const maxSteps = Math.round(options.config.maxStepsPerAgentTurn * (stepBudgetMultiplier ?? 1));
@@ -794,7 +828,7 @@ Standing goals are context only; do not redirect unrelated requests toward them.
         if (result.stepsUsed >= maxSteps) throw new WorkerStepExhaustionError(result.stepsUsed, maxSteps);
         throw new Error("Worker finished without submit_completion_report. Retry with an explicit report.");
       }
-      return result.artifact;
+      return reportSecurityEvents(result.artifact);
     },
 
     review: async ({ plan, report, round, diff, previousAttemptError }) => {

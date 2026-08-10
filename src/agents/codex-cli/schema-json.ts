@@ -44,7 +44,7 @@ export const buildPlanJsonSchema = {
 export const completionReportJsonSchema = {
   type: "object",
   additionalProperties: false,
-  required: ["status", "summary", "taskResults", "filesChanged", "verificationResults", "deviationsFromPlan"],
+  required: ["status", "summary", "taskResults", "filesChanged", "verificationResults", "deviationsFromPlan", "securityRisks", "blockedSecurityActions"],
   properties: {
     status: { enum: ["complete", "blocked"] },
     summary: stringSchema,

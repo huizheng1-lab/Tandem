@@ -13,7 +13,15 @@ export interface SecurityRisk {
   proceeded: true;
 }
 
-export class SecurityBoundaryError extends Error {
+/** Base denial used by permission gates, including non-overridable boundaries. */
+export class PermissionDeniedError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "PermissionDeniedError";
+  }
+}
+
+export class SecurityBoundaryError extends PermissionDeniedError {
   readonly report: SecurityBoundaryReport;
 
   constructor(boundary: SecurityBoundary, action: string) {

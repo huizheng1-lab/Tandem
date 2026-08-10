@@ -1,5 +1,6 @@
 import { PermissionMode, PermissionRules } from "../config/schema.js";
-import { SecurityBoundaryError } from "./security.js";
+import { PermissionDeniedError, SecurityBoundaryError } from "./security.js";
+export { PermissionDeniedError } from "./security.js";
 
 export type PermissionAction = "write" | "edit" | "bash";
 
@@ -19,8 +20,6 @@ export interface PermissionOptions { rules?: PermissionRules; unattended?: boole
 export interface PermissionBridge {
   approve(request: PermissionRequest): Promise<boolean>;
 }
-
-export class PermissionDeniedError extends Error {}
 
 const destructivePatterns = [
   /\brm\s+-rf\s+[/~]/i,
