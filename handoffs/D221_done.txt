@@ -1,0 +1,23 @@
+D221 complete
+
+Round: D221
+
+Commits:
+- 92903ce D221-1 fix reciprocal infrastructure diagnostics
+
+Implementation summary:
+- Failure records in scripts/reciprocal-orchestrator.mjs now preserve bounded head plus tail output with an elision marker, so terminal vitest failure summaries survive truncation.
+- Restart Manager lock diagnostics now fall back to enumerating Win32_Process executable paths under the locked target when RM start/register/list fails, while still reporting the RM failure code.
+- Chosen path-separation fix: the user-launched desktop build remains at release/win-unpacked, while reciprocal passive packaging now writes its canonical mutable package to release/reciprocal-passive/win-unpacked. Promotion defaults and relay fallback metadata were updated to that reciprocal-only path.
+- Added regressions for oversized failure-output tail capture, RM-denied executable-path lock-holder discovery, and packaging while release/win-unpacked is held by a desktop-like process.
+- Kept W0049 infrastructure-vs-item failure accounting and executor promotion paths intact.
+
+Verification:
+- npx vitest run tests/reciprocal-orchestrator.test.ts --configLoader runner: passed, 19 tests
+- npx vitest run tests/runtime-package-integrity.test.ts --configLoader runner: passed, 8 tests
+- npx vitest run tests/reciprocal-orchestrator.test.ts tests/reciprocal-implement-no-commit.test.ts --configLoader runner: passed, 47 tests
+- npx vitest run tests/reciprocal-relay.test.ts --configLoader runner: skipped by existing guards, 40 skipped
+- npm test: passed, 63 passed / 2 skipped files; 723 passed / 43 skipped tests
+- npm run dist:app: passed; release/win-unpacked/BUILD_INFO.json stamped for 70c6710
+- npm run typecheck: passed
+- git diff --check: passed
