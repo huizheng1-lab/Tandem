@@ -1,0 +1,27 @@
+D220 complete
+
+Round: D220
+
+Commits:
+- 6ff87ac5eeb72e5d648e62f8e0b5b71fa008b061 D220-1 stabilize reciprocal orchestration tests
+
+Implementation summary:
+- Persisted infrastructure pass and package-b failure-counter reset in the same state transition by adding runInfrastructureAttempt for swap infrastructure steps.
+- Kept infrastructure retry metadata in the operation log without extra state writes that can race with reset persistence.
+- Preserved concrete takeover post-build validator failures across retries so the duplicate-retry guard cannot mask the terminal artifact cause.
+- Added regression coverage for infrastructure pass/reset transition and takeover validator masking.
+- Hardened temp-repo Git fixture commits with short bounded retries to avoid Windows full-suite file-handle/index races without weakening assertions.
+
+Verification:
+- npx vitest run tests/orchestrator.test.ts --configLoader runner: passed, 40 tests
+- npx vitest run tests/reciprocal-orchestrator.test.ts --configLoader runner: passed, 18 tests
+- npx vitest run tests/reciprocal-implement-no-commit.test.ts --configLoader runner: passed, 28 tests
+- npm run typecheck: passed
+- npm run dist:app: passed; release/win-unpacked/BUILD_INFO.json stamped for caa20e0
+- npm test full suite, five consecutive runs after final fixes: all passed
+  - Run 1: 60 passed, 2 skipped files; 688 passed, 43 skipped tests
+  - Run 2: 60 passed, 2 skipped files; 688 passed, 43 skipped tests
+  - Run 3: 60 passed, 2 skipped files; 688 passed, 43 skipped tests
+  - Run 4: 60 passed, 2 skipped files; 688 passed, 43 skipped tests
+  - Run 5: 60 passed, 2 skipped files; 688 passed, 43 skipped tests
+- git diff --check: passed
