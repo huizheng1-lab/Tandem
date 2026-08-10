@@ -573,7 +573,7 @@ function detectVerificationScriptTampering(plan: BuildPlan, report: CompletionRe
 }
 
 const capabilityAbsencePattern = /\b(?:absent|unavailable|not\s+(?:installed|found|present|available|usable)|does\s+not\s+exist|cannot\s+(?:run|start|be\s+used)|can't\s+(?:run|start|be\s+used)|missing|removed|deleted|gone|no\s+longer\s+(?:present|available)|nonexistent|broken|points\s+to\s+(?:a\s+)?(?:removed|nonexistent)\s+path)\b/i;
-const explicitCheckPattern = /(?:exact\s+(?:command|tool\s+call)|(?:ran|running|executed|called|tested|checked|verified)\b|(?:command|tool\s+call)\s*[:=]|returned\s+(?:no|an?\s+error|exit)|test-path|read_file|glob|grep|bash|\bversion\b|\s-[a-z][\w-]*)/i;
+const explicitCheckPattern = /(?:exact\s+(?:command|tool\s+call)|(?:ran|running|executed|called|tested|checked|verified)\b|(?:command|tool\s+call)\s*[:=]|returned\s+(?:no|an?\s+error|exit)|test-path|read_file|glob|grep|bash|\bversion\b|\s-[A-Za-z][\w-]*)/i;
 const capabilityEvidenceStopWords = new Set([
   "about", "after", "before", "being", "could", "does", "from", "into", "just", "made", "missing",
   "not", "only", "plan", "that", "the", "their", "this", "was", "were", "with", "without",
