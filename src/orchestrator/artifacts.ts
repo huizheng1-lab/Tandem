@@ -619,24 +619,48 @@ function capabilityClaimSubjectTerms(reportText: string): Set<string> {
   return subjects;
 }
 
+function capabilityPlanText(plan: BuildPlan): string {
+  return [plan.objective, ...plan.tasks.map((task) => task.description), ...plan.acceptanceCriteria].join(" ");
+}
+
+/** Keep plan subjects as useful context while admitting subjects introduced by the claim. */
+function capabilitySubjectTerms(plan: BuildPlan, reportText: string): Set<string> {
+  const subjects = capabilityClaimSubjectTerms(reportText);
+  for (const subject of capabilityClaimSubjectTerms(capabilityPlanText(plan))) subjects.add(subject);
+  return subjects;
+}
+
+/** Commands may name a capability inside a Windows/Unix path, with an executable suffix. */
+function capabilityCommandTerms(command: string): Set<string> {
+  const terms = capabilityEvidenceTerms(command);
+  for (const term of [...terms]) {
+    for (const part of term.split(/[\\/]/)) {
+      const normalized = part.replace(/\.[a-z0-9]+$/i, "");
+      if (normalized.length >= 4 && !capabilityEvidenceStopWords.has(normalized)) terms.add(normalized);
+    }
+  }
+  return terms;
+}
+
 /** Fail closed when a report turns an unverified empty search into an absence claim. */
 export function validateCapabilityAbsenceClaims(plan: BuildPlan, report: CompletionReport): string[] {
-  const planText = [plan.objective, ...plan.tasks.map((task) => task.description), ...plan.acceptanceCriteria].join(" ");
+  const planText = capabilityPlanText(plan);
   const reportText = capabilityClaimText(report);
   if (!capabilityAbsencePattern.test(reportText)) return [];
   // Ordinary verification failures are not capability claims unless the plan was asking
   // about a capability, or the plan provides that context. The plan is context only;
   // it does not decide which subjects a claim may name.
   if (!hasCapabilityContext(reportText) && !hasCapabilityContext(planText)) return [];
-  // The subject must come from the claim, and it must occur in the probe command itself.
+  // Claim subjects are preferred, with plan subjects retained as relevant context;
+  // whichever source supplies the subject, it must occur in the probe command itself.
   // Output is useful as the returned result, but cannot launder an unrelated command into
   // evidence merely by repeating the model's absence claim.
-  const subjectTerms = capabilityClaimSubjectTerms(reportText);
+  const subjectTerms = capabilitySubjectTerms(plan, reportText);
   const hasProbeEvidence = report.verificationResults.some((result) => {
     if (!result.command.trim() || !result.output.trim()) return false;
     const evidence = `${result.command}\n${result.output}`;
     if (!explicitCheckPattern.test(evidence)) return false;
-    return [...capabilityEvidenceTerms(result.command)].some((term) => subjectTerms.has(term));
+    return [...capabilityCommandTerms(result.command)].some((term) => subjectTerms.has(term));
   });
   return hasProbeEvidence
     ? []
@@ -645,15 +669,13 @@ export function validateCapabilityAbsenceClaims(plan: BuildPlan, report: Complet
 
 /** A successful capability probe invalidates an earlier absence assertion. */
 export function reconcileCapabilityAbsenceClaims(plan: BuildPlan, report: CompletionReport): CompletionReport {
-  const planText = [plan.objective, ...plan.tasks.map((task) => task.description), ...plan.acceptanceCriteria].join(" ");
+  const planText = capabilityPlanText(plan);
   const reportText = capabilityClaimText(report);
   if (!capabilityAbsencePattern.test(reportText) || (!hasCapabilityContext(reportText) && !hasCapabilityContext(planText))) return report;
-  const subjectTerms = capabilityClaimSubjectTerms(reportText);
+  const subjectTerms = capabilitySubjectTerms(plan, reportText);
   const contradiction = report.verificationResults.some((result) => {
-    if (!result.passed || !result.command.trim() || !result.output.trim()) return false;
-    const evidence = `${result.command}\n${result.output}`;
-    const namesClaimedCapability = [...capabilityEvidenceTerms(result.command)].some((term) => subjectTerms.has(term));
-    return namesClaimedCapability && /\b(?:found|present|available|installed|works?|succeed|success|resolved|exit\s*(?:code\s*)?0|version|path)\b/i.test(evidence);
+    const namesClaimedCapability = [...capabilityCommandTerms(result.command)].some((term) => subjectTerms.has(term));
+    return namesClaimedCapability && successfulInvocationEvidence(result);
   });
   if (!contradiction) return report;
   const rewrite = (value: string) => value.replace(capabilityAbsencePattern, "capability probe succeeded; prior absence claim dropped");
@@ -668,6 +690,9 @@ export function reconcileCapabilityAbsenceClaims(plan: BuildPlan, report: Comple
 
 function successfulInvocationEvidence(result: CompletionReport["verificationResults"][number]): boolean {
   if (!result.passed || !result.command.trim() || !result.output.trim()) return false;
+  // A probe can execute successfully while finding nothing. Keep that distinct from
+  // invoking the capability successfully (for example Test-Path -> False).
+  if (/\b(?:false|not\s+found|could\s+not\s+find|no\s+matches?|does\s+not\s+exist|exit\s*(?:code\s*)?[1-9]\b|returned\s+(?:false|not\s+found|no))\b/i.test(result.output)) return false;
   // A successful invocation is deliberately narrower than a positive-sounding log line:
   // the recorded command must have a successful result marker (exit code, version, path,
   // or an explicit success verb). Version-flag probes may report only the version
@@ -680,7 +705,7 @@ function successfulInvocationEvidence(result: CompletionReport["verificationResu
 
 /** Reject a blocker whose named subject is contradicted by that same subject's successful probe. */
 export function validateRecordedCapabilityContradictions(plan: BuildPlan, report: CompletionReport): string[] {
-  const planText = [plan.objective, ...plan.tasks.map((task) => task.description), ...plan.acceptanceCriteria].join(" ");
+  const planText = capabilityPlanText(plan);
   const reportText = capabilityClaimText(report);
   const hasCapabilityAbsenceClaim = capabilityAbsencePattern.test(reportText)
     && (hasCapabilityContext(reportText) || hasCapabilityContext(planText));
@@ -689,10 +714,10 @@ export function validateRecordedCapabilityContradictions(plan: BuildPlan, report
   // choice of blocker vocabulary: the subject match below remains the required
   // narrowness boundary.
   if (!hasCapabilityAbsenceClaim && report.status !== "blocked") return [];
-  const subjectTerms = capabilityClaimSubjectTerms(reportText);
+  const subjectTerms = capabilitySubjectTerms(plan, reportText);
   const contradictions = report.verificationResults
     .filter(successfulInvocationEvidence)
-    .filter((result) => [...capabilityEvidenceTerms(result.command)].some((term) => subjectTerms.has(term)))
+    .filter((result) => [...capabilityCommandTerms(result.command)].some((term) => subjectTerms.has(term)))
     .map((result) => `Capability blocker contradicted by successful invocation of the same subject: ${truncateDiagnostic(`${result.command} -> ${result.output}`)}`);
   return contradictions.length > 0 ? contradictions.map((diagnostic) =>
     report.status === "blocked" && !hasCapabilityAbsenceClaim
@@ -707,12 +732,12 @@ export interface AuthoredFileContent {
 }
 
 function claimedCapabilitySubjects(plan: BuildPlan, report: CompletionReport): Set<string> {
-  const planText = [plan.objective, ...plan.tasks.map((task) => task.description), ...plan.acceptanceCriteria].join(" ");
+  const planText = capabilityPlanText(plan);
   const reportText = capabilityClaimText(report);
   if (!capabilityAbsencePattern.test(reportText) || (!hasCapabilityContext(reportText) && !hasCapabilityContext(planText))) return new Set();
-  // Subjects are taken from the claim itself, so an unrelated executable in a file cannot
-  // make an ordinary report fail. Keep common claim grammar out of the subject set.
-  return capabilityClaimSubjectTerms(reportText);
+  // Include both sources: claims may introduce transitive dependencies, while the plan
+  // remains useful when the blocker uses no explicit subject vocabulary.
+  return capabilitySubjectTerms(plan, reportText);
 }
 
 function executableUseLine(lines: string[], subject: string): string | undefined {
