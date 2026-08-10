@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { resolveOnPath } from "../tools/resolve-on-path.js";
 import { sanitizePromptValue } from "../tools/sanitize.js";
+import type { WorkspaceInventory } from "./inventory.js";
 
 export const BuildPlanSchema = z.object({
   title: z.string(),
@@ -127,6 +128,8 @@ export const CompletionReportSchema = z.object({
     })
   ),
   deviationsFromPlan: z.array(z.string()),
+  // A filesystem snapshot captured by the orchestrator, never supplied as proof of correctness.
+  workspaceInventory: z.custom<WorkspaceInventory>().optional(),
   reciprocalArtifact: z
     .object({
       kind: z.enum(["candidate-preview"]),

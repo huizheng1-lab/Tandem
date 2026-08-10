@@ -9,6 +9,7 @@ import { assertSafeProjectDir } from "../../tools/protection.js";
 import { buildWorkerContext } from "../live.js";
 import { hostPlatformPrompt, resolvedEnvironmentPrompt } from "../platform.js";
 import type { ResolvedEnvironment } from "../../environment/types.js";
+import type { WorkspaceInventory } from "../../orchestrator/inventory.js";
 import { workerPrompt } from "../worker.js";
 import { runCodexExec } from "./exec.js";
 
@@ -33,7 +34,7 @@ async function projectInstructions(options: Pick<CodexWorkerOptions, "projectIns
 
 export async function buildCodexWorkerPrompt(
   options: Pick<CodexWorkerOptions, "env" | "projectInstructions" | "environment">,
-  input: { plan: BuildPlan; streamId: string; tasks: BuildPlan["tasks"]; verification: string[]; round: number; feedback: ReviewFeedback; previousReport?: CompletionReport; previousAttemptError?: string }
+  input: { plan: BuildPlan; streamId: string; tasks: BuildPlan["tasks"]; verification: string[]; round: number; feedback: ReviewFeedback; previousReport?: CompletionReport; previousAttemptError?: string; workspaceInventory?: WorkspaceInventory }
 ): Promise<string> {
   return `${workerPrompt}
 ${hostPlatformPrompt(process.platform, options.env)}
@@ -47,7 +48,7 @@ ${buildWorkerContext(input)}`;
 
 export async function runCodexWorkerBuild(
   options: CodexWorkerOptions,
-  input: { plan: BuildPlan; streamId: string; tasks: BuildPlan["tasks"]; verification: string[]; round: number; feedback: ReviewFeedback; previousReport?: CompletionReport; previousAttemptError?: string }
+  input: { plan: BuildPlan; streamId: string; tasks: BuildPlan["tasks"]; verification: string[]; round: number; feedback: ReviewFeedback; previousReport?: CompletionReport; previousAttemptError?: string; workspaceInventory?: WorkspaceInventory }
 ): Promise<CompletionReport> {
   assertSafeProjectDir(options.cwd);
   if (options.config.permissionMode === "ask") {

@@ -8,6 +8,7 @@ import type { PermissionBridge } from "../../tools/permissions.js";
 import { buildWorkerContext } from "../live.js";
 import { hostPlatformPrompt, resolvedEnvironmentPrompt } from "../platform.js";
 import type { ResolvedEnvironment } from "../../environment/types.js";
+import type { WorkspaceInventory } from "../../orchestrator/inventory.js";
 import { workerPrompt } from "../worker.js";
 import { runClaudeExec } from "./exec.js";
 
@@ -32,7 +33,7 @@ async function projectInstructions(options: Pick<ClaudeWorkerOptions, "projectIn
 
 export async function buildClaudeWorkerPrompts(
   options: Pick<ClaudeWorkerOptions, "env" | "projectInstructions" | "environment">,
-  input: { plan: BuildPlan; streamId: string; tasks: BuildPlan["tasks"]; verification: string[]; round: number; feedback: ReviewFeedback; previousReport?: CompletionReport; previousAttemptError?: string }
+  input: { plan: BuildPlan; streamId: string; tasks: BuildPlan["tasks"]; verification: string[]; round: number; feedback: ReviewFeedback; previousReport?: CompletionReport; previousAttemptError?: string; workspaceInventory?: WorkspaceInventory }
 ): Promise<{ systemPrompt: string; prompt: string }> {
   return {
     systemPrompt: `${workerPrompt}
@@ -47,7 +48,7 @@ Before submit_completion_report, follow Tandem's verification rule: run every no
 
 export async function runClaudeWorkerBuild(
   options: ClaudeWorkerOptions,
-  input: { plan: BuildPlan; streamId: string; tasks: BuildPlan["tasks"]; verification: string[]; round: number; feedback: ReviewFeedback; previousReport?: CompletionReport; previousAttemptError?: string }
+  input: { plan: BuildPlan; streamId: string; tasks: BuildPlan["tasks"]; verification: string[]; round: number; feedback: ReviewFeedback; previousReport?: CompletionReport; previousAttemptError?: string; workspaceInventory?: WorkspaceInventory }
 ): Promise<CompletionReport> {
   if (options.config.permissionMode === "ask") {
     const approved = await options.confirmCodexWrite?.("worker", "Run this round via Claude Code CLI with write access? Claude Code cannot prompt per-command in headless print mode.");

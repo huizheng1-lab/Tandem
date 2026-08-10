@@ -18,6 +18,7 @@ import { sanitizePromptValue } from "../tools/sanitize.js";
 import { VerificationRunner, VerificationResult } from "./verification.js";
 import type { ResolvedEnvironment } from "../environment/types.js";
 import { DurableAwaitSuspendedError, resumeBackgroundAwait, waitForDurableAwait } from "./await.js";
+import { inventoryWorkspace, type WorkspaceInventory } from "./inventory.js";
 
 export type MachinePhase = "IDLE" | "PLANNING" | "BUILDING" | "REVIEWING" | "FEEDBACK" | "PARKED" | "TAKEOVER" | "DONE";
 export interface OrchestrationCheckpoint {
@@ -54,6 +55,7 @@ export interface BuildStreamInput {
   previousReport?: CompletionReport;
   previousAttemptError?: string;
   stepBudgetMultiplier?: number;
+  workspaceInventory?: WorkspaceInventory;
 }
 
 export interface AgentFns {
@@ -222,7 +224,8 @@ async function runOneStreamBuild(
   feedback: ReviewVerdict["feedback"],
   previousReport: CompletionReport | undefined,
   emit: (event: MachineEvent) => void,
-  authoritativeVerification: boolean
+  authoritativeVerification: boolean,
+  workspaceInventory?: WorkspaceInventory
 ): Promise<CompletionReport> {
   emit({ type: "transition", phase: "BUILDING", message: `round ${currentRound} worker build [stream ${stream.id}: ${stream.tasks.length} task(s)]` });
   let previousSubmittedReport: CompletionReport | undefined;
@@ -247,7 +250,8 @@ async function runOneStreamBuild(
         feedback,
         previousReport,
         previousAttemptError: previousError === undefined ? undefined : previousAttemptMessage(previousError),
-        stepBudgetMultiplier
+        stepBudgetMultiplier,
+        workspaceInventory
       });
     },
     (value) => {
@@ -278,7 +282,8 @@ async function dispatchStreams(
   feedback: ReviewVerdict["feedback"],
   previousReports: Map<string, CompletionReport>,
   emit: (event: MachineEvent) => void,
-  authoritativeVerification: boolean
+  authoritativeVerification: boolean,
+  workspaceInventory?: WorkspaceInventory
 ): Promise<CompletionReport[]> {
   if (streams.length === 0) return [];
   const poolSize = Math.max(1, cap);
@@ -289,7 +294,7 @@ async function dispatchStreams(
     const index = cursor.next++;
     const stream = streams[index];
     if (!stream) return Promise.resolve();
-    return runOneStreamBuild(agents, stream, plan, currentRound, feedback, previousReports.get(stream.id), emit, authoritativeVerification).then(
+    return runOneStreamBuild(agents, stream, plan, currentRound, feedback, previousReports.get(stream.id), emit, authoritativeVerification, workspaceInventory).then(
       (report) => {
         results[index] = report;
       }
@@ -369,6 +374,28 @@ export async function runOrchestration(options: RunOptions): Promise<RunResult> 
   let phase: MachinePhase = options.initialState?.phase ?? "PLANNING";
   let round = options.initialState?.round ?? 0;
   let parkedAwaitId = options.initialState?.parkedAwaitId;
+  let currentInventory: WorkspaceInventory | undefined;
+
+  const inventory = async (reason: string): Promise<WorkspaceInventory> => {
+    currentInventory = await inventoryWorkspace(options.cwd ?? process.cwd(), plan);
+    emit({ type: "artifact", name: "WorkspaceInventory", value: { reason, ...currentInventory } });
+    return currentInventory;
+  };
+
+  const attachInventory = async (report: CompletionReport): Promise<CompletionReport> => ({
+    ...report,
+    workspaceInventory: await inventory("terminal report")
+  });
+
+  const reusableReport = (snapshot: WorkspaceInventory): CompletionReport => ({
+    status: "complete",
+    summary: `Reused ${snapshot.satisfiedCriteria.length} acceptance criterion artifact(s) already present in the workspace.`,
+    taskResults: plan!.tasks.map((task) => ({ id: task.id, status: "done" as const, notes: "reused existing workspace artifacts; no regeneration" })),
+    filesChanged: snapshot.criteria.flatMap((criterion) => criterion.status === "satisfied" ? criterion.artifacts : []),
+    verificationResults: [],
+    deviationsFromPlan: ["Worker regeneration was skipped because the current workspace inventory satisfies every acceptance criterion; existing artifacts still require plan verification."],
+    workspaceInventory: snapshot
+  });
 
   const emitCheckpoint = () => {
     emit({
@@ -487,6 +514,10 @@ export async function runOrchestration(options: RunOptions): Promise<RunResult> 
     return { phase: "DONE", summary: "Session already completed.", plan, reports, verdicts, takeover: false };
   }
 
+  // Inventory after planning and before every resumed/build round. This is evidence for
+  // deciding what to reuse; artifact validators and plan verification remain authoritative.
+  await inventory("round start");
+
   // PARKED is resumable state, never a terminal state. The host may call this function
   // again after its durable-await observer wakes it, or after an orchestrator restart.
   if (phase === "PARKED") {
@@ -528,7 +559,8 @@ export async function runOrchestration(options: RunOptions): Promise<RunResult> 
     for (let attempt = 1; attempt <= 3; attempt += 1) {
       try {
         await waitIfPaused();
-         const takeover = await options.agents.takeover({
+      await inventory("before blocker/takeover");
+      const takeover = await options.agents.takeover({
           plan,
           reports,
           feedback: allFeedback,
@@ -561,7 +593,7 @@ export async function runOrchestration(options: RunOptions): Promise<RunResult> 
         }
         if (parsedTakeover.success) previousTakeoverReport = parsedTakeover.data;
         const authoritative = await attachAuthoritativeVerification(schemaReport);
-        const report = completeTakeoverWhenVerificationPasses(plan, authoritative.report);
+        const report = await attachInventory(completeTakeoverWhenVerificationPasses(plan, authoritative.report));
         try {
           validateCompletionReport(plan, report, plan.verification, {
             enforceCommandEcho: !authoritative.ran,
@@ -623,6 +655,7 @@ export async function runOrchestration(options: RunOptions): Promise<RunResult> 
       report = reports[currentRound - 1] as CompletionReport;
     } else {
       transition("BUILDING", `round ${currentRound}/${options.config.maxReviewRounds} worker build`, currentRound);
+      currentInventory = await inventory("round start");
       if (options.diffProvider && typeof options.diffProvider !== "function") await options.diffProvider.beforeBuild?.();
       // D54: partition the plan into streams. Decide which streams to run this round.
       // First round: all streams. Revise rounds: only streams targeted by the feedback.
@@ -648,7 +681,23 @@ export async function runOrchestration(options: RunOptions): Promise<RunResult> 
             syntheticCarryReport(stream, previousReportsByStream.get(stream.id))
         }));
 
-      if (targetStreams.length === 0) {
+      const reusable = currentRound === 1 && currentInventory && plan.acceptanceCriteria.length > 0 &&
+        plan.acceptanceCriteria.every((criterion) => currentInventory?.satisfiedCriteria.includes(criterion));
+      if (reusable) {
+        emit({ type: "notice", message: "All acceptance criteria are satisfied by stable existing artifacts; skipping regeneration and finalizing." });
+        report = reusableReport(currentInventory);
+        try {
+          const authoritative = await attachAuthoritativeVerification(report);
+          report = await attachInventory(authoritative.report);
+          validateCompletionReport(plan, report, plan.verification, {
+            enforceCommandEcho: !authoritative.ran,
+            enforceCompleteVerification: !authoritative.ran
+          });
+        } catch (error) {
+          emit(errorEvent(`reused workspace artifacts failed validation: ${String(error)}`, error));
+          return runTakeover("reused workspace artifacts require verification or repair");
+        }
+      } else if (targetStreams.length === 0) {
         // Defensive: revise with no targets - skip build, reuse previous merged report.
         report = reports.at(-1) as CompletionReport;
       } else {
@@ -666,7 +715,8 @@ export async function runOrchestration(options: RunOptions): Promise<RunResult> 
             feedback,
             previousReportsByStream,
             emit,
-            Boolean(options.verificationRunner)
+            Boolean(options.verificationRunner),
+            currentInventory
           );
           // Build the round's effective stream list (newly-built + carry-forward).
           const roundStreams: { streamId: string; report: CompletionReport }[] = [
@@ -684,7 +734,7 @@ export async function runOrchestration(options: RunOptions): Promise<RunResult> 
             emit({ type: "artifact", name: "PostBuildReport", value: report });
           }
           const authoritative = await attachAuthoritativeVerification(report);
-          report = authoritative.report;
+          report = await attachInventory(authoritative.report);
           validateCompletionReport(plan, report, plan.verification, {
             enforceCommandEcho: !authoritative.ran,
             enforceCompleteVerification: !authoritative.ran
@@ -756,6 +806,10 @@ export async function runOrchestration(options: RunOptions): Promise<RunResult> 
 
     if (verdict.verdict === "approve") {
       await options.removeSessionNotesByPrefix?.("Review round ");
+      // The report returned to the host must contain a filesystem-time snapshot, not the
+      // snapshot taken before review (which may have become stale during a long round).
+      const refreshed = await attachInventory(report);
+      reports[reports.length - 1] = refreshed;
       transition("DONE", "leader review approved", currentRound);
       return { phase: "DONE", summary: verdict.userSummary, plan, reports, verdicts, takeover: false };
     }
