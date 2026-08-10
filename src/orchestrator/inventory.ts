@@ -51,9 +51,9 @@ async function filesUnder(root: string, current = root): Promise<string[]> {
 async function stableArtifact(fullPath: string, root: string): Promise<WorkspaceArtifact | undefined> {
   try {
     const before = await stat(fullPath);
-    // A short second observation prevents a file that is still being written from being
-    // treated as resumable work. The validator remains responsible for correctness.
-    await new Promise((resolve) => setTimeout(resolve, 10));
+    // Take the second observation immediately. Comparing both observations still rejects
+    // files whose size or mtime changes during the scan, while avoiding a per-file sleep
+    // that makes orchestration tests and ordinary small workspaces needlessly time out.
     const after = await stat(fullPath);
     const relative = path.relative(root, fullPath).split(path.sep).join("/");
     const complete = !partialSuffix.test(relative) && before.size === after.size && before.mtimeMs === after.mtimeMs;
