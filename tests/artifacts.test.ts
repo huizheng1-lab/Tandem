@@ -69,7 +69,7 @@ describe("artifacts", () => {
   it("surfaces an underperforming measurement in the completion summary", () => {
     const report = validateCompletionReport(
       { ...plan, provenanceAssertions: [{ artifactId: "subtitles" }] },
-      { ...verifierReport([]), derivedArtifacts: [provenance()] }
+      { ...verifierReport(["npm test"]), derivedArtifacts: [provenance()] }
     );
     expect(report.summary).toContain("90.0% of the 100.000s source");
   });
