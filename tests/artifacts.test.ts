@@ -200,6 +200,29 @@ describe("artifacts", () => {
     );
   });
 
+  it("recognises script arguments without demanding their interpreters", async () => {
+    const cases: Array<[string, string]> = [
+      ["powershell -NoProfile -ExecutionPolicy Bypass -File verify.ps1", "verify.ps1"],
+      ["node verify.mjs", "verify.mjs"],
+      ["powershell.exe -File \"verify.ps1'))\"", "verify.ps1"],
+      ["C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe -File verify.ps1", "verify.ps1"]
+    ];
+    for (const [verification, script] of cases) {
+      const declaredPlan: BuildPlan = {
+        ...plan,
+        tasks: [{ id: "T1", description: "Author the verifier", files: [script] }],
+        verification: [verification]
+      };
+      await expect(validateBuildPlan(declaredPlan)).resolves.toBeDefined();
+    }
+  });
+
+  it("fails open for an unrecognised interpreter shape", async () => {
+    await expect(
+      validateBuildPlan({ ...plan, verification: ["custom-runner.exe --script verify.ps1"] })
+    ).resolves.toBeDefined();
+  });
+
   it("rejects reports that omit plan verification commands", async () => {
     expect(() =>
       validateCompletionReport(plan, {

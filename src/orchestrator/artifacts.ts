@@ -473,24 +473,69 @@ function looselyEquivalentCommand(command: string, entry: string): boolean {
   return overlap / rightTokens.size >= 0.9 && overlap / leftTokens.size >= 0.9;
 }
 
-// Extracts basenames of files referenced by a verification command string. Handles the most
-// common shapes: `node verify-video.js`, `python tests/check.py`, `bash ./scripts/run.sh`,
-// `path\to\verify.cmd`, quoted or unquoted. Falls back to [] for commands that don't reference
-// any file (e.g. `npm test`, `ffprobe foo.mp4` - the latter references the input media, not a script).
-const SCRIPT_EXTENSION = /\.(?:js|mjs|cjs|ts|py|sh|cmd|bat|ps1|exe)\b/i;
+// Extracts basenames of scripts consumed by a verification command. In particular, the command
+// in position zero is an interpreter and is not itself a script reference. Keep this parser
+// deliberately conservative: an unrecognised command shape fails open rather than creating an
+// undeclarable planning requirement. The report-time tampering guard remains the backstop.
+const SCRIPT_EXTENSION = /\.(?:js|mjs|cjs|ts|py|sh|cmd|bat|ps1)$/i;
+const COMMAND_WRAPPERS = /^["'()[\]{}]+|["'()[\]{}]+$/g;
+
+function cleanCommandToken(token: string): string {
+  return token.replace(COMMAND_WRAPPERS, "");
+}
+
+function scriptBasename(token: string): string | undefined {
+  const cleaned = cleanCommandToken(token);
+  if (!SCRIPT_EXTENSION.test(cleaned)) return undefined;
+  return (cleaned.split(/[\\/]/).pop() ?? cleaned).toLowerCase();
+}
+
+function commandName(token: string): string {
+  const basename = cleanCommandToken(token).split(/[\\/]/).pop() ?? token;
+  return basename.toLowerCase().replace(/\.exe$/i, "");
+}
+
 function extractReferencedScriptBasenames(commands: string[]): Set<string> {
   const basenames = new Set<string>();
-  // Match either an extension-suffixed token (path or bare filename) anywhere in the command.
   for (const cmd of commands) {
-    const tokens = cmd.split(/\s+/);
-    for (const token of tokens) {
-      // Commands commonly quote verification paths. Strip all surrounding
-      // quote characters before extension and basename comparison.
-      const cleaned = token.replace(/^["']+|["']+$/g, "");
-      if (SCRIPT_EXTENSION.test(cleaned)) {
-        const basename = cleaned.split(/[\\/]/).pop() ?? cleaned;
-        basenames.add(basename.toLowerCase());
+    const tokens = cmd.split(/\s+/).filter((token) => token.length > 0);
+    if (tokens.length === 0) continue;
+
+    const firstScript = scriptBasename(tokens[0]);
+    if (firstScript) {
+      // A directly invoked .ps1/.mjs/.js/.py (and the other supported script forms).
+      basenames.add(firstScript);
+      continue;
+    }
+
+    const interpreter = commandName(tokens[0]);
+    if (interpreter === "powershell" || interpreter === "pwsh") {
+      // PowerShell's -Command syntax is intentionally not inferred: it can contain arbitrary
+      // strings and expressions. -File is an unambiguous script-consuming shape.
+      const fileFlag = tokens.findIndex((token) => /^-(?:file|f)$/i.test(cleanCommandToken(token)));
+      const script = fileFlag >= 0 ? scriptBasename(tokens[fileFlag + 1] ?? "") : undefined;
+      if (script) basenames.add(script);
+      continue;
+    }
+
+    if (interpreter === "cmd") {
+      // /c and /k consume the remainder as a command; collect a script in that command, if any.
+      const commandFlag = tokens.findIndex((token) => /^\/(?:c|k)$/i.test(cleanCommandToken(token)));
+      if (commandFlag >= 0) {
+        for (const token of tokens.slice(commandFlag + 1)) {
+          const script = scriptBasename(token);
+          if (script) basenames.add(script);
+        }
       }
+      continue;
+    }
+
+    if (interpreter === "node" || interpreter === "python" || interpreter === "bash" || interpreter === "sh") {
+      // Do not inspect -e/-c programs; their remaining tokens are code/data, not confidently
+      // identifiable script arguments. Otherwise the first script-shaped argument is consumed.
+      if (tokens.some((token) => /^-(?:e|c|command)$/i.test(cleanCommandToken(token)))) continue;
+      const script = tokens.slice(1).map(scriptBasename).find((candidate) => candidate !== undefined);
+      if (script) basenames.add(script);
     }
   }
   return basenames;
