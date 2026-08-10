@@ -109,6 +109,39 @@ describe("artifacts", () => {
     expect(reconcileCapabilityAbsenceClaims(absencePlan, report).summary).toMatch(/prior absence claim dropped/);
   });
 
+  it("accepts an off-plan absence claim substantiated by a probe of that claim's subject", () => {
+    const absencePlan = { ...plan, objective: "Render scene 03 with the ComfyUI runtime" };
+    const report = verifierReport(["npm test"]);
+    report.summary = "the python runtime is missing";
+    report.verificationResults.push({ command: "python -V", passed: false, output: "python: command not found" });
+    expect(() => validateCompletionReport(absencePlan, report)).not.toThrow();
+  });
+
+  it("rejects an off-plan absence claim contradicted by a successful invocation of that subject", () => {
+    const absencePlan = { ...plan, objective: "Render scene 03 with the ComfyUI runtime" };
+    const report = verifierReport(["npm test"]);
+    report.summary = "the python runtime is missing";
+    report.verificationResults.push({ command: "python -V", passed: true, output: "Python 3.10.9" });
+    expect(() => validateCompletionReport(absencePlan, report)).toThrow(/python -V.*Python 3\.10\.9/);
+  });
+
+  it("surfaces an off-plan blocker with no absence vocabulary when its subject succeeds", () => {
+    const absencePlan = { ...plan, objective: "Render scene 03 with the ComfyUI runtime" };
+    const report = verifierReport(["npm test"]);
+    report.status = "blocked";
+    report.summary = "scene 03 could not be produced because the python interpreter no longer resolves";
+    report.verificationResults.push({ command: "python -V", passed: true, output: "Python 3.10.9" });
+    expect(() => validateCompletionReport(absencePlan, report)).toThrow(/python -V.*Python 3\.10\.9/);
+  });
+
+  it("does not substantiate an absence claim with an unrelated probe", () => {
+    const absencePlan = { ...plan, objective: "Render scene 03 with the ComfyUI runtime" };
+    const report = verifierReport(["npm test"]);
+    report.summary = "the python runtime is missing";
+    report.verificationResults.push({ command: "node -v", passed: true, output: "v22.0.0" });
+    expect(validateCapabilityAbsenceClaims(absencePlan, report)).not.toEqual([]);
+  });
+
   it("rejects a blocker contradicted by a successful invocation of the same subject", () => {
     const absencePlan = { ...plan, objective: "Check whether python runtime is installed" };
     const report = verifierReport(["npm test"]);

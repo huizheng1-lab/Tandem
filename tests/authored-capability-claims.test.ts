@@ -37,6 +37,16 @@ describe("authored capability contradiction guard", () => {
     expect(() => validateAuthoredCapabilityContradictions(plan, report("ffmpeg is not usable here"), [])).not.toThrow();
   });
 
+  it("uses the claimed subject even when the plan never names it", () => {
+    const offPlan: BuildPlan = { ...plan, objective: "Assemble media with the ComfyUI runtime." };
+    const file: AuthoredFileContent = {
+      path: "work/build.py",
+      content: 'PYTHON = r"C:\\tools\\python.exe"\nsubprocess.run([PYTHON, "--version"])'
+    };
+    expect(() => validateAuthoredCapabilityContradictions(offPlan, report("python is missing"), [file]))
+      .toThrow(/python\.exe/);
+  });
+
   it("ignores comments and captured error output", () => {
     const file: AuthoredFileContent = {
       path: "work/log.txt",

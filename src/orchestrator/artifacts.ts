@@ -591,30 +591,47 @@ function capabilityEvidenceTerms(value: string): Set<string> {
   );
 }
 
-function capabilitySubjectTerms(planText: string): Set<string> {
+function capabilityClaimText(report: CompletionReport): string {
+  return [report.summary, ...report.taskResults.map((task) => task.notes ?? ""), ...report.deviationsFromPlan].join(" ");
+}
+
+function hasCapabilityContext(value: string): boolean {
+  return /\b(?:tool|model|runtime|interpreter|service|server|comfyui|stack|capabilit|installed|executable|port)\b/i.test(value);
+}
+
+function capabilityClaimSubjectTerms(reportText: string): Set<string> {
   const genericTerms = new Set([
-    "check", "checks", "checking", "whether", "available", "availability", "absence",
     "capability", "capabilities", "tool", "tools", "model", "models", "runtime", "runtimes",
-    "service", "services", "server", "servers", "executable", "executables", "installed",
-    "installation", "present", "missing", "unavailable", "found", "exists", "exist"
+    "interpreter", "interpreters", "service", "services", "server", "servers", "stack", "installed",
+    "installation", "executable", "executables", "present", "available", "usable", "missing",
+    "unavailable", "absent", "found", "exists", "exist", "not", "no", "longer", "resolved",
+    "removed", "deleted", "gone", "nonexistent", "broken", "the", "a", "an"
   ]);
-  return new Set(
-    [...capabilityEvidenceTerms(planText)].filter((term) => !genericTerms.has(term))
+  const subjects = new Set(
+    [...capabilityEvidenceTerms(reportText)].filter((term) => !genericTerms.has(term))
   );
+  // "the interpreter the launcher targets" is a claim about the invoked runtime,
+  // even when the prose omits its concrete executable name. Keep this alias narrow
+  // to interpreter commands so an arbitrary passing command cannot satisfy it.
+  if (/\binterpreter\b/i.test(reportText)) {
+    for (const interpreter of ["python", "python3", "node", "ruby", "perl", "php"]) subjects.add(interpreter);
+  }
+  return subjects;
 }
 
 /** Fail closed when a report turns an unverified empty search into an absence claim. */
 export function validateCapabilityAbsenceClaims(plan: BuildPlan, report: CompletionReport): string[] {
   const planText = [plan.objective, ...plan.tasks.map((task) => task.description), ...plan.acceptanceCriteria].join(" ");
-  const reportText = [report.summary, ...report.taskResults.map((task) => task.notes ?? ""), ...report.deviationsFromPlan].join(" ");
+  const reportText = capabilityClaimText(report);
   if (!capabilityAbsencePattern.test(reportText)) return [];
   // Ordinary verification failures are not capability claims unless the plan was asking
-  // about a tool/model/runtime/service. This keeps the guard focused on the incident class.
-  if (!/\b(?:tool|model|runtime|service|server|comfyui|stack|capabilit|installed|executable|port)\b/i.test(`${planText} ${reportText}`)) return [];
-  // The subject must come from the plan, and it must occur in the probe command itself.
+  // about a capability, or the plan provides that context. The plan is context only;
+  // it does not decide which subjects a claim may name.
+  if (!hasCapabilityContext(reportText) && !hasCapabilityContext(planText)) return [];
+  // The subject must come from the claim, and it must occur in the probe command itself.
   // Output is useful as the returned result, but cannot launder an unrelated command into
   // evidence merely by repeating the model's absence claim.
-  const subjectTerms = capabilitySubjectTerms(planText);
+  const subjectTerms = capabilityClaimSubjectTerms(reportText);
   const hasProbeEvidence = report.verificationResults.some((result) => {
     if (!result.command.trim() || !result.output.trim()) return false;
     const evidence = `${result.command}\n${result.output}`;
@@ -629,9 +646,9 @@ export function validateCapabilityAbsenceClaims(plan: BuildPlan, report: Complet
 /** A successful capability probe invalidates an earlier absence assertion. */
 export function reconcileCapabilityAbsenceClaims(plan: BuildPlan, report: CompletionReport): CompletionReport {
   const planText = [plan.objective, ...plan.tasks.map((task) => task.description), ...plan.acceptanceCriteria].join(" ");
-  const reportText = [report.summary, ...report.taskResults.map((task) => task.notes ?? ""), ...report.deviationsFromPlan].join(" ");
-  if (!capabilityAbsencePattern.test(reportText) || !/\b(?:tool|model|runtime|service|server|comfyui|stack|capabilit|installed|executable|port)\b/i.test(`${planText} ${reportText}`)) return report;
-  const subjectTerms = new Set([...capabilitySubjectTerms(planText), ...capabilityEvidenceTerms(reportText)]);
+  const reportText = capabilityClaimText(report);
+  if (!capabilityAbsencePattern.test(reportText) || (!hasCapabilityContext(reportText) && !hasCapabilityContext(planText))) return report;
+  const subjectTerms = capabilityClaimSubjectTerms(reportText);
   const contradiction = report.verificationResults.some((result) => {
     if (!result.passed || !result.command.trim() || !result.output.trim()) return false;
     const evidence = `${result.command}\n${result.output}`;
@@ -664,17 +681,15 @@ function successfulInvocationEvidence(result: CompletionReport["verificationResu
 /** Reject a blocker whose named subject is contradicted by that same subject's successful probe. */
 export function validateRecordedCapabilityContradictions(plan: BuildPlan, report: CompletionReport): string[] {
   const planText = [plan.objective, ...plan.tasks.map((task) => task.description), ...plan.acceptanceCriteria].join(" ");
-  const reportText = [report.summary, ...report.taskResults.map((task) => task.notes ?? ""), ...report.deviationsFromPlan].join(" ");
+  const reportText = capabilityClaimText(report);
   const hasCapabilityAbsenceClaim = capabilityAbsencePattern.test(reportText)
-    && /\b(?:tool|model|runtime|service|server|comfyui|stack|capabilit|installed|executable|port)\b/i.test(`${planText} ${reportText}`);
+    && (hasCapabilityContext(reportText) || hasCapabilityContext(planText));
   // A blocked report is terminal and, by definition, has not satisfied the plan's
   // acceptance criteria. Do not make this second safety net depend on the agent's
   // choice of blocker vocabulary: the subject match below remains the required
   // narrowness boundary.
   if (!hasCapabilityAbsenceClaim && report.status !== "blocked") return [];
-  const subjectTerms = hasCapabilityAbsenceClaim
-    ? new Set([...capabilitySubjectTerms(planText), ...capabilityEvidenceTerms(reportText)])
-    : capabilitySubjectTerms(planText);
+  const subjectTerms = capabilityClaimSubjectTerms(reportText);
   const contradictions = report.verificationResults
     .filter(successfulInvocationEvidence)
     .filter((result) => [...capabilityEvidenceTerms(result.command)].some((term) => subjectTerms.has(term)))
@@ -693,19 +708,11 @@ export interface AuthoredFileContent {
 
 function claimedCapabilitySubjects(plan: BuildPlan, report: CompletionReport): Set<string> {
   const planText = [plan.objective, ...plan.tasks.map((task) => task.description), ...plan.acceptanceCriteria].join(" ");
-  const reportText = [report.summary, ...report.taskResults.map((task) => task.notes ?? ""), ...report.deviationsFromPlan].join(" ");
-  if (!capabilityAbsencePattern.test(reportText) || !/\b(?:tool|model|runtime|service|server|comfyui|stack|capabilit|installed|executable|port)\b/i.test(`${planText} ${reportText}`)) return new Set();
+  const reportText = capabilityClaimText(report);
+  if (!capabilityAbsencePattern.test(reportText) || (!hasCapabilityContext(reportText) && !hasCapabilityContext(planText))) return new Set();
   // Subjects are taken from the claim itself, so an unrelated executable in a file cannot
   // make an ordinary report fail. Keep common claim grammar out of the subject set.
-  const genericTerms = new Set(["capability", "capabilities", "tool", "tools", "runtime", "service", "server", "stack", "installed", "executable", "present", "available", "usable", "missing", "unavailable", "not"]);
-  const subjects = new Set<string>();
-  for (const term of capabilityEvidenceTerms(reportText)) {
-    for (const part of term.split(/[\\/]/)) {
-      const normalized = part.replace(/\.exe$/i, "");
-      if (normalized.length >= 4 && !genericTerms.has(normalized)) subjects.add(normalized);
-    }
-  }
-  return subjects;
+  return capabilityClaimSubjectTerms(reportText);
 }
 
 function executableUseLine(lines: string[], subject: string): string | undefined {
