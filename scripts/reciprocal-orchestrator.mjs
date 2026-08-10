@@ -6,6 +6,25 @@ import path from "node:path";
 
 const utf8 = "utf8";
 const maxStateBytes = 5 * 1024 * 1024;
+const failureOutputBudget = 12000;
+
+function boundedFailureOutput(text, budget = failureOutputBudget) {
+  const value = String(text || "");
+  if (Buffer.byteLength(value, utf8) <= budget) return value;
+  const marker = `\n\n... output truncated; preserving head and tail within ${budget} bytes ...\n\n`;
+  const markerBytes = Buffer.byteLength(marker, utf8);
+  const headBudget = Math.min(2000, Math.floor((budget - markerBytes) / 3));
+  const tailBudget = Math.max(0, budget - markerBytes - headBudget);
+  let head = value.slice(0, headBudget);
+  while (Buffer.byteLength(head, utf8) > headBudget && head.length > 0) head = head.slice(0, -1);
+  let start = Math.max(0, value.length - tailBudget);
+  let tail = value.slice(start);
+  while (Buffer.byteLength(tail, utf8) > tailBudget && start < value.length) {
+    start += 1;
+    tail = value.slice(start);
+  }
+  return `${head}${marker}${tail}`;
+}
 
 function arg(name, fallback = "") {
   const flag = `--${name}`;
@@ -185,7 +204,7 @@ function runSwap({ repo, relayRoot, commands, state, statePath, logPath, reason 
       const consecutiveCycles = state.infrastructureFailures[name]?.consecutiveCycles || consecutiveCycleAllowance;
       state.phase = "failed-paused";
       state.lastSummary = `${name} infrastructure failure exhausted ${infrastructureAllowance} attempts on ${consecutiveCycles} consecutive cycles; implementation passed at ${state.lastImplementCommit || state.acceptedSourceSha || "unknown commit"}.`;
-      const failure = { kind: "infrastructure", step: name, command, exitCode: result.exitCode, output: result.output.slice(0, 12000), implementationPassed: true, implementationCommit: state.lastImplementCommit || state.acceptedSourceSha || null, at: now() };
+      const failure = { kind: "infrastructure", step: name, command, exitCode: result.exitCode, output: boundedFailureOutput(result.output), implementationPassed: true, implementationCommit: state.lastImplementCommit || state.acceptedSourceSha || null, at: now() };
       state.failures = [...(state.failures || []), failure];
       const report = failReport(relayRoot, state.currentItem || { id: "cutover", text: "explicit cutover" }, state.failures, { infrastructure: true, implementationCommit: failure.implementationCommit, sameStepConsecutiveCycles: consecutiveCycles });
       state.failureReport = report;
@@ -263,7 +282,7 @@ function failReport(relayRoot, item, failures, context = {}) {
       `Exit: ${failure.exitCode}`,
       "",
       "```text",
-      (failure.output || "").slice(0, 8000),
+      failure.output || "",
       "```",
       "",
     ].join("\n")),
@@ -480,7 +499,7 @@ function main() {
       item: state.currentItem?.id || null,
       command: test.command,
       exitCode: test.exitCode,
-      output: test.output.slice(0, 12000),
+      output: boundedFailureOutput(test.output),
       attemptCommit: implementation.ok ? state.lastImplementCommit : null,
       at: now(),
     };

@@ -20,7 +20,7 @@ if (-not $RelayRoot.Trim()) {
     $RelayRoot = Join-Path (Split-Path $adminRepo -Parent) "Tandem Reciprocal"
 }
 if (-not $Source.Trim()) {
-    $Source = Join-Path $adminRepo "release\win-unpacked"
+    $Source = Join-Path $adminRepo "release\reciprocal-passive\win-unpacked"
 }
 
 function Assert-UnderRoot([string]$Path, [string]$Root) {
@@ -195,7 +195,7 @@ foreach ($role in $roles) {
         sourceBuildInfo = if ($sourceBuildInfo) { $sourceBuildInfo } else { $null }
         reciprocalCapabilities = if ($sourceBuildInfo -and $sourceBuildInfo.reciprocalCapabilities) { $sourceBuildInfo.reciprocalCapabilities } else { $sourceIntegrity.capabilities }
         promotedAt = (Get-Date).ToString("o")
-        artifact = "release/win-unpacked"
+        artifact = "release/reciprocal-passive/win-unpacked"
     }
     [IO.File]::WriteAllText($buildInfoPath, (($buildInfo | ConvertTo-Json -Depth 12) + [Environment]::NewLine), [Text.UTF8Encoding]::new($false))
     $null = Get-PackageIntegrity $stagingDir $SourceSha $sourcePackageIdentity

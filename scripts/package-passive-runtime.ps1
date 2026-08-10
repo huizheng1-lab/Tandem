@@ -137,9 +137,11 @@ if (-not (Test-Path -LiteralPath $freshExe)) {
     throw "Passive package output is missing Tandem.exe: $freshExe"
 }
 
-$stagingDir = Assert-UnderRoot (Join-Path $releaseRoot ".win-unpacked-next-$shortSha-$PID") $releaseRoot
-$oldDir = Assert-UnderRoot (Join-Path $releaseRoot ".win-unpacked-old-$shortSha-$PID") $releaseRoot
-$targetDir = Assert-UnderRoot (Join-Path $releaseRoot "win-unpacked") $releaseRoot
+$passiveReleaseRoot = Assert-UnderRoot (Join-Path $releaseRoot "reciprocal-passive") $releaseRoot
+New-Item -ItemType Directory -Path $passiveReleaseRoot -Force | Out-Null
+$stagingDir = Assert-UnderRoot (Join-Path $passiveReleaseRoot ".win-unpacked-next-$shortSha-$PID") $passiveReleaseRoot
+$oldDir = Assert-UnderRoot (Join-Path $passiveReleaseRoot ".win-unpacked-old-$shortSha-$PID") $passiveReleaseRoot
+$targetDir = Assert-UnderRoot (Join-Path $passiveReleaseRoot "win-unpacked") $passiveReleaseRoot
 
 Invoke-WithRetry "remove stale runtime staging directory" { Remove-Item -LiteralPath $stagingDir -Recurse -Force -ErrorAction SilentlyContinue } -MaxDurationSeconds 90
 Invoke-WithRetry "remove stale runtime backup directory" { Remove-Item -LiteralPath $oldDir -Recurse -Force -ErrorAction SilentlyContinue } -MaxDurationSeconds 90
@@ -159,7 +161,7 @@ $buildInfo = [ordered]@{
     sourceShortSha = $shortSha
     sourceBranch = $sourceBranch
     builtAt = (Get-Date).ToUniversalTime().ToString("o")
-    artifact = "release/win-unpacked"
+    artifact = "release/reciprocal-passive/win-unpacked"
     packageIdentity = $packageIdentity
     packageManifest = $packageManifest
     immutablePackagePath = $immutableDir

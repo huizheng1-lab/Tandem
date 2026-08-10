@@ -899,7 +899,7 @@ server.listen(port, "127.0.0.1");
 
       const board = await readFile(boardPath, "utf8");
       expect(board).toContain(`- [x] W0001 | P3 | passive candidate | DONE stable=${candidateCommit}`);
-      const buildInfo = JSON.parse(await readFile(path.join(repo, "release", "win-unpacked", "BUILD_INFO.json"), "utf8"));
+      const buildInfo = JSON.parse(await readFile(path.join(repo, "release", "reciprocal-passive", "win-unpacked", "BUILD_INFO.json"), "utf8"));
       expect(buildInfo.sourceSha).toBe(candidateCommit);
       expect(buildInfo.packageIdentity).toMatch(/^[0-9A-F]{64}$/);
       expect(buildInfo.immutablePackagePath).toContain(path.join("release", "runtime-packages", buildInfo.packageIdentity, "win-unpacked"));

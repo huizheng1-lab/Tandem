@@ -2119,7 +2119,7 @@ try {
         Save-State
         $packageIdentity = if ($runtimePackage -and $runtimePackage.packageIdentity) { [string]$runtimePackage.packageIdentity } else { $null }
         if (-not $packageIdentity) {
-            $packageBuildInfoPath = if ($runtimePackage -and $runtimePackage.buildInfoPath) { [string]$runtimePackage.buildInfoPath } else { Join-Path $adminRepo "release\win-unpacked\BUILD_INFO.json" }
+            $packageBuildInfoPath = if ($runtimePackage -and $runtimePackage.buildInfoPath) { [string]$runtimePackage.buildInfoPath } else { Join-Path $adminRepo "release\reciprocal-passive\win-unpacked\BUILD_INFO.json" }
             if (-not (Test-Path -LiteralPath $packageBuildInfoPath)) { throw "Passive package BUILD_INFO is missing package identity: $packageBuildInfoPath" }
             $packageBuildInfo = Read-Utf8JsonFile $packageBuildInfoPath
             $packageIdentity = [string]$packageBuildInfo.packageIdentity

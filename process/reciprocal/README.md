@@ -44,7 +44,7 @@ Follow the injected TANDEM.md and execute one reciprocal improvement invocation 
 2. A implements one narrow candidate on copy B and Tandem's app layer commits it.
 3. The relay enters `passive-testing`.
 4. The passive copy A is fast-forwarded to the candidate and checked with `PassiveTest -Role A`.
-5. Passing passive checks also package the Electron app into the admin repo's canonical `release/win-unpacked`, advance stable, and enter `a-upgrade-pending`.
+5. Passing passive checks also package the reciprocal Electron runtime into the admin repo's canonical `release/reciprocal-passive/win-unpacked`, advance stable, and enter `a-upgrade-pending`. The user-launched desktop app remains separate at `release/win-unpacked`.
 6. A's runtime is promoted from that same verified packaged build only after human confirmation, using `promote-reciprocal-runtime.ps1 -TargetRole A`.
 7. `CompleteAUpgrade -Role A -Force` releases the relay back to `idle`.
 

@@ -1,5 +1,6 @@
-import { mkdir, readFile, rename, rm, symlink, writeFile } from "node:fs/promises";
+import { copyFile, mkdir, readFile, rename, rm, symlink, writeFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
+import { spawn } from "node:child_process";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
@@ -18,6 +19,25 @@ const integrity = await import("../scripts/runtime-package-integrity.mjs") as Ru
 const { packageIdentity, packageManifest, requiredReciprocalCapabilities, verifyPackage } = integrity;
 
 const windowsIt = process.platform === "win32" ? it : it.skip;
+
+async function stopProcess(processHandle: ReturnType<typeof spawn> | undefined) {
+  if (!processHandle?.pid) return;
+  try {
+    processHandle.kill("SIGKILL");
+  } catch {
+  }
+  await new Promise<void>((resolve) => {
+    if (processHandle.exitCode !== null || processHandle.signalCode !== null) {
+      resolve();
+      return;
+    }
+    const timer = setTimeout(resolve, 5000);
+    processHandle.once("exit", () => {
+      clearTimeout(timer);
+      resolve();
+    });
+  });
+}
 
 async function writeBuildInfo(runtimeDir: string, sourceSha: string) {
   const manifest = await packageManifest(runtimeDir);
@@ -55,6 +75,72 @@ describe("runtime package integrity", () => {
     expect(lockHelper).toMatch(/PID=.*Name=.*Path=/);
     expect(lockHelper).toMatch(/No lock holder could be determined/);
   });
+
+  windowsIt("D221 packages reciprocal runtimes outside the user desktop release path", async () => {
+    const adminRoot = path.join(tmpdir(), `runtime-d221-admin-${randomUUID()}`);
+    const prepared = path.join(tmpdir(), `runtime-d221-prepared-${randomUUID()}`);
+    const sourceSha = "4444444444444444444444444444444444444444";
+    let desktopProcess: ReturnType<typeof spawn> | undefined;
+    try {
+      await mkdir(path.join(prepared, "resources"), { recursive: true });
+      await copyFile(process.execPath, path.join(prepared, "Tandem.exe"));
+      await writeFile(path.join(prepared, "resources", "app.asar"), "prepared reciprocal runtime\n", "utf8");
+
+      const desktopRelease = path.join(adminRoot, "release", "win-unpacked");
+      await mkdir(desktopRelease, { recursive: true });
+      await copyFile(process.execPath, path.join(desktopRelease, "Tandem.exe"));
+      desktopProcess = spawn(path.join(desktopRelease, "Tandem.exe"), ["-e", "setInterval(() => {}, 1000)"], { stdio: "ignore", windowsHide: true });
+
+      const result = await execa("powershell", [
+        "-NoProfile",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-File",
+        path.resolve("scripts/package-passive-runtime.ps1"),
+        "-Workspace",
+        path.resolve("."),
+        "-AdminRepo",
+        adminRoot,
+        "-SourceSha",
+        sourceSha,
+        "-PreparedWinUnpacked",
+        prepared,
+      ], { timeout: 60_000 });
+      const parsed = JSON.parse(result.stdout);
+      expect(parsed.targetDir).toBe(path.join(adminRoot, "release", "reciprocal-passive", "win-unpacked"));
+      expect(parsed.buildInfoPath).toBe(path.join(parsed.targetDir, "BUILD_INFO.json"));
+      expect(existsSync(path.join(adminRoot, "release", "win-unpacked", "Tandem.exe"))).toBe(true);
+      await expect(verifyPackage(parsed.targetDir, { sourceSha, packageIdentity: parsed.packageIdentity })).resolves.toMatchObject({ packageIdentity: parsed.packageIdentity });
+    } finally {
+      await stopProcess(desktopProcess);
+      await rm(adminRoot, { recursive: true, force: true });
+      await rm(prepared, { recursive: true, force: true });
+    }
+  }, 90_000);
+
+  windowsIt("D221 falls back to executable-path lock holders when Restart Manager is denied", async () => {
+    const target = path.join(tmpdir(), `runtime-d221-lock-${randomUUID()}`);
+    let holder: ReturnType<typeof spawn> | undefined;
+    try {
+      await mkdir(target, { recursive: true });
+      const exe = path.join(target, "Tandem.exe");
+      await copyFile(process.execPath, exe);
+      holder = spawn(exe, ["-e", "setInterval(() => {}, 1000)"], { stdio: "ignore", windowsHide: true });
+      const command = [
+        `$env:TANDEM_FORCE_RESTART_MANAGER_FAILURE_CODE='5'`,
+        `. ${JSON.stringify(path.resolve("scripts/windows-file-locks.ps1"))}`,
+        `Get-LockHolderReport ${JSON.stringify(target)}`,
+      ].join("; ");
+      const result = await execa("powershell", ["-NoProfile", "-Command", command], { timeout: 30_000 });
+      expect(result.stdout).toContain("Restart Manager list failed with code 5");
+      expect(result.stdout).toContain("executable path fallback");
+      expect(result.stdout).toContain(`PID=${holder.pid}`);
+      expect(result.stdout).toContain("Tandem.exe");
+    } finally {
+      await stopProcess(holder);
+      await rm(target, { recursive: true, force: true });
+    }
+  }, 45_000);
 
   it("D184 rejects independent package tamper cases while claimed identity is unchanged", async () => {
     const cases: Array<[string, (runtimeDir: string) => Promise<void>, RegExp]> = [

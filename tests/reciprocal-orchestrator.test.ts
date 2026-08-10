@@ -55,9 +55,9 @@ function implementingCommand(root: string, label: string) {
     "function sleep(ms) { Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms); }",
     "function git(args) {",
     "  let lastError;",
-    "  for (let attempt = 1; attempt <= 5; attempt += 1) {",
+    "  for (let attempt = 1; attempt <= 10; attempt += 1) {",
     "    try { cp.execFileSync('git', ['-C', root, ...args], {stdio:'pipe'}); return; }",
-    "    catch (error) { lastError = error; sleep(attempt * 50); }",
+    "    catch (error) { lastError = error; sleep(attempt * 100); }",
     "  }",
     "  process.stderr.write(String(lastError && (lastError.stderr || lastError.message || lastError)) + '\\n');",
     "  process.exit(1);",
@@ -206,6 +206,22 @@ describe("single reciprocal orchestrator", () => {
       expect(await readFile(parsed.report, "utf8")).toMatch(/two consecutive failed A rounds/);
       const state = JSON.parse(await readFile(path.join(f.relayRoot, "state", "orchestrator-state.json"), "utf8"));
       expect(state).toMatchObject({ phase: "failed-paused", consecutiveFailures: 2 });
+    } finally {
+      await rm(f.root, { recursive: true, force: true });
+    }
+  });
+
+  windowsIt("records the tail of oversized failure output so the terminal summary is preserved", async () => {
+    const f = await fixture("failure-tail");
+    try {
+      const tailMessage = "FINAL FAILURE SUMMARY: expected tail-only diagnostic";
+      const longFailure = `node -e "process.stdout.write('passing test line\\n'.repeat(1600)); process.stdout.write('${tailMessage}\\n'); process.exit(9)"`;
+      const result = await run(f.root, f.relayRoot, commands(f.root, { test: longFailure }));
+      expect(result.exitCode).toBe(2);
+      const state = JSON.parse(await readFile(path.join(f.relayRoot, "state", "orchestrator-state.json"), "utf8"));
+      expect(state.failures[0].output).toContain("output truncated; preserving head and tail");
+      expect(state.failures[0].output).toContain(tailMessage);
+      expect(await readFile(state.failureReport, "utf8")).toContain(tailMessage);
     } finally {
       await rm(f.root, { recursive: true, force: true });
     }
