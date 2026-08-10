@@ -32,7 +32,6 @@ export const FOREGROUND_SLEEP_DEVIATION_THRESHOLD_MS = 10000;
 export const BASH_SETTLE_GRACE_MS = 5000;
 const BASH_ABORT_SETTLE_GRACE_MS = 2000;
 const INTERNAL_PROCESS_TIMEOUT_MS = 5000;
-const BACKGROUND_START_FAILURE_GRACE_MS = 100;
 
 export function effectiveBashTimeout(timeoutMs = DEFAULT_BASH_TIMEOUT_MS): number {
   return Math.min(timeoutMs, MAX_BASH_TIMEOUT_MS);
@@ -226,9 +225,22 @@ async function startBackgroundProcess(ctx: ToolContext, command: string): Promis
   // The execa promise describes the whole process lifetime, not whether the
   // process launched. Waiting on it here turns a legitimate later non-zero
   // exit into a false start failure and hides the id needed for lifecycle
-  // inspection. The child-process error event is the launch boundary.
-  const launchError = new Promise<unknown>((resolve) => {
-    subprocess.once("error", resolve);
+  // inspection. The child-process spawn/error events are the launch boundary:
+  // once spawn wins, every later exit is an ordinary observable lifecycle
+  // transition, including a non-zero exit.
+  const launch = new Promise<{ spawned: true } | { spawned: false; error: unknown }>((resolve) => {
+    const onSpawn = () => {
+      subprocess.removeListener("spawn", onSpawn);
+      subprocess.removeListener("error", onError);
+      resolve({ spawned: true });
+    };
+    const onError = (error: unknown) => {
+      subprocess.removeListener("spawn", onSpawn);
+      subprocess.removeListener("error", onError);
+      resolve({ spawned: false, error });
+    };
+    subprocess.once("spawn", onSpawn);
+    subprocess.once("error", onError);
   });
   void Promise.resolve(subprocess).then((result) => {
     entry.info.status = "exited";
@@ -239,11 +251,11 @@ async function startBackgroundProcess(ctx: ToolContext, command: string): Promis
     entry.info.exitCode = null;
     entry.tracker?.stop();
   });
-  const startup = await settleWithin(launchError, BACKGROUND_START_FAILURE_GRACE_MS);
-  if (startup.status === "settled") {
+  const startup = await launch;
+  if (!startup.spawned) {
     backgroundProcesses.delete(id);
     entry.tracker?.stop();
-    const detail = tailOutput(`${entry.stdout}${entry.stderr}`) || String(startup.value);
+    const detail = tailOutput(`${entry.stdout}${entry.stderr}`) || String(startup.error);
     return {
       command,
       passed: false,
