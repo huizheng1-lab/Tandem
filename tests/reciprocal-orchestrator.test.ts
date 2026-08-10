@@ -52,9 +52,19 @@ function implementingCommand(root: string, label: string) {
     "const cp = require('child_process');",
     `const root = ${JSON.stringify(root)};`,
     `const log = ${JSON.stringify(log)};`,
+    "function sleep(ms) { Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms); }",
+    "function git(args) {",
+    "  let lastError;",
+    "  for (let attempt = 1; attempt <= 5; attempt += 1) {",
+    "    try { cp.execFileSync('git', ['-C', root, ...args], {stdio:'pipe'}); return; }",
+    "    catch (error) { lastError = error; sleep(attempt * 50); }",
+    "  }",
+    "  process.stderr.write(String(lastError && (lastError.stderr || lastError.message || lastError)) + '\\n');",
+    "  process.exit(1);",
+    "}",
     `fs.appendFileSync(log, JSON.stringify({label:${JSON.stringify(label)}}) + "\\n");`,
-    `cp.execFileSync('git', ['-C', root, 'add', '-A'], {stdio:'ignore'});`,
-    `cp.execFileSync('git', ['-C', root, 'commit', '-m', ${JSON.stringify(`D200-N: ${label} stub`)}, '--allow-empty'], {stdio:'ignore'});`,
+    "git(['add', '-A']);",
+    `git(['commit', '-m', ${JSON.stringify(`D200-N: ${label} stub`)}, '--allow-empty']);`,
     "process.exit(0);",
   ];
   writeFileSync(stub, lines.join("\n"), "utf8");
@@ -212,6 +222,44 @@ describe("single reciprocal orchestrator", () => {
       const state = JSON.parse(await readFile(path.join(f.relayRoot, "state", "orchestrator-state.json"), "utf8"));
       expect(state).toMatchObject({ phase: "idle", consecutiveFailures: 0 });
       expect(state.infrastructureFailures["package-b"]).toMatchObject({ consecutiveCycles: 0 });
+    } finally {
+      await rm(f.root, { recursive: true, force: true });
+    }
+  });
+
+  windowsIt("persists infrastructure pass and failure-counter reset in the same transition", async () => {
+    const f = await fixture("infrastructure-pass-reset");
+    try {
+      await mkdir(path.join(f.relayRoot, "state"), { recursive: true });
+      await writeFile(
+        path.join(f.relayRoot, "state", "orchestrator-state.json"),
+        JSON.stringify({
+          phase: "idle",
+          currentItem: null,
+          consecutiveFailures: 0,
+          failures: [],
+          infrastructureFailures: { "package-b": { consecutiveCycles: 1, lastFailedAt: new Date().toISOString(), allowance: 8 } },
+          step: null,
+          updatedAt: new Date().toISOString()
+        }, null, 2),
+        "utf8",
+      );
+      const sentinel = path.join(f.root, "package-attempts");
+      const escapedSentinel = sentinel.replaceAll("\\", "\\\\").replaceAll("'", "\\'");
+      const packageCommand = `node -e "const fs=require('fs'); const p='${escapedSentinel}'; const n=fs.existsSync(p)?Number(fs.readFileSync(p))+1:1; fs.writeFileSync(p,String(n)); process.exit(n<3?9:0)"`;
+      const result = await run(f.root, f.relayRoot, commands(f.root, { packageB: packageCommand }), ["--cutover"]);
+      expect(result.exitCode).toBe(0);
+      expect(await readFile(sentinel, "utf8")).toBe("3");
+      const state = JSON.parse(await readFile(path.join(f.relayRoot, "state", "orchestrator-state.json"), "utf8"));
+      expect(state).toMatchObject({ phase: "idle", consecutiveFailures: 0 });
+      expect(state.infrastructureFailures["package-b"]).toMatchObject({ consecutiveCycles: 0, allowance: 8 });
+      const log = (await readFile(path.join(f.relayRoot, "control", "orchestrator-operations.ndjson"), "utf8"))
+        .trim()
+        .split(/\r?\n/)
+        .map((line) => JSON.parse(line));
+      const packagePassed = log.find((entry) => entry.action === "package-b.passed");
+      expect(packagePassed).toMatchObject({ infrastructure: true, attempt: 3, cycle: 1, consecutiveCycles: 0 });
+      expect(log.filter((entry) => entry.action === "package-b.infrastructure-retry")).toHaveLength(2);
     } finally {
       await rm(f.root, { recursive: true, force: true });
     }

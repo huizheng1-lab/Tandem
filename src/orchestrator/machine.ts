@@ -514,10 +514,6 @@ export async function runOrchestration(options: RunOptions): Promise<RunResult> 
         lastTakeover = takeover;
         const parsedTakeover = CompletionReportSchema.safeParse(takeover.report);
         const priorTakeoverReport = previousTakeoverReport;
-        if (parsedTakeover.success) previousTakeoverReport = parsedTakeover.data;
-        if (parsedTakeover.success && !hasNewVerificationEvidence(priorTakeoverReport, parsedTakeover.data)) {
-          throw new Error("not a genuine retry: resubmission added no new verification evidence since the previous rejection");
-        }
         let schemaReport: CompletionReport;
         try {
           schemaReport = validateCompletionReport(plan, takeover.report, plan.verification, {
@@ -528,7 +524,17 @@ export async function runOrchestration(options: RunOptions): Promise<RunResult> 
           lastValidationError = error;
           throw error;
         }
-        schemaReport = await applyPostBuildReport(schemaReport);
+        try {
+          schemaReport = await applyPostBuildReport(schemaReport);
+        } catch (error) {
+          lastValidationError = error;
+          if (parsedTakeover.success) previousTakeoverReport = parsedTakeover.data;
+          throw error;
+        }
+        if (parsedTakeover.success && !hasNewVerificationEvidence(priorTakeoverReport, parsedTakeover.data)) {
+          throw new Error("not a genuine retry: resubmission added no new verification evidence since the previous rejection");
+        }
+        if (parsedTakeover.success) previousTakeoverReport = parsedTakeover.data;
         const authoritative = await attachAuthoritativeVerification(schemaReport);
         const report = completeTakeoverWhenVerificationPasses(plan, authoritative.report);
         try {

@@ -165,12 +165,12 @@ function runSwap({ repo, relayRoot, commands, state, statePath, logPath, reason 
     let result = null;
     for (let cycle = 1; cycle <= consecutiveCycleAllowance && !passed; cycle += 1) {
       for (let attempt = 1; attempt <= infrastructureAllowance; attempt += 1) {
-        result = runStep({ name, command, cwd: repo, state, statePath, logPath });
+        result = runInfrastructureAttempt({ name, command, cwd: repo, state, statePath, logPath, attempt, allowance: infrastructureAllowance, cycle });
         if (result.ok) {
           passed = true;
           break;
         }
-        save(statePath, logPath, state, `${name}.infrastructure-retry`, { attempt, allowance: infrastructureAllowance, cycle });
+        appendLog(logPath, { action: `${name}.infrastructure-retry`, phase: state.phase, item: state.currentItem?.id || null, step: state.step || null, attempt, allowance: infrastructureAllowance, cycle });
       }
       if (!passed) {
         const previous = state.infrastructureFailures[name] || { consecutiveCycles: 0 };
@@ -194,7 +194,6 @@ function runSwap({ repo, relayRoot, commands, state, statePath, logPath, reason 
       process.exitCode = 3;
       return false;
     }
-    state.infrastructureFailures[name] = { consecutiveCycles: 0, lastPassedAt: now(), allowance: infrastructureAllowance };
   }
   return true;
 }
@@ -277,6 +276,27 @@ function runStep({ name, command, cwd, state, statePath, logPath }) {
   save(statePath, logPath, state, `${name}.started`, { command });
   const result = runCommand(command, cwd);
   save(statePath, logPath, state, result.ok ? `${name}.passed` : `${name}.failed`, { command, exitCode: result.exitCode, outputHash: sha(result.output).slice(0, 16) });
+  return result;
+}
+
+function runInfrastructureAttempt({ name, command, cwd, state, statePath, logPath, attempt, allowance, cycle }) {
+  state.step = name;
+  save(statePath, logPath, state, `${name}.started`, { command, attempt, allowance, cycle, infrastructure: true });
+  const result = runCommand(command, cwd);
+  if (result.ok) {
+    state.infrastructureFailures = state.infrastructureFailures || {};
+    state.infrastructureFailures[name] = { consecutiveCycles: 0, lastPassedAt: now(), allowance };
+  }
+  save(statePath, logPath, state, result.ok ? `${name}.passed` : `${name}.failed`, {
+    command,
+    exitCode: result.exitCode,
+    outputHash: sha(result.output).slice(0, 16),
+    attempt,
+    allowance,
+    cycle,
+    infrastructure: true,
+    consecutiveCycles: state.infrastructureFailures?.[name]?.consecutiveCycles || 0,
+  });
   return result;
 }
 

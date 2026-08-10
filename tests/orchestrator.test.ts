@@ -351,6 +351,7 @@ describe("orchestration", () => {
   it("reports the exact takeover validator failure as the terminal cause", async () => {
     const validatorMessage = "Verification script edited without disclosure: verify_v3.mjs";
     const invalidTakeover = { ...report(), verificationResults: [{ command: "npm test", passed: true, output: "ok" }] };
+    let postBuildAttempts = 0;
     const result = await runOrchestration({
       request: "build",
       config: { maxReviewRounds: 0, maxParallelWorkers: 1 },
@@ -359,10 +360,15 @@ describe("orchestration", () => {
         // Keep this test focused on the terminal summary's structured validation cause.
         // The real validator error is represented by the same error text it emits.
       }),
-      postBuildReport: async () => { throw new Error(validatorMessage); }
+      postBuildReport: async () => {
+        postBuildAttempts += 1;
+        throw new Error(validatorMessage);
+      }
     });
+    expect(postBuildAttempts).toBe(4);
     expect(result.summary).toContain("artifact validation failed");
     expect(result.summary).toContain(validatorMessage);
+    expect(result.summary).not.toContain("not a genuine retry");
     expect(result.summary).toContain("Agent summary (unverified)");
   });
 
