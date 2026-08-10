@@ -846,7 +846,28 @@ export function validateCompletionReport(
   expectedCommands: string[] = plan.verification,
   options?: { enforceCommandEcho?: boolean; enforceCompleteVerification?: boolean }
 ): CompletionReport {
-  let report = sanitizePromptValue(CompletionReportSchema.parse(value));
+  // A missing shortfall explanation is still reportable when the measured span
+  // itself is valid; the summary will use provenanceShortfall's computed text.
+  // Keep the provenance schema's normal validation intact, including its guard
+  // for undeclared artifact extension beyond measured evidence.
+  const reportValue = value && typeof value === "object" && !Array.isArray(value)
+    ? { ...(value as Record<string, unknown>), derivedArtifacts: Array.isArray((value as Record<string, unknown>).derivedArtifacts)
+      ? ((value as Record<string, unknown>).derivedArtifacts as unknown[]).map((artifact) => {
+        if (!artifact || typeof artifact !== "object" || Array.isArray(artifact)) return artifact;
+        const candidate = artifact as Record<string, unknown>;
+        if (candidate.shortfall !== undefined) return artifact;
+        const measuredDuration = candidate.measuredDuration;
+        const sourceDuration = candidate.sourceDuration;
+        const artifactSpanEnd = candidate.artifactSpanEnd;
+        const measuredSpanEnd = candidate.measuredSpanEnd;
+        if (typeof measuredDuration !== "number" || typeof sourceDuration !== "number" || typeof artifactSpanEnd !== "number" || typeof measuredSpanEnd !== "number" || measuredDuration >= sourceDuration || artifactSpanEnd > measuredSpanEnd) {
+          return artifact;
+        }
+        return { ...candidate, shortfall: `measured evidence covers ${((candidate.measuredFraction as number) * 100).toFixed(1)}% of the ${(sourceDuration as number).toFixed(3)}s source; ${((sourceDuration as number) - measuredDuration).toFixed(3)}s remains absent or interpolated` };
+      })
+      : (value as Record<string, unknown>).derivedArtifacts }
+    : value;
+  let report = sanitizePromptValue(CompletionReportSchema.parse(reportValue));
   enforceVerification(plan, report, expectedCommands, options);
   const evidenceErrors = [
     ...validateCapabilityAbsenceClaims(plan, report),

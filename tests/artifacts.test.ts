@@ -39,7 +39,6 @@ describe("artifacts", () => {
       { status: "measured" as const, distanceFromNearestMeasuredBoundary: 0 },
       { status: "interpolated" as const, distanceFromNearestMeasuredBoundary: 1.2 }
     ],
-    shortfall: "Measured evidence covers 90.0% of the 100.000s source; 10 seconds were not measured and remain absent.",
     ...overrides
   });
 
@@ -73,6 +72,26 @@ describe("artifacts", () => {
       verifierReport([], [], "npm test", [provenance()])
     );
     expect(report.summary).toContain("90.0% of the 100.000s source");
+  });
+
+  it("always includes computed coverage alongside a declared shortfall", () => {
+    const report = validateCompletionReport(
+      { ...plan, provenanceAssertions: [{ artifactId: "subtitles" }] },
+      verifierReport([], [], "npm test", [provenance({ shortfall: "Only a little source was missed." })])
+    );
+    expect(report.summary).toContain("Only a little source was missed.");
+    expect(report.summary).toContain("90.0% of the 100.000s source");
+    expect(report.summary).toContain("10.000s remains absent or interpolated");
+  });
+
+  it("does not trust coverage stated in a declared shortfall", () => {
+    const report = validateCompletionReport(
+      { ...plan, provenanceAssertions: [{ artifactId: "subtitles" }] },
+      verifierReport([], [], "npm test", [provenance({ shortfall: "Measured evidence covers 99.0% of the source." })])
+    );
+    expect(report.summary).toContain("99.0% of the source.");
+    expect(report.summary).toContain("90.0% of the 100.000s source");
+    expect(report.summary).not.toContain("computed: measured evidence covers 99.0%");
   });
 
   it("rejects a repeated report as not a genuine retry when it adds no evidence", () => {

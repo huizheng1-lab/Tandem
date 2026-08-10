@@ -73,5 +73,7 @@ export function validateDerivedArtifactProvenance(
 
 export function provenanceShortfall(provenance: DerivedArtifactProvenance): string {
   const uncovered = Math.max(0, provenance.sourceDuration - provenance.measuredDuration);
-  return provenance.shortfall ?? `measured evidence covers ${(provenance.measuredFraction * 100).toFixed(1)}% of the ${provenance.sourceDuration.toFixed(3)}s source; ${uncovered.toFixed(3)}s remains absent or interpolated`;
+  const computed = `measured evidence covers ${(provenance.measuredFraction * 100).toFixed(1)}% of the ${provenance.sourceDuration.toFixed(3)}s source; ${uncovered.toFixed(3)}s remains absent or interpolated`;
+  if (!provenance.shortfall || provenance.shortfall === computed) return computed;
+  return `${provenance.shortfall} (computed: ${computed})`;
 }
