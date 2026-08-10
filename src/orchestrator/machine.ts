@@ -12,7 +12,9 @@ import {
   partitionPlan,
   hasNewVerificationEvidence,
   validateBuildPlan,
-  validateCompletionReport
+  validateCompletionReport,
+  readAuthoredCapabilityFiles,
+  validateAuthoredCapabilityContradictions
 } from "./artifacts.js";
 import { sanitizePromptValue } from "../tools/sanitize.js";
 import { VerificationRunner, VerificationResult } from "./verification.js";
@@ -387,6 +389,10 @@ export async function runOrchestration(options: RunOptions): Promise<RunResult> 
     workspaceInventory: await inventory("terminal report")
   });
 
+  const validateAuthoredClaims = async (report: CompletionReport): Promise<void> => {
+    validateAuthoredCapabilityContradictions(plan!, report, await readAuthoredCapabilityFiles(options.cwd ?? process.cwd(), report));
+  };
+
   const reusableReport = (snapshot: WorkspaceInventory): CompletionReport => ({
     status: "complete",
     summary: `Reused ${snapshot.satisfiedCriteria.length} acceptance criterion artifact(s) already present in the workspace.`,
@@ -599,6 +605,7 @@ export async function runOrchestration(options: RunOptions): Promise<RunResult> 
             enforceCommandEcho: !authoritative.ran,
             enforceCompleteVerification: !authoritative.ran
           });
+          await validateAuthoredClaims(report);
         } catch (error) {
           lastValidationError = error;
           throw error;
@@ -693,6 +700,7 @@ export async function runOrchestration(options: RunOptions): Promise<RunResult> 
             enforceCommandEcho: !authoritative.ran,
             enforceCompleteVerification: !authoritative.ran
           });
+          await validateAuthoredClaims(report);
         } catch (error) {
           emit(errorEvent(`reused workspace artifacts failed validation: ${String(error)}`, error));
           return runTakeover("reused workspace artifacts require verification or repair");
@@ -739,6 +747,7 @@ export async function runOrchestration(options: RunOptions): Promise<RunResult> 
             enforceCommandEcho: !authoritative.ran,
             enforceCompleteVerification: !authoritative.ran
           });
+          await validateAuthoredClaims(report);
         } catch (error) {
           if (error instanceof DurableAwaitSuspendedError) {
             parkedAwaitId = error.record.id;

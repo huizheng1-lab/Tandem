@@ -1,4 +1,6 @@
 import { z } from "zod";
+import path from "node:path";
+import { readFile } from "node:fs/promises";
 import { resolveOnPath } from "../tools/resolve-on-path.js";
 import { sanitizePromptValue } from "../tools/sanitize.js";
 import type { WorkspaceInventory } from "./inventory.js";
@@ -593,6 +595,73 @@ export function reconcileCapabilityAbsenceClaims(plan: BuildPlan, report: Comple
     taskResults: report.taskResults.map((task) => ({ ...task, notes: task.notes ? rewrite(task.notes) : task.notes })),
     deviationsFromPlan: [...report.deviationsFromPlan.map(rewrite), continuationNote]
   };
+}
+
+export interface AuthoredFileContent {
+  path: string;
+  content: string;
+}
+
+function claimedCapabilitySubjects(plan: BuildPlan, report: CompletionReport): Set<string> {
+  const planText = [plan.objective, ...plan.tasks.map((task) => task.description), ...plan.acceptanceCriteria].join(" ");
+  const reportText = [report.summary, ...report.taskResults.map((task) => task.notes ?? ""), ...report.deviationsFromPlan].join(" ");
+  if (!capabilityAbsencePattern.test(reportText) || !/\b(?:tool|model|runtime|service|server|comfyui|stack|capabilit|installed|executable|port)\b/i.test(`${planText} ${reportText}`)) return new Set();
+  // Subjects are taken from the claim itself, so an unrelated executable in a file cannot
+  // make an ordinary report fail. Keep common claim grammar out of the subject set.
+  const genericTerms = new Set(["capability", "capabilities", "tool", "tools", "runtime", "service", "server", "stack", "installed", "executable", "present", "available", "usable", "missing", "unavailable", "not"]);
+  const subjects = new Set<string>();
+  for (const term of capabilityEvidenceTerms(reportText)) {
+    for (const part of term.split(/[\\/]/)) {
+      const normalized = part.replace(/\.exe$/i, "");
+      if (normalized.length >= 4 && !genericTerms.has(normalized)) subjects.add(normalized);
+    }
+  }
+  return subjects;
+}
+
+function executableUseLine(lines: string[], subject: string): string | undefined {
+  const escaped = subject.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const subjectPattern = new RegExp(`(?:^|[\\\\/"']|\\b)${escaped}(?:\\.exe)?(?:$|[\\\\/"'\\s,):])`, "i");
+  const assignmentPattern = /(?:=|:|=>)\s*(?:r)?["']?(?:[A-Za-z]:[\\/]|\/|\.\.?[\\/])[^\n"']+/;
+  const invocationPattern = /\b(?:subprocess|spawn|exec|run|call|popen|which)\s*\(|\b(?:shell|command|argv)\b\s*[:=]/i;
+  for (const line of lines) {
+    const trimmed = line.trim();
+    if (!trimmed || /^(?:\/\/|#|\/\*|\*)/.test(trimmed)) continue;
+    if (!subjectPattern.test(line)) continue;
+    if (assignmentPattern.test(line) || invocationPattern.test(line)) return trimmed;
+  }
+  return undefined;
+}
+
+/** Reject an absence claim contradicted by executable use in a file authored this round.
+ * Use means an absolute/relative path assignment or an invocation-shaped expression; a
+ * comment and captured diagnostic text are deliberately not evidence of use.
+ */
+export function validateAuthoredCapabilityContradictions(
+  plan: BuildPlan,
+  report: CompletionReport,
+  authoredFiles: AuthoredFileContent[]
+): void {
+  const subjects = claimedCapabilitySubjects(plan, report);
+  if (subjects.size === 0 || authoredFiles.length === 0) return;
+  for (const file of authoredFiles) {
+    const line = [...subjects].map((subject) => executableUseLine(file.content.split(/\r?\n/), subject)).find(Boolean);
+    if (line) {
+      const subject = [...subjects].find((candidate) => line.toLowerCase().includes(candidate.toLowerCase())) ?? "capability";
+      throw new Error(`Capability claim contradicted by authored file ${file.path}: claimed ${subject} is unusable, but this line uses it: ${line}`);
+    }
+  }
+}
+
+export async function readAuthoredCapabilityFiles(cwd: string, report: CompletionReport): Promise<AuthoredFileContent[]> {
+  return (await Promise.all(report.filesChanged.map(async (file) => {
+    const fullPath = path.isAbsolute(file) ? file : path.resolve(cwd, file);
+    try {
+      return { path: file, content: await readFile(fullPath, "utf8") };
+    } catch {
+      return undefined;
+    }
+  }))).filter((file): file is AuthoredFileContent => file !== undefined);
 }
 
 /** True when a retry adds a new command/result pair rather than only rephrasing a claim. */
