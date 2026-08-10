@@ -24,6 +24,20 @@ describe("reciprocal setup script", () => {
     await new Promise((resolve) => setTimeout(resolve, 250));
   }
 
+  async function readJsonWithRetry(file: string, timeoutMs = 5000) {
+    const started = Date.now();
+    let lastError: unknown;
+    while (Date.now() - started < timeoutMs) {
+      try {
+        return JSON.parse(await readFile(file, "utf8"));
+      } catch (error) {
+        lastError = error;
+        await new Promise((resolve) => setTimeout(resolve, 100));
+      }
+    }
+    throw lastError;
+  }
+
   it("D134: generates fresh executor configs with a reciprocal-safe step budget", async () => {
     const script = await readFile(path.resolve("scripts", "setup-reciprocal-tandem.ps1"), "utf8");
 
@@ -68,6 +82,7 @@ describe("reciprocal setup script", () => {
       await writeFile(fakeRuntime, `
 import { readFile, writeFile } from "node:fs/promises";
 import http from "node:http";
+import path from "node:path";
 
 const args = new Map(process.argv.slice(2).map((arg) => {
   const index = arg.indexOf("=");
@@ -78,7 +93,9 @@ const tokenFile = args.get("--automation-token-file");
 const projectDir = args.get("--automation-project-dir");
 const token = "startup-token";
 const buildInfo = JSON.parse(await readFile(process.env.TANDEM_RUNTIME_BUILD_INFO, "utf8"));
+const tandemHome = process.env.TANDEM_HOME;
 await writeFile(tokenFile, JSON.stringify({ port, token, pid: process.pid }, null, 2));
+await writeFile(path.join(tandemHome, "d223-executor-home-marker.txt"), "isolated executor home\\n");
 http.createServer((request, response) => {
   if (request.headers.authorization !== \`Bearer \${token}\`) {
     response.writeHead(401).end();
@@ -90,6 +107,7 @@ http.createServer((request, response) => {
     pid: process.pid,
     projectDir,
     tokenFile,
+    tandemHome,
     sourceSha: buildInfo.sourceSha,
     packageIdentity: buildInfo.packageIdentity,
     capabilities: buildInfo.reciprocalCapabilities,
@@ -141,7 +159,7 @@ http.createServer((request, response) => {
       await new Promise((resolve) => setTimeout(resolve, 500));
       expect(staleB.exitCode).not.toBeNull();
       const tokenFile = path.join(relayRoot, "state", "executor-a", "automation.json");
-      const token = JSON.parse(await readFile(tokenFile, "utf8"));
+      const token = await readJsonWithRetry(tokenFile);
       startedAPid = token.pid;
       expect(token.pid).toEqual(expect.any(Number));
       const status = await fetch(`http://127.0.0.1:${token.port}/status`, {
@@ -151,6 +169,9 @@ http.createServer((request, response) => {
       const body = await status.json();
       expect(body.pid).toBe(token.pid);
       expect(body.projectDir).toBe(path.join(relayRoot, "worktrees", "copy-b"));
+      expect(body.tandemHome).toBe(path.join(relayRoot, "state", "executor-a"));
+      expect(await readFile(path.join(relayRoot, "state", "executor-a", "d223-executor-home-marker.txt"), "utf8")).toBe("isolated executor home\n");
+      expect(await readFile(path.join(os.homedir(), ".tandem", "d223-executor-home-marker.txt"), "utf8").catch(() => "")).toBe("");
       expect(body.sourceSha).toBe("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
       expect(body.packageIdentity).toBe("package-a");
       await stopProcess(startedAPid);
