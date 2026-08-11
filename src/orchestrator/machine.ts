@@ -360,7 +360,10 @@ export interface RunResult {
 export function takeoverValidationFailureSummary(error: unknown, userSummary: string, reports: CompletionReport[] = []): string {
   const artifacts = [...new Set(reports.flatMap((report) => report.filesChanged).filter(Boolean))];
   const inventory = artifacts.length > 0 ? artifacts.join(", ") : "no artifact paths were recorded";
-  return `Agent stated blocker (unverified): ${userSummary}. Takeover could not be finalized because artifact validation failed: ${String(error)}. Underlying work may be complete; artifacts present on disk (as recorded by the reports): ${inventory}. Exact validator error: ${String(error)}.`;
+  // The blocker is the information the human needs to act on. Keep validator
+  // diagnostics visibly secondary so repeated guard rejections cannot obscure
+  // the worker's actual finding (for example, a renderer stalled with no clips).
+  return `Agent stated blocker (unverified): ${userSummary}. Takeover could not be finalized after validation retries. Validator details (secondary): ${String(error)}. Underlying work may be complete; artifacts present on disk (as recorded by the reports): ${inventory}.`;
 }
 
 export async function runOrchestration(options: RunOptions): Promise<RunResult> {
