@@ -583,7 +583,28 @@ const capabilityAbsencePattern = /\b(?:absent|unavailable|unusable|failing|faile
  * with the historical guard vocabulary; functional-failure phrases are filtered
  * below so they do not demand an absence probe.
  */
-export const capabilityMissingPattern = /\b(?:absent|missing|unavailable|not\s+(?:installed|found|present|available)|does\s+not\s+exist|cannot\s+(?:run|start|be\s+used)|can't\s+(?:run|start|be\s+used)|no\s+longer\s+(?:present|available)|nonexistent|removed|deleted|gone|points\s+to\s+(?:a\s+)?(?:removed|nonexistent)\s+path)\b/i;
+// Keep the historical absence vocabulary explicit and centralized. In particular,
+// `unavailable` is a standalone claim; it must not be lost while adding the
+// multi-word forms such as `not available`.
+const capabilityMissingAlternatives = [
+  "absent",
+  "missing",
+  "unavailable",
+  "not\\s+(?:installed|found|present|available)",
+  "does\\s+not\\s+exist",
+  "cannot\\s+(?:run|start|be\\s+used)",
+  "can't\\s+(?:run|start|be\\s+used)",
+  "no\\s+longer\\s+(?:present|available)",
+  "nonexistent",
+  "removed",
+  "deleted",
+  "gone",
+  "points\\s+to\\s+(?:a\\s+)?(?:removed|nonexistent)\\s+path"
+];
+export const capabilityMissingPattern = new RegExp(
+  `\\b(?:${capabilityMissingAlternatives.join("|")})\\b`,
+  "i"
+);
 const capabilityFunctionalFailurePattern = /\b(?:unusable|failing|failed|fails|stalled|broken|cannot\s+(?:run|start|be\s+used)|can't\s+(?:run|start|be\s+used))\b/i;
 const explicitCheckPattern = /(?:exact\s+(?:command|tool\s+call)|(?:ran|running|executed|called|tested|checked|verified)\b|(?:command|tool\s+call)\s*[:=]|returned\s+(?:no|an?\s+error|exit)|test-path|read_file|glob|grep|bash|\bversion\b|\s-[A-Za-z][\w-]*)/i;
 const capabilityEvidenceStopWords = new Set([
