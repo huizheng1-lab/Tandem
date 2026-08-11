@@ -111,6 +111,17 @@ function assertRequiredCoversProperties(schema: unknown, pathLabel = "$"): void 
   for (const [index, child] of (node.anyOf ?? []).entries()) assertRequiredCoversProperties(child, `${pathLabel}.anyOf.${index}`);
 }
 
+function assertEveryPropertyHasType(schema: unknown, pathLabel = "$"): void {
+  if (!schema || typeof schema !== "object") return;
+  const node = schema as { properties?: Record<string, unknown>; items?: unknown; anyOf?: unknown[]; type?: unknown };
+  for (const [key, child] of Object.entries(node.properties ?? {})) {
+    expect(Object.prototype.hasOwnProperty.call(child, "type"), `${pathLabel}.properties.${key} must have type`).toBe(true);
+    assertEveryPropertyHasType(child, `${pathLabel}.properties.${key}`);
+  }
+  if (node.items) assertEveryPropertyHasType(node.items, `${pathLabel}.items`);
+  for (const [index, child] of (node.anyOf ?? []).entries()) assertEveryPropertyHasType(child, `${pathLabel}.anyOf.${index}`);
+}
+
 describe("codex cli discovery", () => {
   it("uses config or env override first", () => {
     clearCodexCliPathCache();
@@ -421,6 +432,15 @@ describe("codex cli execution", () => {
     for (const schema of [buildPlanJsonSchema, completionReportJsonSchema, reviewVerdictJsonSchema, takeoverJsonSchema, planOrAnswerJsonSchema]) {
       assertRequiredCoversProperties(schema);
     }
+  });
+
+  it("requires a type on every CompletionReport and TakeoverReport property, including array items", () => {
+    assertEveryPropertyHasType(completionReportJsonSchema);
+    assertEveryPropertyHasType(takeoverJsonSchema);
+    expect(() => assertEveryPropertyHasType({
+      type: "object",
+      properties: { risk: { const: true } }
+    })).toThrow(/risk must have type/);
   });
 });
 

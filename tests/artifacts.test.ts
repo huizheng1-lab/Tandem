@@ -49,6 +49,14 @@ describe("artifacts", () => {
     expect(artifact.entries[1]).toMatchObject({ status: "interpolated", distanceFromNearestMeasuredBoundary: 1.2 });
   });
 
+  it("round-trips a completion report carrying a security risk", () => {
+    const report = validateCompletionReport(plan, {
+      ...verifierReport([]),
+      securityRisks: [{ kind: "permission-widening", action: "chmod output", proceeded: true }]
+    });
+    expect(report.securityRisks).toEqual([{ kind: "permission-widening", action: "chmod output", proceeded: true }]);
+  });
+
   it("fails insufficient measured coverage and passes sufficient evidence", () => {
     const assertion = { artifactId: "subtitles", minMeasuredCoverageFraction: 0.8 };
     expect(validateDerivedArtifactProvenance(provenance({ measuredDuration: 55, measuredFraction: 0.55 }), assertion)).not.toEqual([]);

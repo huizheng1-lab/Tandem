@@ -46,7 +46,7 @@ export const completionReportJsonSchema = {
   additionalProperties: false,
   required: ["status", "summary", "taskResults", "filesChanged", "verificationResults", "deviationsFromPlan", "securityRisks", "blockedSecurityActions"],
   properties: {
-    status: { enum: ["complete", "blocked"] },
+    status: { type: "string", enum: ["complete", "blocked"] },
     summary: stringSchema,
     taskResults: {
       type: "array",
@@ -56,7 +56,7 @@ export const completionReportJsonSchema = {
         required: ["id", "status", "notes"],
         properties: {
           id: stringSchema,
-          status: { enum: ["done", "partial", "skipped"] },
+          status: { type: "string", enum: ["done", "partial", "skipped"] },
           notes: nullableStringSchema
         }
       }
@@ -76,8 +76,8 @@ export const completionReportJsonSchema = {
       }
     },
     deviationsFromPlan: { type: "array", items: stringSchema },
-    securityRisks: { type: "array", items: { type: "object", additionalProperties: false, required: ["kind", "action", "proceeded"], properties: { kind: stringSchema, action: stringSchema, proceeded: { const: true } } } },
-    blockedSecurityActions: { type: "array", items: { type: "object", additionalProperties: false, required: ["boundary", "action", "performed"], properties: { boundary: stringSchema, action: stringSchema, performed: { const: false } } } }
+    securityRisks: { type: "array", items: { type: "object", additionalProperties: false, required: ["kind", "action", "proceeded"], properties: { kind: stringSchema, action: stringSchema, proceeded: { type: "boolean", const: true } } } },
+    blockedSecurityActions: { type: "array", items: { type: "object", additionalProperties: false, required: ["boundary", "action", "performed"], properties: { boundary: stringSchema, action: stringSchema, performed: { type: "boolean", const: false } } } }
   }
 } as const;
 
@@ -86,7 +86,7 @@ export const reviewVerdictJsonSchema = {
   additionalProperties: false,
   required: ["verdict", "scores", "feedback", "userSummary"],
   properties: {
-    verdict: { enum: ["approve", "revise", "takeover"] },
+    verdict: { type: "string", enum: ["approve", "revise", "takeover"] },
     scores: {
       type: "object",
       additionalProperties: false,
@@ -129,7 +129,7 @@ export const planOrAnswerJsonSchema = {
   additionalProperties: false,
   required: ["kind", "answer", "plan"],
   properties: {
-    kind: { enum: ["question", "implementation"] },
+    kind: { type: "string", enum: ["question", "implementation"] },
     answer: nullableStringSchema,
     plan: { anyOf: [buildPlanJsonSchema, { type: "null" }] }
   }
