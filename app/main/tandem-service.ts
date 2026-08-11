@@ -12,6 +12,8 @@ import { locateCodexCli } from "../../src/agents/codex-cli/locate.js";
 import { locateClaudeCli } from "../../src/agents/claude-code-cli/locate.js";
 import { createDiffTracker } from "../../src/orchestrator/diff.js";
 import { runOrchestration, type MachineEvent, type OrchestrationCheckpoint } from "../../src/orchestrator/machine.js";
+import { backgroundProcessTool } from "../../src/tools/shell.js";
+import { readDurableAwait, waitForDurableAwait } from "../../src/orchestrator/await.js";
 import type { CompletionReport } from "../../src/orchestrator/artifacts.js";
 import { createVerificationRunner } from "../../src/orchestrator/verification.js";
 import { commitReciprocalCandidate, prepareReciprocalWorktree, recoverReciprocalFinalization } from "../../src/reciprocal/candidate-commit.js";
@@ -136,6 +138,7 @@ export class TandemService {
   private paused = false;
   private pauseResolvers = new Set<() => void>();
   private lastCheckpoint?: OrchestrationCheckpoint;
+  private parkedAwaitId?: string;
   private readonly pendingPermissions = new Map<string, PendingResolver>();
   private readonly pendingPlans = new Map<string, PendingResolver>();
   private readonly cronTasks = new Map<string, ScheduledTask>();
@@ -235,6 +238,7 @@ export class TandemService {
     const session = this.session as SessionLike;
     await this.prepareReciprocalRun();
     this.controller = new AbortController();
+    this.parkedAwaitId = undefined;
     this.paused = false;
     this.currentPhase = "IDLE";
     this.runBaselineTotals = this.ledger.totals();
@@ -250,7 +254,7 @@ export class TandemService {
       const attachmentBlock = formatAttachmentBlock(attachments);
       const promptWithAttachments = attachmentBlock ? `${prompt}\n\n${attachmentBlock}` : prompt;
       await session.append("user", { prompt: promptWithAttachments, attachments });
-      const initialState = this.lastCheckpoint?.phase === "DONE" ? undefined : this.lastCheckpoint;
+      let initialState = this.lastCheckpoint?.phase === "DONE" ? undefined : this.lastCheckpoint;
       this.lastCheckpoint = undefined;
       const diffTracker = createDiffTracker(this.projectDir);
       const permissionBridge: PermissionBridge = {
@@ -278,31 +282,57 @@ export class TandemService {
       });
       const goals = formatStandingGoals((await listGoals(this.projectDir)).filter((goal) => goal.status === "active"));
       let directLeaderAnswer = false;
-      const result = await (this.deps.runOrchestration ?? runOrchestration)({
-        request: promptWithAttachments,
-        config: this.config,
-        agents,
-        goals,
-        history: history.text,
-        attachments,
-        diffProvider: diffTracker,
-        verificationRunner: createVerificationRunner({
-          cwd: this.projectDir,
-          permissionMode: this.config.permissionMode,
-          permissionBridge,
-          abortSignal: this.controller.signal
-        }),
-        postBuildReport: (report) => this.postBuildReport(report),
-        initialState,
-        confirmPlan: (plan) => this.confirmPlan(plan),
-        waitIfPaused: () => this.waitIfPaused(),
-        emit: (event) => {
-          if (event.type === "transition" && event.message === "leader answered without build plan") {
-            directLeaderAnswer = true;
+      let result;
+      while (true) {
+        result = await (this.deps.runOrchestration ?? runOrchestration)({
+          request: promptWithAttachments,
+          config: this.config,
+          agents,
+          goals,
+          history: history.text,
+          attachments,
+          diffProvider: diffTracker,
+          verificationRunner: createVerificationRunner({
+            cwd: this.projectDir,
+            permissionMode: this.config.permissionMode,
+            permissionBridge,
+            abortSignal: this.controller.signal
+          }),
+          postBuildReport: (report) => this.postBuildReport(report),
+          initialState,
+          confirmPlan: (plan) => this.confirmPlan(plan),
+          waitIfPaused: () => this.waitIfPaused(),
+          emit: (event) => {
+            if (event.type === "transition" && event.message === "leader answered without build plan") {
+              directLeaderAnswer = true;
+            }
+            void this.emitMachine(event);
           }
-          void this.emitMachine(event);
-        }
-      });
+        });
+        if (result.phase !== "PARKED" || !result.parkedAwaitId) break;
+
+        // PARKED is resumable state, not completion. Persist the complete checkpoint
+        // before waiting so a restart or the renderer can recover the round.
+        this.parkedAwaitId = result.parkedAwaitId;
+        const checkpoint: OrchestrationCheckpoint = {
+          phase: "PARKED",
+          round: initialState?.round ?? 1,
+          plan: result.plan,
+          reports: result.reports,
+          verdicts: result.verdicts,
+          feedbackHistory: initialState?.feedbackHistory ?? [],
+          parkedAwaitId: result.parkedAwaitId
+        };
+        await this.emitMachine({ type: "checkpoint", checkpoint });
+        await this.emitMachine({ type: "notice", message: "Waiting on background job; Stop remains available." });
+        const resumed = await waitForDurableAwait(this.projectDir, result.parkedAwaitId, { signal: this.controller.signal });
+        initialState = {
+          ...checkpoint,
+          phase: "PARKED",
+          parkedAwaitId: resumed.id
+        };
+        this.parkedAwaitId = undefined;
+      }
       if (directLeaderAnswer) {
         this.emitRemoteSessionEvent({
           role: "leader",
@@ -326,6 +356,7 @@ export class TandemService {
       await session.append("done", done);
       this.lastCheckpoint = undefined;
     } finally {
+      this.parkedAwaitId = undefined;
       this.currentPhase = "IDLE";
       this.emitRemoteSessionEvent({
         phase: "completed",
@@ -341,6 +372,12 @@ export class TandemService {
 
   abort(): void {
     this.controller?.abort();
+    const parkedAwaitId = this.parkedAwaitId;
+    if (parkedAwaitId) {
+      void readDurableAwait(this.projectDir, parkedAwaitId)
+        .then((record) => backgroundProcessTool("stop", record.processId))
+        .catch(() => undefined);
+    }
   }
 
   async pauseRun(): Promise<{ ok: boolean; message: string }> {
