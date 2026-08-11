@@ -575,6 +575,10 @@ function detectVerificationScriptTampering(plan: BuildPlan, report: CompletionRe
 }
 
 const capabilityAbsencePattern = /\b(?:absent|unavailable|unusable|failing|failed|fails|stalled|not\s+(?:installed|found|present|available|usable)|does\s+not\s+exist|cannot\s+(?:run|start|be\s+used)|can't\s+(?:run|start|be\s+used)|missing|removed|deleted|gone|no\s+longer\s+(?:present|available)|nonexistent|broken|points\s+to\s+(?:a\s+)?(?:removed|nonexistent)\s+path)\b/i;
+// These words assert non-existence or non-installation. The broader pattern above
+// also includes functional failures (stalled/unusable/broken), which need a
+// different kind of evidence and must not be routed through this absence guard.
+const capabilityMissingPattern = /\b(?:absent|missing|not\s+(?:installed|found|present|available)|does\s+not\s+exist|no\s+longer\s+(?:present|available)|nonexistent|removed|deleted|gone|points\s+to\s+(?:a\s+)?(?:removed|nonexistent)\s+path)\b/i;
 const explicitCheckPattern = /(?:exact\s+(?:command|tool\s+call)|(?:ran|running|executed|called|tested|checked|verified)\b|(?:command|tool\s+call)\s*[:=]|returned\s+(?:no|an?\s+error|exit)|test-path|read_file|glob|grep|bash|\bversion\b|\s-[A-Za-z][\w-]*)/i;
 const capabilityEvidenceStopWords = new Set([
   "about", "after", "before", "being", "could", "does", "from", "into", "just", "made", "missing",
@@ -648,7 +652,10 @@ function capabilityCommandTerms(command: string): Set<string> {
 /** Fail closed when a report turns an unverified empty search into an absence claim. */
 export function validateCapabilityAbsenceClaims(plan: BuildPlan, report: CompletionReport): string[] {
   const reportText = capabilityClaimText(report);
-  if (!capabilityAbsencePattern.test(reportText)) return [];
+  // A stalled/unusable capability is a functional-failure claim, not an absence
+  // claim. In particular, a successful Test-Path must neither contradict it nor
+  // force the report to manufacture an absence probe.
+  if (!capabilityMissingPattern.test(reportText)) return [];
   // Claim subjects are preferred, with plan subjects retained as relevant context;
   // whichever source supplies the subject, it must occur in the probe command itself.
   // Output is useful as the returned result, but cannot launder an unrelated command into
@@ -661,7 +668,14 @@ export function validateCapabilityAbsenceClaims(plan: BuildPlan, report: Complet
     if (!result.command.trim() || !result.output.trim()) return false;
     const evidence = `${result.command}\n${result.output}`;
     if (!explicitCheckPattern.test(evidence)) return false;
-    return [...capabilityCommandTerms(result.command)].some((term) => subjectTerms.has(term));
+    if (![...capabilityCommandTerms(result.command)].some((term) => subjectTerms.has(term))) return false;
+    // Presence-only probes establish absence only when they return a negative
+    // result. A positive Test-Path/Get-Item/etc. is still useful provenance for
+    // a functional-failure report, but cannot prove that a capability is absent.
+    if (isPresenceOnlyProbe(result.command)) {
+      return /\b(?:false|not\s+found|could\s+not\s+find|cannot\s+find|no\s+such\s+file|does\s+not\s+exist|not\s+recognized|command\s+not\s+found)\b/i.test(result.output);
+    }
+    return result.passed === false || /\b(?:error|failed|failure|not\s+recognized|command\s+not\s+found|no\s+such\s+file|does\s+not\s+exist)\b/i.test(evidence);
   });
   return hasProbeEvidence
     ? []
