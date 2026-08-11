@@ -292,6 +292,7 @@ export function App({ config: initialConfig, env, cwd, initialError }: { config:
         config,
         agents,
         goals: activeGoals,
+        goalClosureCandidates: activeGoalObjects,
         history: history.text,
         projectInstructions: currentProjectInstructions,
         diffProvider: diffTracker,

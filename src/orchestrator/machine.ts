@@ -22,6 +22,8 @@ import type { ResolvedEnvironment } from "../environment/types.js";
 import { DurableAwaitSuspendedError, resumeBackgroundAwait, waitForDurableAwait } from "./await.js";
 import { inventoryWorkspace, type WorkspaceInventory } from "./inventory.js";
 import { DECISION_PRECEDENCE, regenerationDecision, regenerationNotice } from "./precedence.js";
+import { findGoalClosureCandidates, formatGoalClosureProposal } from "../session/goals.js";
+import type { Goal } from "../session/goals.js";
 
 export type MachinePhase = "IDLE" | "PLANNING" | "BUILDING" | "REVIEWING" | "FEEDBACK" | "PARKED" | "TAKEOVER" | "DONE";
 export interface OrchestrationCheckpoint {
@@ -76,6 +78,7 @@ export interface RunOptions {
   config: Pick<TandemConfig, "maxReviewRounds" | "maxParallelWorkers"> & Partial<Pick<TandemConfig, "permissionMode">>;
   agents: AgentFns;
   goals?: string[];
+  goalClosureCandidates?: Goal[];
   history?: string;
   attachments?: AttachmentRef[];
   diffProvider?: (() => Promise<string>) | { beforeBuild?: () => Promise<void>; diff: () => Promise<string> };
@@ -354,6 +357,15 @@ export interface RunResult {
   verdicts: ReviewVerdict[];
   takeover: boolean;
   parkedAwaitId?: string;
+}
+
+function addGoalClosureProposal(result: RunResult, goalCandidates: Goal[] | undefined): RunResult {
+  if (!goalCandidates?.length || !result.plan) return result;
+  const report = result.reports.at(-1);
+  if (!report) return result;
+  const context = { objective: result.plan.objective, acceptanceCriteria: result.plan.acceptanceCriteria, report };
+  const matches = findGoalClosureCandidates(goalCandidates, context);
+  return matches.length === 0 ? result : { ...result, summary: `${result.summary}${formatGoalClosureProposal(matches, context)}` };
 }
 
 /** Keep the worker's stated blocker visible when validator retries are exhausted. */
@@ -638,7 +650,7 @@ export async function runOrchestration(options: RunOptions): Promise<RunResult> 
         emit({ type: "artifact", name: "TakeoverReport", value: report });
         transition("DONE", verificationWarning ? "takeover done with verification warning" : "takeover done", round);
         const summary = verificationWarning ? `${takeover.userSummary}\n\nWarning: ${verificationWarning}` : takeover.userSummary;
-        return { phase: "DONE", summary, plan, reports, verdicts, takeover: true };
+        return addGoalClosureProposal({ phase: "DONE", summary, plan, reports, verdicts, takeover: true }, options.goalClosureCandidates);
       } catch (error) {
         if (error instanceof Error && error.name === "AbortError") throw error;
         lastError = error;
@@ -659,7 +671,7 @@ export async function runOrchestration(options: RunOptions): Promise<RunResult> 
     emit({ type: "artifact", name: "TakeoverReport", value: lastTakeover.report });
     const summary = takeoverValidationFailureSummary(lastValidationError ?? lastError, lastTakeover.userSummary, reports);
     transition("DONE", "takeover report validation failed; build preserved", round);
-    return { phase: "DONE", summary, plan, reports, verdicts, takeover: true };
+    return addGoalClosureProposal({ phase: "DONE", summary, plan, reports, verdicts, takeover: true }, options.goalClosureCandidates);
   };
 
   if (options.config.maxReviewRounds === 0) {
@@ -846,7 +858,7 @@ export async function runOrchestration(options: RunOptions): Promise<RunResult> 
       const refreshed = await attachInventory(report);
       reports[reports.length - 1] = refreshed;
       transition("DONE", "leader review approved", currentRound);
-      return { phase: "DONE", summary: verdict.userSummary, plan, reports, verdicts, takeover: false };
+      return addGoalClosureProposal({ phase: "DONE", summary: verdict.userSummary, plan, reports, verdicts, takeover: false }, options.goalClosureCandidates);
     }
 
     feedback = verdict.feedback;

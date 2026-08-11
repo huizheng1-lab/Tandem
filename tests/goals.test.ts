@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { handleGoal } from "../src/commands/goal.js";
-import { addGoal, classifyGoalMessageIntent, clearGoals, formatGoalResumptionNotice, listGoals, formatStandingGoals, type Goal } from "../src/session/goals.js";
+import { addGoal, classifyGoalMessageIntent, clearGoals, findGoalClosureCandidates, formatGoalClosureProposal, formatGoalResumptionNotice, listGoals, formatStandingGoals, type Goal } from "../src/session/goals.js";
 
 function goal(overrides: Partial<Goal>): Goal {
   return {
@@ -43,6 +43,42 @@ describe("goal resumption disclosure", () => {
     expect(notice).toContain("- Goal 2: first exact request");
     expect(notice).toContain("- Goal 3: second exact request");
     expect(notice).toContain("multi-step build or background job with substantial expected duration");
+  });
+});
+
+describe("verified goal closure proposals", () => {
+  const context = {
+    objective: "Render the finished music video",
+    acceptanceCriteria: ["The finished music video is a valid MP4"],
+    report: {
+      status: "complete" as const,
+      summary: "The finished music video passed final verification",
+      taskResults: [{ status: "done" as const }],
+      verificationResults: [{ passed: true }]
+    }
+  };
+
+  it("proposes a matching goal without closing it", () => {
+    const matching = goal({ text: "finish the music video render" });
+    const candidates = findGoalClosureCandidates([matching], context);
+    expect(candidates).toEqual([matching]);
+    expect(formatGoalClosureProposal(candidates, context)).toContain("Goal 1: finish the music video render");
+    expect(formatGoalClosureProposal(candidates, context)).toContain("No goal was closed automatically");
+  });
+
+  it("rejects partial, failed, and unrelated successes", () => {
+    const unrelated = goal({ text: "publish the website documentation" });
+    expect(findGoalClosureCandidates([unrelated], context)).toEqual([]);
+    expect(findGoalClosureCandidates([goal({ text: "finish the music video render" })], {
+      ...context,
+      report: { ...context.report, taskResults: [{ status: "partial" }], verificationResults: [{ passed: false }] }
+    })).toEqual([]);
+  });
+
+  it("selects only the matching goal among several active goals", () => {
+    const match = goal({ id: 2, text: "finish the music video render" });
+    const other = goal({ id: 3, text: "publish the website documentation" });
+    expect(findGoalClosureCandidates([match, other], context)).toEqual([match]);
   });
 });
 

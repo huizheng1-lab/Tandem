@@ -8,6 +8,7 @@ import { createVerificationRunner } from "../src/orchestrator/verification.js";
 import type { PermissionRequest } from "../src/tools/permissions.js";
 import type { ResolvedEnvironment } from "../src/environment/types.js";
 import { resolvedEnvironmentPrompt } from "../src/agents/platform.js";
+import type { Goal } from "../src/session/goals.js";
 
 const plan: BuildPlan = {
   title: "Todo CLI",
@@ -54,6 +55,22 @@ function agents(overrides: Partial<AgentFns> = {}): AgentFns {
 }
 
 describe("orchestration", () => {
+  it("proposes visible closure for the one active goal satisfied by verified work", async () => {
+    const goals: Goal[] = [
+      { id: 1, text: "build a todo CLI", createdAt: "2026-01-01T00:00:00.000Z", status: "active", notes: [] },
+      { id: 2, text: "publish the website documentation", createdAt: "2026-01-01T00:00:00.000Z", status: "active", notes: [] }
+    ];
+    const result = await runOrchestration({
+      request: "build",
+      config: { maxReviewRounds: 1, maxParallelWorkers: 1 },
+      agents: agents(),
+      goalClosureCandidates: goals
+    });
+    expect(result.summary).toContain("Goal 1: build a todo CLI");
+    expect(result.summary).not.toContain("Goal 2: publish the website documentation");
+    expect(result.summary).toContain("No goal was closed automatically");
+  });
+
   it("covers approve path", async () => {
     const result = await runOrchestration({ request: "build", config: { maxReviewRounds: 3, maxParallelWorkers: 1 }, agents: agents() });
     expect(result.takeover).toBe(false);

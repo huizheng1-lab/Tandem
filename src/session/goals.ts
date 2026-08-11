@@ -13,6 +13,17 @@ export const GoalSchema = z.object({
 });
 export type Goal = z.infer<typeof GoalSchema>;
 
+export interface GoalClosureContext {
+  objective: string;
+  acceptanceCriteria: string[];
+  report: {
+    status: "complete" | "blocked";
+    summary: string;
+    taskResults: Array<{ status: "done" | "partial" | "skipped" }>;
+    verificationResults: Array<{ passed: boolean }>;
+  };
+}
+
 const GoalsFileSchema = z.array(GoalSchema);
 
 export function goalsPath(cwd = process.cwd()): string {
@@ -120,4 +131,34 @@ export function formatGoalResumptionNotice(activeGoals: Goal[]): string {
   const count = activeGoals.length;
   const goals = activeGoals.map((goal) => `- Goal ${goal.id}: ${goal.text}`).join("\n");
   return `This message does not clearly request continuation. Before I start, the ${count === 1 ? "active project goal" : "active project goals"} I would resume ${count === 1 ? "is" : "are"}:\n${goals}\nThis may begin a multi-step build or background job with substantial expected duration. Redirect or cancel now if that is not what you want.`;
+}
+
+const CLOSURE_STOP_WORDS = new Set([
+  ...MATCH_STOP_WORDS,
+  "build", "create", "make", "finish", "complete", "implement", "update", "fix", "work", "project"
+]);
+
+function closureWords(text: string): Set<string> {
+  return new Set((text.toLocaleLowerCase().match(MATCH_WORDS) ?? []).filter((word) => !CLOSURE_STOP_WORDS.has(word)));
+}
+
+/** Finds conservative closure candidates without changing goals. */
+export function findGoalClosureCandidates(goals: Goal[], context: GoalClosureContext): Goal[] {
+  if (context.report.status !== "complete" || context.report.verificationResults.length === 0 ||
+      context.report.verificationResults.some((result) => !result.passed) ||
+      context.report.taskResults.length === 0 || context.report.taskResults.some((task) => task.status !== "done")) return [];
+  const evidence = closureWords([context.objective, ...context.acceptanceCriteria, context.report.summary].join(" "));
+  return goals.filter((goal) => {
+    if (goal.status !== "active") return false;
+    const goalWords = closureWords(goal.text);
+    let overlap = 0;
+    for (const word of goalWords) if (evidence.has(word)) overlap += 1;
+    return overlap >= 2;
+  });
+}
+
+export function formatGoalClosureProposal(goals: Goal[], context: GoalClosureContext): string {
+  if (goals.length === 0) return "";
+  const names = goals.map((goal) => `Goal ${goal.id}: ${goal.text}`).join("; ");
+  return `\n\nVerified completion proposal: this completed work passed all verification checks and appears to satisfy ${names}. No goal was closed automatically. Confirm closure with /goal done <id>; this proposal is based on completed acceptance-criteria work and passing verification (${context.report.verificationResults.length}/${context.report.verificationResults.length}).`;
 }
