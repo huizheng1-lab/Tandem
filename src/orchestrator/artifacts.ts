@@ -578,7 +578,13 @@ const capabilityAbsencePattern = /\b(?:absent|unavailable|unusable|failing|faile
 // These words assert non-existence or non-installation. The broader pattern above
 // also includes functional failures (stalled/unusable/broken), which need a
 // different kind of evidence and must not be routed through this absence guard.
-const capabilityMissingPattern = /\b(?:absent|missing|unavailable|not\s+(?:installed|found|present|available)|does\s+not\s+exist|no\s+longer\s+(?:present|available)|nonexistent|removed|deleted|gone|points\s+to\s+(?:a\s+)?(?:removed|nonexistent)\s+path)\b/i;
+/**
+ * Vocabulary for claims that a capability is absent. Keep this superset in sync
+ * with the historical guard vocabulary; functional-failure phrases are filtered
+ * below so they do not demand an absence probe.
+ */
+export const capabilityMissingPattern = /\b(?:absent|missing|unavailable|not\s+(?:installed|found|present|available)|does\s+not\s+exist|cannot\s+(?:run|start|be\s+used)|can't\s+(?:run|start|be\s+used)|no\s+longer\s+(?:present|available)|nonexistent|removed|deleted|gone|points\s+to\s+(?:a\s+)?(?:removed|nonexistent)\s+path)\b/i;
+const capabilityFunctionalFailurePattern = /\b(?:unusable|failing|failed|fails|stalled|broken|cannot\s+(?:run|start|be\s+used)|can't\s+(?:run|start|be\s+used))\b/i;
 const explicitCheckPattern = /(?:exact\s+(?:command|tool\s+call)|(?:ran|running|executed|called|tested|checked|verified)\b|(?:command|tool\s+call)\s*[:=]|returned\s+(?:no|an?\s+error|exit)|test-path|read_file|glob|grep|bash|\bversion\b|\s-[A-Za-z][\w-]*)/i;
 const capabilityEvidenceStopWords = new Set([
   "about", "after", "before", "being", "could", "does", "from", "into", "just", "made", "missing",
@@ -656,6 +662,7 @@ export function validateCapabilityAbsenceClaims(plan: BuildPlan, report: Complet
   // claim. In particular, a successful Test-Path must neither contradict it nor
   // force the report to manufacture an absence probe.
   if (!capabilityMissingPattern.test(reportText)) return [];
+  if (capabilityFunctionalFailurePattern.test(reportText)) return [];
   // Claim subjects are preferred, with plan subjects retained as relevant context;
   // whichever source supplies the subject, it must occur in the probe command itself.
   // Output is useful as the returned result, but cannot launder an unrelated command into

@@ -10,6 +10,7 @@ import {
   validateBuildPlan,
   validateCompletionReport,
   validateCapabilityAbsenceClaims,
+  capabilityMissingPattern,
   hasNewVerificationEvidence,
   reconcileCapabilityAbsenceClaims,
   validateRecordedCapabilityContradictions,
@@ -217,6 +218,14 @@ describe("artifacts", () => {
     unrelated.summary = "ComfyUI is unavailable";
     unrelated.verificationResults[0]!.output = "verified: tests passed";
     expect(validateCapabilityAbsenceClaims(absencePlan, unrelated)).not.toEqual([]);
+  });
+
+  it.each([
+    "absent", "unavailable", "missing", "not installed", "not found", "not present",
+    "not available", "does not exist", "removed", "deleted", "gone", "nonexistent",
+    "cannot run", "cannot start", "cannot be used"
+  ])("retains the capability absence vocabulary: %s", (wording) => {
+    expect(capabilityMissingPattern.test(`the ComfyUI capability is ${wording}`)).toBe(true);
   });
 
   it("does not let an unrelated command launder a subject claim through its output", () => {
