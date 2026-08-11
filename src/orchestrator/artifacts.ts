@@ -769,7 +769,11 @@ function executableUseLine(lines: string[], subject: string): string | undefined
   // Likewise, a generic data variable containing a path is not use; an assignment only
   // counts when the authored variable itself names the subject (for example FFMPEG = ...).
   const assignmentPattern = new RegExp(`(?:^|[\\s(;])${escaped}(?:_PATH|_EXE)?\\s*(?:=|=>)\\s*(?:r)?["']?(?:[A-Za-z]:[\\\\/]|\\/|\\.\\.?[\\\\/])[^\\n"']+`, "i");
-  const invocationPattern = /\b(?:subprocess|spawn|exec|run|call|popen|which|require|import)\s*\(|\b(?:import|require)\b|\b(?:shell|command|argv)\b\s*[:=]/i;
+  // Match an actual execution/import API, including the dotted forms used by
+  // Python and Node (`subprocess.run`, `child_process.execFile`, etc.). Do not
+  // treat an arbitrary method call such as `console.log("ffmpeg.exe")` as use:
+  // the method itself must be one of the known execution APIs.
+  const invocationPattern = /\b(?:subprocess|child_process|os|process|runtime|shell|command)?(?:\.(?:spawn|spawnSync|exec|execFile|execFileSync|run|call|popen|which|require|import))\s*\(|\b(?:spawn|spawnSync|exec|execFile|execFileSync|run|call|popen|which|require|import)\s*\(|\b(?:import|require)\b|\b(?:shell|command|argv)\b\s*[:=]/i;
   for (const line of lines) {
     const trimmed = line.trim();
     if (!trimmed || /^(?:\/\/|#|\/\*|\*)/.test(trimmed)) continue;
