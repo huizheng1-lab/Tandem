@@ -578,7 +578,7 @@ const capabilityAbsencePattern = /\b(?:absent|unavailable|unusable|failing|faile
 // These words assert non-existence or non-installation. The broader pattern above
 // also includes functional failures (stalled/unusable/broken), which need a
 // different kind of evidence and must not be routed through this absence guard.
-const capabilityMissingPattern = /\b(?:absent|missing|not\s+(?:installed|found|present|available)|does\s+not\s+exist|no\s+longer\s+(?:present|available)|nonexistent|removed|deleted|gone|points\s+to\s+(?:a\s+)?(?:removed|nonexistent)\s+path)\b/i;
+const capabilityMissingPattern = /\b(?:absent|missing|unavailable|not\s+(?:installed|found|present|available)|does\s+not\s+exist|no\s+longer\s+(?:present|available)|nonexistent|removed|deleted|gone|points\s+to\s+(?:a\s+)?(?:removed|nonexistent)\s+path)\b/i;
 const explicitCheckPattern = /(?:exact\s+(?:command|tool\s+call)|(?:ran|running|executed|called|tested|checked|verified)\b|(?:command|tool\s+call)\s*[:=]|returned\s+(?:no|an?\s+error|exit)|test-path|read_file|glob|grep|bash|\bversion\b|\s-[A-Za-z][\w-]*)/i;
 const capabilityEvidenceStopWords = new Set([
   "about", "after", "before", "being", "could", "does", "from", "into", "just", "made", "missing",
