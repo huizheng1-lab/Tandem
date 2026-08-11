@@ -597,10 +597,6 @@ function capabilityClaimText(report: CompletionReport): string {
   return [report.summary, ...report.taskResults.map((task) => task.notes ?? ""), ...report.deviationsFromPlan].join(" ");
 }
 
-function hasCapabilityContext(value: string): boolean {
-  return /\b(?:tool|model|runtime|interpreter|service|server|comfyui|stack|capabilit|installed|executable|port)\b/i.test(value);
-}
-
 function capabilityClaimSubjectTerms(reportText: string): Set<string> {
   const genericTerms = new Set([
     "capability", "capabilities", "tool", "tools", "model", "models", "runtime", "runtimes",
@@ -651,18 +647,16 @@ function capabilityCommandTerms(command: string): Set<string> {
 
 /** Fail closed when a report turns an unverified empty search into an absence claim. */
 export function validateCapabilityAbsenceClaims(plan: BuildPlan, report: CompletionReport): string[] {
-  const planText = capabilityPlanText(plan);
   const reportText = capabilityClaimText(report);
   if (!capabilityAbsencePattern.test(reportText)) return [];
-  // Ordinary verification failures are not capability claims unless the plan was asking
-  // about a capability, or the plan provides that context. The plan is context only;
-  // it does not decide which subjects a claim may name.
-  if (!hasCapabilityContext(reportText) && !hasCapabilityContext(planText)) return [];
   // Claim subjects are preferred, with plan subjects retained as relevant context;
   // whichever source supplies the subject, it must occur in the probe command itself.
   // Output is useful as the returned result, but cannot launder an unrelated command into
   // evidence merely by repeating the model's absence claim.
   const subjectTerms = capabilitySubjectTerms(plan, reportText);
+  // A concrete name in the claim is sufficient context. Generic category words such as
+  // "tool" or "runtime" are supporting signals only, never a prerequisite for checking.
+  if (subjectTerms.size === 0) return [];
   const hasProbeEvidence = report.verificationResults.some((result) => {
     if (!result.command.trim() || !result.output.trim()) return false;
     const evidence = `${result.command}\n${result.output}`;
@@ -676,10 +670,10 @@ export function validateCapabilityAbsenceClaims(plan: BuildPlan, report: Complet
 
 /** A successful capability probe invalidates an earlier absence assertion. */
 export function reconcileCapabilityAbsenceClaims(plan: BuildPlan, report: CompletionReport): CompletionReport {
-  const planText = capabilityPlanText(plan);
   const reportText = capabilityClaimText(report);
-  if (!capabilityAbsencePattern.test(reportText) || (!hasCapabilityContext(reportText) && !hasCapabilityContext(planText))) return report;
+  if (!capabilityAbsencePattern.test(reportText)) return report;
   const subjectTerms = capabilitySubjectTerms(plan, reportText);
+  if (subjectTerms.size === 0) return report;
   const contradiction = report.verificationResults.some((result) => {
     const namesClaimedCapability = [...capabilityCommandTerms(result.command)].some((term) => subjectTerms.has(term));
     return namesClaimedCapability && successfulInvocationEvidence(result);
@@ -726,16 +720,14 @@ function isPresenceOnlyProbe(command: string): boolean {
 
 /** Reject a blocker whose named subject is contradicted by that same subject's successful probe. */
 export function validateRecordedCapabilityContradictions(plan: BuildPlan, report: CompletionReport): string[] {
-  const planText = capabilityPlanText(plan);
   const reportText = capabilityClaimText(report);
-  const hasCapabilityAbsenceClaim = capabilityAbsencePattern.test(reportText)
-    && (hasCapabilityContext(reportText) || hasCapabilityContext(planText));
+  const subjectTerms = capabilitySubjectTerms(plan, reportText);
+  const hasCapabilityAbsenceClaim = capabilityAbsencePattern.test(reportText) && subjectTerms.size > 0;
   // A blocked report is terminal and, by definition, has not satisfied the plan's
   // acceptance criteria. Do not make this second safety net depend on the agent's
   // choice of blocker vocabulary: the subject match below remains the required
   // narrowness boundary.
   if (!hasCapabilityAbsenceClaim && report.status !== "blocked") return [];
-  const subjectTerms = capabilitySubjectTerms(plan, reportText);
   const contradictions = report.verificationResults
     .filter(successfulInvocationEvidence)
     .filter((result) => [...capabilityCommandTerms(result.command)].some((term) => subjectTerms.has(term)))
@@ -753,12 +745,12 @@ export interface AuthoredFileContent {
 }
 
 function claimedCapabilitySubjects(plan: BuildPlan, report: CompletionReport): Set<string> {
-  const planText = capabilityPlanText(plan);
   const reportText = capabilityClaimText(report);
-  if (!capabilityAbsencePattern.test(reportText) || (!hasCapabilityContext(reportText) && !hasCapabilityContext(planText))) return new Set();
+  if (!capabilityAbsencePattern.test(reportText)) return new Set();
   // Include both sources: claims may introduce transitive dependencies, while the plan
   // remains useful when the blocker uses no explicit subject vocabulary.
-  return capabilitySubjectTerms(plan, reportText);
+  const subjects = capabilitySubjectTerms(plan, reportText);
+  return subjects.size > 0 ? subjects : new Set();
 }
 
 function authoredInvocationEvidence(lines: string[], subject: string): string | undefined {
