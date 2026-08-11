@@ -13,6 +13,11 @@ import { backgroundBridgeEnvironment, cliBackgroundInstructions, startBackground
 export type ClaudeSchemaKind = CodexSchemaKind;
 export type ClaudePermissionMode = "acceptEdits" | "auto" | "bypassPermissions" | "default" | "dontAsk" | "plan";
 
+// Claude's Windows .cmd launcher is invoked through cmd.exe, whose command line
+// limit is lower than CreateProcess's limit. Keep this explicit so a future
+// prompt expansion cannot regress into cmd.exe's opaque error.
+export const WINDOWS_CMD_LINE_LIMIT = 8191;
+
 export interface ClaudeExecOptions {
   cwd: string;
   prompt: string;
@@ -82,6 +87,7 @@ export function buildClaudeExecArgv(input: {
   // internal turns before failing. A normal single call should never legitimately exceed
   // $2; if it does, claude-code-cli stops with a diagnosable error.
   maxBudgetUsd?: number;
+  includeSystemPrompt?: boolean;
 }): string[] {
   const args = [
     "-p",
@@ -94,8 +100,23 @@ export function buildClaudeExecArgv(input: {
   }
   args.push("--permission-mode", input.permissionMode, "--no-session-persistence");
   if (input.readOnly) args.push("--tools", "Read,Grep,Glob");
-  args.push("--json-schema", JSON.stringify(input.schema), "--system-prompt", input.systemPrompt);
+  args.push("--json-schema", JSON.stringify(input.schema));
+  if (input.includeSystemPrompt !== false) args.push("--system-prompt", input.systemPrompt);
   return args;
+}
+
+function windowsArgLength(value: string): number {
+  // This deliberately errs slightly high for quoting/escaping. A conservative
+  // measurement is preferable to handing cmd.exe an invocation it cannot parse.
+  return /[\s\"]/.test(value) ? value.length + 2 + (value.match(/\"/g)?.length ?? 0) : value.length;
+}
+
+export function windowsCommandLineLength(filePath: string, args: readonly string[]): number {
+  return windowsArgLength(filePath) + args.reduce((total, arg) => total + 1 + windowsArgLength(arg), 0);
+}
+
+export function formatClaudeCommandLineLimitError(length: number, limit = WINDOWS_CMD_LINE_LIMIT): string {
+  return `Claude Code CLI command line is too long (${length} characters; Windows cmd.exe limit is ${limit}). The prompt could not be sent safely.`;
 }
 
 function trimOutput(value: unknown): string {
@@ -204,7 +225,7 @@ export async function runClaudeExec(options: ClaudeExecOptions): Promise<unknown
   assertSafeProjectDir(options.cwd);
   const claudePath = locateClaudeCli({ env: options.env, overridePath: options.claudeCliPath });
   if (!claudePath) throw new Error("Claude Code CLI not found. Install Claude Code or set CLAUDE_CLI_PATH / claudeCliPath.");
-  const args = buildClaudeExecArgv({
+  let args = buildClaudeExecArgv({
     prompt: options.prompt,
     systemPrompt: options.systemPrompt,
     schema: jsonSchemaFor(options.schema),
@@ -213,6 +234,27 @@ export async function runClaudeExec(options: ClaudeExecOptions): Promise<unknown
     readOnly: options.readOnly,
     maxBudgetUsd: options.maxBudgetUsd
   });
+  const commandLineLength = windowsCommandLineLength(claudePath, args);
+  let inputPrompt = options.prompt;
+  // stdin is the Claude CLI's supported large-input mechanism. If the system
+  // prompt would overflow cmd.exe, preserve it verbatim in stdin and omit only
+  // its argv copy. This branch is intentionally based on the measured command
+  // line, not on prompt truncation.
+  if (process.platform === "win32" && commandLineLength > WINDOWS_CMD_LINE_LIMIT) {
+    args = buildClaudeExecArgv({
+      prompt: options.prompt,
+      systemPrompt: options.systemPrompt,
+      schema: jsonSchemaFor(options.schema),
+      permissionMode: claudePermissionFor(options.permissionMode, options.readOnly),
+      modelName: options.modelName || undefined,
+      readOnly: options.readOnly,
+      maxBudgetUsd: options.maxBudgetUsd,
+      includeSystemPrompt: false
+    });
+    const reducedLength = windowsCommandLineLength(claudePath, args);
+    if (reducedLength > WINDOWS_CMD_LINE_LIMIT) throw new Error(formatClaudeCommandLineLimitError(reducedLength));
+    inputPrompt = `${options.systemPrompt}\n\n--- Task prompt ---\n${options.prompt}`;
+  }
   const bridge = await startBackgroundProcessBridge(options.cwd, options.permissionMode, options.permissionBridge, options.readOnly === true);
   options.onToolEvent?.({ role: options.role, tool: "claude_code_cli", target: options.readOnly ? "read-only prompt" : "write prompt", phase: "start" });
   const started = Date.now();
@@ -220,7 +262,7 @@ export async function runClaudeExec(options: ClaudeExecOptions): Promise<unknown
   const result = await execa(claudePath, args, {
     cwd: options.cwd,
     env: cliEnv,
-    input: `${options.prompt}\n${cliBackgroundInstructions(options.readOnly === true, cliEnv.TANDEM_BACKGROUND_COMMAND ?? "tandem /background")}`,
+    input: `${inputPrompt}\n${cliBackgroundInstructions(options.readOnly === true, cliEnv.TANDEM_BACKGROUND_COMMAND ?? "tandem /background")}`,
     windowsHide: true,
     reject: false,
     cancelSignal: options.abortSignal
