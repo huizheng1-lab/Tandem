@@ -586,6 +586,11 @@ const capabilityAbsencePattern = /\b(?:absent|unavailable|unusable|failing|faile
 // Keep the historical absence vocabulary explicit and centralized. In particular,
 // `unavailable` is a standalone claim; it must not be lost while adding the
 // multi-word forms such as `not available`.
+// Keep this list immutable: it is the absence-only vocabulary shared by the
+// evidence guard and its definite-absence refinement. Functional-failure
+// terms (unusable, stalled, failing, and broken) belong only to
+// capabilityFunctionalFailurePattern below; adding them here would route a
+// failed-but-present capability through the missing-path check.
 const capabilityMissingAlternatives = [
   "absent",
   "missing",
@@ -600,7 +605,7 @@ const capabilityMissingAlternatives = [
   "deleted",
   "gone",
   "points\\s+to\\s+(?:a\\s+)?(?:removed|nonexistent)\\s+path"
-];
+] as const;
 export const capabilityMissingPattern = new RegExp(
   `\\b(?:${capabilityMissingAlternatives.join("|")})\\b`,
   "i"
