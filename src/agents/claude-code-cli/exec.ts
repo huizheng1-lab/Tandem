@@ -106,9 +106,11 @@ export function buildClaudeExecArgv(input: {
 }
 
 function windowsArgLength(value: string): number {
-  // This deliberately errs slightly high for quoting/escaping. A conservative
+  // A .cmd launcher is parsed once by cmd.exe and commonly expands %* into a
+  // second command line. Account for both quoting passes. A conservative
   // measurement is preferable to handing cmd.exe an invocation it cannot parse.
-  return /[\s\"]/.test(value) ? value.length + 2 + (value.match(/\"/g)?.length ?? 0) : value.length;
+  const quoteCount = value.match(/\"/g)?.length ?? 0;
+  return /[\s\"]/.test(value) ? value.length + 2 + quoteCount * 2 : value.length;
 }
 
 export function windowsCommandLineLength(filePath: string, args: readonly string[]): number {
