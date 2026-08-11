@@ -605,6 +605,12 @@ export const capabilityMissingPattern = new RegExp(
   `\\b(?:${capabilityMissingAlternatives.join("|")})\\b`,
   "i"
 );
+const capabilityDefiniteAbsencePattern = new RegExp(
+  `\\b(?:${capabilityMissingAlternatives
+    .filter((alternative) => !alternative.startsWith("cannot") && !alternative.startsWith("can't"))
+    .join("|")})\\b`,
+  "i"
+);
 const capabilityFunctionalFailurePattern = /\b(?:unusable|failing|failed|fails|stalled|broken|cannot\s+(?:run|start|be\s+used)|can't\s+(?:run|start|be\s+used))\b/i;
 const explicitCheckPattern = /(?:exact\s+(?:command|tool\s+call)|(?:ran|running|executed|called|tested|checked|verified)\b|(?:command|tool\s+call)\s*[:=]|returned\s+(?:no|an?\s+error|exit)|test-path|read_file|glob|grep|bash|\bversion\b|\s-[A-Za-z][\w-]*)/i;
 const capabilityEvidenceStopWords = new Set([
@@ -683,7 +689,10 @@ export function validateCapabilityAbsenceClaims(plan: BuildPlan, report: Complet
   // claim. In particular, a successful Test-Path must neither contradict it nor
   // force the report to manufacture an absence probe.
   if (!capabilityMissingPattern.test(reportText)) return [];
-  if (capabilityFunctionalFailurePattern.test(reportText)) return [];
+  if (
+    capabilityFunctionalFailurePattern.test(reportText)
+    && !capabilityDefiniteAbsencePattern.test(reportText)
+  ) return [];
   // Claim subjects are preferred, with plan subjects retained as relevant context;
   // whichever source supplies the subject, it must occur in the probe command itself.
   // Output is useful as the returned result, but cannot launder an unrelated command into
