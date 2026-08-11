@@ -12,7 +12,7 @@ import { modelRegistry } from "../providers/registry.js";
 import { modelDisplayName } from "../providers/cli-models.js";
 import { parseLoop } from "../commands/loop.js";
 import { addSchedule, listSchedules, markScheduleRun, missedSchedule, removeSchedule, Schedule } from "../commands/schedule.js";
-import { addGoal, appendGoalNote, formatStandingGoals, listGoals } from "../session/goals.js";
+import { addGoal, appendGoalNote, classifyGoalMessageIntent, formatGoalResumptionNotice, formatStandingGoals, listGoals } from "../session/goals.js";
 import { buildConversationHistory } from "../session/history.js";
 import { compactSessionHistory, isCliBackedLeader } from "../session/compaction.js";
 import { rebuildLeaderThread } from "../session/leader-thread.js";
@@ -489,6 +489,10 @@ export function App({ config: initialConfig, env, cwd, initialError }: { config:
       if (commandResult !== undefined) {
         addMessage("SYSTEM", commandResult);
       } else {
+        const activeGoals = (await listGoals(cwd)).filter((goal) => goal.status === "active");
+        if (activeGoals.length > 0 && classifyGoalMessageIntent(value, activeGoals) === "low-signal") {
+          addMessage("SYSTEM", formatGoalResumptionNotice(activeGoals));
+        }
         await runPipeline(value);
       }
     } catch (error) {

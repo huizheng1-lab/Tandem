@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { handleGoal } from "../src/commands/goal.js";
-import { addGoal, clearGoals, listGoals, formatStandingGoals, type Goal } from "../src/session/goals.js";
+import { addGoal, classifyGoalMessageIntent, clearGoals, formatGoalResumptionNotice, listGoals, formatStandingGoals, type Goal } from "../src/session/goals.js";
 
 function goal(overrides: Partial<Goal>): Goal {
   return {
@@ -23,6 +23,26 @@ describe("standing goal formatting", () => {
 
   it("includes only the last two progress notes indented under the goal", () => {
     expect(formatStandingGoals([goal({ id: 3, notes: ["first", "second", "third"] })])).toEqual(["Goal 3: build a dogfight game\n  - second\n  - third"]);
+  });
+});
+
+describe("goal resumption disclosure", () => {
+  it("classifies a greeting as low signal and explicit continuation as intentional", () => {
+    const goals = [goal({ text: "regenerate every clip from scratch" })];
+    expect(classifyGoalMessageIntent("Hi", goals)).toBe("low-signal");
+    expect(classifyGoalMessageIntent("continue", goals)).toBe("explicit-continuation");
+  });
+
+  it("recognizes a message matching the recorded goal", () => {
+    expect(classifyGoalMessageIntent("Please regenerate every clip from scratch", [goal({ text: "regenerate every clip from scratch" })])).toBe("goal-match");
+  });
+
+  it("lists every active goal verbatim and states the expensive scope", () => {
+    const goals = [goal({ id: 2, text: "first exact request" }), goal({ id: 3, text: "second exact request" })];
+    const notice = formatGoalResumptionNotice(goals);
+    expect(notice).toContain("- Goal 2: first exact request");
+    expect(notice).toContain("- Goal 3: second exact request");
+    expect(notice).toContain("multi-step build or background job with substantial expected duration");
   });
 });
 
