@@ -106,15 +106,20 @@ export function buildClaudeExecArgv(input: {
 }
 
 function windowsArgLength(value: string): number {
-  // A .cmd launcher is parsed once by cmd.exe and commonly expands %* into a
-  // second command line. Account for both quoting passes. A conservative
-  // measurement is preferable to handing cmd.exe an invocation it cannot parse.
+  // This is the length of one argv value after the quoting needed by cmd.exe.
+  // The launcher itself is accounted for separately below.
   const quoteCount = value.match(/\"/g)?.length ?? 0;
   return /[\s\"]/.test(value) ? value.length + 2 + quoteCount * 2 : value.length;
 }
 
 export function windowsCommandLineLength(filePath: string, args: readonly string[]): number {
-  return windowsArgLength(filePath) + args.reduce((total, arg) => total + 1 + windowsArgLength(arg), 0);
+  const forwardedArgsLength = args.reduce((total, arg) => total + 1 + windowsArgLength(arg), 0);
+  // Claude is commonly launched through claude.cmd. cmd.exe parses the outer
+  // invocation and then the .cmd file expands %* into a second invocation.
+  // Every forwarded argument therefore occupies the command line twice; the
+  // old calculation doubled only quote characters and under-counted long
+  // prompts by thousands of characters.
+  return windowsArgLength(filePath) + forwardedArgsLength * 2;
 }
 
 export function formatClaudeCommandLineLimitError(length: number, limit = WINDOWS_CMD_LINE_LIMIT): string {

@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { createLiveAgents } from "../src/agents/live.js";
-import { buildClaudeExecArgv, claudePermissionFor, formatClaudeExitError, isClaudeOpus5UnsupportedError, parseClaudeEnvelope, RateLimitError, runClaudeExec } from "../src/agents/claude-code-cli/exec.js";
+import { buildClaudeExecArgv, claudePermissionFor, formatClaudeCommandLineLimitError, formatClaudeExitError, isClaudeOpus5UnsupportedError, parseClaudeEnvelope, RateLimitError, runClaudeExec, WINDOWS_CMD_LINE_LIMIT, windowsCommandLineLength } from "../src/agents/claude-code-cli/exec.js";
 import { buildClaudeLeaderPlanPrompts, buildClaudeLeaderReviewPrompts, buildClaudeLeaderTakeoverPrompts, claudeLeaderReview, claudeLeaderTakeover } from "../src/agents/claude-code-cli/leader.js";
 import { clearClaudeCliPathCache, locateClaudeCli } from "../src/agents/claude-code-cli/locate.js";
 import { buildClaudeWorkerPrompts } from "../src/agents/claude-code-cli/worker.js";
@@ -235,6 +235,21 @@ describe("claude code cli execution", () => {
     });
     expect(argv).toContain("-p");
     expect(argv).not.toContain(prompt);
+  });
+
+  it("accounts for both cmd.exe parsing passes when measuring forwarded arguments", () => {
+    const systemPrompt = "x".repeat(5000);
+    const measured = windowsCommandLineLength("claude.cmd", ["--system-prompt", systemPrompt]);
+    const expected = "claude.cmd".length + 2 * (1 + "--system-prompt".length + 1 + systemPrompt.length);
+    expect(measured).toBe(expected);
+    expect(measured).toBeGreaterThan(WINDOWS_CMD_LINE_LIMIT);
+  });
+
+  it("formats an over-limit measurement with the measured length and cmd.exe limit", () => {
+    const measured = windowsCommandLineLength("claude.cmd", ["--system-prompt", "x".repeat(5000)]);
+    expect(formatClaudeCommandLineLimitError(measured)).toContain(`(${measured} characters`);
+    expect(formatClaudeCommandLineLimitError(measured)).toContain(`limit is ${WINDOWS_CMD_LINE_LIMIT}`);
+    expect(formatClaudeCommandLineLimitError(measured)).not.toContain("The command line is too long.");
   });
 
   it("D68-2: appends --max-budget-usd when maxBudgetUsd is set (omits when not)", () => {
