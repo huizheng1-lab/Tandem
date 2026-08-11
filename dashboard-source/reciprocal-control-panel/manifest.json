@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "generatedAtUtc": "2026-08-07T15:06:50.836Z",
+  "generatedAtUtc": "2026-08-11T00:38:58.582Z",
   "files": [
     {
       "path": "approval-flow.e2e.mjs",
@@ -34,7 +34,7 @@
     },
     {
       "path": "public/app.js",
-      "sha256": "671759B646A79BEC65904B32208EF6B27616C9E491DFD95BB7EE28CEABB51CCF",
+      "sha256": "6C5D51225C89F464922471D0D5E506EB8A8441D2F99F4B1E269F0AD0E4F7207E",
       "bytes": 45983
     },
     {
@@ -44,7 +44,7 @@
     },
     {
       "path": "public/index.html",
-      "sha256": "51022B8E26DF7252A26D7F52EA837E13401B0288A3F022B26A7E083EB70DF8DD",
+      "sha256": "D9818112401B1395D4D8454B6331C1A6EB40D97D16990FCB2134BCA0C8AC99D8",
       "bytes": 15983
     },
     {
@@ -74,7 +74,7 @@
     },
     {
       "path": "server.mjs",
-      "sha256": "9695562153F3BDA47451B55BBB1D26E0EAC397B804893DBC30AEFB6DED658E0B",
+      "sha256": "5EF06B26FE4C1DADD4D835C2CCBC5D53581B6F0E399ED3D2B26CE38B96A3CC98",
       "bytes": 144449
     },
     {
