@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   validateAuthoredCapabilityContradictions,
+  validateRecordedCapabilityContradictions,
   type AuthoredFileContent
 } from "../src/orchestrator/artifacts.js";
 import type { BuildPlan, CompletionReport } from "../src/orchestrator/artifacts.js";
@@ -61,5 +62,37 @@ describe("authored capability contradiction guard", () => {
       content: 'FFMPEG = r"C:\\tools\\ffmpeg.exe"'
     };
     expect(() => validateAuthoredCapabilityContradictions(plan, report("assembled the clips"), [file])).not.toThrow();
+  });
+
+  it.each([
+    ['{"audio": "C:\\\\tmp\\\\sound.mp3"}'],
+    ['const report = "ffmpeg.exe failed to start";'],
+    ['const input = "C:\\\\tools\\\\ffmpeg.exe";']
+  ])("does not treat authored data as capability use: %s", (content) => {
+    expect(() => validateAuthoredCapabilityContradictions(plan, report("ffmpeg is unusable"), [{ path: "work/report.json", content }])).not.toThrow();
+  });
+
+  it("still rejects an authored invocation", () => {
+    expect(() => validateAuthoredCapabilityContradictions(plan, report("ffmpeg is unusable"), [{
+      path: "work/build.py",
+      content: 'subprocess.run(["ffmpeg.exe", "-version"])'
+    }])).toThrow();
+  });
+});
+
+describe("recorded capability contradiction guard", () => {
+  const blocked = (summary: string, command: string, output: string, passed = true): CompletionReport => ({
+    ...report(summary),
+    status: "blocked",
+    verificationResults: [{ command, passed, output }]
+  });
+
+  it("does not treat presence probes as functional success", () => {
+    expect(validateRecordedCapabilityContradictions(plan, blocked("ComfyUI is stalled", 'Test-Path -LiteralPath "C:\\ComfyUI"', "True"))).toEqual([]);
+    expect(validateRecordedCapabilityContradictions(plan, blocked("ComfyUI is stalled", 'Get-ChildItem "C:\\ComfyUI"', "Directory: C:\\ComfyUI"))).toEqual([]);
+  });
+
+  it("does treat a successful version invocation as a contradiction", () => {
+    expect(validateRecordedCapabilityContradictions(plan, blocked("ffmpeg is unusable", "ffmpeg --version", "ffmpeg version 7.0"))).toHaveLength(1);
   });
 });

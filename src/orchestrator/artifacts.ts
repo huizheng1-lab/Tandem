@@ -697,6 +697,11 @@ export function reconcileCapabilityAbsenceClaims(plan: BuildPlan, report: Comple
 
 function successfulInvocationEvidence(result: CompletionReport["verificationResults"][number]): boolean {
   if (!result.passed || !result.command.trim() || !result.output.trim()) return false;
+  // Presence probes establish that a path or entry exists, not that the capability can
+  // perform its job. Keep these explicitly separate from functional invocations: a true
+  // Test-Path must not contradict a claim that ComfyUI (or another runtime) is stalled or
+  // unusable. This covers the common PowerShell, cmd, POSIX, and Node existence shapes.
+  if (isPresenceOnlyProbe(result.command)) return false;
   // A probe can execute successfully while finding nothing. Keep that distinct from
   // invoking the capability successfully (for example Test-Path -> False).
   if (/\b(?:false|not\s+found|could\s+not\s+find|cannot\s+find|no\s+matches?|no\s+such\s+file|does\s+not\s+exist|not\s+recognized|command\s+not\s+found|exit\s*(?:code\s*)?[1-9]\b|returned\s+(?:false|not\s+found|no))\b/i.test(result.output)) return false;
@@ -708,6 +713,15 @@ function successfulInvocationEvidence(result: CompletionReport["verificationResu
   // version does not satisfy this predicate because passed must also be true.
   if (/\b(?:exit\s*(?:code\s*)?0|version\b|\bpath\b|(?:succeed|success|successful|works?)\b|returned\s+(?:true|ok)|true\b)/i.test(result.output)) return true;
   return /(?:^|\s)(?:-v|-V|--version)(?:\s|$)/.test(result.command) && /\b\d+(?:\.\d+){1,3}\b/.test(result.output);
+}
+
+/** Presence-only probes are evidence of installation/layout, never successful capability use. */
+function isPresenceOnlyProbe(command: string): boolean {
+  const normalized = command.trim().replace(/\s+/g, " ");
+  return /^(?:test-path|get-item|get-childitem|gci|dir|ls|stat|find|where|which)\b/i.test(normalized)
+    || /\b(?:test-path|get-item|get-childitem|gci)\b/i.test(normalized)
+    || /(?:file|directory|path)\.exists\s*\(|\bexists\s*\(/i.test(normalized)
+    || /^\[?\s*-e\s+/i.test(normalized);
 }
 
 /** Reject a blocker whose named subject is contradicted by that same subject's successful probe. */
@@ -750,8 +764,12 @@ function claimedCapabilitySubjects(plan: BuildPlan, report: CompletionReport): S
 function executableUseLine(lines: string[], subject: string): string | undefined {
   const escaped = subject.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   const subjectPattern = new RegExp(`(?:^|[\\\\/"']|\\b)${escaped}(?:\\.exe)?(?:$|[\\\\/"'\\s,):])`, "i");
-  const assignmentPattern = /(?:=|:|=>)\s*(?:r)?["']?(?:[A-Za-z]:[\\/]|\/|\.\.?[\\/])[^\n"']+/;
-  const invocationPattern = /\b(?:subprocess|spawn|exec|run|call|popen|which)\s*\(|\b(?:shell|command|argv)\b\s*[:=]/i;
+  // A colon is intentionally excluded: in JSON/YAML/report data it commonly separates a
+  // field name from a path string (for example "audio": "C:\\...") and is not execution.
+  // Likewise, a generic data variable containing a path is not use; an assignment only
+  // counts when the authored variable itself names the subject (for example FFMPEG = ...).
+  const assignmentPattern = new RegExp(`(?:^|[\\s(;])${escaped}(?:_PATH|_EXE)?\\s*(?:=|=>)\\s*(?:r)?["']?(?:[A-Za-z]:[\\\\/]|\\/|\\.\\.?[\\\\/])[^\\n"']+`, "i");
+  const invocationPattern = /\b(?:subprocess|spawn|exec|run|call|popen|which|require|import)\s*\(|\b(?:import|require)\b|\b(?:shell|command|argv)\b\s*[:=]/i;
   for (const line of lines) {
     const trimmed = line.trim();
     if (!trimmed || /^(?:\/\/|#|\/\*|\*)/.test(trimmed)) continue;

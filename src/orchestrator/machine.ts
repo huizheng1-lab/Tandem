@@ -356,11 +356,11 @@ export interface RunResult {
   parkedAwaitId?: string;
 }
 
-/** A validator rejection is a concrete turn failure and must outrank model guesses. */
+/** Keep the worker's stated blocker visible when validator retries are exhausted. */
 export function takeoverValidationFailureSummary(error: unknown, userSummary: string, reports: CompletionReport[] = []): string {
   const artifacts = [...new Set(reports.flatMap((report) => report.filesChanged).filter(Boolean))];
   const inventory = artifacts.length > 0 ? artifacts.join(", ") : "no artifact paths were recorded";
-  return `Takeover could not be finalized because artifact validation failed: ${String(error)}. Underlying work may be complete; artifacts present on disk (as recorded by the reports): ${inventory}. Exact validator error: ${String(error)}. Agent summary (unverified): ${userSummary}`;
+  return `Agent stated blocker (unverified): ${userSummary}. Takeover could not be finalized because artifact validation failed: ${String(error)}. Underlying work may be complete; artifacts present on disk (as recorded by the reports): ${inventory}. Exact validator error: ${String(error)}.`;
 }
 
 export async function runOrchestration(options: RunOptions): Promise<RunResult> {

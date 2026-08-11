@@ -369,7 +369,8 @@ describe("orchestration", () => {
     expect(result.summary).toContain("artifact validation failed");
     expect(result.summary).toContain(validatorMessage);
     expect(result.summary).not.toContain("not a genuine retry");
-    expect(result.summary).toContain("Agent summary (unverified)");
+    expect(result.summary).toContain("Agent stated blocker (unverified): ffmpeg is unavailable");
+    expect(result.summary.indexOf("Agent stated blocker")).toBeLessThan(result.summary.indexOf("artifact validation failed"));
   });
 
   it("preserves an earlier takeover validation cause when a later retry fails elsewhere", async () => {
