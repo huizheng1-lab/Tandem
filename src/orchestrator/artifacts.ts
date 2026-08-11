@@ -768,30 +768,29 @@ function claimedCapabilitySubjects(plan: BuildPlan, report: CompletionReport): S
 }
 
 function authoredInvocationEvidence(lines: string[], subject: string): string | undefined {
-  const normalizedSubject = subject.toLowerCase();
-  const directCall = new RegExp(`(?:^|[^\\w.-])${subject.replace(/[.*+?^${}()|[\\]\\]/g, "\\$&")}(?:\\.exe)?\\s*\\(`, "i");
+  const escaped = subject.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const subjectInPath = new RegExp(`(?:^|[\\\\/"']|\\b)${escaped}(?:\\.exe)?(?=$|[\\\\/"'\\s,):])`, "i");
+  const directCall = new RegExp(`(?:^|[^\\w.-])${escaped}(?:\\.exe)?\\s*\\(`, "i");
+  const importUse = new RegExp(`^\\s*(?:from\\s+|import\\s+|(?:const|let|var)\\s+\\w+\\s*=\\s*require\\s*\\(\\s*["'])${escaped}(?:\\.exe)?`, "i");
   const invocation = /\b(?:subprocess|child_process|os|process|runtime|shell|command)?\s*\.\s*(?:spawn|spawnSync|exec|execFile|execFileSync|run|popen|system|call)\s*\(|\b(?:spawn|spawnSync|exec|execFile|execFileSync|run|popen|system|call)\s*\(/i;
-  const bindings = new Set<string>();
-  const bindingLines = new Map<string, string>();
+  const bindings = new Map<string, string>();
   const activeLines = lines.map((line) => line.replace(/\s*(?:#|\/\/).*/, "").trim()).filter(Boolean);
-  const assignment = new RegExp(`^\\s*(?:const|let|var)?\\s*([A-Za-z_][\\w]*)\\s*=\\s*.*${subject.replace(/[.*+?^${}()|[\\]\\]/g, "\\$&")}(?:\\.exe)?`, "i");
+  const assignment = /^\s*(?:(?:const|let|var)\s+)?([A-Za-z_]\w*)\s*=\s*(?:r)?["']([^"']+)["']/i;
   for (const line of activeLines) {
     const match = line.match(assignment);
-    if (match && line.toLowerCase().includes(normalizedSubject)) {
-      const binding = match[1].toLowerCase();
-      bindings.add(binding);
-      bindingLines.set(binding, line);
-    }
+    if (match && subjectInPath.test(match[2])) bindings.set(match[1].toLowerCase(), line);
   }
   for (const line of activeLines) {
-    if (new RegExp(`^\\s*(?:from\\s+|import\\s+|require\\s*\\(\\s*["']|use\\s+).*${subject.replace(/[.*+?^${}()|[\\]\\]/g, "\\\\$&")}`, "i").test(line)) return line;
+    if (importUse.test(line)) return line;
     if (directCall.test(line)) return line;
     const call = line.match(invocation);
     if (!call) continue;
-    const argumentsText = line.slice((call.index ?? 0) + call[0].length).toLowerCase();
-    const binding = [...bindings].find((candidate) => new RegExp(`\\b${candidate}\\b`, "i").test(argumentsText));
-    if (argumentsText.includes(normalizedSubject)) return line;
-    if (binding) return `${bindingLines.get(binding) ?? binding} -> ${line}`;
+    const argumentsText = line.slice((call.index ?? 0) + call[0].length);
+    if (subjectInPath.test(argumentsText)) return line;
+    const binding = [...bindings.keys()].find((candidate) =>
+      new RegExp(`\\b${candidate.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`, "i").test(argumentsText)
+    );
+    if (binding) return `${bindings.get(binding)} -> ${line}`;
   }
   return undefined;
 }
