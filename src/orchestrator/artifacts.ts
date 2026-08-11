@@ -786,11 +786,15 @@ function authoredInvocationEvidence(lines: string[], subject: string): string | 
     const call = line.match(invocation);
     if (!call) continue;
     const argumentsText = line.slice((call.index ?? 0) + call[0].length);
-    if (subjectInPath.test(argumentsText)) return line;
     const binding = [...bindings.keys()].find((candidate) =>
       new RegExp(`\\b${candidate.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`, "i").test(argumentsText)
     );
+    // Resolve a bare executable variable before path matching. A case-insensitive
+    // subject match can hit a binding such as FFMPEG, but the assignment and call
+    // together are the useful evidence; literal path-bearing arguments still use
+    // the concise call-site evidence below.
     if (binding) return `${bindings.get(binding)} -> ${line}`;
+    if (subjectInPath.test(argumentsText)) return line;
   }
   return undefined;
 }
