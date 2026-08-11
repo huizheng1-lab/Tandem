@@ -309,7 +309,10 @@ export class TandemService {
             void this.emitMachine(event);
           }
         });
-        if (result.phase !== "PARKED" || !result.parkedAwaitId) break;
+        if (result.phase !== "PARKED") break;
+        if (!result.parkedAwaitId) {
+          throw new Error("Parked orchestration result is missing its durable await id.");
+        }
 
         // PARKED is resumable state, not completion. Persist the complete checkpoint
         // before waiting so a restart or the renderer can recover the round.
