@@ -761,6 +761,34 @@ function claimedCapabilitySubjects(plan: BuildPlan, report: CompletionReport): S
   return capabilitySubjectTerms(plan, reportText);
 }
 
+function authoredInvocationLine(lines: string[], subject: string): string | undefined {
+  const escaped = subject.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const subjectPattern = new RegExp(`(?:^|[\\\\/"']|\\b)${escaped}(?:\\.exe)?(?=$|[\\\\/"'\\s,):])`, "i");
+  const executionCallPattern = /\b(?:subprocess|child_process|os|process|runtime|shell|command)?\s*\.\s*(?:spawn|spawnSync|exec|execFile|execFileSync|run|popen|system|call)\s*\(|\b(?:spawn|spawnSync|exec|execFile|execFileSync|run|popen|system|call)\s*\(/i;
+  const directCallPattern = new RegExp(`(?:^|[^\\w.-])${escaped}(?:\\.exe)?\\s*\\(`, "i");
+  const importPattern = new RegExp(`^\\s*(?:from\\s+${escaped}\\s+import|import\\s+${escaped}(?:\\s|$)|(?:const|let|var)\\s+\\w+\\s*=\\s*require\\s*\\(["']${escaped}(?:["']|[\\\\/]))`, "i");
+  const assignmentPattern = new RegExp(`^\\s*(?:const|let|var)?\\s*([A-Za-z_][\\w]*)\\s*=\\s*(?:r)?["'](?:[A-Za-z]:[\\\\/]|\\.?[\\\\/])[^"']*${escaped}(?:\\.exe)?[^"']*["']`, "i");
+  const bindings = new Set<string>();
+  const activeLines = lines.map((line) => line.replace(/\\s*(?:#|\/\/).*/, "").trim()).filter(Boolean);
+  for (const line of activeLines) {
+    const assignment = line.match(assignmentPattern);
+    if (assignment) bindings.add(assignment[1]);
+  }
+  for (const line of activeLines) {
+    if (importPattern.test(line)) return line;
+    if (directCallPattern.test(line)) return line;
+    const hasSubject = subjectPattern.test(line);
+    const hasBinding = [...bindings].some((binding) => new RegExp(`\\b${binding.replace(/[.*+?^${}()|[\\]\\]/g, "\\$&")}\\b`).test(line));
+    if (!hasSubject && !hasBinding) continue;
+    const call = line.match(executionCallPattern);
+    if (!call) continue;
+    const callEnd = (call.index ?? 0) + call[0].length;
+    if (subjectPattern.test(line.slice(callEnd))) return line;
+    if (hasBinding && [...bindings].some((binding) => new RegExp(`\\b${binding.replace(/[.*+?^${}()|[\\]\\]/g, "\\$&")}\\b`).test(line.slice(callEnd)))) return line;
+  }
+  return undefined;
+}
+
 function executableUseLine(lines: string[], subject: string): string | undefined {
   const escaped = subject.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   const subjectPattern = new RegExp(`(?:^|[\\\\/"']|\\b)${escaped}(?:\\.exe)?(?:$|[\\\\/"'\\s,):])`, "i");
@@ -795,7 +823,7 @@ export function validateAuthoredCapabilityContradictions(
   const subjects = claimedCapabilitySubjects(plan, report);
   if (subjects.size === 0 || authoredFiles.length === 0) return;
   for (const file of authoredFiles) {
-    const line = [...subjects].map((subject) => executableUseLine(file.content.split(/\r?\n/), subject)).find(Boolean);
+    const line = [...subjects].map((subject) => authoredInvocationLine(file.content.split(/\r?\n/), subject)).find(Boolean);
     if (line) {
       const subject = [...subjects].find((candidate) => line.toLowerCase().includes(candidate.toLowerCase())) ?? "capability";
       throw new Error(`Capability claim contradicted by authored file ${file.path}: claimed ${subject} is unusable, but this line uses it: ${line}`);
