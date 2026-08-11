@@ -574,7 +574,7 @@ function detectVerificationScriptTampering(plan: BuildPlan, report: CompletionRe
   return missing;
 }
 
-const capabilityAbsencePattern = /\b(?:absent|unavailable|not\s+(?:installed|found|present|available|usable)|does\s+not\s+exist|cannot\s+(?:run|start|be\s+used)|can't\s+(?:run|start|be\s+used)|missing|removed|deleted|gone|no\s+longer\s+(?:present|available)|nonexistent|broken|points\s+to\s+(?:a\s+)?(?:removed|nonexistent)\s+path)\b/i;
+const capabilityAbsencePattern = /\b(?:absent|unavailable|unusable|failing|failed|fails|stalled|not\s+(?:installed|found|present|available|usable)|does\s+not\s+exist|cannot\s+(?:run|start|be\s+used)|can't\s+(?:run|start|be\s+used)|missing|removed|deleted|gone|no\s+longer\s+(?:present|available)|nonexistent|broken|points\s+to\s+(?:a\s+)?(?:removed|nonexistent)\s+path)\b/i;
 const explicitCheckPattern = /(?:exact\s+(?:command|tool\s+call)|(?:ran|running|executed|called|tested|checked|verified)\b|(?:command|tool\s+call)\s*[:=]|returned\s+(?:no|an?\s+error|exit)|test-path|read_file|glob|grep|bash|\bversion\b|\s-[A-Za-z][\w-]*)/i;
 const capabilityEvidenceStopWords = new Set([
   "about", "after", "before", "being", "could", "does", "from", "into", "just", "made", "missing",
@@ -758,18 +758,26 @@ function authoredInvocationEvidence(lines: string[], subject: string): string | 
   const directCall = new RegExp(`(?:^|[^\\w.-])${subject.replace(/[.*+?^${}()|[\\]\\]/g, "\\$&")}(?:\\.exe)?\\s*\\(`, "i");
   const invocation = /\b(?:subprocess|child_process|os|process|runtime|shell|command)?\s*\.\s*(?:spawn|spawnSync|exec|execFile|execFileSync|run|popen|system|call)\s*\(|\b(?:spawn|spawnSync|exec|execFile|execFileSync|run|popen|system|call)\s*\(/i;
   const bindings = new Set<string>();
+  const bindingLines = new Map<string, string>();
   const activeLines = lines.map((line) => line.replace(/\s*(?:#|\/\/).*/, "").trim()).filter(Boolean);
   const assignment = new RegExp(`^\\s*(?:const|let|var)?\\s*([A-Za-z_][\\w]*)\\s*=\\s*.*${subject.replace(/[.*+?^${}()|[\\]\\]/g, "\\$&")}(?:\\.exe)?`, "i");
   for (const line of activeLines) {
     const match = line.match(assignment);
-    if (match && line.toLowerCase().includes(normalizedSubject)) bindings.add(match[1].toLowerCase());
+    if (match && line.toLowerCase().includes(normalizedSubject)) {
+      const binding = match[1].toLowerCase();
+      bindings.add(binding);
+      bindingLines.set(binding, line);
+    }
   }
   for (const line of activeLines) {
+    if (new RegExp(`^\\s*(?:from\\s+|import\\s+|require\\s*\\(\\s*["']|use\\s+).*${subject.replace(/[.*+?^${}()|[\\]\\]/g, "\\\\$&")}`, "i").test(line)) return line;
     if (directCall.test(line)) return line;
     const call = line.match(invocation);
     if (!call) continue;
     const argumentsText = line.slice((call.index ?? 0) + call[0].length).toLowerCase();
-    if (argumentsText.includes(normalizedSubject) || [...bindings].some((binding) => new RegExp(`\\b${binding}\\b`, "i").test(argumentsText))) return line;
+    const binding = [...bindings].find((candidate) => new RegExp(`\\b${candidate}\\b`, "i").test(argumentsText));
+    if (argumentsText.includes(normalizedSubject)) return line;
+    if (binding) return `${bindingLines.get(binding) ?? binding} -> ${line}`;
   }
   return undefined;
 }
