@@ -761,6 +761,27 @@ function claimedCapabilitySubjects(plan: BuildPlan, report: CompletionReport): S
   return capabilitySubjectTerms(plan, reportText);
 }
 
+function authoredInvocationEvidence(lines: string[], subject: string): string | undefined {
+  const normalizedSubject = subject.toLowerCase();
+  const directCall = new RegExp(`(?:^|[^\\w.-])${subject.replace(/[.*+?^${}()|[\\]\\]/g, "\\$&")}(?:\\.exe)?\\s*\\(`, "i");
+  const invocation = /\b(?:subprocess|child_process|os|process|runtime|shell|command)?\s*\.\s*(?:spawn|spawnSync|exec|execFile|execFileSync|run|popen|system|call)\s*\(|\b(?:spawn|spawnSync|exec|execFile|execFileSync|run|popen|system|call)\s*\(/i;
+  const bindings = new Set<string>();
+  const activeLines = lines.map((line) => line.replace(/\s*(?:#|\/\/).*/, "").trim()).filter(Boolean);
+  const assignment = new RegExp(`^\\s*(?:const|let|var)?\\s*([A-Za-z_][\\w]*)\\s*=\\s*.*${subject.replace(/[.*+?^${}()|[\\]\\]/g, "\\$&")}(?:\\.exe)?`, "i");
+  for (const line of activeLines) {
+    const match = line.match(assignment);
+    if (match && line.toLowerCase().includes(normalizedSubject)) bindings.add(match[1].toLowerCase());
+  }
+  for (const line of activeLines) {
+    if (directCall.test(line)) return line;
+    const call = line.match(invocation);
+    if (!call) continue;
+    const argumentsText = line.slice((call.index ?? 0) + call[0].length).toLowerCase();
+    if (argumentsText.includes(normalizedSubject) || [...bindings].some((binding) => new RegExp(`\\b${binding}\\b`, "i").test(argumentsText))) return line;
+  }
+  return undefined;
+}
+
 function authoredInvocationLine(lines: string[], subject: string): string | undefined {
   const escaped = subject.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   const subjectPattern = new RegExp(`(?:^|[\\\\/"']|\\b)${escaped}(?:\\.exe)?(?=$|[\\\\/"'\\s,):])`, "i");
@@ -823,7 +844,7 @@ export function validateAuthoredCapabilityContradictions(
   const subjects = claimedCapabilitySubjects(plan, report);
   if (subjects.size === 0 || authoredFiles.length === 0) return;
   for (const file of authoredFiles) {
-    const line = [...subjects].map((subject) => authoredInvocationLine(file.content.split(/\r?\n/), subject)).find(Boolean);
+    const line = [...subjects].map((subject) => authoredInvocationEvidence(file.content.split(/\r?\n/), subject)).find(Boolean);
     if (line) {
       const subject = [...subjects].find((candidate) => line.toLowerCase().includes(candidate.toLowerCase())) ?? "capability";
       throw new Error(`Capability claim contradicted by authored file ${file.path}: claimed ${subject} is unusable, but this line uses it: ${line}`);
