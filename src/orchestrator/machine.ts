@@ -155,6 +155,11 @@ async function retryArtifact<T>(name: string, emit: (event: MachineEvent) => voi
       emit({ type: "artifact", name, value: parsed });
       return parsed;
     } catch (error) {
+      // Suspending on a durable background job is control flow, not a failed
+      // artifact attempt. Retrying here can consume all three report attempts
+      // while the renderer is healthy and can send the machine into takeover.
+      // Let the parked-round handler restore the same checkpoint instead.
+      if (error instanceof DurableAwaitSuspendedError) throw error;
       // D66-2: rate-limit outcomes are not transient - retrying now (before the reset time)
       // is guaranteed to fail identically. Same AbortError fast-fail pattern.
       if (error instanceof Error && (error.name === "AbortError" || error.name === "RateLimitError" || isNullByteArgumentError(error))) throw error;

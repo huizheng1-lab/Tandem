@@ -102,8 +102,19 @@ export async function resumeBackgroundAwait(cwd: string, id: string): Promise<Du
   const record = await readDurableAwait(cwd, id);
   if (record.status !== "suspended") return record;
   const state = processState(record.processId, record.pid);
+  // A deadline is only a wakeup hint. A registered job that is still alive owns
+  // the checkpoint, so an early/late observer wakeup must remain resumable and
+  // must not release the process or turn the round terminal.
   const timedOut = Date.now() >= Date.parse(record.deadlineAt);
-  const status: DurableAwaitStatus = timedOut ? "timed_out" : state === "exited" ? "completed" : state === "failed" || state === "stopped" ? "failed" : "suspended";
+  const status: DurableAwaitStatus = state === "running"
+    ? "suspended"
+    : state === "exited"
+      ? "completed"
+      : state === "failed" || state === "stopped"
+        ? "failed"
+        : timedOut
+          ? "timed_out"
+          : "suspended";
   if (status === "suspended") return record;
   releaseBackgroundProcess(record.processId);
   const resumed = { ...record, status, resumedAt: new Date().toISOString() };
