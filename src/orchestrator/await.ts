@@ -26,6 +26,29 @@ export class DurableAwaitSuspendedError extends Error {
   }
 }
 
+/**
+ * The AI SDK may serialize a tool execution failure before it reaches the
+ * stream consumer. Keep the control-flow marker recognizable after that
+ * conversion, without treating arbitrary tool failures as suspensions.
+ */
+export function isDurableAwaitSuspendedError(error: unknown): boolean {
+  const seen = new Set<unknown>();
+  const visit = (value: unknown, depth: number): boolean => {
+    if (depth > 8 || value === null || (typeof value !== "object" && typeof value !== "function") || seen.has(value)) {
+      if (typeof value === "string") return value.includes("Round suspended on background process ");
+      return false;
+    }
+    seen.add(value);
+    if (value instanceof DurableAwaitSuspendedError) return true;
+    const candidate = value as { name?: unknown; message?: unknown; cause?: unknown; error?: unknown; errors?: unknown };
+    if (candidate.name === "DurableAwaitSuspendedError") return true;
+    if (typeof candidate.message === "string" && candidate.message.includes("Round suspended on background process ")) return true;
+    if (visit(candidate.cause, depth + 1) || visit(candidate.error, depth + 1)) return true;
+    return Array.isArray(candidate.errors) && candidate.errors.some((item) => visit(item, depth + 1));
+  };
+  return visit(error, 0);
+}
+
 function awaitDir(cwd: string): string {
   return path.join(cwd, ".tandem", "awaits");
 }

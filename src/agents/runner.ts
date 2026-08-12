@@ -4,7 +4,7 @@ import type { ProviderOptions } from "@ai-sdk/provider-utils";
 import { CostLedger, CostRole } from "../session/cost.js";
 import { ModelEntry } from "../providers/registry.js";
 import type { ContentPart } from "../session/attachments.js";
-import { DurableAwaitSuspendedError } from "../orchestrator/await.js";
+import { DurableAwaitSuspendedError, isDurableAwaitSuspendedError } from "../orchestrator/await.js";
 
 export interface RunnerMessage {
   role: "system" | "user" | "assistant";
@@ -331,6 +331,7 @@ export async function runAgentText(options: AgentRunOptions): Promise<AgentTextR
       let finishedUsage: LanguageModelUsage | undefined;
       let streamError: unknown;
       let streamDurableAwaitError: DurableAwaitSuspendedError | undefined;
+      let streamDurableAwaitSignal = false;
       let recordedUsage = false;
       let stepInputTokens = 0;
       let stepOutputTokens = 0;
@@ -388,10 +389,12 @@ export async function runAgentText(options: AgentRunOptions): Promise<AgentTextR
           options.onToolCallThinking?.(toolName);
         } else if (part.type === "tool-error" || part.type === "error") {
           streamDurableAwaitError ??= durableAwaitError(part.error);
+          streamDurableAwaitSignal ||= isDurableAwaitSuspendedError(part.error);
         }
       }
       text += filter.end().text;
       if (streamDurableAwaitError) throw streamDurableAwaitError;
+      if (streamDurableAwaitSignal || isDurableAwaitSuspendedError(streamError)) throw streamError ?? new Error("Round suspended on background process.");
       if (streamError) throw streamError;
       finishedUsage ??= await result.totalUsage;
       recordUsage(finishedUsage);
@@ -406,6 +409,7 @@ export async function runAgentText(options: AgentRunOptions): Promise<AgentTextR
     } catch (error) {
       const suspended = durableAwaitError(error);
       if (suspended) throw suspended;
+      if (isDurableAwaitSuspendedError(error)) throw error;
       lastError = enrichAgentError(error, options);
       if (!isRetryable(error) || attempt === 2 || options.abortSignal?.aborted) break;
       await new Promise((resolve) => setTimeout(resolve, 500 * (attempt + 1)));
