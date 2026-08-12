@@ -109,7 +109,12 @@ export async function resumeBackgroundAwait(cwd: string, id: string): Promise<Du
   const status: DurableAwaitStatus = state === "running"
     ? "suspended"
     : state === "exited"
-      ? "completed"
+      // A deadline is the durable contract's terminal boundary. If the
+      // observer wakes after that boundary, report timeout even when the
+      // process has already disappeared (including after an app restart).
+      ? timedOut
+        ? "timed_out"
+        : "completed"
       : state === "failed" || state === "stopped"
         ? "failed"
         : timedOut

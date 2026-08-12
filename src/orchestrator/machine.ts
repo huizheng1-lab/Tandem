@@ -19,7 +19,7 @@ import {
 import { sanitizePromptValue } from "../tools/sanitize.js";
 import { VerificationRunner, VerificationResult } from "./verification.js";
 import type { ResolvedEnvironment } from "../environment/types.js";
-import { DurableAwaitSuspendedError, resumeBackgroundAwait, waitForDurableAwait } from "./await.js";
+import { DurableAwaitSuspendedError, listDurableAwaits, resumeBackgroundAwait, waitForDurableAwait } from "./await.js";
 import { inventoryWorkspace, type WorkspaceInventory } from "./inventory.js";
 import { DECISION_PRECEDENCE, regenerationDecision, regenerationNotice } from "./precedence.js";
 import { findGoalClosureCandidates, formatGoalClosureProposal } from "../session/goals.js";
@@ -793,6 +793,20 @@ export async function runOrchestration(options: RunOptions): Promise<RunResult> 
             transition("PARKED", `round ${currentRound} parked until ${error.record.deadlineAt}`, currentRound);
             emit({ type: "notice", message: `Round parked on ${error.record.processId}; waiting consumes no review round or agent budget.` });
             return { phase: "PARKED", summary: `Round parked on ${error.record.processId} until ${error.record.deadlineAt}.`, plan, reports, verdicts, takeover: false, parkedAwaitId: error.record.id };
+          }
+          // A worker may have launched a durable job and then exited before it
+          // submitted a report. Treat its persisted await as ownership of the
+          // round: takeover is not allowed to finalize while that job is live.
+          // This also covers a host restart where the worker's in-memory error
+          // is gone but the await/checkpoint record remains on disk.
+          const awaitRecords = await listDurableAwaits(options.cwd ?? process.cwd());
+          for (const candidate of awaitRecords.filter((record) => record.status === "suspended" && (record.round === undefined || record.round === currentRound))) {
+            const resumed = await resumeBackgroundAwait(options.cwd ?? process.cwd(), candidate.id);
+            if (resumed.status !== "suspended") continue;
+            parkedAwaitId = resumed.id;
+            transition("PARKED", `round ${currentRound} parked until ${resumed.deadlineAt}`, currentRound);
+            emit({ type: "notice", message: `Round parked on ${resumed.processId}; waiting consumes no review round or agent budget.` });
+            return { phase: "PARKED", summary: `Round parked on ${resumed.processId} until ${resumed.deadlineAt}.`, plan, reports, verdicts, takeover: false, parkedAwaitId: resumed.id };
           }
           // D66-2: rate-limit errors should not trigger a takeover (the failure isn't in the
           // worker's output, it's a transient quota hit). Surface the resetsAt so the user
