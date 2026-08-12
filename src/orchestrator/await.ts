@@ -1,6 +1,6 @@
 import { mkdir, readFile, readdir, writeFile } from "node:fs/promises";
 import path from "node:path";
-import { keepBackgroundProcessAlive, listBackgroundProcesses, releaseBackgroundProcess } from "../tools/shell.js";
+import { getBackgroundProcessInfo, keepBackgroundProcessAlive, listBackgroundProcesses, releaseBackgroundProcess } from "../tools/shell.js";
 
 export type DurableAwaitStatus = "suspended" | "completed" | "failed" | "timed_out";
 
@@ -19,6 +19,9 @@ export interface DurableAwaitRecord {
   resumedAt?: string;
   round?: number;
   checkpoint?: { plan?: unknown; tasks?: unknown; evidence?: unknown };
+  /** Optional estimate used to explain/recalculate observer wakeups. */
+  expectedDurationMs?: number;
+  safetyMarginMs?: number;
 }
 
 export class DurableAwaitSuspendedError extends Error {
@@ -100,11 +103,13 @@ export async function registerBackgroundAwait(input: {
   id?: string;
   round?: number;
   checkpoint?: DurableAwaitRecord["checkpoint"];
+  expectedDurationMs?: number;
+  safetyMarginMs?: number;
 }): Promise<DurableAwaitRecord> {
   if (!Number.isFinite(input.timeoutMs) || input.timeoutMs <= 0) throw new Error("Await timeout must be positive.");
   const id = safeId(input.id ?? `await-${Date.now().toString(36)}`);
-  const process = listBackgroundProcesses().find((entry) => entry.id === input.processId);
-  if (!process) throw new Error(`Unknown background process id: ${input.processId}`);
+  const ownedProcess = getBackgroundProcessInfo(input.processId) ?? listBackgroundProcesses().find((entry) => entry.id === input.processId);
+  if (!ownedProcess) throw new Error(`Unknown background process id: ${input.processId}`);
   keepBackgroundProcessAlive(input.processId);
   const wakeupDeadlineAt = new Date(Date.now() + input.timeoutMs).toISOString();
   const terminalDeadlineAt = input.terminalTimeoutMs === undefined
@@ -120,14 +125,16 @@ export async function registerBackgroundAwait(input: {
     // Persist the child PID, not the host/orchestrator PID. The in-memory
     // background registry is lost when the desktop app is restarted, while
     // this PID is enough to observe the same selected-project job again.
-    pid: process.pid,
+    pid: ownedProcess.pid,
     deadlineAt: wakeupDeadlineAt,
     wakeupDeadlineAt,
     terminalDeadlineAt,
     status: "suspended",
     createdAt: new Date().toISOString(),
     round: input.round,
-    checkpoint: input.checkpoint
+    checkpoint: input.checkpoint,
+    expectedDurationMs: input.expectedDurationMs,
+    safetyMarginMs: input.safetyMarginMs
   };
   await save(input.cwd, record);
   return record;
@@ -166,11 +173,11 @@ export async function resumeBackgroundAwait(cwd: string, id: string): Promise<Du
   const timedOut = terminalDeadline !== undefined
     ? Date.now() >= Date.parse(terminalDeadline)
     : Date.now() >= Date.parse(wakeupDeadline);
-  const terminalExpired = terminalDeadline !== undefined && Date.now() >= Date.parse(terminalDeadline);
+  // Wakeup and terminal timestamps are observer hints. A healthy owned process
+  // remains suspended even after either timestamp; never turn elapsed wall
+  // time into a failure or release its ownership.
   const status: DurableAwaitStatus = state === "running"
-    ? terminalExpired
-      ? "timed_out"
-      : "suspended"
+    ? "suspended"
     : state === "exited"
       // A deadline is the durable contract's terminal boundary. If the
       // observer wakes after that boundary, report timeout even when the
@@ -214,4 +221,4 @@ export async function waitForDurableAwait(
   }
 }
 
-export const DURABLE_AWAIT_DESCRIPTION = "Suspend this round until a named background process exits or the deadline expires. Waiting consumes no tool calls, tokens, wall-clock budget, or review rounds; resume restores the checkpoint, plan, tasks, and evidence.";
+export const DURABLE_AWAIT_DESCRIPTION = "Suspend this round while a named background process runs. The deadline is an observer wakeup/recovery hint, not proof of failure; a healthy process remains owned and resumable. Waiting consumes no tool calls, tokens, wall-clock budget, or review rounds; resume restores the checkpoint, plan, tasks, and evidence.";

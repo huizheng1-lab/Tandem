@@ -337,6 +337,16 @@ export function listBackgroundProcesses(): BackgroundProcessInfo[] {
   return [...backgroundProcesses.values()].map(({ info }) => ({ ...info }));
 }
 
+/**
+ * Return the persisted identity of a Tandem-owned job.  Callers must persist
+ * this child pid, never their own orchestration-host pid: the child is the
+ * process that must survive a foreground turn or be cancelled after restart.
+ */
+export function getBackgroundProcessInfo(id: string): BackgroundProcessInfo | undefined {
+  const entry = backgroundProcesses.get(id);
+  return entry ? { ...entry.info } : undefined;
+}
+
 /** Mark a process as owned by a durable await. Session shutdown must not sweep it. */
 export function keepBackgroundProcessAlive(id: string): void {
   if (!backgroundProcesses.has(id)) throw new Error(`Unknown background process id: ${id}`);
