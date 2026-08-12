@@ -10,6 +10,7 @@ import type { AgentFns, RunOptions, RunResult } from "../src/orchestrator/machin
 import type { PermissionBridge } from "../src/tools/permissions.js";
 import { safeDefaultProjectDir } from "../src/tools/protection.js";
 import { SessionStore } from "../src/session/store.js";
+import type { SessionEvent } from "../src/session/store.js";
 import type { RemoteInboundMessage, RemoteSendOptions, RemoteTransport } from "../src/remote-control/bridge.js";
 import type { SessionSearchBatch } from "../src/session/search.js";
 import { CLAUDE_CLI_OPUS_5_ID, CLAUDE_CLI_OPUS_5_MODEL } from "../src/providers/cli-models.js";
@@ -74,7 +75,114 @@ async function* searchBatches(batches: SessionSearchBatch[]): AsyncGenerator<Ses
   for (const batch of batches) yield batch;
 }
 
+function historyTurn(index: number, size = 12): SessionEvent[] {
+  return [
+    { type: "user", payload: { prompt: `prompt ${index} ${"u".repeat(size)}` }, at: "2026-01-01T00:00:00.000Z" },
+    { type: "done", payload: { summary: `summary ${index} ${"o".repeat(size)}` }, at: "2026-01-01T00:00:00.000Z" }
+  ];
+}
+
+async function writeLeaderBudget(projectDir: string, leaderContextBudgetTokens: number): Promise<void> {
+  await mkdir(path.join(projectDir, ".tandem"), { recursive: true });
+  await writeFile(path.join(projectDir, ".tandem", "config.json"), JSON.stringify({ leaderContextBudgetTokens }), "utf8");
+}
+
 describe("TandemService", () => {
+  it("keeps more than ten short prior turns in the desktop leader history", async () => {
+    const cwd = await tempDir();
+    await writeLeaderBudget(cwd, 60000);
+    const events = Array.from({ length: 12 }, (_, index) => historyTurn(index + 1)).flat();
+    let capturedHistory = "";
+    let compactionChecks = 0;
+    const { window } = fakeWindow();
+    const service = new TandemService(window as never, {
+      registerIpcResponses: false,
+      createSession: async () => ({
+        id: "session-1",
+        append: async (type, payload) => { events.push({ type, payload, at: "2026-01-01T00:00:00.000Z" }); },
+        read: async () => events
+      }),
+      createAgents: async (): Promise<AgentFns> => fakeAgents(),
+      compactSessionHistory: async () => {
+        compactionChecks += 1;
+        return undefined;
+      },
+      runOrchestration: async (options: RunOptions): Promise<RunResult> => {
+        capturedHistory = options.history ?? "";
+        return { phase: "DONE", summary: "finished", reports: [], verdicts: [], takeover: false };
+      }
+    });
+
+    await service.startSession({ projectDir: cwd });
+    await service.run("next");
+
+    expect(compactionChecks).toBe(1);
+    expect(capturedHistory).toContain("prompt 1");
+    expect(capturedHistory).toContain("prompt 12");
+  });
+
+  it("summarizes oversized desktop history instead of silently truncating it", async () => {
+    const cwd = await tempDir();
+    await writeLeaderBudget(cwd, 2000);
+    const events = Array.from({ length: 18 }, (_, index) => historyTurn(index + 1, 500)).flat();
+    let capturedHistory = "";
+    let configuredBudget = 0;
+    const { window } = fakeWindow();
+    const service = new TandemService(window as never, {
+      registerIpcResponses: false,
+      createSession: async () => ({
+        id: "session-1",
+        append: async (type, payload) => { events.push({ type, payload, at: "2026-01-01T00:00:00.000Z" }); },
+        read: async () => events
+      }),
+      createAgents: async (): Promise<AgentFns> => fakeAgents(),
+      compactSessionHistory: async ({ config }) => {
+        configuredBudget = config.leaderContextBudgetTokens;
+        return { summary: "Earlier turns were summarized.", compactedTurns: 18 };
+      },
+      runOrchestration: async (options: RunOptions): Promise<RunResult> => {
+        capturedHistory = options.history ?? "";
+        return { phase: "DONE", summary: "finished", reports: [], verdicts: [], takeover: false };
+      }
+    });
+
+    await service.startSession({ projectDir: cwd });
+    await service.run("next");
+
+    expect(configuredBudget).toBe(2000);
+    expect(capturedHistory).toContain("Earlier turns were summarized.");
+    expect(capturedHistory).not.toContain("prompt 1");
+  });
+
+  it("uses a custom context budget larger than the legacy four-thousand-character slice", async () => {
+    const cwd = await tempDir();
+    await writeLeaderBudget(cwd, 3000);
+    const events = Array.from({ length: 12 }, (_, index) => historyTurn(index + 1, 180)).flat();
+    let capturedHistory = "";
+    const { window } = fakeWindow();
+    const service = new TandemService(window as never, {
+      registerIpcResponses: false,
+      createSession: async () => ({
+        id: "session-1",
+        append: async (type, payload) => { events.push({ type, payload, at: "2026-01-01T00:00:00.000Z" }); },
+        read: async () => events
+      }),
+      createAgents: async (): Promise<AgentFns> => fakeAgents(),
+      compactSessionHistory: async () => undefined,
+      runOrchestration: async (options: RunOptions): Promise<RunResult> => {
+        capturedHistory = options.history ?? "";
+        return { phase: "DONE", summary: "finished", reports: [], verdicts: [], takeover: false };
+      }
+    });
+
+    await service.startSession({ projectDir: cwd });
+    await service.run("next");
+
+    expect(capturedHistory.length).toBeGreaterThan(4000);
+    expect(capturedHistory).toContain("prompt 1");
+    expect(capturedHistory).toContain("prompt 12");
+  });
+
   it("loads a BOM-prefixed desktop state and preserves its peer worktree", async () => {
     const cwd = await tempDir();
     const home = await tempDir();

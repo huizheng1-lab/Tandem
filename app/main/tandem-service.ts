@@ -29,7 +29,7 @@ import { copyAttachment, formatAttachmentBlock, writeAttachmentData } from "../.
 import type { AttachmentRef } from "../../src/session/attachments.js";
 import { addGoal, clearGoals, completeGoal, formatStandingGoals, listGoals } from "../../src/session/goals.js";
 import { buildConversationHistory } from "../../src/session/history.js";
-import { compactSessionHistory, isCliBackedLeader, type LeaderCompactionEvent } from "../../src/session/compaction.js";
+import { compactSessionHistory, leaderContextBudgetChars, type LeaderCompactionEvent } from "../../src/session/compaction.js";
 import { rebuildLeaderThread } from "../../src/session/leader-thread.js";
 import { addNote, formatSessionNotes, removeNote, replaySessionMemory } from "../../src/session/memory.js";
 import type { MemoryAuthor, SessionMemoryNote } from "../../src/session/memory.js";
@@ -115,6 +115,7 @@ function missingKeyInfo(error: unknown, projectDir: string, homeDir?: string): M
 export interface TandemServiceDeps {
   createAgents?: typeof createLiveAgents;
   runOrchestration?: typeof runOrchestration;
+  compactSessionHistory?: typeof compactSessionHistory;
   createSession?: (cwd: string) => Promise<SessionLike>;
   openSession?: (id: string, cwd: string) => Promise<SessionLike>;
   findSessionProjectDir?: typeof findSessionProjectDir;
@@ -244,13 +245,11 @@ export class TandemService {
     this.runBaselineTotals = this.ledger.totals();
     try {
       let sessionEvents = await session.read();
-      if (isCliBackedLeader(this.config)) {
-        const compacted = await this.compactCurrentSession(sessionEvents, false);
-        if (compacted) sessionEvents = await session.read();
-      }
-      const history = buildConversationHistory(sessionEvents);
+      const compacted = await this.compactCurrentSession(sessionEvents, false);
+      if (compacted) sessionEvents = await session.read();
+      const history = buildConversationHistory(sessionEvents, Number.MAX_SAFE_INTEGER, leaderContextBudgetChars(this.config));
       await this.emitMachine({ type: "notice", message: `context: ${history.priorTurns} prior turn${history.priorTurns === 1 ? "" : "s"}` });
-      if (history.truncated) await this.emitMachine({ type: "notice", message: "including last 10 turns of context" });
+      if (history.truncated) await this.emitMachine({ type: "notice", message: "history exceeded the configured context budget" });
       const attachmentBlock = formatAttachmentBlock(attachments);
       const promptWithAttachments = attachmentBlock ? `${prompt}\n\n${attachmentBlock}` : prompt;
       await session.append("user", { prompt: promptWithAttachments, attachments });
@@ -813,7 +812,7 @@ export class TandemService {
   }
 
   private async compactCurrentSession(events: Awaited<ReturnType<SessionLike["read"]>>, force: boolean): Promise<LeaderCompactionEvent | undefined> {
-    const event = await compactSessionHistory({
+    const event = await (this.deps.compactSessionHistory ?? compactSessionHistory)({
       events,
       config: this.config,
       cwd: this.projectDir,
