@@ -1086,10 +1086,14 @@ if (args.length === 1 && sub === "clear") {
   };
 
   const stop = async () => {
-    await tandem.abortPipeline();
-    setRunning(false);
-    setPhase("IDLE");
-    appendMessage("system", "Abort requested.");
+    const stopped = await tandem.abortPipeline();
+    if (stopped !== false) {
+      setRunning(false);
+      setPhase("IDLE");
+      appendMessage("system", "Abort requested.");
+    } else {
+      appendMessage("system", "Stop could not cancel the background job; the checkpoint remains active.");
+    }
   };
 
   const respondToPermission = (approved: boolean) => {

@@ -117,6 +117,9 @@ export async function registerBackgroundAwait(input: {
     id,
     condition: "background_process",
     processId: input.processId,
+    // Persist the child PID, not the host/orchestrator PID. The in-memory
+    // background registry is lost when the desktop app is restarted, while
+    // this PID is enough to observe the same selected-project job again.
     pid: process.pid,
     deadlineAt: wakeupDeadlineAt,
     wakeupDeadlineAt,

@@ -273,7 +273,7 @@ export interface TandemDesktopApi {
   getStartupError(): Promise<StartupErrorInfo | undefined>;
   startSession(request: SessionStartRequest): Promise<SessionStartResponse>;
   runPipeline(request: PipelineRunRequest): Promise<void>;
-  abortPipeline(): Promise<void>;
+  abortPipeline(): Promise<boolean | undefined>;
   addAttachmentFiles(request: AttachmentAddFilesRequest): Promise<AttachmentRef[]>;
   addAttachmentData(request: AttachmentAddDataRequest): Promise<AttachmentRef>;
   getAppState(): Promise<DesktopAppStateResponse>;

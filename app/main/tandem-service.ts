@@ -12,7 +12,7 @@ import { locateCodexCli } from "../../src/agents/codex-cli/locate.js";
 import { locateClaudeCli } from "../../src/agents/claude-code-cli/locate.js";
 import { createDiffTracker } from "../../src/orchestrator/diff.js";
 import { runOrchestration, type MachineEvent, type OrchestrationCheckpoint } from "../../src/orchestrator/machine.js";
-import { backgroundProcessTool } from "../../src/tools/shell.js";
+import { backgroundProcessTool, stopBackgroundProcessByPid } from "../../src/tools/shell.js";
 import { readDurableAwait, waitForDurableAwait } from "../../src/orchestrator/await.js";
 import type { CompletionReport } from "../../src/orchestrator/artifacts.js";
 import { createVerificationRunner } from "../../src/orchestrator/verification.js";
@@ -149,6 +149,7 @@ export class TandemService {
   private lastPersistedCostKey?: string;
   private runBaselineTotals?: CostTotals;
   private currentPhase = "IDLE";
+  private cancellationSucceeded = true;
   private remoteBridge: RemoteBridge;
   private readonly remoteSessionSubscribers = new Map<string, Set<(event: StreamingSessionEvent) => void>>();
   constructor(
@@ -239,6 +240,7 @@ export class TandemService {
     const session = this.session as SessionLike;
     await this.prepareReciprocalRun();
     this.controller = new AbortController();
+    this.cancellationSucceeded = true;
     this.parkedAwaitId = undefined;
     this.paused = false;
     this.currentPhase = "IDLE";
@@ -254,7 +256,7 @@ export class TandemService {
       const promptWithAttachments = attachmentBlock ? `${prompt}\n\n${attachmentBlock}` : prompt;
       await session.append("user", { prompt: promptWithAttachments, attachments });
       let initialState = this.lastCheckpoint?.phase === "DONE" ? undefined : this.lastCheckpoint;
-      this.lastCheckpoint = undefined;
+      if (this.cancellationSucceeded) this.lastCheckpoint = undefined;
       const diffTracker = createDiffTracker(this.projectDir);
       const permissionBridge: PermissionBridge = {
         approve: (request) => this.requestPermission(request)
@@ -318,6 +320,7 @@ export class TandemService {
         this.parkedAwaitId = result.parkedAwaitId;
         const checkpoint: OrchestrationCheckpoint = {
           phase: "PARKED",
+          projectDir: this.projectDir,
           round: initialState?.round ?? 1,
           plan: result.plan,
           reports: result.reports,
@@ -348,7 +351,7 @@ export class TandemService {
       const done = { summary: result.summary, takeover: result.takeover };
       this.window.webContents.send(ipcChannels.doneEvent, done);
       await session.append("done", done);
-      this.lastCheckpoint = undefined;
+      if (this.cancellationSucceeded) this.lastCheckpoint = undefined;
     } catch (error) {
       const event: MachineEvent = { type: "error", message: String(error) };
       const done = { summary: event.message, takeover: false, error: true, missingKey: missingKeyInfo(error, this.projectDir, this.homeDir) };
@@ -356,7 +359,7 @@ export class TandemService {
       this.window.webContents.send(ipcChannels.doneEvent, done);
       await session.append("machine", event);
       await session.append("done", done);
-      this.lastCheckpoint = undefined;
+      if (this.cancellationSucceeded) this.lastCheckpoint = undefined;
     } finally {
       this.parkedAwaitId = undefined;
       this.currentPhase = "IDLE";
@@ -372,14 +375,25 @@ export class TandemService {
     }
   }
 
-  abort(): void {
-    this.controller?.abort();
+  async abort(): Promise<boolean> {
     const parkedAwaitId = this.parkedAwaitId;
     if (parkedAwaitId) {
-      void readDurableAwait(this.projectDir, parkedAwaitId)
-        .then((record) => backgroundProcessTool("stop", record.processId))
-        .catch(() => undefined);
+      try {
+        const record = await readDurableAwait(this.projectDir, parkedAwaitId);
+        const stopped = record.pid === undefined
+          ? await backgroundProcessTool("stop", record.processId).then(() => true)
+          : await stopBackgroundProcessByPid(record.processId, record.pid);
+        if (!stopped) {
+          this.cancellationSucceeded = false;
+          return false;
+        }
+      } catch {
+        this.cancellationSucceeded = false;
+        return false;
+      }
     }
+    this.controller?.abort();
+    return true;
   }
 
   async pauseRun(): Promise<{ ok: boolean; message: string }> {

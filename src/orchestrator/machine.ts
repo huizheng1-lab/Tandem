@@ -28,6 +28,8 @@ import type { Goal } from "../session/goals.js";
 export type MachinePhase = "IDLE" | "PLANNING" | "BUILDING" | "REVIEWING" | "FEEDBACK" | "PARKED" | "TAKEOVER" | "DONE";
 export interface OrchestrationCheckpoint {
   phase: MachinePhase;
+  /** The selected workspace that owns this checkpoint and its durable awaits. */
+  projectDir?: string;
   round: number;
   plan?: BuildPlan;
   reports: CompletionReport[];
@@ -448,6 +450,7 @@ export async function runOrchestration(options: RunOptions): Promise<RunResult> 
       type: "checkpoint",
       checkpoint: {
         phase,
+        projectDir: options.cwd,
         round,
         plan,
         reports: [...reports],

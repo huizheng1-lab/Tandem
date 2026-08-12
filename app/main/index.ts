@@ -104,7 +104,7 @@ ipcMain.handle(ipcChannels.pipelineRun, async (_event, request: PipelineRunReque
   await service?.run(request.prompt, request.attachments ?? []);
 });
 ipcMain.handle(ipcChannels.pipelineAbort, () => {
-  service?.abort();
+  return service?.abort();
 });
 ipcMain.handle(ipcChannels.attachmentAddFiles, (_event, request: AttachmentAddFilesRequest) => service?.addAttachmentFiles(request.paths));
 ipcMain.handle(ipcChannels.attachmentAddData, (_event, request: AttachmentAddDataRequest) => service?.addAttachmentData(request.name, request.data));

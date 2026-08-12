@@ -364,6 +364,38 @@ export async function backgroundProcessTool(action: BackgroundProcessAction, id?
   return `Stopped background process ${id}.`;
 }
 
+/**
+ * Stop a durable background job from a fresh host process.  The normal
+ * registry-backed path is preferred, but a desktop restart intentionally
+ * leaves that registry empty; in that case the await record's persisted PID
+ * is the authority for cancellation.
+ */
+export async function stopBackgroundProcessByPid(id: string, pid: number): Promise<boolean> {
+  const registered = backgroundProcesses.get(id);
+  if (registered) {
+    await backgroundProcessTool("stop", id);
+    return true;
+  }
+  if (!Number.isInteger(pid) || pid <= 0) return false;
+  if (process.platform === "win32") {
+    const killed = await cleanupWindowsProcessTree(pid, []);
+    return killed.length > 0 || (() => {
+      try { process.kill(pid, 0); return false; } catch { return true; }
+    })();
+  }
+  try {
+    process.kill(-pid, "SIGKILL");
+  } catch {
+    try { process.kill(pid, "SIGKILL"); } catch { /* already exited */ }
+  }
+  try {
+    process.kill(pid, 0);
+    return false;
+  } catch {
+    return true;
+  }
+}
+
 export async function startBackgroundProcessBridge(
   cwd?: string,
   permissionMode: ToolContext["permissionMode"] = "yolo",
