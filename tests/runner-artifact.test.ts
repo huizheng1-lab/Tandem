@@ -9,6 +9,7 @@ import { listDurableAwaits, resumeBackgroundAwait, suspendOnBackgroundAwait } fr
 const { streamTextMock } = vi.hoisted(() => ({ streamTextMock: vi.fn() }));
 
 vi.mock("ai", () => ({
+  tool: (definition: unknown) => definition,
   hasToolCall: (toolName: string) => ({ type: "hasToolCall", toolName }),
   stepCountIs: (steps: number) => ({ type: "stepCountIs", steps }),
   streamText: streamTextMock
