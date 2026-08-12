@@ -6,7 +6,7 @@ import { makeToolSet } from "../src/tools/index.js";
 import { bashTool } from "../src/tools/shell.js";
 import { listDurableAwaits, resumeBackgroundAwait, suspendOnBackgroundAwait } from "../src/orchestrator/await.js";
 
-const streamTextMock = vi.fn();
+const { streamTextMock } = vi.hoisted(() => ({ streamTextMock: vi.fn() }));
 
 vi.mock("ai", () => ({
   hasToolCall: (toolName: string) => ({ type: "hasToolCall", toolName }),
