@@ -1,0 +1,27 @@
+D224 done
+
+Round: D224
+Implementation commit:
+- 9a78145 D224 add timeout headroom for process-backed tests
+
+Summary:
+- Added a narrowly scoped 15,000 ms timeout to tests/desktop-app-refresh.test.ts, test "surfaces desktop, passive, stable, and behind state".
+- Added a narrowly scoped 20,000 ms timeout to tests/candidate-preview-smoke.test.ts, test "D164: times out readiness and cleans up the launched process".
+- No production code, W0089 implementation, global Vitest timeout, cleanup logic, or assertions were weakened.
+
+Focused verification:
+- Dashboard status test, run 1: passed in 13.646s.
+- Dashboard status test, run 2: passed in 8.309s.
+- Dashboard status test, run 3: passed in 14.929s.
+- Candidate readiness-timeout cleanup test, first 10s timeout attempt: timed out at 10.301s, proving 10s was still too tight on this machine.
+- Candidate readiness-timeout cleanup test after 20s timeout, run 1: passed in 5.742s.
+- Candidate readiness-timeout cleanup test after 20s timeout, run 2: passed in 5.266s.
+- Candidate readiness-timeout cleanup test after 20s timeout, run 3: passed in 5.452s.
+- Post-run process check found no launched candidate-preview fixture process remaining.
+- Negative assertion check: temporarily changed the desktop behind-state assertion to the wrong value; focused run failed with "expected true to be false", confirming assertion failures are still real failures. The temporary change was restored, and the focused tests were rerun successfully.
+- Final focused rerun after restoration: dashboard status test passed in 6.166s; candidate readiness-timeout cleanup test passed in 5.064s.
+
+Required checks:
+- npm run typecheck: passed.
+- npm test: passed, 65 files passed / 2 skipped; 771 tests passed / 43 skipped.
+- git diff --check: passed.
