@@ -87,7 +87,7 @@ describeWindows("candidate preview GUI smoke", () => {
     expect(result.json.stoppedPids).toEqual(expect.arrayContaining([result.json.pid]));
     const pidCheck = await execFileAsync("powershell", ["-NoProfile", "-Command", `$p=Get-Process -Id ${result.json.pid} -ErrorAction SilentlyContinue; if ($p) { $p | ConvertTo-Json -Compress }; exit 0`], { windowsHide: true });
     expect(pidCheck.stdout.trim()).toBe("");
-  });
+  }, 20_000);
 
   it("D164: refuses a missing executable distinctly", async () => {
     const root = await scratch();

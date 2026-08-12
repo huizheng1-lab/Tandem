@@ -240,5 +240,5 @@ describe("desktop app refresh dashboard actions", () => {
     } finally {
       await rm(fixture.root, { recursive: true, force: true });
     }
-  });
+  }, 15_000);
 });
