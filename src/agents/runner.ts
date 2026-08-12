@@ -4,6 +4,7 @@ import type { ProviderOptions } from "@ai-sdk/provider-utils";
 import { CostLedger, CostRole } from "../session/cost.js";
 import { ModelEntry } from "../providers/registry.js";
 import type { ContentPart } from "../session/attachments.js";
+import { DurableAwaitSuspendedError } from "../orchestrator/await.js";
 
 export interface RunnerMessage {
   role: "system" | "user" | "assistant";
@@ -51,6 +52,31 @@ export function toolCallThinkingDelta(toolName: string): string {
 function isRetryable(error: unknown): boolean {
   const text = String(error);
   return /\b(429|500|502|503|504)\b/.test(text);
+}
+
+/**
+ * Tool execution errors are wrapped by the AI SDK before they reach the
+ * stream. Durable await is control flow, so it must survive those wrappers
+ * instead of being reported as a failed tool call (and retried).
+ */
+function durableAwaitError(error: unknown): DurableAwaitSuspendedError | undefined {
+  const seen = new Set<unknown>();
+  const visit = (value: unknown, depth: number): DurableAwaitSuspendedError | undefined => {
+    if (depth > 8 || value === null || (typeof value !== "object" && typeof value !== "function") || seen.has(value)) return undefined;
+    seen.add(value);
+    if (value instanceof DurableAwaitSuspendedError) return value;
+    const candidate = value as { cause?: unknown; error?: unknown; errors?: unknown };
+    const nested = visit(candidate.cause, depth + 1) ?? visit(candidate.error, depth + 1);
+    if (nested) return nested;
+    if (Array.isArray(candidate.errors)) {
+      for (const item of candidate.errors) {
+        const found = visit(item, depth + 1);
+        if (found) return found;
+      }
+    }
+    return undefined;
+  };
+  return visit(error, 0);
 }
 
 function truncate(value: string, max = 1200): string {
@@ -304,6 +330,7 @@ export async function runAgentText(options: AgentRunOptions): Promise<AgentTextR
     try {
       let finishedUsage: LanguageModelUsage | undefined;
       let streamError: unknown;
+      let streamDurableAwaitError: DurableAwaitSuspendedError | undefined;
       let recordedUsage = false;
       let stepInputTokens = 0;
       let stepOutputTokens = 0;
@@ -359,9 +386,12 @@ export async function runAgentText(options: AgentRunOptions): Promise<AgentTextR
         } else if (part.type === "tool-call") {
           const toolName = "toolName" in part && typeof part.toolName === "string" ? part.toolName : "tool";
           options.onToolCallThinking?.(toolName);
+        } else if (part.type === "tool-error" || part.type === "error") {
+          streamDurableAwaitError ??= durableAwaitError(part.error);
         }
       }
       text += filter.end().text;
+      if (streamDurableAwaitError) throw streamDurableAwaitError;
       if (streamError) throw streamError;
       finishedUsage ??= await result.totalUsage;
       recordUsage(finishedUsage);
@@ -374,6 +404,8 @@ export async function runAgentText(options: AgentRunOptions): Promise<AgentTextR
         stepsUsed: steps?.length ?? 0
       };
     } catch (error) {
+      const suspended = durableAwaitError(error);
+      if (suspended) throw suspended;
       lastError = enrichAgentError(error, options);
       if (!isRetryable(error) || attempt === 2 || options.abortSignal?.aborted) break;
       await new Promise((resolve) => setTimeout(resolve, 500 * (attempt + 1)));

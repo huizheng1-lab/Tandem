@@ -1,4 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { mkdir, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import path from "node:path";
+import { makeToolSet } from "../src/tools/index.js";
+import { bashTool } from "../src/tools/shell.js";
+import { listDurableAwaits, resumeBackgroundAwait, suspendOnBackgroundAwait } from "../src/orchestrator/await.js";
 
 const streamTextMock = vi.fn();
 
@@ -100,5 +106,50 @@ describe("runAgentArtifact", () => {
 
     expect(result.artifact).toBeUndefined();
     expect(streamTextMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("propagates an await_background suspension through the worker tool runner", async () => {
+    const { runAgentText } = await import("../src/agents/runner.js");
+    const cwd = path.join(tmpdir(), `tandem-runner-await-${Date.now()}-${Math.random().toString(16).slice(2)}`);
+    await mkdir(cwd, { recursive: true });
+    const started = await bashTool({ cwd, permissionMode: "yolo" }, "Start-Sleep -Milliseconds 250", 5_000, true);
+    const processId = started.output.match(/Started background process (\S+)/)?.[1];
+    if (!processId) throw new Error(`background process did not start: ${started.output}`);
+    try {
+      const tools = makeToolSet({
+        cwd,
+        permissionMode: "yolo",
+        durableAwait: ({ processId: id, timeoutMs, id: awaitId }) =>
+          suspendOnBackgroundAwait({ cwd, processId: id, timeoutMs, id: awaitId })
+      }, "worker");
+      streamTextMock.mockImplementationOnce((options) => {
+        const toolExecution = (options.tools.await_background.execute as (input: unknown) => Promise<unknown>)({ processId, timeoutMs: 1_000, id: "runner-await" });
+        return {
+          fullStream: (async function* () {
+            try {
+              await toolExecution;
+              throw new Error("await_background unexpectedly returned");
+            } catch (error) {
+              yield { type: "tool-error", error: new Error("AI SDK tool execution failed", { cause: error }) };
+            }
+          })(),
+          totalUsage: Promise.resolve({ inputTokens: 1, outputTokens: 0 }),
+          steps: Promise.resolve([{}]),
+          response: Promise.resolve({ messages: [] })
+        };
+      });
+
+      await expect(runAgentText({
+        model: {} as never,
+        system: "worker",
+        messages: [{ role: "user", content: "await" }],
+        tools,
+        maxSteps: 10
+      })).rejects.toMatchObject({ name: "DurableAwaitSuspendedError" });
+      expect(await listDurableAwaits(cwd)).toHaveLength(1);
+    } finally {
+      await resumeBackgroundAwait(cwd, "runner-await").catch(() => undefined);
+      await rm(cwd, { recursive: true, force: true });
+    }
   });
 });
