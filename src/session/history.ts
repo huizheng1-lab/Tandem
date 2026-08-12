@@ -12,8 +12,11 @@ interface HistoryTurn {
   error?: boolean;
 }
 
-const TURN_LIMIT = 10;
-const CHAR_BUDGET = 4000;
+// Kept only for callers that use this formatter as a small, bounded view. The
+// desktop turn path supplies an explicit unlimited-turn view and applies the
+// configured leader context budget through compaction before calling here.
+const LEGACY_TURN_LIMIT = 10;
+const LEGACY_CHAR_BUDGET = 4000;
 
 function payloadText(payload: unknown, field: "prompt" | "summary" | "text" | "delta"): string | undefined {
   const value = (payload as Record<string, unknown> | undefined)?.[field];
@@ -39,7 +42,11 @@ function formatTurn(turn: HistoryTurn, index: number): string {
   return lines.join("\n");
 }
 
-export function buildConversationHistory(events: SessionEvent[], turnLimit = TURN_LIMIT, charBudget = CHAR_BUDGET): ConversationHistory {
+export function buildConversationHistory(
+  events: SessionEvent[],
+  turnLimit = LEGACY_TURN_LIMIT,
+  charBudget = LEGACY_CHAR_BUDGET
+): ConversationHistory {
   const turns: HistoryTurn[] = [];
   let current: HistoryTurn | undefined;
   let leaderAnswer = "";
