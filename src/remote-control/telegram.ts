@@ -72,7 +72,11 @@ export class TelegramLongPollingTransport implements RemoteTransport {
     this.stopped = false;
     let poller = TelegramLongPollingTransport.pollers.get(this.token);
     if (!poller) {
-      poller = new TelegramPoller(this.token, this.fetchImpl, this.offsetStore);
+      poller = new TelegramPoller(this.token, this.fetchImpl, this.offsetStore, () => {
+        if (TelegramLongPollingTransport.pollers.get(this.token) === poller) {
+          TelegramLongPollingTransport.pollers.delete(this.token);
+        }
+      });
       TelegramLongPollingTransport.pollers.set(this.token, poller);
     }
     this.unsubscribe = poller.subscribe(onMessage, onError);
@@ -140,7 +144,8 @@ class TelegramPoller {
   constructor(
     private readonly token: string,
     private readonly fetchImpl: typeof fetch,
-    private readonly offsetStore?: TelegramOffsetStore
+    private readonly offsetStore?: TelegramOffsetStore,
+    private readonly onEmpty?: () => void
   ) {}
 
   subscribe(onMessage: (message: RemoteInboundMessage) => void | Promise<void>, onError?: (error: unknown) => void | Promise<void>): () => void {
@@ -152,7 +157,10 @@ class TelegramPoller {
     }
     return () => {
       this.subscribers.delete(id);
-      if (this.subscribers.size === 0) this.stopped = true;
+      if (this.subscribers.size === 0) {
+        this.stopped = true;
+        this.onEmpty?.();
+      }
     };
   }
 
