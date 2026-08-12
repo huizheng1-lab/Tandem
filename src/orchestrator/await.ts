@@ -10,6 +10,10 @@ export interface DurableAwaitRecord {
   processId: string;
   pid?: number;
   deadlineAt: string;
+  /** The observer wakeup deadline. It is not a terminal job deadline. */
+  wakeupDeadlineAt?: string;
+  /** Optional explicit terminal deadline for the background job. */
+  terminalDeadlineAt?: string;
   status: DurableAwaitStatus;
   createdAt: string;
   resumedAt?: string;
@@ -92,6 +96,7 @@ export async function registerBackgroundAwait(input: {
   cwd: string;
   processId: string;
   timeoutMs: number;
+  terminalTimeoutMs?: number;
   id?: string;
   round?: number;
   checkpoint?: DurableAwaitRecord["checkpoint"];
@@ -101,12 +106,21 @@ export async function registerBackgroundAwait(input: {
   const process = listBackgroundProcesses().find((entry) => entry.id === input.processId);
   if (!process) throw new Error(`Unknown background process id: ${input.processId}`);
   keepBackgroundProcessAlive(input.processId);
+  const wakeupDeadlineAt = new Date(Date.now() + input.timeoutMs).toISOString();
+  const terminalDeadlineAt = input.terminalTimeoutMs === undefined
+    ? undefined
+    : new Date(Date.now() + input.terminalTimeoutMs).toISOString();
+  if (input.terminalTimeoutMs !== undefined && (!Number.isFinite(input.terminalTimeoutMs) || input.terminalTimeoutMs <= 0)) {
+    throw new Error("Terminal await timeout must be positive.");
+  }
   const record: DurableAwaitRecord = {
     id,
     condition: "background_process",
     processId: input.processId,
     pid: process.pid,
-    deadlineAt: new Date(Date.now() + input.timeoutMs).toISOString(),
+    deadlineAt: wakeupDeadlineAt,
+    wakeupDeadlineAt,
+    terminalDeadlineAt,
     status: "suspended",
     createdAt: new Date().toISOString(),
     round: input.round,
@@ -120,6 +134,22 @@ export async function suspendOnBackgroundAwait(input: Parameters<typeof register
   throw new DurableAwaitSuspendedError(await registerBackgroundAwait(input));
 }
 
+/** Extend a wakeup deadline without releasing ownership of a live job. */
+export async function extendDurableAwait(cwd: string, id: string, timeoutMs: number): Promise<DurableAwaitRecord> {
+  if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) throw new Error("Await extension must be positive.");
+  const record = await readDurableAwait(cwd, id);
+  if (record.status !== "suspended") return record;
+  const state = processState(record.processId, record.pid);
+  if (state !== "running") return resumeBackgroundAwait(cwd, id);
+  const deadlineAt = new Date(Date.now() + timeoutMs).toISOString();
+  const extended = { ...record, deadlineAt, wakeupDeadlineAt: deadlineAt };
+  await save(cwd, extended);
+  return extended;
+}
+
+/** Re-register a live process after an observer or app restart. */
+export const reregisterDurableAwait = extendDurableAwait;
+
 /** Re-prime a parked round. This is deliberately side-effect free until a terminal event is observed. */
 export async function resumeBackgroundAwait(cwd: string, id: string): Promise<DurableAwaitRecord> {
   const record = await readDurableAwait(cwd, id);
@@ -128,9 +158,16 @@ export async function resumeBackgroundAwait(cwd: string, id: string): Promise<Du
   // A deadline is only a wakeup hint. A registered job that is still alive owns
   // the checkpoint, so an early/late observer wakeup must remain resumable and
   // must not release the process or turn the round terminal.
-  const timedOut = Date.now() >= Date.parse(record.deadlineAt);
+  const wakeupDeadline = record.wakeupDeadlineAt ?? record.deadlineAt;
+  const terminalDeadline = record.terminalDeadlineAt;
+  const timedOut = terminalDeadline !== undefined
+    ? Date.now() >= Date.parse(terminalDeadline)
+    : Date.now() >= Date.parse(wakeupDeadline);
+  const terminalExpired = terminalDeadline !== undefined && Date.now() >= Date.parse(terminalDeadline);
   const status: DurableAwaitStatus = state === "running"
-    ? "suspended"
+    ? terminalExpired
+      ? "timed_out"
+      : "suspended"
     : state === "exited"
       // A deadline is the durable contract's terminal boundary. If the
       // observer wakes after that boundary, report timeout even when the

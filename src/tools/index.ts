@@ -98,10 +98,10 @@ export function makeToolSet(ctx: ToolContext, role: ToolRole, allowedBashCommand
   });
   const awaitTool = tool({
     description: DURABLE_AWAIT_DESCRIPTION,
-    inputSchema: z.object({ processId: z.string(), timeoutMs: z.number().int().positive(), id: z.string().optional() }),
-    execute: wrapExecute(ctx, role, "await_background", ({ processId }) => processId, ({ processId, timeoutMs, id }) => {
+    inputSchema: z.object({ processId: z.string(), timeoutMs: z.number().int().positive(), terminalTimeoutMs: z.number().int().positive().optional(), id: z.string().optional() }),
+    execute: wrapExecute(ctx, role, "await_background", ({ processId }) => processId, ({ processId, timeoutMs, terminalTimeoutMs, id }) => {
       if (!ctx.durableAwait) throw new Error("Durable await is unavailable outside an orchestrated round.");
-      return ctx.durableAwait({ processId, timeoutMs, id });
+      return ctx.durableAwait({ processId, timeoutMs, terminalTimeoutMs, id });
     })
   });
 

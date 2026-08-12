@@ -488,8 +488,8 @@ export async function createLiveAgents(options: LiveAgentOptions): Promise<Agent
     recordSecurityRisk: (risk: SecurityRisk) => {
       if (!roundSecurityRisks.some((existing) => existing.kind === risk.kind && existing.action === risk.action)) roundSecurityRisks.push(risk);
     }
-    ,durableAwait: ({ processId, timeoutMs, id }: { processId: string; timeoutMs: number; id?: string }) =>
-      suspendOnBackgroundAwait({ cwd: options.cwd, processId, timeoutMs, id, checkpoint: { plan: activePlan, tasks: activePlan?.tasks, evidence: { phase: "worker" } } })
+    ,durableAwait: ({ processId, timeoutMs, terminalTimeoutMs, id }: { processId: string; timeoutMs: number; terminalTimeoutMs?: number; id?: string }) =>
+      suspendOnBackgroundAwait({ cwd: options.cwd, processId, timeoutMs, terminalTimeoutMs, id, checkpoint: { plan: activePlan, tasks: activePlan?.tasks, evidence: { phase: "worker" } } })
   };
   const projectInstructions = async () => (await options.projectInstructions?.())?.trim() || "Project instructions:\nnone";
   const memoryInstruction = "Honor Project instructions. Use remember only for durable project facts such as conventions, constraints, decisions, or unresolved issues. Never use remember for Q&A trivia or one-off answers; direct answers rarely warrant notes.";

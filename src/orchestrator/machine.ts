@@ -412,6 +412,11 @@ export async function runOrchestration(options: RunOptions): Promise<RunResult> 
     workspaceInventory: await inventory("terminal report")
   });
 
+  const missingAcceptanceCriteria = (snapshot: WorkspaceInventory | undefined): string[] =>
+    (snapshot?.criteria ?? [])
+      .filter((criterion) => criterion.status !== "satisfied" && criterion.artifacts.length > 0)
+      .map((criterion) => criterion.criterion);
+
   const validateAuthoredClaims = async (report: CompletionReport): Promise<void> => {
     validateAuthoredCapabilityContradictions(plan!, report, await readAuthoredCapabilityFiles(options.cwd ?? process.cwd(), report));
   };
@@ -875,6 +880,16 @@ export async function runOrchestration(options: RunOptions): Promise<RunResult> 
       // The report returned to the host must contain a filesystem-time snapshot, not the
       // snapshot taken before review (which may have become stale during a long round).
       const refreshed = await attachInventory(report);
+      const missing = missingAcceptanceCriteria(refreshed.workspaceInventory);
+      if (missing.length > 0) {
+        const requiredChange = `Re-inventory found unfinished acceptance criteria: ${missing.join("; ")}`;
+        feedback = [{ issue: "Acceptance artifacts are missing or incomplete.", requiredChange }];
+        allFeedback.push(feedback);
+        emit({ type: "notice", message: requiredChange });
+        transition("FEEDBACK", "approval blocked by incomplete workspace inventory", currentRound);
+        phase = "BUILDING";
+        continue;
+      }
       reports[reports.length - 1] = refreshed;
       transition("DONE", "leader review approved", currentRound);
       return addGoalClosureProposal({ phase: "DONE", summary: verdict.userSummary, plan, reports, verdicts, takeover: false }, options.goalClosureCandidates);
