@@ -58,8 +58,8 @@ export class FileTelegramOffsetStore implements TelegramOffsetStore {
 
 export class TelegramLongPollingTransport implements RemoteTransport {
   private stopped = true;
-  private offset = 0;
-  private loadedOffset = false;
+  private unsubscribe?: () => void;
+  private static readonly pollers = new Map<string, TelegramPoller>();
 
   constructor(
     private readonly token: string,
@@ -68,12 +68,20 @@ export class TelegramLongPollingTransport implements RemoteTransport {
   ) {}
 
   start(onMessage: (message: RemoteInboundMessage) => void | Promise<void>, onError?: (error: unknown) => void | Promise<void>): void {
+    this.stop();
     this.stopped = false;
-    void this.loop(onMessage, onError);
+    let poller = TelegramLongPollingTransport.pollers.get(this.token);
+    if (!poller) {
+      poller = new TelegramPoller(this.token, this.fetchImpl, this.offsetStore);
+      TelegramLongPollingTransport.pollers.set(this.token, poller);
+    }
+    this.unsubscribe = poller.subscribe(onMessage, onError);
   }
 
   stop(): void {
     this.stopped = true;
+    this.unsubscribe?.();
+    this.unsubscribe = undefined;
   }
 
   async sendMessage(chatId: number, text: string, options?: RemoteSendOptions): Promise<RemoteSentMessage | undefined> {
@@ -106,8 +114,50 @@ export class TelegramLongPollingTransport implements RemoteTransport {
     if (!response.ok) throw await telegramHttpError(response, "answerCallbackQuery");
   }
 
-  private async loop(onMessage: (message: RemoteInboundMessage) => void | Promise<void>, onError?: (error: unknown) => void | Promise<void>): Promise<void> {
-    await this.loadOffset(onError);
+  private url(method: string, query = ""): string {
+    return `https://api.telegram.org/bot${this.token}/${method}${query ? `?${query}` : ""}`;
+  }
+
+  private replyMarkup(options?: RemoteSendOptions): unknown {
+    if (options?.inlineKeyboard) {
+      return { inline_keyboard: options.inlineKeyboard.map((row) => row.map((button) => ({ text: button.text, callback_data: button.data }))) };
+    }
+    if (options?.keyboard) {
+      return { keyboard: options.keyboard.map((row) => row.map((label) => ({ text: label }))), one_time_keyboard: options.oneTimeKeyboard ?? true, resize_keyboard: true };
+    }
+    return undefined;
+  }
+
+}
+
+class TelegramPoller {
+  private stopped = true;
+  private offset = 0;
+  private loadedOffset = false;
+  private readonly subscribers = new Map<number, { onMessage: (message: RemoteInboundMessage) => void | Promise<void>; onError?: (error: unknown) => void | Promise<void> }>();
+  private nextSubscriber = 0;
+
+  constructor(
+    private readonly token: string,
+    private readonly fetchImpl: typeof fetch,
+    private readonly offsetStore?: TelegramOffsetStore
+  ) {}
+
+  subscribe(onMessage: (message: RemoteInboundMessage) => void | Promise<void>, onError?: (error: unknown) => void | Promise<void>): () => void {
+    const id = this.nextSubscriber++;
+    this.subscribers.set(id, { onMessage, onError });
+    if (this.stopped) {
+      this.stopped = false;
+      void this.loop();
+    }
+    return () => {
+      this.subscribers.delete(id);
+      if (this.subscribers.size === 0) this.stopped = true;
+    };
+  }
+
+  private async loop(): Promise<void> {
+    await this.loadOffset();
     while (!this.stopped) {
       try {
         const response = await this.fetchImpl(this.url("getUpdates", `timeout=25&offset=${this.offset}`));
@@ -122,7 +172,7 @@ export class TelegramLongPollingTransport implements RemoteTransport {
             const chatId = callback.message?.chat?.id;
             const data = callback.data;
             if (typeof senderId === "number" && typeof chatId === "number" && typeof data === "string") {
-              await onMessage({
+              await this.dispatch({
                 updateId: update.update_id,
                 senderId,
                 chatId,
@@ -133,17 +183,17 @@ export class TelegramLongPollingTransport implements RemoteTransport {
                 callbackData: data
               });
             }
-            await this.persistOffset(onError);
+            await this.persistOffset();
             continue;
           }
           const senderId = update.message?.from?.id;
           const chatId = update.message?.chat?.id;
           const text = update.message?.text;
           if (typeof senderId !== "number" || typeof chatId !== "number" || typeof text !== "string") {
-            await this.persistOffset(onError);
+            await this.persistOffset();
             continue;
           }
-          await onMessage({
+          await this.dispatch({
             updateId: update.update_id,
             senderId,
             chatId,
@@ -152,47 +202,42 @@ export class TelegramLongPollingTransport implements RemoteTransport {
             messageId: update.message?.message_id,
             replyToMessageId: update.message?.reply_to_message?.message_id
           });
-          await this.persistOffset(onError);
+          await this.persistOffset();
         }
       } catch (error) {
-        await onError?.(error);
+        await Promise.allSettled([...this.subscribers.values()].map((subscriber) => Promise.resolve(subscriber.onError?.(error))));
         await new Promise((resolve) => setTimeout(resolve, 5000));
       }
     }
   }
 
-  private async loadOffset(onError?: (error: unknown) => void | Promise<void>): Promise<void> {
+  private async dispatch(message: RemoteInboundMessage): Promise<void> {
+    const deliveries = [...this.subscribers.values()];
+    const results = await Promise.allSettled(deliveries.map((subscriber) => Promise.resolve(subscriber.onMessage(message))));
+    await Promise.allSettled(results.map((result, index) => result.status === "rejected"
+      ? Promise.resolve(deliveries[index]?.onError?.(result.reason))
+      : Promise.resolve()));
+  }
+
+  private async loadOffset(): Promise<void> {
     if (this.loadedOffset || !this.offsetStore) return;
     this.loadedOffset = true;
     try {
       this.offset = Math.max(this.offset, normalizeOffset(await this.offsetStore.read()));
-    } catch (error) {
-      await onError?.(error);
-    }
+    } catch { /* polling remains usable when offset persistence is unavailable */ }
   }
 
-  private async persistOffset(onError?: (error: unknown) => void | Promise<void>): Promise<void> {
+  private async persistOffset(): Promise<void> {
     if (!this.offsetStore) return;
     try {
       await this.offsetStore.write(this.offset);
-    } catch (error) {
-      await onError?.(error);
-    }
+    } catch { /* delivery must not stop because persistence failed */ }
   }
 
   private url(method: string, query = ""): string {
     return `https://api.telegram.org/bot${this.token}/${method}${query ? `?${query}` : ""}`;
   }
 
-  private replyMarkup(options?: RemoteSendOptions): unknown {
-    if (options?.inlineKeyboard) {
-      return { inline_keyboard: options.inlineKeyboard.map((row) => row.map((button) => ({ text: button.text, callback_data: button.data }))) };
-    }
-    if (options?.keyboard) {
-      return { keyboard: options.keyboard.map((row) => row.map((label) => ({ text: label }))), one_time_keyboard: options.oneTimeKeyboard ?? true, resize_keyboard: true };
-    }
-    return undefined;
-  }
 }
 
 function normalizeOffset(value: unknown): number {

@@ -49,6 +49,7 @@ export interface RemoteSentMessage {
 export interface RemoteBridgeConfig {
   enabled?: boolean;
   telegramUserId?: number;
+  telegramUserIds?: number[];
 }
 
 export interface RemoteStatusSnapshot {
@@ -191,12 +192,14 @@ export class RemoteBridge {
   private readonly rejectedAuditAt = new Map<number, number>();
   private polling = false;
   private lastError: string | undefined;
-  private stopConfirmation?: StopConfirmation;
+  private readonly stopConfirmations = new Map<string, StopConfirmation>();
   private readonly pendingApprovals = new Map<string, PendingRemoteApproval>();
   private readonly pendingPromptApprovals = new Map<string, PendingPromptApprovalContext>();
   private readonly sessionStreamsByMessage = new Map<string, TelegramSessionStream>();
   private readonly sessionStreamsBySession = new Map<string, TelegramSessionStream>();
   private readonly selectedSessionsByChat = new Map<number, string>();
+  private readonly sessionCommandTails = new Map<string, Promise<void>>();
+  private readonly subscribedChats = new Set<number>();
 
   constructor(private readonly deps: RemoteBridgeDeps) {}
 
@@ -217,8 +220,8 @@ export class RemoteBridge {
   async revoke(): Promise<RemoteControlState> {
     await this.audit("revoke", { source: "desktop" });
     this.pairing = undefined;
-    this.config = { ...this.config, enabled: false, telegramUserId: undefined };
-    await this.deps.saveConfig({ enabled: false, telegramUserId: undefined });
+    this.config = { ...this.config, enabled: false, telegramUserId: undefined, telegramUserIds: undefined };
+    await this.deps.saveConfig({ enabled: false, telegramUserId: undefined, telegramUserIds: undefined });
     this.stopTransport();
     this.emitState();
     return this.state();
@@ -231,7 +234,7 @@ export class RemoteBridge {
       configured: Boolean(token),
       enabled: Boolean(this.config.enabled),
       polling: this.polling,
-      paired: Boolean(this.config.telegramUserId),
+      paired: this.authorizedUserIds().length > 0,
       pairedUserId: maskTelegramUserId(this.config.telegramUserId),
       pairingCode: this.pairing && expiresAt && expiresAt > this.now() ? this.pairing.code : undefined,
       pairingExpiresAt: this.pairing && expiresAt && expiresAt > this.now() ? new Date(expiresAt).toISOString() : undefined,
@@ -257,10 +260,11 @@ export class RemoteBridge {
       return;
     }
 
-    if (!this.config.telegramUserId || message.senderId !== this.config.telegramUserId) {
+    if (!this.authorized(message.senderId)) {
       await this.auditRejectedSender(message);
       return;
     }
+    this.subscribedChats.add(message.chatId);
 
     // Keep content submissions in their own rate-limit bucket. Session browsing
     // and status checks must not consume the capacity needed for the selected
@@ -276,7 +280,7 @@ export class RemoteBridge {
       return;
     }
 
-    if (command.verb !== "confirm-stop" && command.verb !== "stop") this.stopConfirmation = undefined;
+    if (command.verb !== "confirm-stop" && command.verb !== "stop") this.stopConfirmations.delete(this.deviceKey(message));
 
     if (command.verb === "status") {
       await this.send(message.chatId, formatStatus(this.deps.statusProvider()), "status");
@@ -291,7 +295,7 @@ export class RemoteBridge {
       return;
     }
     if (command.verb === "prompt") {
-      await this.handlePrompt(message, command.args);
+      await this.handlePromptSerialized(message, command.args);
       return;
     }
     if (command.verb === "cancel") {
@@ -318,16 +322,17 @@ export class RemoteBridge {
       await this.send(message.chatId, "Remote control revoked. Pair again from the desktop to re-enable.", "revoke");
       await this.audit("revoke", { source: "telegram", senderId: message.senderId });
       this.pairing = undefined;
-      this.config = { ...this.config, enabled: false, telegramUserId: undefined };
+      this.config = { ...this.config, enabled: false, telegramUserId: undefined, telegramUserIds: undefined };
       this.selectedSessionsByChat.clear();
-      await this.deps.saveConfig({ enabled: false, telegramUserId: undefined });
+      this.stopConfirmations.clear();
+      await this.deps.saveConfig({ enabled: false, telegramUserId: undefined, telegramUserIds: undefined });
       this.stopTransport();
       this.emitState();
       return;
     }
 
     if (message.replyToMessageId !== undefined || this.selectedSessionsByChat.has(message.chatId)) {
-      await this.handlePrompt(message, message.text);
+      await this.handlePromptSerialized(message, message.text);
       return;
     }
 
@@ -380,7 +385,7 @@ export class RemoteBridge {
 
   async pushApproval(request: RemoteApprovalRequest): Promise<boolean> {
     const token = this.deps.tokenProvider();
-    const pairedUserId = this.config.telegramUserId;
+    const pairedUserId = this.config.telegramUserId ?? this.authorizedUserIds()[0];
     if (!this.config.enabled || !token || !pairedUserId || !this.transport) return false;
     const text = formatApprovalRequest(request);
     const sent = await this.transport.sendMessage(pairedUserId, text, {
@@ -423,7 +428,7 @@ export class RemoteBridge {
       this.emitState();
       return;
     }
-    if (!this.config.telegramUserId && (!this.pairing || this.pairing.expiresAt <= this.now())) {
+    if (!this.authorizedUserIds().length && (!this.pairing || this.pairing.expiresAt <= this.now())) {
       this.emitState();
       return;
     }
@@ -450,7 +455,7 @@ export class RemoteBridge {
   }
 
   private async handlePair(message: RemoteInboundMessage, code: string): Promise<void> {
-    if (this.config.telegramUserId && message.senderId !== this.config.telegramUserId) {
+    if (this.config.telegramUserId && !this.authorized(message.senderId)) {
       await this.auditRejectedSender(message);
       return;
     }
@@ -463,9 +468,12 @@ export class RemoteBridge {
       await this.send(message.chatId, "Pairing code is invalid or expired.", "pairing-failed");
       return;
     }
-    this.config.telegramUserId = message.senderId;
-    this.pairing = undefined;
-    await this.deps.saveConfig({ enabled: true, telegramUserId: message.senderId });
+    const existing = this.authorizedUserIds();
+    this.config.telegramUserId = existing[0] ?? message.senderId;
+    this.config.telegramUserIds = [...new Set([...existing, message.senderId])];
+    await this.deps.saveConfig(existing.length === 0
+      ? { enabled: true, telegramUserId: message.senderId }
+      : { enabled: true, telegramUserId: this.config.telegramUserId, telegramUserIds: this.config.telegramUserIds });
     await this.audit("paired", { senderId: message.senderId, username: message.username });
     await this.send(message.chatId, "Tandem remote control paired. Try /status.", "paired");
     this.emitState();
@@ -477,7 +485,7 @@ export class RemoteBridge {
       chatId: message.chatId,
       dataHash: hashArgs(message.callbackData ?? "")
     });
-    if (!this.config.telegramUserId || message.senderId !== this.config.telegramUserId) {
+    if (!this.authorized(message.senderId)) {
       await this.auditRejectedSender(message);
       return;
     }
@@ -602,6 +610,15 @@ export class RemoteBridge {
     if (result.ok) this.selectedSessionsByChat.set(message.chatId, target.id);
     await this.audit("use", { outcome: result.ok ? "ok" : "rejected", sessionId: target.id });
     await this.send(message.chatId, result.ok ? `${result.message} Send any message to prompt it.` : result.message, "use");
+  }
+
+  private async handlePromptSerialized(message: RemoteInboundMessage, text: string): Promise<void> {
+    const sessionId = this.selectedSessionsByChat.get(message.chatId);
+    if (!sessionId) {
+      await this.handlePrompt(message, text);
+      return;
+    }
+    await this.withSessionCommandLock(sessionId, () => this.handlePrompt(message, text));
   }
 
   private async handlePrompt(message: RemoteInboundMessage, text: string): Promise<void> {
@@ -825,13 +842,13 @@ export class RemoteBridge {
 
   private async handleStopRequest(message: RemoteInboundMessage): Promise<void> {
     const nonce = String(randomInt(0, 1000000)).padStart(6, "0");
-    this.stopConfirmation = {
+    this.stopConfirmations.set(this.deviceKey(message), {
       nonce,
       senderId: message.senderId,
       chatId: message.chatId,
       expiresAt: this.now() + STOP_CONFIRM_TTL_MS,
       used: false
-    };
+    });
     await this.audit("stop-request", { outcome: "confirmation-required" });
     await this.send(
       message.chatId,
@@ -842,20 +859,20 @@ export class RemoteBridge {
   }
 
   private async handleStopConfirm(message: RemoteInboundMessage, nonce: string): Promise<void> {
-    const confirmation = this.stopConfirmation;
+    const confirmation = this.stopConfirmations.get(this.deviceKey(message));
     if (!confirmation || confirmation.used || confirmation.senderId !== message.senderId || confirmation.chatId !== message.chatId || confirmation.nonce !== nonce) {
       await this.audit("stop-confirm", { outcome: "rejected", reason: "invalid-or-used" });
       await this.send(message.chatId, "Stop confirmation is invalid or already used. Send /stop to request a fresh confirmation.", "stop-confirm-rejected");
       return;
     }
     if (confirmation.expiresAt <= this.now()) {
-      this.stopConfirmation = undefined;
+      this.stopConfirmations.delete(this.deviceKey(message));
       await this.audit("stop-confirm", { outcome: "rejected", reason: "expired" });
       await this.send(message.chatId, "Stop confirmation expired. Nothing was stopped. Send /stop to request a fresh confirmation.", "stop-confirm-expired");
       return;
     }
     confirmation.used = true;
-    this.stopConfirmation = undefined;
+    this.stopConfirmations.delete(this.deviceKey(message));
     if (!this.deps.actions) {
       await this.audit("stop-confirm", { outcome: "unavailable" });
       await this.send(message.chatId, "Remote stop is unavailable in this build.", "stop-confirm");
@@ -873,8 +890,32 @@ export class RemoteBridge {
   }
 
   private async send(chatId: number, text: string, kind: string, options?: RemoteSendOptions): Promise<void> {
-    await this.transport?.sendMessage(chatId, text, options);
-    await this.audit("outbound", { chatId, kind });
+    const chats = this.subscribedChats.size > 0 ? [...this.subscribedChats] : [chatId];
+    await Promise.all(chats.map(async (targetChatId) => {
+      await this.transport?.sendMessage(targetChatId, text, options);
+      await this.audit("outbound", { chatId: targetChatId, kind });
+    }));
+  }
+
+  private authorizedUserIds(): number[] {
+    return [...new Set([...(this.config.telegramUserIds ?? []), ...(this.config.telegramUserId ? [this.config.telegramUserId] : [])])];
+  }
+
+  private authorized(senderId: number): boolean {
+    return this.authorizedUserIds().includes(senderId);
+  }
+
+  private deviceKey(message: Pick<RemoteInboundMessage, "senderId" | "chatId">): string {
+    return `${message.senderId}:${message.chatId}`;
+  }
+
+  private async withSessionCommandLock(sessionId: string, command: () => Promise<void>): Promise<void> {
+    const previous = this.sessionCommandTails.get(sessionId) ?? Promise.resolve();
+    const current = previous.catch(() => undefined).then(command);
+    this.sessionCommandTails.set(sessionId, current);
+    try { await current; } finally {
+      if (this.sessionCommandTails.get(sessionId) === current) this.sessionCommandTails.delete(sessionId);
+    }
   }
 
   private now(): number {

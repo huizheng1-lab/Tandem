@@ -65,7 +65,8 @@ export const CustomModelSchema = z
 
 export const RemoteControlConfigSchema = z.object({
   enabled: z.boolean().optional(),
-  telegramUserId: z.number().int().positive().optional()
+  telegramUserId: z.number().int().positive().optional(),
+  telegramUserIds: z.array(z.number().int().positive()).optional()
 });
 export type RemoteControlConfig = z.infer<typeof RemoteControlConfigSchema>;
 

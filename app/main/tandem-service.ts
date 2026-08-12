@@ -925,10 +925,11 @@ export class TandemService {
     };
   }
 
-  private async saveRemoteControlConfig(patch: { enabled?: boolean; telegramUserId?: number }): Promise<void> {
+  private async saveRemoteControlConfig(patch: { enabled?: boolean; telegramUserId?: number; telegramUserIds?: number[] }): Promise<void> {
     const current = this.config.remoteControl ?? {};
     const remoteControl = { ...current, ...patch };
     if (remoteControl.telegramUserId === undefined) delete remoteControl.telegramUserId;
+    if (remoteControl.telegramUserIds === undefined) delete remoteControl.telegramUserIds;
     this.config = { ...this.config, remoteControl };
     await saveGlobalConfigPatch({ remoteControl }, this.homeDir);
   }
