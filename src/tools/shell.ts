@@ -20,6 +20,8 @@ export interface BackgroundProcessInfo {
   pid?: number;
   status: "running" | "exited" | "stopped";
   startedAt: string;
+  /** Working directory is the best recovery hint when a durable record is lost. */
+  cwd?: string;
   exitCode?: number | null;
 }
 
@@ -238,7 +240,7 @@ async function startBackgroundProcess(ctx: ToolContext, command: string): Promis
   });
   const id = backgroundId();
   const entry: BackgroundProcess = {
-    info: { id, command, pid: subprocess.pid, status: "running", startedAt: new Date().toISOString() },
+    info: { id, command, pid: subprocess.pid, status: "running", startedAt: new Date().toISOString(), cwd: ctx.cwd },
     subprocess,
     tracker: startDescendantTracker(subprocess.pid),
     stdout: "",

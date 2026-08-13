@@ -20,6 +20,7 @@ import { sanitizePromptValue } from "../tools/sanitize.js";
 import { VerificationRunner, VerificationResult } from "./verification.js";
 import type { ResolvedEnvironment } from "../environment/types.js";
 import { DurableAwaitSuspendedError, listDurableAwaits, resumeBackgroundAwait, waitForDurableAwait } from "./await.js";
+import { listBackgroundProcesses } from "../tools/shell.js";
 import { inventoryWorkspace, type WorkspaceInventory } from "./inventory.js";
 import { DECISION_PRECEDENCE, regenerationDecision, regenerationNotice } from "./precedence.js";
 import { findGoalClosureCandidates, formatGoalClosureProposal } from "../session/goals.js";
@@ -36,6 +37,7 @@ export interface OrchestrationCheckpoint {
   verdicts: ReviewVerdict[];
   feedbackHistory: ReviewVerdict["feedback"][];
   parkedAwaitId?: string;
+  parkedProcessId?: string;
 }
 
 export type MachineEvent =
@@ -106,6 +108,14 @@ function isNullByteArgumentError(error: unknown): boolean {
 function errorEvent(message: string, error?: unknown): MachineEvent {
   const stack = error instanceof Error && error.stack ? error.stack : undefined;
   return stack ? { type: "error", message, stack } : { type: "error", message };
+}
+
+function durableAwaitRecoveryMessage(projectDir: string, awaitId: string, processId: string | undefined, error: unknown): string {
+  const known = processId ? listBackgroundProcesses().find((entry) => entry.id === processId) : undefined;
+  const recovery = known
+    ? `background process ${processId} is still known (status ${known.status}, command "${known.command}", likely output/work directory "${known.cwd ?? projectDir}")`
+    : `background process ${processId ?? "unknown"} is not currently registered; inspect its persisted PID/output from the worker log`;
+  return `Durable-await record ${awaitId} could not be read from "${projectDir}" (${String(error)}). ${recovery}. Completed output may exist but was not stitched; recover it before retrying.`;
 }
 
 function previousAttemptMessage(error: unknown, max = 500): string {
@@ -364,6 +374,7 @@ export interface RunResult {
   verdicts: ReviewVerdict[];
   takeover: boolean;
   parkedAwaitId?: string;
+  parkedProcessId?: string;
 }
 
 function addGoalClosureProposal(result: RunResult, goalCandidates: Goal[] | undefined): RunResult {
@@ -389,6 +400,9 @@ export async function runOrchestration(options: RunOptions): Promise<RunResult> 
   const emit = options.emit ?? (() => undefined);
   const waitIfPaused = options.waitIfPaused ?? (async () => undefined);
   const reports: CompletionReport[] = [...(options.initialState?.reports ?? [])];
+  // A turn owns one workspace for its entire lifetime. In particular, a parked
+  // turn must not follow a mutable project selection after its await is written.
+  const projectDir = options.initialState?.projectDir ?? options.cwd ?? process.cwd();
   const verdicts: ReviewVerdict[] = [...(options.initialState?.verdicts ?? [])];
   const allFeedback: ReviewVerdict["feedback"][] = [...(options.initialState?.feedbackHistory ?? [])];
   // D54: per-stream report history, kept in stream-id order. The most recent entry per stream
@@ -400,11 +414,12 @@ export async function runOrchestration(options: RunOptions): Promise<RunResult> 
   let phase: MachinePhase = options.initialState?.phase ?? "PLANNING";
   let round = options.initialState?.round ?? 0;
   let parkedAwaitId = options.initialState?.parkedAwaitId;
+  let parkedProcessId = options.initialState?.parkedProcessId;
   let currentInventory: WorkspaceInventory | undefined;
   let freshnessDecision = { required: false } as ReturnType<typeof regenerationDecision>;
 
   const inventory = async (reason: string): Promise<WorkspaceInventory> => {
-    currentInventory = await inventoryWorkspace(options.cwd ?? process.cwd(), plan);
+    currentInventory = await inventoryWorkspace(projectDir, plan);
     emit({ type: "artifact", name: "WorkspaceInventory", value: { reason, ...currentInventory } });
     return currentInventory;
   };
@@ -420,7 +435,7 @@ export async function runOrchestration(options: RunOptions): Promise<RunResult> 
       .map((criterion) => criterion.criterion);
 
   const validateAuthoredClaims = async (report: CompletionReport): Promise<void> => {
-    validateAuthoredCapabilityContradictions(plan!, report, await readAuthoredCapabilityFiles(options.cwd ?? process.cwd(), report));
+    validateAuthoredCapabilityContradictions(plan!, report, await readAuthoredCapabilityFiles(projectDir, report));
   };
 
   const reusableReport = (snapshot: WorkspaceInventory): CompletionReport => ({
@@ -450,13 +465,14 @@ export async function runOrchestration(options: RunOptions): Promise<RunResult> 
       type: "checkpoint",
       checkpoint: {
         phase,
-        projectDir: options.cwd,
+        projectDir,
         round,
         plan,
         reports: [...reports],
         verdicts: [...verdicts],
         feedbackHistory: [...allFeedback],
-        parkedAwaitId
+        parkedAwaitId,
+        parkedProcessId
       }
     });
   };
@@ -563,25 +579,28 @@ export async function runOrchestration(options: RunOptions): Promise<RunResult> 
     return { phase: "DONE", summary: "Session already completed.", plan, reports, verdicts, takeover: false };
   }
 
-  await resolveFreshnessDecision();
-  emit({ type: "notice", message: `Decision precedence: ${DECISION_PRECEDENCE}` });
-  await options.addSessionNote?.(`Decision precedence: ${DECISION_PRECEDENCE}`, "system");
-
-  // Inventory after planning and before every resumed/build round. This is evidence for
-  // deciding what to reuse; artifact validators and plan verification remain authoritative.
-  await inventory("round start");
-
   // PARKED is resumable state, never a terminal state. The host may call this function
   // again after its durable-await observer wakes it, or after an orchestrator restart.
   if (phase === "PARKED") {
     if (!parkedAwaitId) throw new Error("Parked round is missing its durable await id and cannot be resumed.");
-    const resumed = await resumeBackgroundAwait(options.cwd ?? process.cwd(), parkedAwaitId);
+    let resumed;
+    try {
+      resumed = await resumeBackgroundAwait(projectDir, parkedAwaitId);
+    } catch (error) {
+      if (error instanceof Error && (error as NodeJS.ErrnoException).code === "ENOENT") {
+        const message = durableAwaitRecoveryMessage(projectDir, parkedAwaitId, parkedProcessId, error);
+        emit(errorEvent(message, error));
+        return { phase: "DONE", summary: message, plan, reports, verdicts, takeover: false, parkedAwaitId, parkedProcessId };
+      }
+      throw error;
+    }
     if (resumed.status === "suspended") {
       const summary = `Round parked on ${resumed.processId} until ${resumed.deadlineAt}; waiting consumes no review round.`;
       emit({ type: "notice", message: summary });
-      return { phase: "PARKED", summary, plan, reports, verdicts, takeover: false, parkedAwaitId };
+      return { phase: "PARKED", summary, plan, reports, verdicts, takeover: false, parkedAwaitId, parkedProcessId };
     }
     parkedAwaitId = undefined;
+    parkedProcessId = undefined;
     phase = "BUILDING";
     emit({
       type: "notice",
@@ -591,6 +610,14 @@ export async function runOrchestration(options: RunOptions): Promise<RunResult> 
     });
     emitCheckpoint();
   }
+
+  await resolveFreshnessDecision();
+  emit({ type: "notice", message: `Decision precedence: ${DECISION_PRECEDENCE}` });
+  await options.addSessionNote?.(`Decision precedence: ${DECISION_PRECEDENCE}`, "system");
+
+  // Inventory after planning and before every new build round. It must not run
+  // between parking and the genuine durable-await resolution above.
+  await inventory("round start");
 
   const runTakeover = async (message: string): Promise<RunResult> => {
     transition("TAKEOVER", message, round);
@@ -798,23 +825,25 @@ export async function runOrchestration(options: RunOptions): Promise<RunResult> 
         } catch (error) {
           if (error instanceof DurableAwaitSuspendedError) {
             parkedAwaitId = error.record.id;
+            parkedProcessId = error.record.processId;
             transition("PARKED", `round ${currentRound} parked until ${error.record.deadlineAt}`, currentRound);
             emit({ type: "notice", message: `Round parked on ${error.record.processId}; waiting consumes no review round or agent budget.` });
-            return { phase: "PARKED", summary: `Round parked on ${error.record.processId} until ${error.record.deadlineAt}.`, plan, reports, verdicts, takeover: false, parkedAwaitId: error.record.id };
+            return { phase: "PARKED", summary: `Round parked on ${error.record.processId} until ${error.record.deadlineAt}.`, plan, reports, verdicts, takeover: false, parkedAwaitId: error.record.id, parkedProcessId };
           }
           // A worker may have launched a durable job and then exited before it
           // submitted a report. Treat its persisted await as ownership of the
           // round: takeover is not allowed to finalize while that job is live.
           // This also covers a host restart where the worker's in-memory error
           // is gone but the await/checkpoint record remains on disk.
-          const awaitRecords = await listDurableAwaits(options.cwd ?? process.cwd());
+          const awaitRecords = await listDurableAwaits(projectDir);
           for (const candidate of awaitRecords.filter((record) => record.status === "suspended" && (record.round === undefined || record.round === currentRound))) {
-            const resumed = await resumeBackgroundAwait(options.cwd ?? process.cwd(), candidate.id);
+            const resumed = await resumeBackgroundAwait(projectDir, candidate.id);
             if (resumed.status !== "suspended") continue;
             parkedAwaitId = resumed.id;
+            parkedProcessId = resumed.processId;
             transition("PARKED", `round ${currentRound} parked until ${resumed.deadlineAt}`, currentRound);
             emit({ type: "notice", message: `Round parked on ${resumed.processId}; waiting consumes no review round or agent budget.` });
-            return { phase: "PARKED", summary: `Round parked on ${resumed.processId} until ${resumed.deadlineAt}.`, plan, reports, verdicts, takeover: false, parkedAwaitId: resumed.id };
+            return { phase: "PARKED", summary: `Round parked on ${resumed.processId} until ${resumed.deadlineAt}.`, plan, reports, verdicts, takeover: false, parkedAwaitId: resumed.id, parkedProcessId };
           }
           // D66-2: rate-limit errors should not trigger a takeover (the failure isn't in the
           // worker's output, it's a transient quota hit). Surface the resetsAt so the user
@@ -919,19 +948,32 @@ export async function runOrchestration(options: RunOptions): Promise<RunResult> 
  * to recover after this process is restarted.
  */
 export async function runOrchestrationDurably(options: RunOptions): Promise<RunResult> {
-  let initialState = options.initialState;
+  const projectDir = options.initialState?.projectDir ?? options.cwd ?? process.cwd();
+  let initialState = options.initialState ? { ...options.initialState, projectDir } : undefined;
   while (true) {
-    const result = await runOrchestration({ ...options, initialState });
+    const result = await runOrchestration({ ...options, cwd: projectDir, initialState });
     if (result.phase !== "PARKED" || !result.parkedAwaitId) return result;
-    const resumed = await waitForDurableAwait(options.cwd ?? process.cwd(), result.parkedAwaitId);
+    let resumed;
+    try {
+      resumed = await waitForDurableAwait(projectDir, result.parkedAwaitId);
+    } catch (error) {
+      if (error instanceof Error && (error as NodeJS.ErrnoException).code === "ENOENT") {
+        const message = durableAwaitRecoveryMessage(projectDir, result.parkedAwaitId, result.parkedProcessId, error);
+        options.emit?.(errorEvent(message, error));
+        return { ...result, phase: "DONE", summary: message, takeover: false };
+      }
+      throw error;
+    }
     initialState = {
       phase: "PARKED",
+      projectDir,
       round: initialState?.round ?? 1,
       plan: result.plan,
       reports: result.reports,
       verdicts: result.verdicts,
       feedbackHistory: initialState?.feedbackHistory ?? [],
-      parkedAwaitId: resumed.id
+      parkedAwaitId: resumed.id,
+      parkedProcessId: result.parkedProcessId
     };
   }
 }

@@ -33,6 +33,7 @@ describe("durable await", () => {
     let builds = 0;
     let takeovers = 0;
     const phases: string[] = [];
+    const events: Array<{ type: string; name?: string; message?: string; checkpointDir?: string }> = [];
     try {
       const result = await runOrchestrationDurably({
         cwd,
@@ -55,6 +56,12 @@ describe("durable await", () => {
         },
         emit: (event) => {
           if (event.type === "transition") phases.push(event.phase);
+          events.push({
+            type: event.type,
+            name: event.type === "artifact" ? event.name : undefined,
+            message: event.type === "notice" || event.type === "transition" ? event.message : undefined,
+            checkpointDir: event.type === "checkpoint" ? event.checkpoint.projectDir : undefined
+          });
         }
       });
       expect(result.phase).toBe("DONE");
@@ -63,10 +70,62 @@ describe("durable await", () => {
       expect(takeovers).toBe(0);
       expect(phases).toContain("PARKED");
       expect(phases.indexOf("DONE")).toBeGreaterThan(phases.indexOf("PARKED"));
+      const parkIndex = events.findIndex((event) => event.type === "transition" && event.message?.includes("parked"));
+      const doneIndex = events.findIndex((event) => event.type === "transition" && event.message?.includes("approved"));
+      expect(events.slice(parkIndex + 1, doneIndex)).not.toEqual(expect.arrayContaining([
+        expect.objectContaining({ name: "WorkspaceInventory" }),
+        expect.objectContaining({ message: expect.stringContaining("Decision precedence") })
+      ]));
+      expect(events.filter((event) => event.type === "checkpoint").every((event) => event.checkpointDir === cwd)).toBe(true);
     } finally {
       await resumeBackgroundAwait(cwd, "live-render").catch(() => undefined);
       await rm(cwd, { recursive: true, force: true });
     }
+  });
+
+  it("uses the parked checkpoint directory for every resume even when the live selection changes", async () => {
+    const projectDir = path.join(tmpdir(), `tandem-captured-await-${Date.now()}`);
+    const otherDir = path.join(tmpdir(), `tandem-other-await-${Date.now()}`);
+    await mkdir(path.join(projectDir, ".tandem", "awaits"), { recursive: true });
+    await writeFile(path.join(projectDir, ".tandem", "awaits", "captured.json"), JSON.stringify({
+      id: "captured", condition: "background_process", processId: "gone", pid: 2147483647,
+      deadlineAt: new Date(Date.now() - 1).toISOString(), status: "suspended", createdAt: new Date().toISOString(), round: 1
+    }));
+    const checkpointDirs: string[] = [];
+    try {
+      const result = await runOrchestration({
+        cwd: otherDir,
+        request: "resume",
+        config: { maxReviewRounds: 1, maxParallelWorkers: 1 },
+        initialState: { phase: "PARKED", projectDir, round: 1, plan, reports: [], verdicts: [], feedbackHistory: [], parkedAwaitId: "captured", parkedProcessId: "gone" },
+        agents: { plan: async () => ({ kind: "plan", plan }), build: async () => report, review: async () => verdict, takeover: async () => ({ report, userSummary: "takeover" }) },
+        emit: (event) => { if (event.type === "checkpoint") checkpointDirs.push(event.checkpoint.projectDir ?? ""); }
+      });
+      expect(result.phase).toBe("DONE");
+      expect(checkpointDirs).toContain(projectDir);
+      expect(checkpointDirs).not.toContain(otherDir);
+      expect((await resumeBackgroundAwait(projectDir, "captured")).status).toBe("timed_out");
+    } finally {
+      await rm(projectDir, { recursive: true, force: true });
+      await rm(otherDir, { recursive: true, force: true });
+    }
+  });
+
+  it("reports a missing await record with process identity and recovery location", async () => {
+    const projectDir = path.join(tmpdir(), `tandem-missing-await-${Date.now()}`);
+    try {
+      const result = await runOrchestration({
+        cwd: path.join(tmpdir(), "wrong-live-selection"),
+        request: "resume",
+        config: { maxReviewRounds: 1, maxParallelWorkers: 1 },
+        initialState: { phase: "PARKED", projectDir, round: 1, plan, reports: [], verdicts: [], feedbackHistory: [], parkedAwaitId: "missing", parkedProcessId: "bg-recovery" },
+        agents: { plan: async () => ({ kind: "plan", plan }), build: async () => report, review: async () => verdict, takeover: async () => ({ report, userSummary: "takeover" }) }
+      });
+      expect(result.phase).toBe("DONE");
+      expect(result.summary).toContain("bg-recovery");
+      expect(result.summary).toContain(projectDir);
+      expect(result.summary).toContain("Completed output may exist");
+    } finally { await rm(projectDir, { recursive: true, force: true }); }
   });
 
   it("resumes a persisted parked round on deadline without spending a round", async () => {
