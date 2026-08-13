@@ -413,6 +413,11 @@ export async function runOrchestration(options: RunOptions): Promise<RunResult> 
   const streamReportHistory: { streamId: string; report: CompletionReport }[][] = [];
   let phase: MachinePhase = options.initialState?.phase ?? "PLANNING";
   let round = options.initialState?.round ?? 0;
+  // A parked round resumes inside the same turn after its observer resolves. Keep
+  // the resume boundary quiet: startup diagnostics belong to the turn that parked,
+  // not to the interval surrounding the durable wait. The work still performs the
+  // same calculations and inventories; only duplicate stream events are suppressed.
+  const resumingParkedRound = phase === "PARKED";
   let parkedAwaitId = options.initialState?.parkedAwaitId;
   let parkedProcessId = options.initialState?.parkedProcessId;
   let currentInventory: WorkspaceInventory | undefined;
@@ -420,7 +425,9 @@ export async function runOrchestration(options: RunOptions): Promise<RunResult> 
 
   const inventory = async (reason: string): Promise<WorkspaceInventory> => {
     currentInventory = await inventoryWorkspace(projectDir, plan);
-    emit({ type: "artifact", name: "WorkspaceInventory", value: { reason, ...currentInventory } });
+    if (!resumingParkedRound) {
+      emit({ type: "artifact", name: "WorkspaceInventory", value: { reason, ...currentInventory } });
+    }
     return currentInventory;
   };
 
@@ -453,7 +460,7 @@ export async function runOrchestration(options: RunOptions): Promise<RunResult> 
     const planText = [plan?.objective ?? "", ...(plan?.constraints ?? []), ...(plan?.tasks.map((task) => task.description) ?? []), ...(plan?.acceptanceCriteria ?? [])].join("\n");
     freshnessDecision = regenerationDecision(options.request, instructions, planText);
     const notice = regenerationNotice(freshnessDecision);
-    if (notice) emit({ type: "notice", message: notice });
+    if (notice && !resumingParkedRound) emit({ type: "notice", message: notice });
   };
   const recordFreshnessDecision = (report: CompletionReport): CompletionReport => {
     const notice = regenerationNotice(freshnessDecision);
@@ -612,8 +619,10 @@ export async function runOrchestration(options: RunOptions): Promise<RunResult> 
   }
 
   await resolveFreshnessDecision();
-  emit({ type: "notice", message: `Decision precedence: ${DECISION_PRECEDENCE}` });
-  await options.addSessionNote?.(`Decision precedence: ${DECISION_PRECEDENCE}`, "system");
+  if (!resumingParkedRound) {
+    emit({ type: "notice", message: `Decision precedence: ${DECISION_PRECEDENCE}` });
+    await options.addSessionNote?.(`Decision precedence: ${DECISION_PRECEDENCE}`, "system");
+  }
 
   // Inventory after planning and before every new build round. It must not run
   // between parking and the genuine durable-await resolution above.
