@@ -26,7 +26,7 @@ export interface ToolContext {
   abortSignal?: AbortSignal;
   onToolEvent?: (event: ToolActivityEvent) => void;
   recordSecurityRisk?: (risk: SecurityRisk) => void;
-  durableAwait?: (input: { processId: string; timeoutMs: number; terminalTimeoutMs?: number; id?: string }) => Promise<string>;
+  durableAwait?: (input: { processId: string; timeoutMs: number; terminalTimeoutMs?: number; id?: string; expectedDurationMs?: number; safetyMarginMs?: number }) => Promise<string>;
 }
 
 export type ToolActivityRole = "leader" | "worker";

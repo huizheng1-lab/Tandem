@@ -2,10 +2,10 @@ import { mkdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { resumeBackgroundAwait, suspendOnBackgroundAwait, waitForDurableAwait } from "../src/orchestrator/await.js";
+import { DURABLE_AWAIT_MIN_WAKEUP_MS, extendDurableAwait, registerBackgroundAwait, resumeBackgroundAwait, suspendOnBackgroundAwait, waitForDurableAwait } from "../src/orchestrator/await.js";
 import { runOrchestration, runOrchestrationDurably, type OrchestrationCheckpoint } from "../src/orchestrator/machine.js";
 import type { BuildPlan, CompletionReport, ReviewVerdict } from "../src/orchestrator/artifacts.js";
-import { bashTool } from "../src/tools/shell.js";
+import { backgroundProcessTool, bashTool } from "../src/tools/shell.js";
 
 const plan: BuildPlan = { title: "await", objective: "await", constraints: [], tasks: [{ id: "T1", description: "work" }], acceptanceCriteria: ["done"], verification: [] };
 const report: CompletionReport = { status: "complete", summary: "done", taskResults: [{ id: "T1", status: "done" }], filesChanged: [], verificationResults: [], deviationsFromPlan: [] };
@@ -24,6 +24,52 @@ async function fixture(deadlineAt: string): Promise<{ cwd: string; id: string }>
 }
 
 describe("durable await", () => {
+  it("uses the supplied duration estimate and never persists a sub-minute wakeup", async () => {
+    const cwd = path.join(tmpdir(), `tandem-await-floor-${Date.now()}-${Math.random().toString(16).slice(2)}`);
+    await mkdir(cwd, { recursive: true });
+    const started = await bashTool({ cwd, permissionMode: "yolo" }, "Start-Sleep -Seconds 5", 5_000, true);
+    const processId = started.output.match(/Started background process (\S+)/)?.[1];
+    if (!processId) throw new Error(`background process did not start: ${started.output}`);
+    try {
+      const before = Date.now();
+      const record = await registerBackgroundAwait({
+        cwd,
+        processId,
+        timeoutMs: 1_000,
+        expectedDurationMs: 120_000,
+        safetyMarginMs: 30_000,
+        id: "estimated-render"
+      });
+      const interval = Date.parse(record.wakeupDeadlineAt ?? record.deadlineAt) - before;
+      expect(interval).toBeGreaterThanOrEqual(149_000);
+      expect(record.wakeupIntervalMs).toBe(150_000);
+      expect(record.minimumWakeupIntervalMs).toBe(DURABLE_AWAIT_MIN_WAKEUP_MS);
+    } finally {
+      await backgroundProcessTool("stop", processId).catch(() => undefined);
+      await rm(cwd, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps the floor across repeated re-registration of a live process", async () => {
+    const cwd = path.join(tmpdir(), `tandem-await-reregister-${Date.now()}-${Math.random().toString(16).slice(2)}`);
+    await mkdir(cwd, { recursive: true });
+    const started = await bashTool({ cwd, permissionMode: "yolo" }, "Start-Sleep -Seconds 5", 5_000, true);
+    const processId = started.output.match(/Started background process (\S+)/)?.[1];
+    if (!processId) throw new Error(`background process did not start: ${started.output}`);
+    try {
+      const initial = await registerBackgroundAwait({ cwd, processId, timeoutMs: 1_000, id: "repeated-render" });
+      let current = initial;
+      for (let attempt = 0; attempt < 8; attempt += 1) {
+        current = await extendDurableAwait(cwd, current.id, 1_000);
+        expect(current.wakeupIntervalMs).toBeGreaterThanOrEqual(DURABLE_AWAIT_MIN_WAKEUP_MS);
+        expect(Date.parse(current.wakeupDeadlineAt ?? current.deadlineAt)).toBeGreaterThan(Date.now() + 55_000);
+      }
+    } finally {
+      await backgroundProcessTool("stop", processId).catch(() => undefined);
+      await rm(cwd, { recursive: true, force: true });
+    }
+  });
+
   it("keeps a live render parked through an early wakeup and resumes without takeover", async () => {
     const cwd = path.join(tmpdir(), `tandem-live-await-${Date.now()}-${Math.random().toString(16).slice(2)}`);
     await mkdir(cwd, { recursive: true });

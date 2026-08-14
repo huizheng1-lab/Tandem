@@ -97,11 +97,11 @@ export function makeToolSet(ctx: ToolContext, role: ToolRole, allowedBashCommand
     execute: wrapExecute(ctx, role, "bash_background", ({ action, id }) => id ?? action, ({ action, id }) => backgroundProcessTool(action, id))
   });
   const awaitTool = tool({
-    description: DURABLE_AWAIT_DESCRIPTION,
-    inputSchema: z.object({ processId: z.string(), timeoutMs: z.number().int().positive(), terminalTimeoutMs: z.number().int().positive().optional(), id: z.string().optional() }),
-    execute: wrapExecute(ctx, role, "await_background", ({ processId }) => processId, ({ processId, timeoutMs, terminalTimeoutMs, id }) => {
+    description: `${DURABLE_AWAIT_DESCRIPTION} For background renders, provide expectedDurationMs and safetyMarginMs when known; intervals below 60 seconds are raised to a 60-second minimum, so use a deadline measured in minutes rather than a few seconds. A wakeup is not failure and the await may be extended or re-registered.`,
+    inputSchema: z.object({ processId: z.string(), timeoutMs: z.number().int().positive(), terminalTimeoutMs: z.number().int().positive().optional(), id: z.string().optional(), expectedDurationMs: z.number().int().nonnegative().optional(), safetyMarginMs: z.number().int().nonnegative().optional() }),
+    execute: wrapExecute(ctx, role, "await_background", ({ processId }) => processId, ({ processId, timeoutMs, terminalTimeoutMs, id, expectedDurationMs, safetyMarginMs }) => {
       if (!ctx.durableAwait) throw new Error("Durable await is unavailable outside an orchestrated round.");
-      return ctx.durableAwait({ processId, timeoutMs, terminalTimeoutMs, id });
+      return ctx.durableAwait({ processId, timeoutMs, terminalTimeoutMs, id, expectedDurationMs, safetyMarginMs });
     })
   });
 

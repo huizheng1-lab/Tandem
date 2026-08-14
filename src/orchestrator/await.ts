@@ -4,6 +4,13 @@ import { getBackgroundProcessInfo, keepBackgroundProcessAlive, listBackgroundPro
 
 export type DurableAwaitStatus = "suspended" | "completed" | "failed" | "timed_out";
 
+/**
+ * A durable await is an observer wakeup, not a busy polling interval. Keep a
+ * model mistake from turning one long-running render into repeated worker
+ * turns. This is intentionally observable on every persisted record.
+ */
+export const DURABLE_AWAIT_MIN_WAKEUP_MS = 60_000;
+
 export interface DurableAwaitRecord {
   id: string;
   condition: "background_process";
@@ -22,6 +29,10 @@ export interface DurableAwaitRecord {
   /** Optional estimate used to explain/recalculate observer wakeups. */
   expectedDurationMs?: number;
   safetyMarginMs?: number;
+  /** Minimum observer interval applied when this await was registered. */
+  minimumWakeupIntervalMs?: number;
+  /** Effective interval used to calculate wakeupDeadlineAt. */
+  wakeupIntervalMs?: number;
 }
 
 export class DurableAwaitSuspendedError extends Error {
@@ -95,6 +106,24 @@ function processState(processId: string, pid?: number): "running" | "exited" | "
   try { process.kill(pid, 0); return "running"; } catch { return "exited"; }
 }
 
+function effectiveWakeupInterval(input: {
+  timeoutMs: number;
+  expectedDurationMs?: number;
+  safetyMarginMs?: number;
+}): number {
+  if (!Number.isFinite(input.timeoutMs) || input.timeoutMs <= 0) throw new Error("Await timeout must be positive.");
+  if (input.expectedDurationMs !== undefined && (!Number.isFinite(input.expectedDurationMs) || input.expectedDurationMs < 0)) {
+    throw new Error("Expected await duration must be non-negative.");
+  }
+  if (input.safetyMarginMs !== undefined && (!Number.isFinite(input.safetyMarginMs) || input.safetyMarginMs < 0)) {
+    throw new Error("Await safety margin must be non-negative.");
+  }
+  const estimate = input.expectedDurationMs === undefined
+    ? 0
+    : input.expectedDurationMs + (input.safetyMarginMs ?? 0);
+  return Math.max(DURABLE_AWAIT_MIN_WAKEUP_MS, input.timeoutMs, estimate);
+}
+
 export async function registerBackgroundAwait(input: {
   cwd: string;
   processId: string;
@@ -106,12 +135,12 @@ export async function registerBackgroundAwait(input: {
   expectedDurationMs?: number;
   safetyMarginMs?: number;
 }): Promise<DurableAwaitRecord> {
-  if (!Number.isFinite(input.timeoutMs) || input.timeoutMs <= 0) throw new Error("Await timeout must be positive.");
+  const wakeupIntervalMs = effectiveWakeupInterval(input);
   const id = safeId(input.id ?? `await-${Date.now().toString(36)}`);
   const ownedProcess = getBackgroundProcessInfo(input.processId) ?? listBackgroundProcesses().find((entry) => entry.id === input.processId);
   if (!ownedProcess) throw new Error(`Unknown background process id: ${input.processId}`);
   keepBackgroundProcessAlive(input.processId);
-  const wakeupDeadlineAt = new Date(Date.now() + input.timeoutMs).toISOString();
+  const wakeupDeadlineAt = new Date(Date.now() + wakeupIntervalMs).toISOString();
   const terminalDeadlineAt = input.terminalTimeoutMs === undefined
     ? undefined
     : new Date(Date.now() + input.terminalTimeoutMs).toISOString();
@@ -134,7 +163,9 @@ export async function registerBackgroundAwait(input: {
     round: input.round,
     checkpoint: input.checkpoint,
     expectedDurationMs: input.expectedDurationMs,
-    safetyMarginMs: input.safetyMarginMs
+    safetyMarginMs: input.safetyMarginMs,
+    minimumWakeupIntervalMs: DURABLE_AWAIT_MIN_WAKEUP_MS,
+    wakeupIntervalMs
   };
   await save(input.cwd, record);
   return record;
@@ -146,13 +177,27 @@ export async function suspendOnBackgroundAwait(input: Parameters<typeof register
 
 /** Extend a wakeup deadline without releasing ownership of a live job. */
 export async function extendDurableAwait(cwd: string, id: string, timeoutMs: number): Promise<DurableAwaitRecord> {
-  if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) throw new Error("Await extension must be positive.");
+  const wakeupIntervalMs = effectiveWakeupInterval({
+    timeoutMs,
+    expectedDurationMs: undefined,
+    safetyMarginMs: undefined
+  });
   const record = await readDurableAwait(cwd, id);
   if (record.status !== "suspended") return record;
   const state = processState(record.processId, record.pid);
   if (state !== "running") return resumeBackgroundAwait(cwd, id);
-  const deadlineAt = new Date(Date.now() + timeoutMs).toISOString();
-  const extended = { ...record, deadlineAt, wakeupDeadlineAt: deadlineAt };
+  const expectedInterval = record.expectedDurationMs === undefined
+    ? 0
+    : record.expectedDurationMs + (record.safetyMarginMs ?? 0);
+  const appliedIntervalMs = Math.max(wakeupIntervalMs, expectedInterval);
+  const deadlineAt = new Date(Date.now() + appliedIntervalMs).toISOString();
+  const extended = {
+    ...record,
+    deadlineAt,
+    wakeupDeadlineAt: deadlineAt,
+    minimumWakeupIntervalMs: DURABLE_AWAIT_MIN_WAKEUP_MS,
+    wakeupIntervalMs: appliedIntervalMs
+  };
   await save(cwd, extended);
   return extended;
 }
