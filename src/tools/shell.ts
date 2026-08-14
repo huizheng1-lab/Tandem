@@ -521,6 +521,20 @@ export async function cleanupBackgroundProcesses(): Promise<void> {
   }
 }
 
+/**
+ * Task-boundary backstop for Tandem-owned background processes. A process held
+ * by await_background is durable work and is intentionally preserved; every
+ * other process was launched through runInBackground without being claimed by
+ * an await, so leaving it alive would leak the task's resources into the next
+ * session. Callers should surface the returned ids before/alongside cleanup so
+ * this ownership action is visible to the user.
+ */
+export async function cleanupTaskBackgroundProcesses(): Promise<string[]> {
+  const ids = [...backgroundProcesses.keys()].filter((id) => !durableBackgroundProcesses.has(id));
+  await Promise.all(ids.map((id) => backgroundProcessTool("stop", id).catch(() => undefined)));
+  return ids;
+}
+
 export async function bashTool(ctx: ToolContext, command: string, timeoutMs = DEFAULT_BASH_TIMEOUT_MS, runInBackground = false): Promise<ShellResult> {
   resolveInside(ctx.cwd, ".");
   assertSafeBash(ctx.cwd, command);

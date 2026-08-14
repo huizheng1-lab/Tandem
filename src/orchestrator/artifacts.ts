@@ -939,6 +939,24 @@ export function validateServiceStartAttempt(plan: BuildPlan, report: CompletionR
   return attempted || explicitReason ? [] : ["Service-start instruction is incomplete: record a start attempt and its outcome (including background-process/port polling evidence), or explicitly state why no attempt was made."];
 }
 
+/**
+ * Enforce an attempted shutdown when the selected project instruction source
+ * explicitly requires a service to be stopped.  The instruction text is
+ * supplied by the same precedence-resolved project-instruction loader used by
+ * the agents; this validator deliberately does not discover or merge files.
+ */
+export function validateServiceStopAttempt(plan: BuildPlan, report: CompletionReport, instructionText = ""): string[] {
+  if (report.status !== "complete") return [];
+  const planText = [plan.objective, ...plan.tasks.map((task) => task.description), ...plan.acceptanceCriteria].join(" ");
+  const sourceText = `${instructionText}\n${planText}`;
+  const serviceMentioned = /\b(?:service|server|comfyui|daemon|port\s+\d{2,5})\b/i.test(sourceText);
+  const stopInstruction = /\b(?:stop|shut\s+down|terminate|kill|close|exit)\b[\s\S]{0,240}\b(?:it|service|server|comfyui|daemon|port\s+\d{2,5})\b|\b(?:service|server|comfyui|daemon|port\s+\d{2,5})\b[\s\S]{0,240}\b(?:stop|shut\s+down|terminate|kill|close|exit)\b/i.test(sourceText);
+  if (!serviceMentioned || !stopInstruction) return [];
+  const reportText = [report.summary, ...report.taskResults.map((task) => task.notes ?? ""), ...report.deviationsFromPlan, ...report.verificationResults.map((result) => `${result.command}\n${result.output}`)].join(" ");
+  const attempted = /\b(?:stop(?:ped|ping)?|shut\s+down|terminat(?:ed|ing)|kill(?:ed|ing)?|close(?:d|ing)?|exit(?:ed|ing)?)\b[\s\S]{0,240}\b(?:service|server|comfyui|daemon|process|pid|port\s+\d{2,5})\b|\b(?:service|server|comfyui|daemon|process|pid|port\s+\d{2,5})\b[\s\S]{0,240}\b(?:stop(?:ped|ping)?|shut\s+down|terminat(?:ed|ing)|kill(?:ed|ing)?|close(?:d|ing)?|exit(?:ed|ing)?)\b/i.test(reportText);
+  return attempted ? [] : ["Service-stop instruction is incomplete: record a stop/kill/terminate attempt and its outcome before claiming completion."];
+}
+
 export function enforceVerification(
   plan: BuildPlan,
   report: CompletionReport,
@@ -1013,7 +1031,7 @@ export function validateCompletionReport(
   plan: BuildPlan,
   value: unknown,
   expectedCommands: string[] = plan.verification,
-  options?: { enforceCommandEcho?: boolean; enforceCompleteVerification?: boolean }
+  options?: { enforceCommandEcho?: boolean; enforceCompleteVerification?: boolean; instructionText?: string }
 ): CompletionReport {
   // A missing shortfall explanation is still reportable when the measured span
   // itself is valid; the summary will use provenanceShortfall's computed text.
@@ -1041,7 +1059,8 @@ export function validateCompletionReport(
   const evidenceErrors = [
     ...validateCapabilityAbsenceClaims(plan, report),
     ...validateRecordedCapabilityContradictions(plan, report),
-    ...validateServiceStartAttempt(plan, report)
+    ...validateServiceStartAttempt(plan, report),
+    ...validateServiceStopAttempt(plan, report, options?.instructionText)
   ];
   const artifacts = report.derivedArtifacts ?? [];
   for (const assertion of plan.provenanceAssertions ?? []) {

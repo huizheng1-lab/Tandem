@@ -15,6 +15,7 @@ import {
   reconcileCapabilityAbsenceClaims,
   validateRecordedCapabilityContradictions,
   validateServiceStartAttempt,
+  validateServiceStopAttempt,
   validateStreamFileOwnership
 } from "../src/orchestrator/artifacts.js";
 import { validateDerivedArtifactProvenance } from "../src/orchestrator/provenance.js";
@@ -248,6 +249,32 @@ describe("artifacts", () => {
     expect(validateServiceStartAttempt(servicePlan, report)).not.toEqual([]);
     report.summary = "Started with runInBackground; port 8188 responded.";
     expect(validateServiceStartAttempt(servicePlan, report)).toEqual([]);
+  });
+
+  it("rejects completion when project instructions require stopping a service without an attempt", () => {
+    const servicePlan = { ...plan, objective: "Render with ComfyUI" };
+    const report = verifierReport(["test.mjs"]);
+    expect(validateServiceStopAttempt(servicePlan, report, "Use ComfyUI for rendering. Stop it when finished.")).not.toEqual([]);
+    expect(() => validateCompletionReport(servicePlan, report, plan.verification, {
+      instructionText: "Use ComfyUI for rendering. Stop it when finished."
+    })).toThrow(/Service-stop instruction is incomplete/);
+  });
+
+  it("accepts and preserves either outcome when a required service stop was attempted", () => {
+    const servicePlan = { ...plan, objective: "Render with ComfyUI" };
+    const instructionText = "Use ComfyUI for rendering. Stop it when finished.";
+    for (const outcome of ["Stopped ComfyUI successfully.", "Attempted to stop ComfyUI, but the process refused the request."]) {
+      const report = verifierReport(["test.mjs"]);
+      report.summary = outcome;
+      expect(() => validateCompletionReport(servicePlan, report, plan.verification, { instructionText })).not.toThrow();
+    }
+  });
+
+  it("does not require stop evidence when instructions never mention stopping a service", () => {
+    const servicePlan = { ...plan, objective: "Render with ComfyUI" };
+    const report = verifierReport(["test.mjs"]);
+    expect(validateServiceStopAttempt(servicePlan, report, "Use ComfyUI for rendering.")).toEqual([]);
+    expect(() => validateCompletionReport(servicePlan, report, plan.verification, { instructionText: "Use ComfyUI for rendering." })).not.toThrow();
   });
   const verifierReport = (
     filesChanged: string[],

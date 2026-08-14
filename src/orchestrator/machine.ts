@@ -20,7 +20,7 @@ import { sanitizePromptValue } from "../tools/sanitize.js";
 import { VerificationRunner, VerificationResult } from "./verification.js";
 import type { ResolvedEnvironment } from "../environment/types.js";
 import { DurableAwaitSuspendedError, listDurableAwaits, resumeBackgroundAwait, waitForDurableAwait } from "./await.js";
-import { listBackgroundProcesses } from "../tools/shell.js";
+import { cleanupTaskBackgroundProcesses, listBackgroundProcesses } from "../tools/shell.js";
 import { inventoryWorkspace, type WorkspaceInventory } from "./inventory.js";
 import { DECISION_PRECEDENCE, regenerationDecision, regenerationNotice } from "./precedence.js";
 import { findGoalClosureCandidates, formatGoalClosureProposal } from "../session/goals.js";
@@ -143,7 +143,7 @@ function takeoverAuthoritativeVerificationWarning(report: CompletionReport): str
   return `takeover claimed complete, but authoritative verification failed ${failed.length}/${report.verificationResults.length} command(s): ${commands}`;
 }
 
-function completeTakeoverWhenVerificationPasses(plan: BuildPlan, report: CompletionReport): CompletionReport {
+function completeTakeoverWhenVerificationPasses(plan: BuildPlan, report: CompletionReport, instructionText = ""): CompletionReport {
   if (report.status === "complete") return report;
   const completed: CompletionReport = { ...report, status: "complete" };
   try {
@@ -151,7 +151,7 @@ function completeTakeoverWhenVerificationPasses(plan: BuildPlan, report: Complet
     // passing, and existing verification-script disclosure checks still apply. Passing
     // takeover evidence (whether reported by the takeover or replaced by the authoritative
     // runner) is stronger than a stale blocked status caused by earlier tool-policy warnings.
-    validateCompletionReport(plan, completed, plan.verification);
+    validateCompletionReport(plan, completed, plan.verification, { instructionText });
     return completed;
   } catch {
     return report;
@@ -249,7 +249,8 @@ async function runOneStreamBuild(
   previousReport: CompletionReport | undefined,
   emit: (event: MachineEvent) => void,
   authoritativeVerification: boolean,
-  workspaceInventory?: WorkspaceInventory
+  workspaceInventory?: WorkspaceInventory,
+  instructionText = ""
 ): Promise<CompletionReport> {
   emit({ type: "transition", phase: "BUILDING", message: `round ${currentRound} worker build [stream ${stream.id}: ${stream.tasks.length} task(s)]` });
   let previousSubmittedReport: CompletionReport | undefined;
@@ -286,7 +287,8 @@ async function runOneStreamBuild(
       previousSubmittedReport = candidate;
       return validateCompletionReport(plan, candidate, stream.verification, {
         enforceCommandEcho: !authoritativeVerification,
-        enforceCompleteVerification: !authoritativeVerification
+        enforceCompleteVerification: !authoritativeVerification,
+        instructionText
       });
     }
   );
@@ -307,7 +309,8 @@ async function dispatchStreams(
   previousReports: Map<string, CompletionReport>,
   emit: (event: MachineEvent) => void,
   authoritativeVerification: boolean,
-  workspaceInventory?: WorkspaceInventory
+  workspaceInventory?: WorkspaceInventory,
+  instructionText = ""
 ): Promise<CompletionReport[]> {
   if (streams.length === 0) return [];
   const poolSize = Math.max(1, cap);
@@ -420,6 +423,7 @@ export async function runOrchestration(options: RunOptions): Promise<RunResult> 
   const resumingParkedRound = phase === "PARKED";
   let parkedAwaitId = options.initialState?.parkedAwaitId;
   let parkedProcessId = options.initialState?.parkedProcessId;
+  let projectInstructionText = "";
   let currentInventory: WorkspaceInventory | undefined;
   let freshnessDecision = { required: false } as ReturnType<typeof regenerationDecision>;
 
@@ -457,6 +461,7 @@ export async function runOrchestration(options: RunOptions): Promise<RunResult> 
 
   const resolveFreshnessDecision = async () => {
     const instructions = (await options.projectInstructions?.()) ?? "";
+    projectInstructionText = instructions;
     const planText = [plan?.objective ?? "", ...(plan?.constraints ?? []), ...(plan?.tasks.map((task) => task.description) ?? []), ...(plan?.acceptanceCriteria ?? [])].join("\n");
     freshnessDecision = regenerationDecision(options.request, instructions, planText);
     const notice = regenerationNotice(freshnessDecision);
@@ -465,6 +470,12 @@ export async function runOrchestration(options: RunOptions): Promise<RunResult> 
   const recordFreshnessDecision = (report: CompletionReport): CompletionReport => {
     const notice = regenerationNotice(freshnessDecision);
     return notice ? { ...report, deviationsFromPlan: [...report.deviationsFromPlan, notice] } : report;
+  };
+  const cleanupAtTaskBoundary = async () => {
+    const stopped = await cleanupTaskBackgroundProcesses();
+    if (stopped.length > 0) {
+      emit({ type: "notice", message: `Task boundary stopped unawaited Tandem background process(es): ${stopped.join(", ")}. Durable await_background jobs were preserved.` });
+    }
   };
 
   const emitCheckpoint = () => {
@@ -664,7 +675,8 @@ export async function runOrchestration(options: RunOptions): Promise<RunResult> 
         try {
           schemaReport = validateCompletionReport(plan, takeover.report, plan.verification, {
             enforceCommandEcho: !options.verificationRunner,
-            enforceCompleteVerification: !options.verificationRunner
+            enforceCompleteVerification: !options.verificationRunner,
+            instructionText: projectInstructionText
           });
         } catch (error) {
           lastValidationError = error;
@@ -682,11 +694,12 @@ export async function runOrchestration(options: RunOptions): Promise<RunResult> 
         }
         if (parsedTakeover.success) previousTakeoverReport = parsedTakeover.data;
         const authoritative = await attachAuthoritativeVerification(schemaReport);
-        const report = await attachInventory(completeTakeoverWhenVerificationPasses(plan, authoritative.report));
+        const report = await attachInventory(completeTakeoverWhenVerificationPasses(plan, authoritative.report, projectInstructionText));
         try {
           validateCompletionReport(plan, report, plan.verification, {
             enforceCommandEcho: !authoritative.ran,
-            enforceCompleteVerification: !authoritative.ran
+            enforceCompleteVerification: !authoritative.ran,
+            instructionText: projectInstructionText
           });
           await validateAuthoredClaims(report);
         } catch (error) {
@@ -697,6 +710,7 @@ export async function runOrchestration(options: RunOptions): Promise<RunResult> 
         if (verificationWarning) emit({ type: "notice", message: verificationWarning });
         reports.push(report);
         emit({ type: "artifact", name: "TakeoverReport", value: report });
+        await cleanupAtTaskBoundary();
         transition("DONE", verificationWarning ? "takeover done with verification warning" : "takeover done", round);
         const summary = verificationWarning ? `${takeover.userSummary}\n\nWarning: ${verificationWarning}` : takeover.userSummary;
         return addGoalClosureProposal({ phase: "DONE", summary, plan, reports, verdicts, takeover: true }, options.goalClosureCandidates);
@@ -719,6 +733,7 @@ export async function runOrchestration(options: RunOptions): Promise<RunResult> 
     }
     emit({ type: "artifact", name: "TakeoverReport", value: lastTakeover.report });
     const summary = takeoverValidationFailureSummary(lastValidationError ?? lastError, lastTakeover.userSummary, reports);
+    await cleanupAtTaskBoundary();
     transition("DONE", "takeover report validation failed; build preserved", round);
     return addGoalClosureProposal({ phase: "DONE", summary, plan, reports, verdicts, takeover: true }, options.goalClosureCandidates);
   };
@@ -781,7 +796,8 @@ export async function runOrchestration(options: RunOptions): Promise<RunResult> 
           report = recordFreshnessDecision(await attachInventory(authoritative.report));
           validateCompletionReport(plan, report, plan.verification, {
             enforceCommandEcho: !authoritative.ran,
-            enforceCompleteVerification: !authoritative.ran
+            enforceCompleteVerification: !authoritative.ran,
+            instructionText: projectInstructionText
           });
           await validateAuthoredClaims(report);
         } catch (error) {
@@ -807,7 +823,8 @@ export async function runOrchestration(options: RunOptions): Promise<RunResult> 
             previousReportsByStream,
             emit,
             Boolean(options.verificationRunner),
-            currentInventory
+            currentInventory,
+            projectInstructionText
           );
           // Build the round's effective stream list (newly-built + carry-forward).
           const roundStreams: { streamId: string; report: CompletionReport }[] = [
@@ -828,7 +845,8 @@ export async function runOrchestration(options: RunOptions): Promise<RunResult> 
           report = await attachInventory(authoritative.report);
           validateCompletionReport(plan, report, plan.verification, {
             enforceCommandEcho: !authoritative.ran,
-            enforceCompleteVerification: !authoritative.ran
+            enforceCompleteVerification: !authoritative.ran,
+            instructionText: projectInstructionText
           });
           await validateAuthoredClaims(report);
         } catch (error) {
@@ -906,6 +924,7 @@ export async function runOrchestration(options: RunOptions): Promise<RunResult> 
       }
       const summary = `Build completed, but automated review could not be finalized after retries. Last worker report: ${report.summary}`;
       emit(errorEvent(`leader review could not produce a valid ReviewVerdict: ${String(error)}`, error));
+      await cleanupAtTaskBoundary();
       transition("DONE", "leader review failed; build report preserved", currentRound);
       return { phase: "DONE", summary, plan, reports, verdicts, takeover: false };
     }
@@ -932,6 +951,7 @@ export async function runOrchestration(options: RunOptions): Promise<RunResult> 
         continue;
       }
       reports[reports.length - 1] = refreshed;
+      await cleanupAtTaskBoundary();
       transition("DONE", "leader review approved", currentRound);
       return addGoalClosureProposal({ phase: "DONE", summary: verdict.userSummary, plan, reports, verdicts, takeover: false }, options.goalClosureCandidates);
     }
