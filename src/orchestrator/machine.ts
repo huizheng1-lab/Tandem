@@ -321,7 +321,7 @@ async function dispatchStreams(
     const index = cursor.next++;
     const stream = streams[index];
     if (!stream) return Promise.resolve();
-    return runOneStreamBuild(agents, stream, plan, currentRound, feedback, previousReports.get(stream.id), emit, authoritativeVerification, workspaceInventory).then(
+    return runOneStreamBuild(agents, stream, plan, currentRound, feedback, previousReports.get(stream.id), emit, authoritativeVerification, workspaceInventory, instructionText).then(
       (report) => {
         results[index] = report;
       }
