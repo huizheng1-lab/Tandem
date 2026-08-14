@@ -949,11 +949,31 @@ export function validateServiceStopAttempt(plan: BuildPlan, report: CompletionRe
   if (report.status !== "complete") return [];
   const planText = [plan.objective, ...plan.tasks.map((task) => task.description), ...plan.acceptanceCriteria].join(" ");
   const sourceText = `${instructionText}\n${planText}`;
-  const serviceMentioned = /\b(?:service|server|comfyui|daemon|port\s+\d{2,5})\b/i.test(sourceText);
-  const stopInstruction = /\b(?:stop|shut\s+down|terminate|kill|close|exit)\b[\s\S]{0,240}\b(?:it|service|server|comfyui|daemon|port\s+\d{2,5})\b|\b(?:service|server|comfyui|daemon|port\s+\d{2,5})\b[\s\S]{0,240}\b(?:stop|shut\s+down|terminate|kill|close|exit)\b/i.test(sourceText);
-  if (!serviceMentioned || !stopInstruction) return [];
+  const servicePattern = /\b(?:service|server|comfyui|daemon|port\s+\d{2,5})\b/i;
+  const stopPattern = /\b(?:stop(?:ping|ped)?|shut(?:ting)?\s+down|terminat(?:e|ing|ed)|kill(?:ing|ed)?|clos(?:e|ing|ed)|exit(?:ing|ed)?)\b/i;
+  const clauses = sourceText.split(/[.!?;\n]+/).map((clause) => clause.trim()).filter(Boolean);
+  const serviceMentioned = clauses.some((clause) => servicePattern.test(clause));
+  const stopInstruction = clauses.some((clause) => {
+    if (!stopPattern.test(clause) || (!servicePattern.test(clause) && !(/\bit\b/i.test(clause) && serviceMentioned))) return false;
+    // A request such as "do not stop the server" is an explicit keep-alive
+    // instruction, not a cleanup obligation. Keep this decision local to the
+    // same clause so an earlier sentence naming the service still pairs with
+    // the separate instruction "stop it when finished".
+    const stopIndex = clause.search(stopPattern);
+    return !/(?:\b(?:do\s+not|don't|dont|never|must\s+not|should\s+not|not)\b)/i.test(clause.slice(0, stopIndex));
+  });
+  if (!stopInstruction) return [];
   const reportText = [report.summary, ...report.taskResults.map((task) => task.notes ?? ""), ...report.deviationsFromPlan, ...report.verificationResults.map((result) => `${result.command}\n${result.output}`)].join(" ");
-  const attempted = /\b(?:stop(?:ped|ping)?|shut\s+down|terminat(?:ed|ing)|kill(?:ed|ing)?|close(?:d|ing)?|exit(?:ed|ing)?)\b[\s\S]{0,240}\b(?:service|server|comfyui|daemon|process|pid|port\s+\d{2,5})\b|\b(?:service|server|comfyui|daemon|process|pid|port\s+\d{2,5})\b[\s\S]{0,240}\b(?:stop(?:ped|ping)?|shut\s+down|terminat(?:ed|ing)|kill(?:ed|ing)?|close(?:d|ing)?|exit(?:ed|ing)?)\b/i.test(reportText);
+  const reportClauses = reportText.split(/[.!?;\n]+/).map((clause) => clause.trim()).filter(Boolean);
+  const attempted = reportClauses.some((clause) => {
+    if (!servicePattern.test(clause) || !stopPattern.test(clause)) return false;
+    // Do not let a statement explicitly saying that no attempt occurred pass
+    // merely because it repeats the required action and service name.
+    const stopIndex = clause.search(stopPattern);
+    if (/\b(?:do\s+not|don't|dont|never|must\s+not|should\s+not|did\s+not|didn't|didnt|not)\b/i.test(clause.slice(0, stopIndex))) return false;
+    if (/\b(?:no|without|never|did\s+not|didn't|didnt|not)\b[\s\S]*\b(?:attempt|try|trying)\b/i.test(clause)) return false;
+    return true;
+  });
   return attempted ? [] : ["Service-stop instruction is incomplete: record a stop/kill/terminate attempt and its outcome before claiming completion."];
 }
 

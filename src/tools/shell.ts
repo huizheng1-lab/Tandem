@@ -333,6 +333,10 @@ async function stopBackgroundProcess(entry: BackgroundProcess): Promise<void> {
     }
   }
   await cleanupWindowsProcessTree(pid, entry.tracker?.seen ?? []);
+  // taskkill can return before Node has reaped the execa child.  Await the
+  // child briefly so task-boundary callers do not release a project directory
+  // while a just-stopped process still has its cwd open (notably on Windows).
+  await settleWithin(entry.subprocess, INTERNAL_PROCESS_TIMEOUT_MS);
 }
 
 export function listBackgroundProcesses(): BackgroundProcessInfo[] {
