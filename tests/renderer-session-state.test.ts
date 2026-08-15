@@ -87,4 +87,20 @@ describe("renderer session resume state", () => {
     expect(replay.entries.every((entry) => entry.kind !== "message" || entry.role !== "system")).toBe(true);
     expect(replay.entries).toContainEqual({ id: 2, kind: "message", role: "worker", text: "Thinking", thinking: true });
   });
+
+  it("W0100: keeps a worker status placeholder for plain worker-only deltas", () => {
+    let id = 1;
+    const replay = replayVisibleSessionEvents(
+      [
+        { type: "user", at: "2026-08-15T00:00:00.000Z", payload: { prompt: "Run the worker" } },
+        { type: "text", at: "2026-08-15T00:00:01.000Z", payload: { role: "worker", delta: "plain minimax-style worker output" } },
+        { type: "text", at: "2026-08-15T00:00:02.000Z", payload: { role: "worker", delta: "more hidden output" } }
+      ],
+      () => id++
+    );
+
+    expect(replay.entries).toContainEqual({ id: 2, kind: "message", role: "worker", text: "Thinking", thinking: true });
+    expect(replay.entries.filter((entry) => entry.kind === "message" && entry.role === "worker")).toHaveLength(1);
+    expect(JSON.stringify(replay.entries)).not.toContain("plain minimax-style worker output");
+  });
 });

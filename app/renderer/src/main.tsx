@@ -406,7 +406,16 @@ function App(): React.ReactElement {
 
   const appendStream = (role: "leader" | "worker", delta: string) => {
     if (delta) markActivity(role, "writing");
-    if (!isVisibleLiveTextRole(role)) return;
+    if (!isVisibleLiveTextRole(role)) {
+      if (delta) {
+        setBoundedEntries((current) => {
+          const next = [...current];
+          appendThinkingStatus(next, role, () => nextId.current++);
+          return next;
+        });
+      }
+      return;
+    }
     setBoundedEntries((current) => {
       const last = current.at(-1);
       if (last?.kind === "message" && last.role === role && !last.thinking) {

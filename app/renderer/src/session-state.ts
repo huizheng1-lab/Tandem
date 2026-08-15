@@ -100,6 +100,9 @@ export function replayVisibleSessionEvents(
     if (stored.type === "text" && isRecord(payload) && payload.role === "leader" && typeof payload.delta === "string") {
       appendAgentText(entries, payload.role, payload.delta, nextId, boundText);
     }
+    if (stored.type === "text" && isRecord(payload) && payload.role === "worker" && typeof payload.delta === "string" && payload.delta) {
+      appendThinkingStatus(entries, payload.role, nextId);
+    }
     if (stored.type === "machine" && isRecord(payload)) {
       const event = payload as MachineEvent;
       if (event.type === "artifact") entries.push({ id: nextId(), kind: "artifact", name: event.name, value: event.value, open: false });

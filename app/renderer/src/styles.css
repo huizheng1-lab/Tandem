@@ -30,6 +30,9 @@
   --warning-bg: #2d291a;
   --warning-text: #f5e9c8;
   --warning-border: #665832;
+  --status-border: #58708f;
+  --status-bg: #202b3b;
+  --status-text: #dce8f8;
   --overlay: rgba(0, 0, 0, 0.54);
   --shadow: rgba(0, 0, 0, 0.45);
   --soft-divider: rgba(255, 255, 255, 0.08);
@@ -68,6 +71,9 @@
   --warning-bg: #fff5d9;
   --warning-text: #66501c;
   --warning-border: #c5a75a;
+  --status-border: #8098b8;
+  --status-bg: #e8eef8;
+  --status-text: #29415f;
   --overlay: rgba(21, 29, 39, 0.42);
   --shadow: rgba(34, 45, 60, 0.2);
   --soft-divider: rgba(23, 32, 43, 0.12);
@@ -675,6 +681,36 @@ select {
   color: var(--warning-text);
   background: var(--warning-bg);
   padding: 7px 10px;
+}
+
+.taskOutcomeStatus {
+  width: min(820px, 100%);
+  border: 1px solid var(--status-border);
+  border-radius: 8px;
+  padding: 9px 12px;
+  color: var(--status-text);
+  background: var(--status-bg);
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+}
+
+.taskOutcomeStatus.successful {
+  border-color: var(--user-border);
+  color: var(--success-text);
+  background: var(--success-bg);
+}
+
+.taskOutcomeStatus.failed {
+  border-color: var(--danger-text);
+  color: var(--danger-text);
+  background: var(--danger-bg);
+}
+
+.taskOutcomeStatus.hung {
+  border-color: var(--warning-border);
+  color: var(--warning-text);
+  background: var(--warning-bg);
 }
 
 .noticeActions {
