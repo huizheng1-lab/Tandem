@@ -49,6 +49,20 @@ export function appendTuiText(messages: TranscriptMessage[], role: "LEADER" | "W
   return [...messages, { role, text }];
 }
 
+/**
+ * Keep the terminal surface on the same event contract as the desktop surface.
+ * Thinking deltas are intentionally represented only by a fixed status message;
+ * they must never be routed through either visible-text callback.
+ */
+export function createTuiLiveAgentHandlers(append: (role: "LEADER" | "WORKER", text: string) => void, thinking: (role: "LEADER" | "WORKER") => void) {
+  return {
+    onLeaderText: (text: string) => append("LEADER", text),
+    onWorkerText: (text: string) => append("WORKER", text),
+    onLeaderThinking: () => thinking("LEADER"),
+    onWorkerThinking: () => thinking("WORKER")
+  };
+}
+
 export function App({ config: initialConfig, env, cwd, initialError }: { config: TandemConfig; env: NodeJS.ProcessEnv; cwd: string; initialError?: string }) {
   const [config, setConfig] = useState(initialConfig);
   const [messages, setMessages] = useState<TranscriptMessage[]>([
@@ -93,6 +107,8 @@ export function App({ config: initialConfig, env, cwd, initialError }: { config:
   const appendThinkingStatus = (role: "LEADER" | "WORKER") => {
     setMessages((current) => appendTuiThinkingStatus(current, role));
   };
+
+  const liveAgentHandlers = createTuiLiveAgentHandlers(appendDelta, appendThinkingStatus);
 
   const trimTrailingAgentMessage = () => {
     setMessages((current) => {
@@ -287,10 +303,7 @@ export function App({ config: initialConfig, env, cwd, initialError }: { config:
         permissionBridge,
         recordTouchedPath: (filePath) => diffTracker.recordTouchedPath(filePath),
         abortSignal: controller.signal,
-        onLeaderText: (text) => appendDelta("LEADER", text),
-        onWorkerText: (text) => appendDelta("WORKER", text),
-        onLeaderThinking: () => appendThinkingStatus("LEADER"),
-        onWorkerThinking: () => appendThinkingStatus("WORKER"),
+        ...liveAgentHandlers,
         onToolEvent: addToolMessage,
         projectInstructions: currentProjectInstructions,
         rememberNote: rememberSessionNote,
