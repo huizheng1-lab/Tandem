@@ -44,7 +44,51 @@ function now() {
 }
 
 function ensureDir(dir) {
-  mkdirSync(dir, { recursive: true });
+  retryFsSync(`mkdir:${dir}`, () => mkdirSync(dir, { recursive: true }));
+}
+
+function sleep(ms) {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+}
+
+function transientFsFailures() {
+  if (!process.env.TANDEM_ORCHESTRATOR_TEST_TRANSIENT_FS_FAILURES) return null;
+  try {
+    return JSON.parse(process.env.TANDEM_ORCHESTRATOR_TEST_TRANSIENT_FS_FAILURES);
+  } catch {
+    return null;
+  }
+}
+
+const injectedTransientFsFailures = transientFsFailures();
+
+function maybeInjectTransientFsFailure(label) {
+  if (!injectedTransientFsFailures || typeof injectedTransientFsFailures !== "object") return;
+  const remaining = Number(injectedTransientFsFailures[label] || 0);
+  if (remaining <= 0) return;
+  injectedTransientFsFailures[label] = remaining - 1;
+  const error = new Error(`Injected transient filesystem failure for ${label}`);
+  error.code = process.env.TANDEM_ORCHESTRATOR_TEST_TRANSIENT_FS_CODE || "EBUSY";
+  throw error;
+}
+
+function isTransientFsError(error) {
+  return ["EBUSY", "EPERM", "EACCES", "ENOTEMPTY"].includes(String(error?.code || "").toUpperCase());
+}
+
+function retryFsSync(label, operation, attempts = 6) {
+  let lastError = null;
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    try {
+      maybeInjectTransientFsFailure(label);
+      return operation();
+    } catch (error) {
+      lastError = error;
+      if (!isTransientFsError(error) || attempt === attempts) throw error;
+      sleep(attempt * 50);
+    }
+  }
+  throw lastError;
 }
 
 function processAlive(pid) {
@@ -62,9 +106,9 @@ function acquireInvocationLock(relayRoot, logPath, state) {
   ensureDir(path.dirname(lockDir));
   for (;;) {
     try {
-      mkdirSync(lockDir);
+      retryFsSync(`lock.mkdir:${lockDir}`, () => mkdirSync(lockDir));
       writeJsonAtomic(path.join(lockDir, "owner.json"), { pid: process.pid, startedAt: now(), argv: process.argv.slice(2) });
-      return () => rmSync(lockDir, { recursive: true, force: true });
+      return () => retryFsSync(`lock.release:${lockDir}`, () => rmSync(lockDir, { recursive: true, force: true }));
     } catch (error) {
       if (error?.code !== "EEXIST") throw error;
       const owner = readJson(path.join(lockDir, "owner.json"), {});
@@ -72,16 +116,18 @@ function acquireInvocationLock(relayRoot, logPath, state) {
         appendLog(logPath, { action: "invocation.locked", phase: state.phase, item: state.currentItem?.id || null, step: state.step || null, ownerPid: owner.pid });
         return null;
       }
-      rmSync(lockDir, { recursive: true, force: true });
+      retryFsSync(`lock.remove-stale:${lockDir}`, () => rmSync(lockDir, { recursive: true, force: true }));
     }
   }
 }
 
 function readJson(file, fallback = null) {
   if (!existsSync(file)) return fallback;
-  const size = statSync(file).size;
-  if (size > maxStateBytes) throw new Error(`Refusing to read oversized JSON file ${file} (${size} bytes).`);
-  return JSON.parse(readFileSync(file, utf8));
+  return retryFsSync(`json.read:${file}`, () => {
+    const size = statSync(file).size;
+    if (size > maxStateBytes) throw new Error(`Refusing to read oversized JSON file ${file} (${size} bytes).`);
+    return JSON.parse(readFileSync(file, utf8));
+  });
 }
 
 function writeJsonAtomic(file, value) {
@@ -90,13 +136,13 @@ function writeJsonAtomic(file, value) {
   const bytes = Buffer.byteLength(body, utf8);
   if (bytes > maxStateBytes) throw new Error(`Refusing to write oversized JSON file ${file} (${bytes} bytes).`);
   const temp = `${file}.${process.pid}.tmp`;
-  writeFileSync(temp, body, utf8);
-  renameSync(temp, file);
+  retryFsSync(`json.write:${file}`, () => writeFileSync(temp, body, utf8));
+  retryFsSync(`json.rename:${file}`, () => renameSync(temp, file));
 }
 
 function appendLog(file, entry) {
   ensureDir(path.dirname(file));
-  appendFileSync(file, `${JSON.stringify({ at: now(), ...entry })}\n`, utf8);
+  retryFsSync(`log.append:${file}`, () => appendFileSync(file, `${JSON.stringify({ at: now(), ...entry })}\n`, utf8));
 }
 
 function runCommand(command, cwd) {
@@ -220,7 +266,7 @@ function runSwap({ repo, relayRoot, commands, state, statePath, logPath, reason 
 function parseWishlist(file) {
   if (!existsSync(file)) return [];
   const rank = { P0: 0, P1: 1, P2: 2, P3: 3 };
-  return readFileSync(file, utf8).split(/\r?\n/).flatMap((line, index) => {
+  return retryFsSync(`wishlist.read:${file}`, () => readFileSync(file, utf8)).split(/\r?\n/).flatMap((line, index) => {
     const match = /^- \[ \] (W\d+) \| (P[0-3]) \| (.*?) \| QUEUED(?:\s+(.*))?$/.exec(line);
     if (!match) return [];
     return [{ id: match[1], priority: match[2], text: match[3], detail: match[4] || "", line: index, rank: rank[match[2]] ?? 9 }];
@@ -228,14 +274,14 @@ function parseWishlist(file) {
 }
 
 function markWishlist(file, item, status, note = "") {
-  const lines = existsSync(file) ? readFileSync(file, utf8).split(/\r?\n/) : [];
+  const lines = existsSync(file) ? retryFsSync(`wishlist.read:${file}`, () => readFileSync(file, utf8)).split(/\r?\n/) : [];
   let line = Number.isInteger(item.line) ? item.line : -1;
   if (!lines[line]?.includes(` ${item.id} |`)) {
     line = lines.findIndex((candidate) => new RegExp(`^- \\[[ x]\\] ${item.id} \\|`).test(candidate));
   }
   if (line >= 0 && lines[line]) {
     lines[line] = `- [${status === "DONE" ? "x" : " "}] ${item.id} | ${item.priority} | ${item.text} | ${status}${note ? ` note=${note.replace(/\s+/g, " ").replaceAll("|", "/")}` : ""} updated=${now()}`;
-    writeFileSync(file, `${lines.join("\n").replace(/\n*$/, "")}\n`, utf8);
+    retryFsSync(`wishlist.write:${file}`, () => writeFileSync(file, `${lines.join("\n").replace(/\n*$/, "")}\n`, utf8));
   }
 }
 
@@ -263,7 +309,7 @@ function failReport(relayRoot, item, failures, context = {}) {
   const dir = path.join(relayRoot, "control", "failure-reports");
   ensureDir(dir);
   const file = path.join(dir, `${item.id}-${now().replace(/[:.]/g, "-")}.md`);
-  writeFileSync(file, [
+  retryFsSync(`failure-report.write:${file}`, () => writeFileSync(file, [
     `# Reciprocal Failure Report ${item.id}`,
     "",
     `Item: ${item.text}`,
@@ -286,7 +332,7 @@ function failReport(relayRoot, item, failures, context = {}) {
       "```",
       "",
     ].join("\n")),
-  ].join("\n"), utf8);
+  ].join("\n"), utf8));
   return file;
 }
 
@@ -334,7 +380,7 @@ function updateStableRef(repo, sourceSha, logPath) {
 
 function requeueCurrentItem(wishlistPath, item, note) {
   if (!item || !existsSync(wishlistPath)) return;
-  const lines = readFileSync(wishlistPath, utf8).split(/\r?\n/);
+  const lines = retryFsSync(`wishlist.read:${wishlistPath}`, () => readFileSync(wishlistPath, utf8)).split(/\r?\n/);
   const targetRe = new RegExp(`^- \\[[ x]\\] ${item.id} \\|`);
   const cleanNote = (note || "").replace(/\s+/g, " ").replaceAll("|", "/").trim();
   for (let i = 0; i < lines.length; i += 1) {
@@ -348,7 +394,7 @@ function requeueCurrentItem(wishlistPath, item, note) {
     lines[i] = `${head}${noteSuffix} updated=${now()}`;
     break;
   }
-  writeFileSync(wishlistPath, `${lines.join("\n").replace(/\n*$/, "")}\n`, utf8);
+  retryFsSync(`wishlist.write:${wishlistPath}`, () => writeFileSync(wishlistPath, `${lines.join("\n").replace(/\n*$/, "")}\n`, utf8));
 }
 
 function main() {

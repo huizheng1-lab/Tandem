@@ -8,6 +8,20 @@ import { listDurableAwaits, resumeBackgroundAwait, suspendOnBackgroundAwait } fr
 
 const { streamTextMock } = vi.hoisted(() => ({ streamTextMock: vi.fn() }));
 
+async function removeWithRetry(target: string) {
+  let lastError: unknown;
+  for (let attempt = 1; attempt <= 6; attempt += 1) {
+    try {
+      await rm(target, { recursive: true, force: true });
+      return;
+    } catch (error) {
+      lastError = error;
+      await new Promise((resolve) => setTimeout(resolve, attempt * 75));
+    }
+  }
+  throw lastError;
+}
+
 vi.mock("ai", () => ({
   tool: (definition: unknown) => definition,
   hasToolCall: (toolName: string) => ({ type: "hasToolCall", toolName }),
@@ -150,7 +164,7 @@ describe("runAgentArtifact", () => {
       expect(await listDurableAwaits(cwd)).toHaveLength(1);
     } finally {
       await resumeBackgroundAwait(cwd, "runner-await").catch(() => undefined);
-      await rm(cwd, { recursive: true, force: true });
+      await removeWithRetry(cwd);
     }
   });
 });

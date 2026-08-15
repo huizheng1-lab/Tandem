@@ -336,13 +336,23 @@ async function runOrchestrator(root: string, relayRoot: string, commands: Record
   });
 }
 
+function expectExitCode(result: Awaited<ReturnType<typeof runOrchestrator>>, expected: number) {
+  expect(result.exitCode, [
+    `expected reciprocal-orchestrator exit code ${expected}, got ${result.exitCode}`,
+    "--- stdout ---",
+    result.stdout || "(empty)",
+    "--- stderr ---",
+    result.stderr || "(empty)",
+  ].join("\n")).toBe(expected);
+}
+
 describe("D200 reciprocal orchestrator no-commit abort", () => {
   windowsIt("aborts with cycle.aborted.no-commit when a-implements succeeds but produces no new descendant commit", async () => {
     const f = await fixture("no-commit-abort");
     try {
       const cmds = { implement: readOnlyImplementStub(f.root), ...swapStubs(f.root) };
       const result = await runOrchestrator(f.root, f.relayRoot, cmds);
-      expect(result.exitCode).toBe(3);
+      expectExitCode(result, 3);
       const parsed = JSON.parse(result.stdout);
       expect(parsed).toMatchObject({ ok: false, aborted: "no-commit" });
       expect(parsed.headBefore).toMatch(/^[0-9a-f]{40}$/);
@@ -369,7 +379,7 @@ describe("D200 reciprocal orchestrator no-commit abort", () => {
     try {
       const cmds = { implement: descendantBreakingImplementStub(f.root), ...swapStubs(f.root) };
       const result = await runOrchestrator(f.root, f.relayRoot, cmds);
-      expect(result.exitCode).toBe(3);
+      expectExitCode(result, 3);
       const parsed = JSON.parse(result.stdout);
       expect(parsed).toMatchObject({ ok: false, aborted: "no-commit" });
       expect(parsed.descendant).toBe(false);

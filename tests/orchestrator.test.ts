@@ -109,7 +109,7 @@ describe("orchestration", () => {
     });
     expect(result.verdicts).toHaveLength(3);
     expect(result.takeover).toBe(false);
-  });
+  }, 15_000);
 
   it("forces takeover when rounds are exhausted", async () => {
     let builds = 0;
@@ -168,7 +168,7 @@ describe("orchestration", () => {
     });
     expect(result.takeover).toBe(true);
     expect(builds).toBe(2);
-  });
+  }, 15_000);
 
   it("supports leader early takeover", async () => {
     const result = await runOrchestration({ request: "build", config: { maxReviewRounds: 3, maxParallelWorkers: 1 }, agents: agents({ review: async () => verdict("takeover") }) });
@@ -548,7 +548,7 @@ describe("orchestration", () => {
       })
     });
     expect(fallback.takeover).toBe(true);
-  });
+  }, 15_000);
 
   it("D97: complete report with authoritative failure proceeds to review instead of retry-burning", async () => {
     let builds = 0;

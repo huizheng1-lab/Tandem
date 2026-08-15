@@ -90,12 +90,22 @@ function noCommitCommand(root: string) {
   return `node -e "require('fs').appendFileSync('${log}', JSON.stringify({label:'implement'})+'\\n'); process.exit(0)"`;
 }
 
-async function run(root: string, relayRoot: string, commandMap: Record<string, string>, extraArgs: string[] = []) {
+async function run(root: string, relayRoot: string, commandMap: Record<string, string>, extraArgs: string[] = [], extraEnv: Record<string, string> = {}) {
   return execa("node", [script, "--repo", root, "--relay-root", relayRoot, ...extraArgs], {
     cwd: root,
-    env: { ...process.env, TANDEM_ORCHESTRATOR_COMMANDS_JSON: JSON.stringify(commandMap), TANDEM_ORCHESTRATOR_SOURCE_SHA: "fixture-sha" },
+    env: { ...process.env, TANDEM_ORCHESTRATOR_COMMANDS_JSON: JSON.stringify(commandMap), TANDEM_ORCHESTRATOR_SOURCE_SHA: "fixture-sha", ...extraEnv },
     reject: false,
   });
+}
+
+function expectExitCode(result: Awaited<ReturnType<typeof run>>, expected: number) {
+  expect(result.exitCode, [
+    `expected reciprocal-orchestrator exit code ${expected}, got ${result.exitCode}`,
+    "--- stdout ---",
+    result.stdout || "(empty)",
+    "--- stderr ---",
+    result.stderr || "(empty)",
+  ].join("\n")).toBe(expected);
 }
 
 async function labels(root: string) {
@@ -107,7 +117,7 @@ describe("single reciprocal orchestrator", () => {
     const f = await fixture("d200-no-commit");
     try {
       const result = await run(f.root, f.relayRoot, commands(f.root, { implement: noCommitCommand(f.root) }));
-      expect(result.exitCode).toBe(3);
+      expectExitCode(result, 3);
       const parsed = JSON.parse(result.stdout);
       expect(parsed).toMatchObject({ ok: false, aborted: "no-commit" });
       expect(parsed.headAfter).toBe(parsed.headBefore);
@@ -125,7 +135,7 @@ describe("single reciprocal orchestrator", () => {
     const f = await fixture("d200-commit");
     try {
       const result = await run(f.root, f.relayRoot, commands(f.root));
-      expect(result.exitCode).toBe(0);
+      expectExitCode(result, 0);
       const parsed = JSON.parse(result.stdout);
       expect(parsed.state.lastImplementCommit).toMatch(/^[0-9a-f]{40}$/);
       expect(parsed.state.stableCommit).toBe(parsed.state.lastImplementCommit);
@@ -152,7 +162,7 @@ describe("single reciprocal orchestrator", () => {
         "utf8",
       );
       const result = await run(f.root, f.relayRoot, commands(f.root));
-      expect(result.exitCode).toBe(0);
+      expectExitCode(result, 0);
       expect(await readFile(path.join(f.relayRoot, "control", "WISHLIST.md"), "utf8")).toMatch(/- \[x\] W0001 .* DONE/);
     } finally {
       await rm(f.root, { recursive: true, force: true });
@@ -163,7 +173,7 @@ describe("single reciprocal orchestrator", () => {
     const f = await fixture("happy");
     try {
       const result = await run(f.root, f.relayRoot, commands(f.root));
-      expect(result.exitCode).toBe(0);
+      expectExitCode(result, 0);
       expect(JSON.parse(result.stdout)).toMatchObject({ ok: true, completed: "W0001" });
       expect(await labels(f.root)).toEqual(["implement", "test", "packageB", "startB", "verifyRuntime", "rebuildA", "verifyA", "stopB"]);
       expect(await readFile(path.join(f.relayRoot, "control", "WISHLIST.md"), "utf8")).toMatch(/- \[x\] W0001 .* DONE/);
@@ -183,7 +193,7 @@ describe("single reciprocal orchestrator", () => {
       const sentinel = path.join(f.root, "attempt.txt").replaceAll("\\", "\\\\");
       const retryTest = `node -e "const fs=require('fs'); const p='${sentinel}'; const n=fs.existsSync(p)?2:1; fs.writeFileSync(p,String(n)); fs.appendFileSync('${commandLog(f.root).replaceAll("\\", "\\\\")}', JSON.stringify({label:'test', attempt:n})+'\\n'); process.exit(n===1?9:0)"`;
       const result = await run(f.root, f.relayRoot, commands(f.root, { test: retryTest }));
-      expect(result.exitCode).toBe(0);
+      expectExitCode(result, 0);
       expect(await labels(f.root)).toEqual(["implement", "test", "implement", "test", "packageB", "startB", "verifyRuntime", "rebuildA", "verifyA", "stopB"]);
       const log = await readFile(path.join(f.relayRoot, "control", "orchestrator-operations.ndjson"), "utf8");
       expect(log).toMatch(/cycle.retry-feedback/);
@@ -200,7 +210,7 @@ describe("single reciprocal orchestrator", () => {
     const f = await fixture("two-strike");
     try {
       const result = await run(f.root, f.relayRoot, commands(f.root, { test: command(f.root, "test", 7, "boom") }));
-      expect(result.exitCode).toBe(2);
+      expectExitCode(result, 2);
       const parsed = JSON.parse(result.stdout);
       expect(parsed).toMatchObject({ ok: false, failedPaused: true });
       expect(await readFile(parsed.report, "utf8")).toMatch(/two consecutive failed A rounds/);
@@ -217,7 +227,7 @@ describe("single reciprocal orchestrator", () => {
       const tailMessage = "FINAL FAILURE SUMMARY: expected tail-only diagnostic";
       const longFailure = `node -e "process.stdout.write('passing test line\\n'.repeat(1600)); process.stdout.write('${tailMessage}\\n'); process.exit(9)"`;
       const result = await run(f.root, f.relayRoot, commands(f.root, { test: longFailure }));
-      expect(result.exitCode).toBe(2);
+      expectExitCode(result, 2);
       const state = JSON.parse(await readFile(path.join(f.relayRoot, "state", "orchestrator-state.json"), "utf8"));
       expect(state.failures[0].output).toContain("output truncated; preserving head and tail");
       expect(state.failures[0].output).toContain(tailMessage);
@@ -234,7 +244,7 @@ describe("single reciprocal orchestrator", () => {
       const escapedSentinel = sentinel.replaceAll("\\", "\\\\").replaceAll("'", "\\'");
       const packageCommand = `node -e "const fs=require('fs'); const p='${escapedSentinel}'; const n=fs.existsSync(p)?Number(fs.readFileSync(p))+1:1; fs.writeFileSync(p,String(n)); process.exit(n<6?9:0)"`;
       const result = await run(f.root, f.relayRoot, commands(f.root, { packageB: packageCommand }));
-      expect(result.exitCode).toBe(0);
+      expectExitCode(result, 0);
       const state = JSON.parse(await readFile(path.join(f.relayRoot, "state", "orchestrator-state.json"), "utf8"));
       expect(state).toMatchObject({ phase: "idle", consecutiveFailures: 0 });
       expect(state.infrastructureFailures["package-b"]).toMatchObject({ consecutiveCycles: 0 });
@@ -264,7 +274,7 @@ describe("single reciprocal orchestrator", () => {
       const escapedSentinel = sentinel.replaceAll("\\", "\\\\").replaceAll("'", "\\'");
       const packageCommand = `node -e "const fs=require('fs'); const p='${escapedSentinel}'; const n=fs.existsSync(p)?Number(fs.readFileSync(p))+1:1; fs.writeFileSync(p,String(n)); process.exit(n<3?9:0)"`;
       const result = await run(f.root, f.relayRoot, commands(f.root, { packageB: packageCommand }), ["--cutover"]);
-      expect(result.exitCode).toBe(0);
+      expectExitCode(result, 0);
       expect(await readFile(sentinel, "utf8")).toBe("3");
       const state = JSON.parse(await readFile(path.join(f.relayRoot, "state", "orchestrator-state.json"), "utf8"));
       expect(state).toMatchObject({ phase: "idle", consecutiveFailures: 0 });
@@ -285,7 +295,7 @@ describe("single reciprocal orchestrator", () => {
     const f = await fixture("infrastructure-exhausted");
     try {
       const result = await run(f.root, f.relayRoot, commands(f.root, { packageB: command(f.root, "packageB", 9, "lock remains") }));
-      expect(result.exitCode).toBe(3);
+      expectExitCode(result, 3);
       const parsed = JSON.parse(result.stdout);
       const report = await readFile(parsed.report, "utf8");
       expect(report).toMatch(/implementation itself passed/i);
@@ -293,6 +303,35 @@ describe("single reciprocal orchestrator", () => {
       const state = JSON.parse(await readFile(path.join(f.relayRoot, "state", "orchestrator-state.json"), "utf8"));
       expect(state).toMatchObject({ phase: "failed-paused", consecutiveFailures: 0 });
       expect(state.failures.at(-1)).toMatchObject({ kind: "infrastructure", step: "package-b", implementationPassed: true });
+    } finally {
+      await rm(f.root, { recursive: true, force: true });
+    }
+  });
+
+  windowsIt("retries transient state and log filesystem failures before pausing for infrastructure exhaustion", async () => {
+    const f = await fixture("transient-fs-infrastructure-exhausted");
+    try {
+      const statePath = path.join(f.relayRoot, "state", "orchestrator-state.json");
+      const logPath = path.join(f.relayRoot, "control", "orchestrator-operations.ndjson");
+      const injectedFailures = {
+        [`json.rename:${statePath}`]: 2,
+        [`log.append:${logPath}`]: 2,
+      };
+      const result = await run(
+        f.root,
+        f.relayRoot,
+        commands(f.root, { packageB: command(f.root, "packageB", 9, "lock remains") }),
+        [],
+        { TANDEM_ORCHESTRATOR_TEST_TRANSIENT_FS_FAILURES: JSON.stringify(injectedFailures), TANDEM_ORCHESTRATOR_TEST_TRANSIENT_FS_CODE: "EBUSY" },
+      );
+
+      expectExitCode(result, 3);
+      const parsed = JSON.parse(result.stdout);
+      expect(parsed).toMatchObject({ ok: false, failedPaused: true, infrastructureFailure: true });
+      const state = JSON.parse(await readFile(statePath, "utf8"));
+      expect(state).toMatchObject({ phase: "failed-paused", step: "package-b" });
+      const log = await readFile(logPath, "utf8");
+      expect(log).toMatch(/package-b\.failed/);
     } finally {
       await rm(f.root, { recursive: true, force: true });
     }
@@ -316,7 +355,7 @@ describe("single reciprocal orchestrator", () => {
         "utf8",
       );
       const result = await run(f.root, f.relayRoot, commands(f.root), ["--resume", "--reason", "reviewed and fixed"]);
-      expect(result.exitCode).toBe(0);
+      expectExitCode(result, 0);
       const parsed = JSON.parse(result.stdout);
       expect(parsed).toMatchObject({ ok: true, resumed: true, reason: "reviewed and fixed" });
       const state = JSON.parse(await readFile(path.join(f.relayRoot, "state", "orchestrator-state.json"), "utf8"));
@@ -356,7 +395,7 @@ describe("single reciprocal orchestrator", () => {
         "utf8",
       );
       const result = await run(f.root, f.relayRoot, commands(f.root), ["--resume", "--discard-failures"]);
-      expect(result.exitCode).toBe(0);
+      expectExitCode(result, 0);
       const state = JSON.parse(await readFile(path.join(f.relayRoot, "state", "orchestrator-state.json"), "utf8"));
       expect(state).toMatchObject({ phase: "idle", currentItem: { id: "W0001" }, consecutiveFailures: 0, step: null });
       expect(state.failures).toEqual([]);
@@ -385,7 +424,7 @@ describe("single reciprocal orchestrator", () => {
         "utf8",
       );
       const result = await run(f.root, f.relayRoot, commands(f.root), ["--resume"]);
-      expect(result.exitCode).toBe(0);
+      expectExitCode(result, 0);
       const state = JSON.parse(await readFile(path.join(f.relayRoot, "state", "orchestrator-state.json"), "utf8"));
       expect(state).toMatchObject({ phase: "idle", currentItem: null, consecutiveFailures: 0, step: null });
       expect(state.failures).toEqual([]);
@@ -393,7 +432,7 @@ describe("single reciprocal orchestrator", () => {
       expect(log).toMatch(/no-current-item/);
 
       const retry = await run(f.root, f.relayRoot, commands(f.root));
-      expect(retry.exitCode).toBe(0);
+      expectExitCode(retry, 0);
       expect(await labels(f.root)).toEqual(["implement", "test", "packageB", "startB", "verifyRuntime", "rebuildA", "verifyA", "stopB"]);
       const completedState = JSON.parse(await readFile(path.join(f.relayRoot, "state", "orchestrator-state.json"), "utf8"));
       expect(completedState.failures).toEqual([]);
@@ -420,7 +459,7 @@ describe("single reciprocal orchestrator", () => {
         "utf8",
       );
       const result = await run(f.root, f.relayRoot, commands(f.root), ["--resume"]);
-      expect(result.exitCode).toBe(0);
+      expectExitCode(result, 0);
       const state = JSON.parse(await readFile(path.join(f.relayRoot, "state", "orchestrator-state.json"), "utf8"));
       expect(state.failures).toEqual([]);
       const log = await readFile(path.join(f.relayRoot, "control", "orchestrator-operations.ndjson"), "utf8");
@@ -451,7 +490,7 @@ describe("single reciprocal orchestrator", () => {
         "utf8",
       );
       const result = await run(f.root, f.relayRoot, commands(f.root), ["--resume", "--finalize-accepted", "--reason", "accepted source already promoted"]);
-      expect(result.exitCode).toBe(0);
+      expectExitCode(result, 0);
       const parsed = JSON.parse(result.stdout);
       expect(parsed).toMatchObject({ ok: true, finalized: true, sourceSha: head });
       expect(await readFile(path.join(f.relayRoot, "control", "WISHLIST.md"), "utf8")).toMatch(/- \[x\] W0001 .* DONE .*stable=/);
@@ -475,7 +514,7 @@ describe("single reciprocal orchestrator", () => {
         "utf8",
       );
       const result = await run(f.root, f.relayRoot, commands(f.root));
-      expect(result.exitCode).toBe(0);
+      expectExitCode(result, 0);
       expect(await labels(f.root)).toEqual(["implement", "test", "packageB", "startB", "verifyRuntime", "rebuildA", "verifyA", "stopB"]);
     } finally {
       await rm(f.root, { recursive: true, force: true });
@@ -487,7 +526,7 @@ describe("single reciprocal orchestrator", () => {
     try {
       await writeFile(path.join(f.relayRoot, "control", "WISHLIST.md"), "# Wishlist\n\n<!-- wishlist-items -->\n", "utf8");
       const result = await run(f.root, f.relayRoot, commands(f.root));
-      expect(result.exitCode).toBe(0);
+      expectExitCode(result, 0);
       expect(JSON.parse(result.stdout)).toMatchObject({ ok: true, idle: true, state: { phase: "idle" } });
     } finally {
       await rm(f.root, { recursive: true, force: true });
@@ -498,7 +537,7 @@ describe("single reciprocal orchestrator", () => {
     const f = await fixture("cutover");
     try {
       const result = await run(f.root, f.relayRoot, commands(f.root), ["--cutover"]);
-      expect(result.exitCode).toBe(0);
+      expectExitCode(result, 0);
       expect(JSON.parse(result.stdout)).toMatchObject({ ok: true, cutover: true });
       expect(await labels(f.root)).toEqual(["packageB", "startB", "verifyRuntime", "rebuildA", "verifyA", "stopB"]);
       expect(await readFile(path.join(f.relayRoot, "control", "WISHLIST.md"), "utf8")).toMatch(/- \[ \] W0001 .* QUEUED/);
