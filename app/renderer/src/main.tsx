@@ -26,7 +26,7 @@ import { ErrorBoundary } from "./ErrorBoundary.js";
 import { activityStripState } from "./activity-strip.js";
 import { claudeCliModelOptions } from "./cli-model-options.js";
 import { cumulativeTooltip, formatCumulativeCost, formatTotalCost } from "./cost-display.js";
-import { MODEL_STALL_WARNING_SECONDS, appendThinkingStatus, effectiveRendererConfig, isSessionActionable, isTaskStale, needsProjectPickForSession, replayVisibleSessionEvents, sessionFromResume, type TaskOutcomeStatus } from "./session-state.js";
+import { MODEL_STALL_WARNING_SECONDS, appendThinkingStatus, effectiveRendererConfig, isSessionActionable, isTaskStale, isVisibleLiveTextRole, needsProjectPickForSession, replayVisibleSessionEvents, sessionFromResume, type TaskOutcomeStatus } from "./session-state.js";
 import { taskOutcomeFromDone, taskOutcomeFromMachineEvent } from "../../../src/task-outcome-status.js";
 import { SearchSessionResults, useSessionSearchController, type SessionSearchApi } from "./search-session-results.js";
 import { boundedMessageTextForState, MessageText } from "./TranscriptText.js";
@@ -406,6 +406,7 @@ function App(): React.ReactElement {
 
   const appendStream = (role: "leader" | "worker", delta: string) => {
     if (delta) markActivity(role, "writing");
+    if (!isVisibleLiveTextRole(role)) return;
     setBoundedEntries((current) => {
       const last = current.at(-1);
       if (last?.kind === "message" && last.role === role && !last.thinking) {

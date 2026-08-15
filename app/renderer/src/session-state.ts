@@ -16,6 +16,10 @@ export type VisibleTranscriptEntry =
 
 export const THINKING_STATUS_TEXT = "Thinking";
 
+export function isVisibleLiveTextRole(role: "leader" | "worker"): role is "leader" {
+  return role === "leader";
+}
+
 export interface VisibleSessionReplay {
   entries: VisibleTranscriptEntry[];
   checkpoint?: OrchestrationCheckpoint;
@@ -93,7 +97,7 @@ export function replayVisibleSessionEvents(
     if (stored.type === "user" && isRecord(payload) && typeof payload.prompt === "string") {
       entries.push({ id: nextId(), kind: "message", role: "user", text: boundText(payload.prompt) });
     }
-    if (stored.type === "text" && isRecord(payload) && (payload.role === "leader" || payload.role === "worker") && typeof payload.delta === "string") {
+    if (stored.type === "text" && isRecord(payload) && payload.role === "leader" && typeof payload.delta === "string") {
       appendAgentText(entries, payload.role, payload.delta, nextId, boundText);
     }
     if (stored.type === "machine" && isRecord(payload)) {

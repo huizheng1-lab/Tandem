@@ -55,6 +55,7 @@ export function appendTuiThinkingStatus(messages: TranscriptMessage[], role: "LE
 }
 
 export function appendTuiText(messages: TranscriptMessage[], role: "LEADER" | "WORKER", text: string): TranscriptMessage[] {
+  if (role === "WORKER") return appendTuiThinkingStatus(messages, role);
   const last = messages.at(-1);
   if (last?.role === role && last.thinking) {
     const sanitized = appendTuiThinkingStatus(messages, role);
@@ -77,7 +78,7 @@ export function createTuiLiveAgentHandlers(
 ) {
   return {
     onLeaderText: (text: string) => append("LEADER", text),
-    onWorkerText: (text: string) => append("WORKER", text),
+    onWorkerText: (_text: string) => thinking("WORKER"),
     // The runner supplies raw reasoning deltas here. Deliberately accept the
     // argument but never forward it to the transcript or any visible-text
     // callback; the terminal gets the same fixed state indicator as desktop.

@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { defaultConfig } from "../src/config/schema.js";
 import { claudeCliModelOptions } from "../app/renderer/src/cli-model-options.js";
-import { MODEL_STALL_WARNING_SECONDS, effectiveRendererConfig, isSessionActionable, needsProjectPickForSession, replayVisibleSessionEvents, sessionFromResume } from "../app/renderer/src/session-state.js";
+import { MODEL_STALL_WARNING_SECONDS, effectiveRendererConfig, isSessionActionable, isVisibleLiveTextRole, needsProjectPickForSession, replayVisibleSessionEvents, sessionFromResume } from "../app/renderer/src/session-state.js";
 import type { SessionResumeResponse } from "../app/shared/ipc.js";
 import type { SessionEvent } from "../src/session/store.js";
 
@@ -62,12 +62,15 @@ describe("renderer session resume state", () => {
     expect(claudeCliModelOptions).toEqual(expect.arrayContaining(["claude-opus-5"]));
   });
 
-  it("W0031: suppresses persisted thinking text while replaying visible transcript output", () => {
+  it("W0099: suppresses persisted worker text while preserving leader output", () => {
+    expect(isVisibleLiveTextRole("leader")).toBe(true);
+    expect(isVisibleLiveTextRole("worker")).toBe(false);
     let id = 1;
     const events: SessionEvent[] = [
       { type: "user", at: "2026-07-26T00:00:00.000Z", payload: { prompt: "Build the thing" } },
       { type: "thinking", at: "2026-07-26T00:00:01.000Z", payload: { role: "worker", delta: "I will reveal private step-by-step reasoning." } },
-      { type: "text", at: "2026-07-26T00:00:02.000Z", payload: { role: "worker", delta: "Implemented the change." } },
+      { type: "text", at: "2026-07-26T00:00:02.000Z", payload: { role: "worker", delta: "The render directory is empty; this is investigative worker narration." } },
+      { type: "text", at: "2026-07-26T00:00:02.500Z", payload: { role: "leader", delta: "Leader plan and answer." } },
       { type: "machine", at: "2026-07-26T00:00:03.000Z", payload: { type: "transition", phase: "BUILDING", message: "BUILDING round 1/3" } },
       { type: "done", at: "2026-07-26T00:00:04.000Z", payload: { summary: "Final summary", takeover: false } }
     ];
@@ -77,7 +80,8 @@ describe("renderer session resume state", () => {
 
     expect(visibleText).not.toContain("private step-by-step reasoning");
     expect(visibleText).toContain("Build the thing");
-    expect(visibleText).toContain("Implemented the change.");
+     expect(visibleText).not.toContain("investigative worker narration");
+     expect(visibleText).toContain("Leader plan and answer.");
     expect(visibleText).not.toContain("BUILDING round 1/3");
     expect(visibleText).not.toContain("Final summary");
     expect(replay.entries.every((entry) => entry.kind !== "message" || entry.role !== "system")).toBe(true);

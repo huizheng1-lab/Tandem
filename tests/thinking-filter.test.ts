@@ -67,20 +67,25 @@ describe("ThinkingStreamFilter", () => {
     expect(visible).not.toContain(thinking);
   });
 
-  it("collapses TUI thinking callbacks without merging later communicated output", () => {
+  it("W0099: keeps all worker text behind the TUI status indicator", () => {
     let messages: TranscriptMessage[] = [];
     messages = appendTuiThinkingStatus(messages, "WORKER");
     messages = appendTuiThinkingStatus(messages, "WORKER");
     messages = appendTuiText(messages, "WORKER", "worker answer");
 
-    expect(messages).toEqual([
-      { role: "WORKER", text: "Thinking", thinking: true },
-      { role: "WORKER", text: "worker answer" }
-    ]);
+    expect(messages).toEqual([{ role: "WORKER", text: "Thinking", thinking: true }]);
     expect(messages.map((message) => message.text).join("\n")).not.toContain("private worker reasoning");
   });
 
-  it("wires the live TUI thinking callbacks as status-only sinks", () => {
+  it("W0099: suppresses plain worker text for custom OpenAI-compatible workers while preserving leader text", () => {
+    const customWorker = customToModelEntry({
+      id: "custom/openai-compatible-worker",
+      provider: "openai-compatible",
+      baseURL: "https://example.test/v1",
+      apiKeyEnv: "CUSTOM_API_KEY",
+      modelName: "minimax-m3"
+    });
+    expect(customWorker.provider).toBe("openai-compatible");
     let messages: TranscriptMessage[] = [];
     const handlers = createTuiLiveAgentHandlers(
       (role, text) => {
@@ -93,14 +98,14 @@ describe("ThinkingStreamFilter", () => {
 
     handlers.onWorkerThinking("private custom-model reasoning");
     handlers.onWorkerThinking("more private reasoning");
-    handlers.onWorkerText("worker result");
+    handlers.onWorkerText("The render directory is empty; this is plain worker narration");
     handlers.onLeaderText("Plan and answer");
 
     expect(messages).toEqual([
       { role: "WORKER", text: "Thinking", thinking: true },
-      { role: "WORKER", text: "worker result" },
       { role: "LEADER", text: "Plan and answer" }
     ]);
+    expect(JSON.stringify(messages)).not.toContain("plain worker narration");
     expect(JSON.stringify(messages)).not.toContain("private custom-model reasoning");
   });
   it("strips a think block contained within one chunk", () => {
