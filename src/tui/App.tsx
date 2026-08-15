@@ -36,14 +36,29 @@ import { PlanView } from "./PlanView.js";
 
 export const TUI_THINKING_STATUS_TEXT = "Thinking";
 
+function tuiThinkingStatus(role: "LEADER" | "WORKER"): TranscriptMessage {
+  return { role, text: TUI_THINKING_STATUS_TEXT, thinking: true };
+}
+
 export function appendTuiThinkingStatus(messages: TranscriptMessage[], role: "LEADER" | "WORKER"): TranscriptMessage[] {
   const last = messages.at(-1);
-  if (last?.role === role && last.thinking && last.text === TUI_THINKING_STATUS_TEXT) return messages;
-  return [...messages, { role, text: TUI_THINKING_STATUS_TEXT, thinking: true }];
+  if (last?.role === role && last.thinking) {
+    // Replace, rather than trust, an existing thinking entry. This keeps the
+    // terminal safe even if a legacy caller or restored transcript contained
+    // raw thinking text.
+    if (last.text === TUI_THINKING_STATUS_TEXT) return messages;
+    return [...messages.slice(0, -1), tuiThinkingStatus(role)];
+  }
+  return [...messages, tuiThinkingStatus(role)];
 }
 
 export function appendTuiText(messages: TranscriptMessage[], role: "LEADER" | "WORKER", text: string): TranscriptMessage[] {
   const last = messages.at(-1);
+  if (last?.role === role && last.thinking) {
+    const sanitized = appendTuiThinkingStatus(messages, role);
+    if (!text.trim()) return sanitized;
+    return [...sanitized, { role, text }];
+  }
   if (last?.role === role && !last.thinking) return [...messages.slice(0, -1), { ...last, text: `${last.text}${text}` }];
   if (!text.trim()) return messages;
   return [...messages, { role, text }];
