@@ -2,7 +2,7 @@ import type { SessionMetadata, SessionResumeResponse, SessionStartResponse } fro
 import type { TandemConfig } from "../../../src/config/schema.js";
 import type { MachineEvent, OrchestrationCheckpoint } from "../../../src/orchestrator/machine.js";
 import type { SessionEvent } from "../../../src/session/store.js";
-import type { TaskOutcomeStatus } from "../../../src/task-outcome-status.js";
+import { taskOutcomeFromDone, type TaskOutcomeStatus } from "../../../src/task-outcome-status.js";
 
 export const MODEL_STALL_WARNING_SECONDS = 180;
 
@@ -103,7 +103,7 @@ export function replayVisibleSessionEvents(
       if (event.type === "error") taskStatus = "failed";
     }
     if (stored.type === "done" && isRecord(payload) && typeof payload.summary === "string") {
-      taskStatus = payload.error === true ? "failed" : "successful";
+      taskStatus = taskOutcomeFromDone(payload);
     }
   }
 

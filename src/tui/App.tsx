@@ -34,7 +34,7 @@ import { InputBar } from "./InputBar.js";
 import { StatusLine } from "./StatusLine.js";
 import { Approval } from "./Approval.js";
 import { PlanView } from "./PlanView.js";
-import { isTaskStale, TASK_STALL_THRESHOLD_MS, taskOutcomeFromMachineEvent, taskOutcomeFromRun, type TaskOutcomeStatus } from "../task-outcome-status.js";
+import { isTaskStale, TASK_STALL_THRESHOLD_MS, taskOutcomeFromDone, taskOutcomeFromMachineEvent, taskOutcomeFromRun, type TaskOutcomeStatus } from "../task-outcome-status.js";
 
 export const TUI_THINKING_STATUS_TEXT = "Thinking";
 
@@ -98,7 +98,7 @@ export function taskStatusFromTuiSessionEvents(events: SessionEvent[]): TaskOutc
     }
     if (stored.type === "done" && stored.payload && typeof stored.payload === "object") {
       const payload = stored.payload as { error?: boolean };
-      status = payload.error === true ? "failed" : "successful";
+      status = taskOutcomeFromDone(payload);
     }
   }
   if (!status && finalCheckpoint?.phase === "DONE") {

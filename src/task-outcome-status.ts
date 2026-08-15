@@ -20,3 +20,8 @@ export function taskOutcomeFromMachineEvent(event: MachineEvent): TaskOutcomeSta
   if (event.type === "error") return "failed";
   return undefined;
 }
+
+export function taskOutcomeFromDone(payload: { outcome?: unknown; error?: unknown }): TaskOutcomeStatus {
+  if (payload.outcome === "successful" || payload.outcome === "failed" || payload.outcome === "hung") return payload.outcome;
+  return payload.error === true ? "failed" : "successful";
+}

@@ -27,7 +27,7 @@ import { activityStripState } from "./activity-strip.js";
 import { claudeCliModelOptions } from "./cli-model-options.js";
 import { cumulativeTooltip, formatCumulativeCost, formatTotalCost } from "./cost-display.js";
 import { MODEL_STALL_WARNING_SECONDS, appendThinkingStatus, effectiveRendererConfig, isSessionActionable, isTaskStale, needsProjectPickForSession, replayVisibleSessionEvents, sessionFromResume, type TaskOutcomeStatus } from "./session-state.js";
-import { taskOutcomeFromMachineEvent } from "../../../src/task-outcome-status.js";
+import { taskOutcomeFromDone, taskOutcomeFromMachineEvent } from "../../../src/task-outcome-status.js";
 import { SearchSessionResults, useSessionSearchController, type SessionSearchApi } from "./search-session-results.js";
 import { boundedMessageTextForState, MessageText } from "./TranscriptText.js";
 import { applyDesktopTheme, THEME_REFRESH_INTERVAL_MS } from "./theme.js";
@@ -585,7 +585,7 @@ function App(): React.ReactElement {
         setActivityPulse(undefined);
         setActiveTool(undefined);
         trimTrailingAgentBubble();
-        setTaskStatus(event.error ? "failed" : "successful");
+        setTaskStatus(taskOutcomeFromDone(event));
       }),
       tandem.onPermissionRequest((event) => {
         setPermissionModal(event);

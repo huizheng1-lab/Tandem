@@ -12,6 +12,7 @@ import { locateCodexCli } from "../../src/agents/codex-cli/locate.js";
 import { locateClaudeCli } from "../../src/agents/claude-code-cli/locate.js";
 import { createDiffTracker } from "../../src/orchestrator/diff.js";
 import { runOrchestration, type MachineEvent, type OrchestrationCheckpoint } from "../../src/orchestrator/machine.js";
+import { taskOutcomeFromRun } from "../../src/task-outcome-status.js";
 import { backgroundProcessTool, stopBackgroundProcessByPid } from "../../src/tools/shell.js";
 import { readDurableAwait, waitForDurableAwait } from "../../src/orchestrator/await.js";
 import type { CompletionReport } from "../../src/orchestrator/artifacts.js";
@@ -348,7 +349,7 @@ export class TandemService {
           ended: true
         });
       }
-      const done = { summary: result.summary, takeover: result.takeover };
+      const done = { summary: result.summary, takeover: result.takeover, outcome: taskOutcomeFromRun(result) };
       this.window.webContents.send(ipcChannels.doneEvent, done);
       await session.append("done", done);
       if (this.cancellationSucceeded) this.lastCheckpoint = undefined;
