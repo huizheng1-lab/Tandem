@@ -1,0 +1,36 @@
+D225 done
+
+Round: D225
+Implementation commit:
+- fc5e4e3e0d046be501384c95ed84b168d027a4ff D225 harden orchestrator integration tests against host-load flakes
+
+Root cause / investigation:
+- Confirmed a real contributor in scripts/reciprocal-orchestrator.mjs: state JSON read/write, atomic rename, log append, lock create/release, wishlist read/write, and failure-report writes were raw synchronous filesystem operations. A transient Windows EBUSY/EPERM/EACCES/ENOTEMPTY on those paths could throw before the orchestrator reached its structured process.exit(3) pause path.
+- Added bounded retry/backoff for those filesystem paths at scripts/reciprocal-orchestrator.mjs:47, 79, 109, 126, 139, 145, 269, 277, 312, 383, and 397.
+- Added deterministic transient EBUSY injection for tests via TANDEM_ORCHESTRATOR_TEST_TRANSIENT_FS_FAILURES / TANDEM_ORCHESTRATOR_TEST_TRANSIENT_FS_CODE, with coverage in tests/reciprocal-orchestrator.test.ts:325.
+- The targeted before/after approximation is the new injected EBUSY test: previously an unguarded rename/append would throw and produce an unstructured exit 1; after the fix the same injected failures are retried and the orchestrator reaches the expected structured infrastructure pause with exit 3.
+
+Diagnostics added:
+- Replaced raw reciprocal-orchestrator exit-code assertions with expectExitCode helpers that include child stdout and stderr on assertion failure in tests/reciprocal-orchestrator.test.ts:101 and tests/reciprocal-implement-no-commit.test.ts:339.
+
+Additional scoped hardening discovered during acceptance:
+- The third full-suite run exposed three tests/orchestrator.test.ts default-timeout failures under load. Added 15s per-test timeout only to those three cases at tests/orchestrator.test.ts:112, 171, and 551.
+- A later full-suite run exposed an EBUSY temp-directory cleanup race in tests/runner-artifact.test.ts. Added removeWithRetry at tests/runner-artifact.test.ts:11 and used it at line 167.
+
+Load reproduction attempt:
+- Ran tests/reciprocal-orchestrator.test.ts concurrently with a 30-second disk write/hash loop under tmp/d225-load. The run passed all 20 tests in 29.34s. This increased durations but did not reproduce the original flake.
+- The generated tmp/d225-load stress files were removed.
+
+Focused verification:
+- node --check scripts/reciprocal-orchestrator.mjs: passed.
+- npx vitest run tests/reciprocal-orchestrator.test.ts --configLoader runner --reporter verbose: passed, 20 tests in 18.99s.
+- npx vitest run tests/reciprocal-implement-no-commit.test.ts -t "D200 reciprocal orchestrator no-commit abort" --configLoader runner --reporter verbose: passed, 3 tests in 2.50s.
+- npx vitest run tests/orchestrator.test.ts -t "covers two revise rounds then approve|gives the worker exactly maxReviewRounds build attempts|D97: accepts omitted model verification" --configLoader runner --reporter verbose: passed, 3 tests in 8.94s.
+- npx vitest run tests/runner-artifact.test.ts -t "propagates an await_background suspension through the worker tool runner" --configLoader runner --reporter verbose: passed, 1 test in 360ms.
+
+Required checks:
+- npm run typecheck: passed.
+- git diff --check: passed.
+- npm test run 1: passed, 66 files passed / 2 skipped; 786 tests passed / 43 skipped; duration 274.43s.
+- npm test run 2: passed, 66 files passed / 2 skipped; 786 tests passed / 43 skipped; duration 270.35s.
+- npm test run 3: passed, 66 files passed / 2 skipped; 786 tests passed / 43 skipped; duration 290.78s.
