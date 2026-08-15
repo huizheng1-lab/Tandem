@@ -26,7 +26,7 @@ import { ErrorBoundary } from "./ErrorBoundary.js";
 import { activityStripState } from "./activity-strip.js";
 import { claudeCliModelOptions } from "./cli-model-options.js";
 import { cumulativeTooltip, formatCumulativeCost, formatTotalCost } from "./cost-display.js";
-import { MODEL_STALL_WARNING_SECONDS, appendThinkingStatus, effectiveRendererConfig, isSessionActionable, needsProjectPickForSession, replayVisibleSessionEvents, sessionFromResume } from "./session-state.js";
+import { MODEL_STALL_WARNING_SECONDS, appendThinkingStatus, effectiveRendererConfig, isSessionActionable, isTaskStale, needsProjectPickForSession, replayVisibleSessionEvents, sessionFromResume, type TaskOutcomeStatus } from "./session-state.js";
 import { SearchSessionResults, useSessionSearchController, type SessionSearchApi } from "./search-session-results.js";
 import { boundedMessageTextForState, MessageText } from "./TranscriptText.js";
 import { applyDesktopTheme, THEME_REFRESH_INTERVAL_MS } from "./theme.js";
@@ -257,11 +257,12 @@ function App(): React.ReactElement {
   const [config, setConfig] = useState<TandemConfig>();
   const [appState, setAppState] = useState<DesktopAppStateResponse>();
   const [models, setModels] = useState<ModelListItem[]>([]);
-  const [entries, setEntries] = useState<TranscriptEntry[]>([{ id: 1, kind: "message", role: "system", text: "Choose a project folder to start Tandem." }]);
+  const [entries, setEntries] = useState<TranscriptEntry[]>([]);
   const [transcriptTruncated, setTranscriptTruncated] = useState(false);
   const [prompt, setPrompt] = useState("");
   const [attachments, setAttachments] = useState<AttachmentRef[]>([]);
   const [running, setRunning] = useState(false);
+  const [taskStatus, setTaskStatus] = useState<TaskOutcomeStatus>("successful");
   const [phase, setPhase] = useState("IDLE");
   const [round, setRound] = useState(0);
   const [cost, setCost] = useState<CostTotals>();
@@ -348,6 +349,7 @@ function App(): React.ReactElement {
   };
 
   const appendMessage = (role: Role, text: string) => {
+    if (role === "system") return;
     setBoundedEntries((current) => [...current, { id: nextId.current++, kind: "message", role, text: boundedMessageTextForState(text) }]);
   };
 
@@ -452,14 +454,13 @@ function App(): React.ReactElement {
     setLastActivityAt(Date.now());
     if (event.type === "transition") {
       setPhase(event.phase);
-      appendMessage("system", event.message);
     } else if (event.type === "artifact") {
       setBoundedEntries((current) => [...current, { id: nextId.current++, kind: "artifact", name: event.name, value: event.value, open: false }]);
     } else if (event.type === "checkpoint") {
       setPhase(event.checkpoint.phase);
       setRound(event.checkpoint.round);
     } else {
-      appendMessage("system", event.message);
+      if (event.type === "error") setTaskStatus("failed");
     }
   };
 
@@ -481,9 +482,7 @@ function App(): React.ReactElement {
     setSession(started);
     setConfig(started.config);
     setAppState({ projectDir: started.projectDir, lastProjectDir: started.defaultProject ? appState?.lastProjectDir : started.projectDir, config: started.config, projectSummary: started.projectSummary });
-    const startEntry = { id: nextId.current++, kind: "message" as const, role: "system" as const, text: sessionStartedText(started) };
-    if (resetTranscript) replaceTranscript([startEntry], false);
-    else setBoundedEntries((current) => [...current, startEntry]);
+    if (resetTranscript) replaceTranscript([], false);
     setPhase("IDLE");
     setRound(0);
     setCost(undefined);
@@ -538,8 +537,7 @@ function App(): React.ReactElement {
       setPhase(replay.checkpoint.phase);
       setRound(replay.checkpoint.round);
     }
-    replayed.push({ id: nextId.current++, kind: "message", role: "system", text: `Resumed session ${id}. The next prompt will continue from its latest checkpoint.` });
-    replaceTranscript(replayed.length > 1 ? replayed : [{ id: nextId.current++, kind: "message", role: "system", text: `Session ${id} has no transcript events.` }], Boolean(resumed.eventsTruncated));
+    replaceTranscript(replayed, Boolean(resumed.eventsTruncated));
     await refreshSidebar();
   };
 
@@ -585,7 +583,7 @@ function App(): React.ReactElement {
         setActivityPulse(undefined);
         setActiveTool(undefined);
         trimTrailingAgentBubble();
-        appendMessage("system", `${event.summary}${event.takeover ? " (takeover)" : ""}`);
+        setTaskStatus(event.error ? "failed" : "successful");
       }),
       tandem.onPermissionRequest((event) => {
         setPermissionModal(event);
@@ -625,6 +623,15 @@ function App(): React.ReactElement {
     const timer = setInterval(() => setActivityTick(Date.now()), 1000);
     return () => clearInterval(timer);
   }, [running]);
+
+  useEffect(() => {
+    if (running) setTaskStatus("successful");
+  }, [running]);
+
+  useEffect(() => {
+    if (!running) return;
+    if (isTaskStale(lastActivityAt, activityTick, MODEL_STALL_WARNING_SECONDS * 1000)) setTaskStatus("hung");
+  }, [running, lastActivityAt, activityTick]);
 
   const updateModel = async (role: "leader" | "worker", modelId: string) => {
     const nextConfig = await tandem.setConfig({ [role]: modelId });
@@ -1453,6 +1460,7 @@ if (args.length === 1 && sub === "clear") {
               <span>Older transcript history remains saved on disk; the desktop UI keeps only recent entries in memory.</span>
             </aside>
           ) : null}
+          <div className={`taskOutcomeStatus ${taskStatus}`} role="status">Task status: {taskStatus}</div>
           {visibleEntries.map((entry) =>
             entry.kind === "message" ? (
               <article

@@ -5,6 +5,8 @@ import type { SessionEvent } from "../../../src/session/store.js";
 
 export const MODEL_STALL_WARNING_SECONDS = 180;
 
+export { TASK_STALL_THRESHOLD_MS, isTaskStale, type TaskOutcomeStatus } from "../../../src/task-outcome-status.js";
+
 export type TranscriptRole = "user" | "leader" | "worker" | "system";
 
 export type VisibleTranscriptEntry =
@@ -94,12 +96,9 @@ export function replayVisibleSessionEvents(
     if (stored.type === "machine" && isRecord(payload)) {
       const event = payload as MachineEvent;
       if (event.type === "artifact") entries.push({ id: nextId(), kind: "artifact", name: event.name, value: event.value, open: false });
-      if (event.type === "transition") entries.push({ id: nextId(), kind: "message", role: "system", text: boundText(event.message) });
-      if (event.type === "error") entries.push({ id: nextId(), kind: "message", role: "system", text: boundText(event.message) });
       if (event.type === "checkpoint") checkpoint = event.checkpoint;
     }
     if (stored.type === "done" && isRecord(payload) && typeof payload.summary === "string") {
-      entries.push({ id: nextId(), kind: "message", role: "system", text: boundText(`${payload.summary}${payload.takeover ? " (takeover)" : ""}`) });
     }
   }
 

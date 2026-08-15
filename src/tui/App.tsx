@@ -33,6 +33,7 @@ import { InputBar } from "./InputBar.js";
 import { StatusLine } from "./StatusLine.js";
 import { Approval } from "./Approval.js";
 import { PlanView } from "./PlanView.js";
+import { isTaskStale, TASK_STALL_THRESHOLD_MS, taskOutcomeFromRun, type TaskOutcomeStatus } from "../task-outcome-status.js";
 
 export const TUI_THINKING_STATUS_TEXT = "Thinking";
 
@@ -91,6 +92,9 @@ export function App({ config: initialConfig, env, cwd, initialError }: { config:
   ]);
   const [input, setInput] = useState("");
   const [busy, setBusy] = useState(false);
+  const [taskStatus, setTaskStatus] = useState<TaskOutcomeStatus>("successful");
+  const [lastTaskActivityAt, setLastTaskActivityAt] = useState(Date.now());
+  const [taskActivityTick, setTaskActivityTick] = useState(Date.now());
   const [phase, setPhase] = useState("IDLE");
   const [round, setRound] = useState(0);
   const [plan, setPlan] = useState<BuildPlan | undefined>();
@@ -111,8 +115,14 @@ export function App({ config: initialConfig, env, cwd, initialError }: { config:
   const missedScheduleQueueRef = useRef<Schedule[]>([]);
 
   const addMessage = (role: TranscriptMessage["role"], text: string) => {
-    setMessages((current) => [...current, { role, text }]);
-    void storeRef.current?.append("message", { role, text });
+    const interactive = role === "SYSTEM" && /Permission requested|Build plan ready|Missed schedule|Choose model|Plan approval pending|Resume continuation pending/.test(text);
+    if (role === "SYSTEM" && !interactive) {
+      void storeRef.current?.append("message", { role, text });
+      return;
+    }
+    const message = { role, text, ...(interactive ? { interactive: true } : {}) };
+    setMessages((current) => [...current, message]);
+    void storeRef.current?.append("message", message);
   };
 
   const addArtifactMessage = (name: string, value: unknown) => {
@@ -122,10 +132,12 @@ export function App({ config: initialConfig, env, cwd, initialError }: { config:
   };
 
   const appendDelta = (role: "LEADER" | "WORKER", text: string) => {
+    setLastTaskActivityAt(Date.now());
     setMessages((current) => appendTuiText(current, role, text));
   };
 
   const appendThinkingStatus = (role: "LEADER" | "WORKER") => {
+    setLastTaskActivityAt(Date.now());
     setMessages((current) => appendTuiThinkingStatus(current, role));
   };
 
@@ -143,6 +155,7 @@ export function App({ config: initialConfig, env, cwd, initialError }: { config:
   };
 
   const addToolMessage = (event: ToolActivityEvent) => {
+    setLastTaskActivityAt(Date.now());
     const status = event.phase === "start" ? "running" : event.ok ? `ok ${((event.ms ?? 0) / 1000).toFixed(1)}s` : `failed ${((event.ms ?? 0) / 1000).toFixed(1)}s`;
     const detail = event.phase === "end" && !event.ok ? (event.output ?? event.error) : undefined;
     addMessage("SYSTEM", `tool ${event.role} - ${event.tool}: ${event.target} - ${status}${detail ? `\noutput: ${detail}` : ""}`);
@@ -274,6 +287,7 @@ export function App({ config: initialConfig, env, cwd, initialError }: { config:
   };
 
   const handleEvent = (event: MachineEvent) => {
+    setLastTaskActivityAt(Date.now());
     void storeRef.current?.append(event.type, event);
     if (event.type === "transition") {
       setPhase(event.phase);
@@ -298,6 +312,8 @@ export function App({ config: initialConfig, env, cwd, initialError }: { config:
     const controller = new AbortController();
     abortRef.current = controller;
     setBusy(true);
+    setTaskStatus("successful");
+    setLastTaskActivityAt(Date.now());
     setPhase("PLANNING");
     setRound(0);
     setPlan(undefined);
@@ -357,6 +373,7 @@ export function App({ config: initialConfig, env, cwd, initialError }: { config:
         initialState,
         emit: handleEvent
       });
+      setTaskStatus(taskOutcomeFromRun(result));
       trimTrailingAgentMessage();
       addMessage("LEADER", result.summary);
       await storeRef.current?.append("done", { summary: result.summary, takeover: result.takeover });
@@ -376,12 +393,25 @@ export function App({ config: initialConfig, env, cwd, initialError }: { config:
       }
       setPhase("DONE");
       void storeRef.current?.append("cost", ledger.totals());
+    } catch (error) {
+      setTaskStatus("failed");
+      throw error;
     } finally {
       trimTrailingAgentMessage();
       setBusy(false);
       abortRef.current = undefined;
     }
   };
+
+  useEffect(() => {
+    if (!busy) return;
+    const timer = setInterval(() => setTaskActivityTick(Date.now()), 1000);
+    return () => clearInterval(timer);
+  }, [busy]);
+
+  useEffect(() => {
+    if (busy && isTaskStale(lastTaskActivityAt, taskActivityTick, TASK_STALL_THRESHOLD_MS)) setTaskStatus("hung");
+  }, [busy, lastTaskActivityAt, taskActivityTick]);
 
   const runSequential = async (prompt: string, source: string) => {
     if (loopRunningRef.current) {
@@ -555,7 +585,7 @@ export function App({ config: initialConfig, env, cwd, initialError }: { config:
 
   return (
     <Box flexDirection="column">
-      <Transcript messages={messages} />
+      <Transcript messages={messages} taskStatus={taskStatus} />
       <PlanView plan={plan} verdict={verdict} />
       {modelPicker ? (
         <Box borderStyle="single" flexDirection="column" paddingX={1}>
