@@ -1,7 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { ThinkingStreamFilter } from "../src/agents/runner.js";
-import { customToModelEntry } from "../src/providers/registry.js";
-import { appendTuiText, appendTuiThinkingStatus } from "../src/tui/App.js";
+import { customToModelEntry, modelRegistry } from "../src/providers/registry.js";
+import { defaultConfig } from "../src/config/schema.js";
+import { appendTuiText, appendTuiThinkingStatus, createTuiLiveAgentHandlers } from "../src/tui/App.js";
 import type { TranscriptMessage } from "../src/tui/Transcript.js";
 
 function runFilter(chunks: string[]): { text: string; thinking: string } {
@@ -20,14 +21,22 @@ function runFilter(chunks: string[]): { text: string; thinking: string } {
 
 describe("ThinkingStreamFilter", () => {
   it("suppresses reasoning for a custom OpenAI-compatible worker while preserving live output", () => {
-    const worker = customToModelEntry({
-      id: "custom/openai-compatible-worker",
-      provider: "openai-compatible",
-      baseURL: "https://example.test/v1",
-      apiKeyEnv: "CUSTOM_API_KEY",
-      modelName: "reasoning-worker"
-    });
-    expect(worker.provider).toBe("openai-compatible");
+    const config = {
+      ...defaultConfig,
+      customModels: [
+        {
+          id: "custom/openai-compatible-worker",
+          provider: "openai-compatible" as const,
+          baseURL: "https://example.test/v1",
+          apiKeyEnv: "CUSTOM_API_KEY",
+          modelName: "reasoning-worker"
+        }
+      ]
+    };
+    const worker = modelRegistry(config.customModels).find((entry) => entry.id === config.customModels[0].id);
+    expect(worker).toBeDefined();
+    const resolvedWorker = customToModelEntry(config.customModels[0]);
+    expect(resolvedWorker.provider).toBe("openai-compatible");
 
     let visible = "";
     let thinking = "";
@@ -56,6 +65,30 @@ describe("ThinkingStreamFilter", () => {
       { role: "WORKER", text: "worker answer" }
     ]);
     expect(messages.map((message) => message.text).join("\n")).not.toContain("private worker reasoning");
+  });
+
+  it("wires the live TUI thinking callbacks as status-only sinks", () => {
+    let messages: TranscriptMessage[] = [];
+    const handlers = createTuiLiveAgentHandlers(
+      (role, text) => {
+        messages = appendTuiText(messages, role, text);
+      },
+      (role) => {
+        messages = appendTuiThinkingStatus(messages, role);
+      }
+    );
+
+    handlers.onWorkerThinking("private custom-model reasoning");
+    handlers.onWorkerThinking("more private reasoning");
+    handlers.onWorkerText("worker result");
+    handlers.onLeaderText("Plan and answer");
+
+    expect(messages).toEqual([
+      { role: "WORKER", text: "Thinking", thinking: true },
+      { role: "WORKER", text: "worker result" },
+      { role: "LEADER", text: "Plan and answer" }
+    ]);
+    expect(JSON.stringify(messages)).not.toContain("private custom-model reasoning");
   });
   it("strips a think block contained within one chunk", () => {
     expect(runFilter(["hello <think>secret</think>world"])).toEqual({ text: "hello world", thinking: "secret" });

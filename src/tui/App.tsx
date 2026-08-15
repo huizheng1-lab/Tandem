@@ -69,12 +69,18 @@ export function appendTuiText(messages: TranscriptMessage[], role: "LEADER" | "W
  * Thinking deltas are intentionally represented only by a fixed status message;
  * they must never be routed through either visible-text callback.
  */
-export function createTuiLiveAgentHandlers(append: (role: "LEADER" | "WORKER", text: string) => void, thinking: (role: "LEADER" | "WORKER") => void) {
+export function createTuiLiveAgentHandlers(
+  append: (role: "LEADER" | "WORKER", text: string) => void,
+  thinking: (role: "LEADER" | "WORKER") => void
+) {
   return {
     onLeaderText: (text: string) => append("LEADER", text),
     onWorkerText: (text: string) => append("WORKER", text),
-    onLeaderThinking: () => thinking("LEADER"),
-    onWorkerThinking: () => thinking("WORKER")
+    // The runner supplies raw reasoning deltas here. Deliberately accept the
+    // argument but never forward it to the transcript or any visible-text
+    // callback; the terminal gets the same fixed state indicator as desktop.
+    onLeaderThinking: (_delta: string) => thinking("LEADER"),
+    onWorkerThinking: (_delta: string) => thinking("WORKER")
   };
 }
 
