@@ -3,7 +3,7 @@ import { ThinkingStreamFilter } from "../src/agents/runner.js";
 import { customToModelEntry, modelRegistry } from "../src/providers/registry.js";
 import { defaultConfig } from "../src/config/schema.js";
 import { appendTuiText, appendTuiThinkingStatus, createTuiLiveAgentHandlers } from "../src/tui/App.js";
-import type { TranscriptMessage } from "../src/tui/Transcript.js";
+import { visibleTranscriptMessages, type TranscriptMessage } from "../src/tui/Transcript.js";
 
 function runFilter(chunks: string[]): { text: string; thinking: string } {
   let text = "";
@@ -20,6 +20,19 @@ function runFilter(chunks: string[]): { text: string; thinking: string } {
 }
 
 describe("ThinkingStreamFilter", () => {
+  it("keeps passive SYSTEM chatter out while preserving interactive prompts", () => {
+    const visible = visibleTranscriptMessages([
+      { role: "SYSTEM", text: "round 1 worker build" },
+      { role: "SYSTEM", text: "Permission requested: bash", interactive: true },
+      { role: "LEADER", text: "done" }
+    ]);
+
+    expect(visible).toEqual([
+      { role: "SYSTEM", text: "Permission requested: bash", interactive: true },
+      { role: "LEADER", text: "done" }
+    ]);
+  });
+
   it("suppresses reasoning for a custom OpenAI-compatible worker while preserving live output", () => {
     const config = {
       ...defaultConfig,

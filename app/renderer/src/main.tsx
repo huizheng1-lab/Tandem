@@ -537,6 +537,7 @@ function App(): React.ReactElement {
       setPhase(replay.checkpoint.phase);
       setRound(replay.checkpoint.round);
     }
+    if (replay.taskStatus) setTaskStatus(replay.taskStatus);
     replaceTranscript(replayed, Boolean(resumed.eventsTruncated));
     await refreshSidebar();
   };
@@ -969,6 +970,7 @@ if (args.length === 1 && sub === "clear") {
         } catch (error) {
           setRunning(false);
           setPhase("IDLE");
+          setTaskStatus("failed");
           appendMessage("system", `Run failed: ${errorText(error)}`);
         }
         return;
@@ -1048,6 +1050,7 @@ if (args.length === 1 && sub === "clear") {
       } catch (error) {
         setRunning(false);
         setPhase("IDLE");
+        setTaskStatus("failed");
         appendMessage("system", `${source} failed: ${errorText(error)}`);
       }
     } finally {
@@ -1085,6 +1088,7 @@ if (args.length === 1 && sub === "clear") {
     } catch (error) {
       setRunning(false);
       setPhase("IDLE");
+      setTaskStatus("failed");
       const message = String(error);
       setMissingKey(missingKeyFromMessage(message));
       trimTrailingAgentBubble();

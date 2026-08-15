@@ -78,8 +78,9 @@ describe("renderer session resume state", () => {
     expect(visibleText).not.toContain("private step-by-step reasoning");
     expect(visibleText).toContain("Build the thing");
     expect(visibleText).toContain("Implemented the change.");
-    expect(visibleText).toContain("BUILDING round 1/3");
-    expect(visibleText).toContain("Final summary");
+    expect(visibleText).not.toContain("BUILDING round 1/3");
+    expect(visibleText).not.toContain("Final summary");
+    expect(replay.entries.every((entry) => entry.kind !== "message" || entry.role !== "system")).toBe(true);
     expect(replay.entries).toContainEqual({ id: 2, kind: "message", role: "worker", text: "Thinking", thinking: true });
   });
 });

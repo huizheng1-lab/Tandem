@@ -2,6 +2,7 @@ import type { SessionMetadata, SessionResumeResponse, SessionStartResponse } fro
 import type { TandemConfig } from "../../../src/config/schema.js";
 import type { MachineEvent, OrchestrationCheckpoint } from "../../../src/orchestrator/machine.js";
 import type { SessionEvent } from "../../../src/session/store.js";
+import type { TaskOutcomeStatus } from "../../../src/task-outcome-status.js";
 
 export const MODEL_STALL_WARNING_SECONDS = 180;
 
@@ -18,6 +19,7 @@ export const THINKING_STATUS_TEXT = "Thinking";
 export interface VisibleSessionReplay {
   entries: VisibleTranscriptEntry[];
   checkpoint?: OrchestrationCheckpoint;
+  taskStatus?: TaskOutcomeStatus;
 }
 
 type TranscriptEntryWithOptionalMessageFields = {
@@ -79,6 +81,7 @@ export function replayVisibleSessionEvents(
 ): VisibleSessionReplay {
   const entries: VisibleTranscriptEntry[] = [];
   let checkpoint: OrchestrationCheckpoint | undefined;
+  let taskStatus: TaskOutcomeStatus | undefined;
 
   for (const stored of events) {
     const payload = stored.payload;
@@ -97,10 +100,17 @@ export function replayVisibleSessionEvents(
       const event = payload as MachineEvent;
       if (event.type === "artifact") entries.push({ id: nextId(), kind: "artifact", name: event.name, value: event.value, open: false });
       if (event.type === "checkpoint") checkpoint = event.checkpoint;
+      if (event.type === "error") taskStatus = "failed";
     }
     if (stored.type === "done" && isRecord(payload) && typeof payload.summary === "string") {
+      taskStatus = payload.error === true ? "failed" : "successful";
     }
   }
 
-  return { entries, checkpoint };
+  if (!taskStatus && checkpoint?.phase === "DONE") {
+    const report = checkpoint.reports.at(-1);
+    const verdict = checkpoint.verdicts.at(-1)?.verdict;
+    taskStatus = report?.status === "complete" && (verdict === undefined || verdict === "approve") ? "successful" : "failed";
+  }
+  return { entries, checkpoint, taskStatus };
 }

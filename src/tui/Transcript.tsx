@@ -19,11 +19,15 @@ const colors: Record<TranscriptRole, string> = {
   SYSTEM: "gray"
 };
 
+export function visibleTranscriptMessages(messages: TranscriptMessage[]): TranscriptMessage[] {
+  return messages.filter((message) => message.role !== "SYSTEM" || message.interactive || message.artifactDetails);
+}
+
 export function Transcript({ messages, taskStatus }: { messages: TranscriptMessage[]; taskStatus: TaskOutcomeStatus }) {
   return (
     <Box flexDirection="column" flexGrow={1}>
       <Text color={taskStatus === "successful" ? "green" : taskStatus === "failed" ? "red" : "yellow"}>Task status: {taskStatus}</Text>
-      {messages.filter((message) => message.role !== "SYSTEM" || message.interactive || message.artifactDetails).slice(-30).map((message, index) => (
+      {visibleTranscriptMessages(messages).slice(-30).map((message, index) => (
         <Box key={`${index}-${message.role}`} marginBottom={0} flexDirection="column">
           <Box>
             <Text color={colors[message.role]} bold>

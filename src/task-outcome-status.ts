@@ -11,8 +11,8 @@ export function isTaskStale(lastActivityAt: number, now = Date.now(), thresholdM
 
 export function taskOutcomeFromRun(result: RunResult): TaskOutcomeStatus {
   const report = result.reports.at(-1);
-  if (result.phase !== "DONE" || report?.status === "blocked") return "failed";
-  if (result.verdicts.at(-1)?.verdict === "revise") return "failed";
+  const verdict = result.verdicts.at(-1)?.verdict;
+  if (result.phase !== "DONE" || report?.status !== "complete" || (verdict !== undefined && verdict !== "approve")) return "failed";
   return "successful";
 }
 
