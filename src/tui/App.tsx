@@ -97,7 +97,7 @@ export function taskStatusFromTuiSessionEvents(events: SessionEvent[]): TaskOutc
       if (event.type === "checkpoint") finalCheckpoint = event.checkpoint;
     }
     if (stored.type === "done" && stored.payload && typeof stored.payload === "object") {
-      const payload = stored.payload as { error?: boolean };
+      const payload = stored.payload as { outcome?: unknown; error?: boolean };
       status = taskOutcomeFromDone(payload);
     }
   }

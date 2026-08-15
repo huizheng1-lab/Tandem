@@ -2,9 +2,9 @@ import type { SessionMetadata, SessionResumeResponse, SessionStartResponse } fro
 import type { TandemConfig } from "../../../src/config/schema.js";
 import type { MachineEvent, OrchestrationCheckpoint } from "../../../src/orchestrator/machine.js";
 import type { SessionEvent } from "../../../src/session/store.js";
-import { taskOutcomeFromDone, type TaskOutcomeStatus } from "../../../src/task-outcome-status.js";
+import { taskOutcomeFromDone, TASK_STALL_THRESHOLD_MS, type TaskOutcomeStatus } from "../../../src/task-outcome-status.js";
 
-export const MODEL_STALL_WARNING_SECONDS = 180;
+export const MODEL_STALL_WARNING_SECONDS = TASK_STALL_THRESHOLD_MS / 1000;
 
 export { TASK_STALL_THRESHOLD_MS, isTaskStale, type TaskOutcomeStatus } from "../../../src/task-outcome-status.js";
 

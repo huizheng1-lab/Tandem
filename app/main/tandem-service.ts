@@ -355,7 +355,10 @@ export class TandemService {
       if (this.cancellationSucceeded) this.lastCheckpoint = undefined;
     } catch (error) {
       const event: MachineEvent = { type: "error", message: String(error) };
-      const done = { summary: event.message, takeover: false, error: true, missingKey: missingKeyInfo(error, this.projectDir, this.homeDir) };
+      // Keep the terminal outcome explicit so replay does not have to infer a
+      // failed run from the legacy error flag. The machine event remains
+      // persisted above for diagnostics and debugging.
+      const done = { summary: event.message, takeover: false, error: true, outcome: "failed" as const, missingKey: missingKeyInfo(error, this.projectDir, this.homeDir) };
       this.window.webContents.send(ipcChannels.machineEvent, event);
       this.window.webContents.send(ipcChannels.doneEvent, done);
       await session.append("machine", event);

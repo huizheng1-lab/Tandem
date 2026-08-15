@@ -2,7 +2,11 @@ import type { MachineEvent, RunResult } from "./orchestrator/machine.js";
 
 export type TaskOutcomeStatus = "successful" | "failed" | "hung";
 
-/** Reuse the existing renderer stall window for both live surfaces. */
+/**
+ * The renderer already used this three-minute model-stall warning window.
+ * Both live surfaces now share that same source of truth for hung status;
+ * durable-await deadlines remain observer/recovery deadlines, not failures.
+ */
 export const TASK_STALL_THRESHOLD_MS = 180_000;
 
 export function isTaskStale(lastActivityAt: number, now = Date.now(), thresholdMs = TASK_STALL_THRESHOLD_MS): boolean {
