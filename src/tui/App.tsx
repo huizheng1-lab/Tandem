@@ -18,6 +18,7 @@ import { compactSessionHistory, isCliBackedLeader } from "../session/compaction.
 import { rebuildLeaderThread } from "../session/leader-thread.js";
 import { appendProjectMemoryNote, formatProjectInstructions, readProjectInstructions } from "../session/project-memory.js";
 import { SessionStore, listSessions } from "../session/store.js";
+import type { SessionEvent } from "../session/store.js";
 import { createLiveAgents, suggestGoalProgressNotes } from "../agents/live.js";
 import { locateCodexCli } from "../agents/codex-cli/locate.js";
 import { locateClaudeCli } from "../agents/claude-code-cli/locate.js";
@@ -33,7 +34,7 @@ import { InputBar } from "./InputBar.js";
 import { StatusLine } from "./StatusLine.js";
 import { Approval } from "./Approval.js";
 import { PlanView } from "./PlanView.js";
-import { isTaskStale, TASK_STALL_THRESHOLD_MS, taskOutcomeFromRun, type TaskOutcomeStatus } from "../task-outcome-status.js";
+import { isTaskStale, TASK_STALL_THRESHOLD_MS, taskOutcomeFromMachineEvent, taskOutcomeFromRun, type TaskOutcomeStatus } from "../task-outcome-status.js";
 
 export const TUI_THINKING_STATUS_TEXT = "Thinking";
 
@@ -83,6 +84,29 @@ export function createTuiLiveAgentHandlers(
     onLeaderThinking: (_delta: string) => thinking("LEADER"),
     onWorkerThinking: (_delta: string) => thinking("WORKER")
   };
+}
+
+export function taskStatusFromTuiSessionEvents(events: SessionEvent[]): TaskOutcomeStatus | undefined {
+  let status: TaskOutcomeStatus | undefined;
+  let finalCheckpoint: OrchestrationCheckpoint | undefined;
+  for (const stored of events) {
+    if (stored.type === "machine" && stored.payload && typeof stored.payload === "object") {
+      const event = stored.payload as MachineEvent;
+      const eventStatus = taskOutcomeFromMachineEvent(event);
+      if (eventStatus) status = eventStatus;
+      if (event.type === "checkpoint") finalCheckpoint = event.checkpoint;
+    }
+    if (stored.type === "done" && stored.payload && typeof stored.payload === "object") {
+      const payload = stored.payload as { error?: boolean };
+      status = payload.error === true ? "failed" : "successful";
+    }
+  }
+  if (!status && finalCheckpoint?.phase === "DONE") {
+    const report = finalCheckpoint.reports.at(-1);
+    const verdict = finalCheckpoint.verdicts.at(-1)?.verdict;
+    status = report?.status === "complete" && (verdict === undefined || verdict === "approve") ? "successful" : "failed";
+  }
+  return status;
 }
 
 export function App({ config: initialConfig, env, cwd, initialError }: { config: TandemConfig; env: NodeJS.ProcessEnv; cwd: string; initialError?: string }) {
@@ -289,6 +313,8 @@ export function App({ config: initialConfig, env, cwd, initialError }: { config:
   const handleEvent = (event: MachineEvent) => {
     setLastTaskActivityAt(Date.now());
     void storeRef.current?.append(event.type, event);
+    const eventStatus = taskOutcomeFromMachineEvent(event);
+    if (eventStatus) setTaskStatus(eventStatus);
     if (event.type === "transition") {
       setPhase(event.phase);
       const match = /round (\d+)\//.exec(event.message);
@@ -547,6 +573,8 @@ export function App({ config: initialConfig, env, cwd, initialError }: { config:
           .filter((event) => event.type === "checkpoint")
           .map((event) => (event.payload as { checkpoint: OrchestrationCheckpoint }).checkpoint);
         const checkpoint = checkpoints.at(-1);
+        const restoredTaskStatus = taskStatusFromTuiSessionEvents(events);
+        if (restoredTaskStatus) setTaskStatus(restoredTaskStatus);
         const userMessages = restored.filter((message) => message.role === "USER");
         const request = userMessages.at(-1)?.text ?? "";
         if (checkpoint && checkpoint.phase !== "DONE" && request) {
