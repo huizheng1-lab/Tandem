@@ -34,6 +34,21 @@ import { StatusLine } from "./StatusLine.js";
 import { Approval } from "./Approval.js";
 import { PlanView } from "./PlanView.js";
 
+export const TUI_THINKING_STATUS_TEXT = "Thinking";
+
+export function appendTuiThinkingStatus(messages: TranscriptMessage[], role: "LEADER" | "WORKER"): TranscriptMessage[] {
+  const last = messages.at(-1);
+  if (last?.role === role && last.thinking && last.text === TUI_THINKING_STATUS_TEXT) return messages;
+  return [...messages, { role, text: TUI_THINKING_STATUS_TEXT, thinking: true }];
+}
+
+export function appendTuiText(messages: TranscriptMessage[], role: "LEADER" | "WORKER", text: string): TranscriptMessage[] {
+  const last = messages.at(-1);
+  if (last?.role === role && !last.thinking) return [...messages.slice(0, -1), { ...last, text: `${last.text}${text}` }];
+  if (!text.trim()) return messages;
+  return [...messages, { role, text }];
+}
+
 export function App({ config: initialConfig, env, cwd, initialError }: { config: TandemConfig; env: NodeJS.ProcessEnv; cwd: string; initialError?: string }) {
   const [config, setConfig] = useState(initialConfig);
   const [messages, setMessages] = useState<TranscriptMessage[]>([
@@ -72,12 +87,11 @@ export function App({ config: initialConfig, env, cwd, initialError }: { config:
   };
 
   const appendDelta = (role: "LEADER" | "WORKER", text: string) => {
-    setMessages((current) => {
-      const last = current.at(-1);
-      if (last?.role === role) return [...current.slice(0, -1), { ...last, text: `${last.text}${text}` }];
-      if (!text.trim()) return current;
-      return [...current, { role, text }];
-    });
+    setMessages((current) => appendTuiText(current, role, text));
+  };
+
+  const appendThinkingStatus = (role: "LEADER" | "WORKER") => {
+    setMessages((current) => appendTuiThinkingStatus(current, role));
   };
 
   const trimTrailingAgentMessage = () => {
@@ -275,6 +289,8 @@ export function App({ config: initialConfig, env, cwd, initialError }: { config:
         abortSignal: controller.signal,
         onLeaderText: (text) => appendDelta("LEADER", text),
         onWorkerText: (text) => appendDelta("WORKER", text),
+        onLeaderThinking: () => appendThinkingStatus("LEADER"),
+        onWorkerThinking: () => appendThinkingStatus("WORKER"),
         onToolEvent: addToolMessage,
         projectInstructions: currentProjectInstructions,
         rememberNote: rememberSessionNote,

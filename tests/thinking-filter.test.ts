@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { ThinkingStreamFilter } from "../src/agents/runner.js";
+import { customToModelEntry } from "../src/providers/registry.js";
+import { appendTuiText, appendTuiThinkingStatus } from "../src/tui/App.js";
+import type { TranscriptMessage } from "../src/tui/Transcript.js";
 
 function runFilter(chunks: string[]): { text: string; thinking: string } {
   let text = "";
@@ -16,6 +19,44 @@ function runFilter(chunks: string[]): { text: string; thinking: string } {
 }
 
 describe("ThinkingStreamFilter", () => {
+  it("suppresses reasoning for a custom OpenAI-compatible worker while preserving live output", () => {
+    const worker = customToModelEntry({
+      id: "custom/openai-compatible-worker",
+      provider: "openai-compatible",
+      baseURL: "https://example.test/v1",
+      apiKeyEnv: "CUSTOM_API_KEY",
+      modelName: "reasoning-worker"
+    });
+    expect(worker.provider).toBe("openai-compatible");
+
+    let visible = "";
+    let thinking = "";
+    const filter = new ThinkingStreamFilter((delta) => {
+      visible += delta;
+    }, (delta) => {
+      thinking += delta;
+    });
+    filter.push("<think>private worker reasoning</think>");
+    filter.push("worker result");
+    filter.end();
+
+    expect(visible).toBe("worker result");
+    expect(thinking).toBe("private worker reasoning");
+    expect(visible).not.toContain(thinking);
+  });
+
+  it("collapses TUI thinking callbacks without merging later communicated output", () => {
+    let messages: TranscriptMessage[] = [];
+    messages = appendTuiThinkingStatus(messages, "WORKER");
+    messages = appendTuiThinkingStatus(messages, "WORKER");
+    messages = appendTuiText(messages, "WORKER", "worker answer");
+
+    expect(messages).toEqual([
+      { role: "WORKER", text: "Thinking", thinking: true },
+      { role: "WORKER", text: "worker answer" }
+    ]);
+    expect(messages.map((message) => message.text).join("\n")).not.toContain("private worker reasoning");
+  });
   it("strips a think block contained within one chunk", () => {
     expect(runFilter(["hello <think>secret</think>world"])).toEqual({ text: "hello world", thinking: "secret" });
   });

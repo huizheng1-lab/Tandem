@@ -5,6 +5,7 @@ export type TranscriptRole = "USER" | "LEADER" | "WORKER" | "SYSTEM";
 export interface TranscriptMessage {
   role: TranscriptRole;
   text: string;
+  thinking?: boolean;
   artifactDetails?: string;
   artifactExpanded?: boolean;
 }
