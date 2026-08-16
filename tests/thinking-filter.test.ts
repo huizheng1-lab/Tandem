@@ -67,13 +67,14 @@ describe("ThinkingStreamFilter", () => {
     expect(visible).not.toContain(thinking);
   });
 
-  it("W0099: keeps all worker text behind the TUI status indicator", () => {
+  it("W0101: omits all worker text and thinking from the TUI transcript", () => {
     let messages: TranscriptMessage[] = [];
     messages = appendTuiThinkingStatus(messages, "WORKER");
     messages = appendTuiThinkingStatus(messages, "WORKER");
     messages = appendTuiText(messages, "WORKER", "worker answer");
+    messages = appendTuiText(messages, "LEADER", "Leader answer");
 
-    expect(messages).toEqual([{ role: "WORKER", text: "Thinking", thinking: true }]);
+    expect(messages).toEqual([{ role: "LEADER", text: "Leader answer" }]);
     expect(messages.map((message) => message.text).join("\n")).not.toContain("private worker reasoning");
   });
 
@@ -101,12 +102,27 @@ describe("ThinkingStreamFilter", () => {
     handlers.onWorkerText("The render directory is empty; this is plain worker narration");
     handlers.onLeaderText("Plan and answer");
 
-    expect(messages).toEqual([
-      { role: "WORKER", text: "Thinking", thinking: true },
-      { role: "LEADER", text: "Plan and answer" }
-    ]);
+    expect(messages).toEqual([{ role: "LEADER", text: "Plan and answer" }]);
     expect(JSON.stringify(messages)).not.toContain("plain worker narration");
     expect(JSON.stringify(messages)).not.toContain("private custom-model reasoning");
+  });
+
+  it("W0101: hides a plain-text-only custom worker turn while keeping leader output", () => {
+    let messages: TranscriptMessage[] = [];
+    const handlers = createTuiLiveAgentHandlers(
+      (role, text) => {
+        messages = appendTuiText(messages, role, text);
+      },
+      (role) => {
+        messages = appendTuiThinkingStatus(messages, role);
+      }
+    );
+
+    handlers.onWorkerText("plain minimax-style worker output");
+    handlers.onLeaderText("Leader output remains visible.");
+
+    expect(messages).toEqual([{ role: "LEADER", text: "Leader output remains visible." }]);
+    expect(messages.some((message) => message.role === "WORKER")).toBe(false);
   });
   it("strips a think block contained within one chunk", () => {
     expect(runFilter(["hello <think>secret</think>world"])).toEqual({ text: "hello world", thinking: "secret" });

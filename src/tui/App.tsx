@@ -43,6 +43,7 @@ function tuiThinkingStatus(role: "LEADER" | "WORKER"): TranscriptMessage {
 }
 
 export function appendTuiThinkingStatus(messages: TranscriptMessage[], role: "LEADER" | "WORKER"): TranscriptMessage[] {
+  if (role === "WORKER") return messages;
   const last = messages.at(-1);
   if (last?.role === role && last.thinking) {
     // Replace, rather than trust, an existing thinking entry. This keeps the
@@ -55,7 +56,7 @@ export function appendTuiThinkingStatus(messages: TranscriptMessage[], role: "LE
 }
 
 export function appendTuiText(messages: TranscriptMessage[], role: "LEADER" | "WORKER", text: string): TranscriptMessage[] {
-  if (role === "WORKER") return appendTuiThinkingStatus(messages, role);
+  if (role === "WORKER") return messages;
   const last = messages.at(-1);
   if (last?.role === role && last.thinking) {
     const sanitized = appendTuiThinkingStatus(messages, role);
@@ -69,8 +70,8 @@ export function appendTuiText(messages: TranscriptMessage[], role: "LEADER" | "W
 
 /**
  * Keep the terminal surface on the same event contract as the desktop surface.
- * Thinking deltas are intentionally represented only by a fixed status message;
- * they must never be routed through either visible-text callback.
+ * Leader thinking remains a fixed status message; worker output is completely
+ * omitted from the transcript and must never be routed to a visible callback.
  */
 export function createTuiLiveAgentHandlers(
   append: (role: "LEADER" | "WORKER", text: string) => void,
@@ -78,12 +79,9 @@ export function createTuiLiveAgentHandlers(
 ) {
   return {
     onLeaderText: (text: string) => append("LEADER", text),
-    onWorkerText: (_text: string) => thinking("WORKER"),
-    // The runner supplies raw reasoning deltas here. Deliberately accept the
-    // argument but never forward it to the transcript or any visible-text
-    // callback; the terminal gets the same fixed state indicator as desktop.
+    onWorkerText: (_text: string) => undefined,
     onLeaderThinking: (_delta: string) => thinking("LEADER"),
-    onWorkerThinking: (_delta: string) => thinking("WORKER")
+    onWorkerThinking: (_delta: string) => undefined
   };
 }
 

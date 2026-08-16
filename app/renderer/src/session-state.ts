@@ -73,6 +73,7 @@ function appendAgentText(entries: VisibleTranscriptEntry[], role: "leader" | "wo
 }
 
 export function appendThinkingStatus<T extends TranscriptEntryWithOptionalMessageFields>(entries: T[], role: "leader" | "worker", nextId: () => number): void {
+  if (role === "worker") return;
   const last = entries.at(-1);
   if (last?.kind === "message" && last.role === role && last.thinking && last.text === THINKING_STATUS_TEXT) return;
   entries.push({ id: nextId(), kind: "message", role, text: THINKING_STATUS_TEXT, thinking: true } as T);
@@ -99,9 +100,6 @@ export function replayVisibleSessionEvents(
     }
     if (stored.type === "text" && isRecord(payload) && payload.role === "leader" && typeof payload.delta === "string") {
       appendAgentText(entries, payload.role, payload.delta, nextId, boundText);
-    }
-    if (stored.type === "text" && isRecord(payload) && payload.role === "worker" && typeof payload.delta === "string" && payload.delta) {
-      appendThinkingStatus(entries, payload.role, nextId);
     }
     if (stored.type === "machine" && isRecord(payload)) {
       const event = payload as MachineEvent;

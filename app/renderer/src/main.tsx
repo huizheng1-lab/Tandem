@@ -407,13 +407,6 @@ function App(): React.ReactElement {
   const appendStream = (role: "leader" | "worker", delta: string) => {
     if (delta) markActivity(role, "writing");
     if (!isVisibleLiveTextRole(role)) {
-      if (delta) {
-        setBoundedEntries((current) => {
-          const next = [...current];
-          appendThinkingStatus(next, role, () => nextId.current++);
-          return next;
-        });
-      }
       return;
     }
     setBoundedEntries((current) => {
@@ -454,17 +447,10 @@ function App(): React.ReactElement {
   const appendThinking = (role: "leader" | "worker", delta: string) => {
     if (!delta) return;
     markThinking(role);
+    if (role === "worker") return;
     setBoundedEntries((current) => {
       const next = [...current];
       appendThinkingStatus(next, role, () => nextId.current++);
-      return next;
-    });
-  };
-
-  const ensureWorkerStatusPlaceholder = () => {
-    setBoundedEntries((current) => {
-      const next = [...current];
-      appendThinkingStatus(next, "worker", () => nextId.current++);
       return next;
     });
   };
@@ -475,10 +461,6 @@ function App(): React.ReactElement {
     if (eventStatus) setTaskStatus(eventStatus);
     if (event.type === "transition") {
       setPhase(event.phase);
-      // A worker can produce no thinking or text deltas at all. BUILDING is
-      // the durable signal that the worker turn has started, so keep the
-      // private-output placeholder visible even for silent model streams.
-      if (event.phase === "BUILDING") ensureWorkerStatusPlaceholder();
     } else if (event.type === "artifact") {
       setBoundedEntries((current) => [...current, { id: nextId.current++, kind: "artifact", name: event.name, value: event.value, open: false }]);
     } else if (event.type === "checkpoint") {

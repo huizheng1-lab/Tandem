@@ -85,22 +85,23 @@ describe("renderer session resume state", () => {
     expect(visibleText).not.toContain("BUILDING round 1/3");
     expect(visibleText).not.toContain("Final summary");
     expect(replay.entries.every((entry) => entry.kind !== "message" || entry.role !== "system")).toBe(true);
-    expect(replay.entries).toContainEqual({ id: 2, kind: "message", role: "worker", text: "Thinking", thinking: true });
+    expect(replay.entries.some((entry) => entry.kind === "message" && entry.role === "worker")).toBe(false);
   });
 
-  it("W0100: keeps a worker status placeholder for plain worker-only deltas", () => {
+  it("W0101: omits worker entries for plain-text-only turns while preserving leader output", () => {
     let id = 1;
     const replay = replayVisibleSessionEvents(
       [
         { type: "user", at: "2026-08-15T00:00:00.000Z", payload: { prompt: "Run the worker" } },
         { type: "text", at: "2026-08-15T00:00:01.000Z", payload: { role: "worker", delta: "plain minimax-style worker output" } },
-        { type: "text", at: "2026-08-15T00:00:02.000Z", payload: { role: "worker", delta: "more hidden output" } }
+        { type: "text", at: "2026-08-15T00:00:02.000Z", payload: { role: "worker", delta: "more hidden output" } },
+        { type: "text", at: "2026-08-15T00:00:03.000Z", payload: { role: "leader", delta: "Leader remains visible." } }
       ],
       () => id++
     );
 
-    expect(replay.entries).toContainEqual({ id: 2, kind: "message", role: "worker", text: "Thinking", thinking: true });
-    expect(replay.entries.filter((entry) => entry.kind === "message" && entry.role === "worker")).toHaveLength(1);
+    expect(replay.entries.filter((entry) => entry.kind === "message" && entry.role === "worker")).toHaveLength(0);
     expect(JSON.stringify(replay.entries)).not.toContain("plain minimax-style worker output");
+    expect(replay.entries).toContainEqual({ id: 2, kind: "message", role: "leader", text: "Leader remains visible." });
   });
 });
